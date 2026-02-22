@@ -310,6 +310,50 @@ pub enum Visibility {
     Offline,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "InvitationStatus"
+)]
+pub enum InvitationStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACCEPTED")]
+    Accepted,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "EXPIRED")]
+    Expired,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "WasmCompilationStatus"
+)]
+pub enum WasmCompilationStatus {
+    #[sea_orm(string_value = "COMPILED")]
+    Compiled,
+    #[sea_orm(string_value = "LOCAL_ONLY")]
+    LocalOnly,
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "WasmPackageVisibility"
+)]
+pub enum WasmPackageVisibility {
+    #[sea_orm(string_value = "PRIVATE")]
+    Private,
+    #[sea_orm(string_value = "PUBLIC")]
+    Public,
+    #[sea_orm(string_value = "PUBLIC_REQUEST_ACCESS")]
+    PublicRequestAccess,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "WasmPackageStatus")]
 pub enum WasmPackageStatus {
     #[sea_orm(string_value = "PENDING_REVIEW")]

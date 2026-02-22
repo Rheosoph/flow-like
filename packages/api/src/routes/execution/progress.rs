@@ -560,7 +560,7 @@ async fn get_state_store(state: &AppState) -> Result<Arc<dyn ExecutionStateStore
 
     #[cfg(feature = "dynamodb")]
     {
-        config = config.with_content_store(state.cdn_bucket.clone());
+        config = config.with_content_store(state.content_bucket.clone());
     }
 
     crate::execution::state::create_state_store(config)

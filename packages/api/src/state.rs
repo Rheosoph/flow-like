@@ -22,10 +22,12 @@ use jsonwebtoken::{
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
 use crate::entity::role;
 use crate::execution::{DispatchConfig, Dispatcher};
 use crate::mail::{DynMailClient, create_mail_client};
+use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
@@ -65,11 +67,16 @@ pub struct State {
     pub registry: Arc<FlowNodeRegistryInner>,
     pub provider: Arc<ModelProviderConfiguration>,
     pub dispatcher: Arc<Dispatcher>,
+    pub compilation_dispatcher: Arc<CompilationDispatcher>,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
+    pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
+    pub meta_bucket: Arc<FlowLikeStore>,
     pub response_cache: moka::sync::Cache<String, Value>,
+    /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
+    pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
     /// Auth token cache: token_hash -> CachedAuth
     /// Short TTL (240s) to balance security vs performance
     pub auth_cache: moka::sync::Cache<String, CachedAuth>,
@@ -82,7 +89,9 @@ pub struct State {
 impl State {
     pub async fn new(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+        content_bucket: Arc<FlowLikeStore>,
         cdn_bucket: Arc<FlowLikeStore>,
+        meta_bucket: Arc<FlowLikeStore>,
     ) -> Self {
         let platform_config: Hub =
             serde_json::from_str(CONFIG).expect("Failed to parse config file");
@@ -152,12 +161,25 @@ impl State {
 
         // Initialize dispatcher once with env config (caches AWS/Redis clients)
         let dispatch_config = DispatchConfig::from_env();
-        let dispatcher = Dispatcher::new(dispatch_config).await;
+        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone())).await;
+
+        // Initialize compilation dispatcher (mirrors execution dispatcher pattern)
+        let compilation_config = CompilationDispatchConfig::from_env();
+        tracing::info!(backend = ?compilation_config.backend, "Compilation dispatch backend");
+        let compilation_dispatcher = Arc::new(
+            CompilationDispatcher::new(compilation_config, content_bucket.clone(), meta_bucket.clone()).await,
+        );
 
         // Initialize WASM registry if enabled (uses PostgreSQL + CDN)
         let wasm_registry = if platform_config.features.wasm_registry {
             let cdn_base_url = platform_config.cdn.clone();
-            let registry = ServerRegistry::new(db.clone(), cdn_bucket.clone(), cdn_base_url);
+            let registry = ServerRegistry::new(
+                db.clone(),
+                content_bucket.clone(),
+                meta_bucket.clone(),
+                cdn_base_url,
+            )
+            .with_compilation_dispatcher(compilation_dispatcher.clone());
             Some(Arc::new(registry))
         } else {
             None
@@ -237,6 +259,7 @@ impl State {
             provider: Arc::new(provider),
             registry: Arc::new(registry),
             dispatcher: Arc::new(dispatcher),
+            compilation_dispatcher,
             permission_cache: moka::sync::Cache::builder()
                 .max_capacity(32 * 1024 * 1024)
                 .time_to_live(Duration::from_secs(120))
@@ -246,8 +269,14 @@ impl State {
                 .time_to_live(Duration::from_secs(30 * 60))
                 .build(),
             credentials_cache: cache,
+            content_bucket,
             cdn_bucket,
+            meta_bucket,
             response_cache,
+            wasm_permission_cache: moka::sync::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(Duration::from_secs(120))
+                .build(),
             // Auth cache: max 10k entries, 60s TTL for security
             // Entries are keyed by token hash to avoid storing raw tokens
             auth_cache: moka::sync::Cache::builder()
@@ -443,6 +472,30 @@ impl State {
     pub fn invalidate_permission(&self, sub: &str, app_id: &str) {
         let key = format!("{}:{}", sub, app_id);
         self.permission_cache.invalidate(&key);
+    }
+
+    pub fn check_wasm_permission(
+        &self,
+        user_id: &str,
+        package_id: &str,
+    ) -> Option<WasmPackagePermission> {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.get(&key)
+    }
+
+    pub fn put_wasm_permission(
+        &self,
+        user_id: &str,
+        package_id: &str,
+        perm: WasmPackagePermission,
+    ) {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.insert(key, perm);
+    }
+
+    pub fn invalidate_wasm_permission(&self, user_id: &str, package_id: &str) {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.invalidate(&key);
     }
 
     pub async fn invalidate_role_permissions(

@@ -34,9 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let catalog = get_catalog();
 
-    let cdn_bucket = storage::create_content_store(&config)?;
+    let content_bucket = storage::create_content_store(&config)?;
+    let cdn_bucket = storage::create_cdn_store(&config)?;
+    let meta_bucket = storage::create_meta_store(&config)?;
 
-    let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket)).await);
+    let state = Arc::new(State::new(Arc::new(catalog), Arc::new(content_bucket), Arc::new(cdn_bucket), Arc::new(meta_bucket)).await);
 
     let app = Router::new()
         .merge(construct_router(state.clone()))

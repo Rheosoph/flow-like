@@ -8,21 +8,44 @@ use flow_like_storage::object_store::{
 use std::sync::Arc;
 
 pub fn create_content_store(config: &Config) -> Result<FlowLikeStore, StorageError> {
+    let bucket = config.storage_config.content_bucket();
     match &config.storage_config {
-        crate::config::StorageConfig::Aws(cfg) => build_aws_store(cfg),
-        crate::config::StorageConfig::Azure(cfg) => build_azure_store(cfg),
-        crate::config::StorageConfig::Gcp(cfg) => build_gcp_store(cfg),
-        crate::config::StorageConfig::R2(cfg) => build_r2_store(cfg),
-        crate::config::StorageConfig::S3(cfg) => build_s3_store(cfg),
+        crate::config::StorageConfig::Aws(cfg) => build_aws_store(cfg, bucket),
+        crate::config::StorageConfig::Azure(cfg) => build_azure_store(cfg, bucket),
+        crate::config::StorageConfig::Gcp(cfg) => build_gcp_store(cfg, bucket),
+        crate::config::StorageConfig::R2(cfg) => build_r2_store(cfg, bucket),
+        crate::config::StorageConfig::S3(cfg) => build_s3_store(cfg, bucket),
     }
 }
 
-fn build_aws_store(cfg: &crate::config::AwsStorageConfig) -> Result<FlowLikeStore, StorageError> {
+pub fn create_meta_store(config: &Config) -> Result<FlowLikeStore, StorageError> {
+    let bucket = config.storage_config.meta_bucket();
+    match &config.storage_config {
+        crate::config::StorageConfig::Aws(cfg) => build_aws_store(cfg, bucket),
+        crate::config::StorageConfig::Azure(cfg) => build_azure_store(cfg, bucket),
+        crate::config::StorageConfig::Gcp(cfg) => build_gcp_store(cfg, bucket),
+        crate::config::StorageConfig::R2(cfg) => build_r2_store(cfg, bucket),
+        crate::config::StorageConfig::S3(cfg) => build_s3_store(cfg, bucket),
+    }
+}
+
+pub fn create_cdn_store(config: &Config) -> Result<FlowLikeStore, StorageError> {
+    let bucket = config.storage_config.cdn_bucket();
+    match &config.storage_config {
+        crate::config::StorageConfig::Aws(cfg) => build_aws_store(cfg, bucket),
+        crate::config::StorageConfig::Azure(cfg) => build_azure_store(cfg, bucket),
+        crate::config::StorageConfig::Gcp(cfg) => build_gcp_store(cfg, bucket),
+        crate::config::StorageConfig::R2(cfg) => build_r2_store(cfg, bucket),
+        crate::config::StorageConfig::S3(cfg) => build_s3_store(cfg, bucket),
+    }
+}
+
+fn build_aws_store(cfg: &crate::config::AwsStorageConfig, bucket_name: &str) -> Result<FlowLikeStore, StorageError> {
     use flow_like_storage::object_store::aws::AmazonS3ConfigKey;
 
     let mut builder = AmazonS3Builder::new()
         .with_region(&cfg.region)
-        .with_bucket_name(&cfg.content_bucket);
+        .with_bucket_name(bucket_name);
 
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
@@ -46,10 +69,11 @@ fn build_aws_store(cfg: &crate::config::AwsStorageConfig) -> Result<FlowLikeStor
 
 fn build_azure_store(
     cfg: &crate::config::AzureStorageConfig,
+    container_name: &str,
 ) -> Result<FlowLikeStore, StorageError> {
     let mut builder = MicrosoftAzureBuilder::new()
         .with_account(&cfg.account_name)
-        .with_container_name(&cfg.content_container);
+        .with_container_name(container_name);
 
     if let Some(key) = &cfg.account_key {
         builder = builder.with_config(AzureConfigKey::AccessKey, key);
@@ -61,8 +85,8 @@ fn build_azure_store(
     Ok(FlowLikeStore::Azure(Arc::new(store)))
 }
 
-fn build_gcp_store(cfg: &crate::config::GcpStorageConfig) -> Result<FlowLikeStore, StorageError> {
-    let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(&cfg.content_bucket);
+fn build_gcp_store(cfg: &crate::config::GcpStorageConfig, bucket_name: &str) -> Result<FlowLikeStore, StorageError> {
+    let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket_name);
 
     if let Some(key) = &cfg.service_account_key {
         builder = builder.with_service_account_key(key);
@@ -74,13 +98,13 @@ fn build_gcp_store(cfg: &crate::config::GcpStorageConfig) -> Result<FlowLikeStor
     Ok(FlowLikeStore::Google(Arc::new(store)))
 }
 
-fn build_r2_store(cfg: &crate::config::R2StorageConfig) -> Result<FlowLikeStore, StorageError> {
+fn build_r2_store(cfg: &crate::config::R2StorageConfig, bucket_name: &str) -> Result<FlowLikeStore, StorageError> {
     use flow_like_storage::object_store::aws::AmazonS3ConfigKey;
 
     let endpoint = format!("https://{}.r2.cloudflarestorage.com", cfg.account_id);
 
     let builder = AmazonS3Builder::new()
-        .with_bucket_name(&cfg.content_bucket)
+        .with_bucket_name(bucket_name)
         .with_endpoint(&endpoint)
         .with_region("auto")
         .with_access_key_id(&cfg.access_key_id)
@@ -93,11 +117,11 @@ fn build_r2_store(cfg: &crate::config::R2StorageConfig) -> Result<FlowLikeStore,
     Ok(FlowLikeStore::AWS(Arc::new(store)))
 }
 
-fn build_s3_store(cfg: &crate::config::S3StorageConfig) -> Result<FlowLikeStore, StorageError> {
+fn build_s3_store(cfg: &crate::config::S3StorageConfig, bucket_name: &str) -> Result<FlowLikeStore, StorageError> {
     use flow_like_storage::object_store::aws::AmazonS3ConfigKey;
 
     let mut builder = AmazonS3Builder::new()
-        .with_bucket_name(&cfg.content_bucket)
+        .with_bucket_name(bucket_name)
         .with_endpoint(&cfg.endpoint)
         .with_region(&cfg.region)
         .with_access_key_id(&cfg.access_key_id)

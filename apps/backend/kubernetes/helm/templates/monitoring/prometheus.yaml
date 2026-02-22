@@ -148,6 +148,27 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
 
+      # Flow-Like Compiler metrics (internal port 9090)
+      {{- if .Values.compiler.enabled }}
+      - job_name: 'flow-like-compiler'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - {{ .Release.Namespace }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: compiler
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      {{- end }}
+
       # Kubernetes pod metrics
       - job_name: 'kubernetes-pods'
         kubernetes_sd_configs:
@@ -198,6 +219,16 @@ data:
           - record: flow_like:execution_duration_p99:5m
             expr: histogram_quantile(0.99, sum(rate(flow_execution_duration_seconds_bucket[5m])) by (le))
 
+          # Compilation metrics
+          - record: flow_like:compilation_rate:5m
+            expr: sum(rate(compilations_total[5m])) by (status)
+
+          - record: flow_like:compilation_duration_p95:5m
+            expr: histogram_quantile(0.95, sum(rate(compilation_duration_seconds_bucket[5m])) by (le))
+
+          - record: flow_like:compilation_duration_p99:5m
+            expr: histogram_quantile(0.99, sum(rate(compilation_duration_seconds_bucket[5m])) by (le))
+
   alerting_rules.yml: |
     groups:
       - name: flow-like-alerts
@@ -241,6 +272,27 @@ data:
             annotations:
               summary: "Executor pool exhausted"
               description: "No executor workers available"
+
+          # Compiler pod down
+          {{- if .Values.compiler.enabled }}
+          - alert: FlowLikeCompilerDown
+            expr: sum(up{job="flow-like-compiler"}) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "WASM compiler unavailable"
+              description: "No compiler pods are running"
+
+          - alert: FlowLikeCompilationHighFailureRate
+            expr: sum(rate(compilations_total{status!="success"}[5m])) / sum(rate(compilations_total[5m])) > 0.3
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High compilation failure rate"
+              description: "Compilation failure rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }}"
+          {{- end }}
 
           # Redis connection issues
           {{- if .Values.redis.enabled }}

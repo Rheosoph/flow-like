@@ -7,6 +7,7 @@ import type { IProfile } from "../../../lib/schema/profile/profile";
 import type { RegistryEntry } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
 import { PackageDetailView } from "../../store/package-detail-view";
+import { usePackageStoreData } from "../../store/use-package-store-data";
 import type { CompileStatus } from "../../ui/package-status-badge";
 
 // biome-ignore lint/suspicious/noExplicitAny: Required for generic fetcher signature compatibility
@@ -96,6 +97,25 @@ export function StorePackageDetail({
 		},
 	});
 
+	const handleAccessChanged = useCallback(() => {
+		queryClient.invalidateQueries({ queryKey: ["registry-package", packageId] });
+	}, [queryClient, packageId]);
+
+	const {
+		isPurchasing,
+		isRequesting,
+		priceLabel,
+		hasAccess,
+		onBuy,
+		onGetOrBuy,
+	} = usePackageStoreData(
+		packageId || undefined,
+		packageData.data,
+		fetcher,
+		auth,
+		handleAccessChanged,
+	);
+
 	const handleInstall = useCallback(
 		(version?: string) => installMutation.mutate(version),
 		[installMutation],
@@ -117,6 +137,17 @@ export function StorePackageDetail({
 			isInstalling={installMutation.isPending}
 			isUninstalling={uninstallMutation.isPending}
 			compileStatus={compileStatus}
+			price={packageData.data?.price}
+			visibility={packageData.data?.visibility}
+			priceLabel={priceLabel}
+			hasAccess={hasAccess}
+			isPurchasing={isPurchasing}
+			isRequesting={isRequesting}
+			onBuy={onBuy}
+			onGetOrBuy={onGetOrBuy}
+			currentUserPermission={packageData.data?.currentUserPermission}
+			fetcher={fetcher}
+			auth={auth}
 		/>
 	);
 }

@@ -166,6 +166,12 @@ impl FlowLikeStore {
         Ok(finalized)
     }
 
+    pub async fn put(&self, path: &Path, data: impl Into<object_store::PutPayload>) -> Result<()> {
+        let store = self.as_generic();
+        store.put(path, data.into()).await?;
+        Ok(())
+    }
+
     pub async fn put_from_url(&self, url: &str) -> Result<(Path, usize)> {
         let parsed = Url::parse(url)?;
         let store = self.as_generic();

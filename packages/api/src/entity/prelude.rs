@@ -2,6 +2,7 @@
 
 pub use super::app::Entity as App;
 pub use super::app_discount::Entity as AppDiscount;
+pub use super::app_package::Entity as AppPackage;
 pub use super::app_purchase::Entity as AppPurchase;
 pub use super::app_sales_daily::Entity as AppSalesDaily;
 pub use super::bit::Entity as Bit;
@@ -48,6 +49,8 @@ pub use super::transaction::Entity as Transaction;
 pub use super::user::Entity as User;
 pub use super::wasm_package::Entity as WasmPackage;
 pub use super::wasm_package_author::Entity as WasmPackageAuthor;
+pub use super::wasm_package_invitation::Entity as WasmPackageInvitation;
 pub use super::wasm_package_review::Entity as WasmPackageReview;
+pub use super::wasm_package_user::Entity as WasmPackageUser;
 pub use super::wasm_package_version::Entity as WasmPackageVersion;
 pub use super::widget::Entity as Widget;

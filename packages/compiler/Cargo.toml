@@ -1,0 +1,28 @@
+[package]
+name = "flow-like-compiler"
+version = "0.1.0"
+edition = "2021"
+description = "WASM compilation worker for Flow-Like"
+
+[dependencies]
+flow-like-types.workspace = true
+flow-like-wasm.workspace = true
+
+blake3.workspace = true
+bytes.workspace = true
+num_cpus = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+axum.workspace = true
+
+# JWT verification
+jsonwebtoken = "9"
+base64 = "0.22"
+p256 = { version = "0.13", features = ["pkcs8", "pem"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

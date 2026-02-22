@@ -91,6 +91,7 @@ impl Modify for SecurityAddon {
         (name = "templates", description = "Template management"),
         (name = "meta", description = "Metadata management"),
         (name = "roles", description = "Role management"),
+        (name = "packages", description = "App package management"),
         (name = "team", description = "Team management"),
         (name = "sales", description = "Sales and pricing"),
         (name = "api-keys", description = "API key management"),
@@ -264,6 +265,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_index::drop_index,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
+        // App package routes
+        crate::routes::app::packages::list_packages,
+        crate::routes::app::packages::add_package,
+        crate::routes::app::packages::remove_package,
+        crate::routes::app::packages::update_package,
+        crate::routes::app::packages::get_patch_info,
+        crate::routes::app::packages::check_updates,
         // Execution routes
         crate::routes::execution::progress::report_progress,
         crate::routes::execution::progress::push_events,
@@ -390,6 +398,12 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::invoke_event_async::InvokeEventAsyncResponse,
         crate::routes::app::events::upsert_event_feedback::FeedbackBody,
         crate::routes::app::events::upsert_event_feedback::FeedbackResponse,
+        // App packages
+        crate::routes::app::packages::AddPackageRequest,
+        crate::routes::app::packages::UpdatePackageRequest,
+        crate::routes::app::packages::AppPackageResponse,
+        crate::routes::app::packages::PatchInfo,
+        crate::routes::app::packages::PackageUpdateInfo,
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         // Data

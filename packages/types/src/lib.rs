@@ -50,6 +50,8 @@ pub mod json {
     };
 }
 
+pub mod dispatch;
+
 pub use bytes::Bytes;
 pub use tokio;
 pub mod sync {

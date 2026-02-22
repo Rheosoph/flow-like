@@ -11,8 +11,12 @@ members = [
     "apps/backend/aws/event-bridge",
     "apps/backend/aws/media-transformer",
     "apps/backend/aws/file-tracker",
+    "apps/backend/aws/compiler-lambda",
+    "apps/backend/aws/compiler-ecs",
+    "apps/backend/aws/executor-ecs",
     "apps/backend/kubernetes/api",
     "apps/backend/kubernetes/executor",
+    "apps/backend/kubernetes/compiler",
     "apps/backend/kubernetes/sink-trigger",
     "apps/backend/docker-compose/api",
     "apps/backend/docker-compose/runtime",
@@ -38,6 +42,7 @@ members = [
     "packages/api",
     "packages/sinks",
     "packages/executor",
+    "packages/compiler",
     "packages/wasm",
     "apps/utils/board-decoder",
 ]
@@ -64,6 +69,7 @@ flow-like-catalog-macros = { path = "packages/catalog-macros" }
 flow-like-storage = { path = "packages/storage" }
 flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor" }
+flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 lambda_http = "0.15.1"
 futures = "0.3.31"

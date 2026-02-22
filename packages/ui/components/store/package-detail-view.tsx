@@ -1,22 +1,34 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import {
 	ArrowLeft,
+	BookOpen,
 	Check,
 	Download,
 	ExternalLink,
 	FileCode,
 	Github,
 	Globe,
+	HelpCircle,
+	KeyRound,
 	Package,
 	RefreshCw,
+	Settings,
 	Shield,
+	ShoppingCart,
 	Tag,
 	User,
 } from "lucide-react";
-import type { RegistryEntry } from "../../lib/schema/wasm";
+import type { PackageMeta, RegistryEntry } from "../../lib/schema/wasm";
+import { useInvoke } from "../../hooks/use-invoke";
+import { isMaintainer } from "../../lib/permission/wasm-package-permission";
+import { useBackend } from "../../state/backend-state";
 import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
 	Badge,
 	Button,
 	Card,
@@ -24,6 +36,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	Separator,
 	Skeleton,
 	Tabs,
 	TabsContent,
@@ -34,6 +47,10 @@ import {
 	type CompileStatus,
 	PackageStatusBadge,
 } from "../ui/package-status-badge";
+import { PackageAccessTab } from "./package-access-tab";
+import { PackageMetaTab } from "./package-meta-tab";
+import { PackageUsersContainer } from "./package-users-container";
+import type { GenericFetcher } from "../pages/store/store-package-detail";
 
 function PermissionBadge({
 	label,
@@ -107,19 +124,68 @@ export interface PackageDetailViewProps {
 	isInstalling?: boolean;
 	isUninstalling?: boolean;
 	compileStatus?: CompileStatus;
+	price?: number;
+	visibility?: string;
+	priceLabel?: string;
+	hasAccess?: boolean;
+	isPurchasing?: boolean;
+	isRequesting?: boolean;
+	onBuy?: () => void;
+	onGetOrBuy?: () => void;
+	currentUserPermission?: number;
+	fetcher?: GenericFetcher;
+	auth?: unknown;
 }
 
-export function PackageDetailView({
-	pkg,
-	isLoading,
-	installedVersion,
-	onBack,
-	onInstall,
-	onUninstall,
-	isInstalling,
-	isUninstalling,
-	compileStatus,
-}: PackageDetailViewProps) {
+export function PackageDetailView(props: PackageDetailViewProps) {
+	const {
+		pkg,
+		isLoading,
+		installedVersion,
+		onBack,
+		onInstall,
+		onUninstall,
+		isInstalling,
+		isUninstalling,
+		compileStatus,
+		price,
+		visibility,
+		priceLabel,
+		hasAccess,
+		isPurchasing,
+		isRequesting,
+		onBuy,
+		onGetOrBuy,
+		currentUserPermission,
+		fetcher,
+		auth,
+	} = props;
+
+	const backend = useBackend();
+	const profile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const { data: meta } = useQuery<PackageMeta | null>({
+		queryKey: ["package-meta", pkg?.id],
+		queryFn: async () => {
+			if (!profile.data || !pkg?.id || !fetcher) return null;
+			try {
+				return await fetcher<PackageMeta>(
+					profile.data.hub_profile,
+					`registry/package/${pkg.id}/meta`,
+					{ method: "GET" },
+					auth,
+				);
+			} catch {
+				return null;
+			}
+		},
+		enabled: !!profile.data && !!pkg?.id && !!fetcher,
+	});
+
 	if (isLoading || !pkg) {
 		return (
 			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -154,12 +220,23 @@ export function PackageDetailView({
 					<CardHeader>
 						<div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
 							<div className="flex items-start gap-4">
-								<div className="p-3 rounded-lg bg-muted">
-									<Package className="h-8 w-8" />
-								</div>
+								<Avatar className="h-14 w-14 rounded-lg">
+									{meta?.icon ? (
+										<AvatarImage
+											src={meta.icon}
+											alt={meta.name ?? manifest.name}
+											className="object-cover"
+										/>
+									) : null}
+									<AvatarFallback className="rounded-lg bg-muted">
+										<Package className="h-7 w-7" />
+									</AvatarFallback>
+								</Avatar>
 								<div>
 									<div className="flex items-center gap-2 flex-wrap">
-										<CardTitle className="text-2xl">{manifest.name}</CardTitle>
+										<CardTitle className="text-2xl">
+											{meta?.name || manifest.name}
+										</CardTitle>
 										{pkg.verified && (
 											<Badge variant="secondary" className="gap-1">
 												<Shield className="h-3 w-3" />
@@ -168,7 +245,7 @@ export function PackageDetailView({
 										)}
 									</div>
 									<CardDescription className="mt-1">
-										{manifest.description}
+										{meta?.description || manifest.description}
 									</CardDescription>
 									<div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
 										<span className="flex items-center gap-1">
@@ -178,6 +255,15 @@ export function PackageDetailView({
 											<Download className="h-4 w-4" />
 											{pkg.downloadCount.toLocaleString()} downloads
 										</span>
+										{price != null && price > 0 ? (
+											<span className="flex items-center gap-1 font-medium">
+												{priceLabel}
+											</span>
+										) : priceLabel ? (
+											<span className="flex items-center gap-1 font-medium">
+												Free
+											</span>
+										) : null}
 										{compileStatus && compileStatus !== "idle" && (
 											<PackageStatusBadge status={compileStatus} />
 										)}
@@ -213,6 +299,39 @@ export function PackageDetailView({
 											Uninstall
 										</Button>
 									</>
+								) : hasAccess === false && price != null && price > 0 ? (
+									<Button onClick={onBuy} disabled={isPurchasing}>
+										{isPurchasing ? (
+											"Processing..."
+										) : (
+											<>
+												<ShoppingCart className="mr-2 h-4 w-4" />
+												{priceLabel || `€${(price / 100).toFixed(2)}`}
+											</>
+										)}
+									</Button>
+								) : hasAccess === false && visibility === "public_request_access" ? (
+									<Button onClick={onGetOrBuy} disabled={isRequesting}>
+										{isRequesting ? (
+											"Requesting..."
+										) : (
+											<>
+												<KeyRound className="mr-2 h-4 w-4" />
+												Request access
+											</>
+										)}
+									</Button>
+								) : hasAccess === false ? (
+									<Button onClick={onGetOrBuy} disabled={isRequesting}>
+										{isRequesting ? (
+											"Processing..."
+										) : (
+											<>
+												<Download className="mr-2 h-4 w-4" />
+												Get
+											</>
+										)}
+									</Button>
 								) : (
 									<Button
 										onClick={() => onInstall(undefined)}
@@ -242,9 +361,45 @@ export function PackageDetailView({
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
 						</TabsTrigger>
+						{currentUserPermission != null &&
+							isMaintainer(currentUserPermission) &&
+							fetcher && (
+								<>
+									<TabsTrigger value="access">Access Requests</TabsTrigger>
+									<TabsTrigger value="users">Users</TabsTrigger>
+									<TabsTrigger value="metadata" className="gap-1">
+										<Settings className="h-3.5 w-3.5" />
+										Metadata
+									</TabsTrigger>
+								</>
+							)}
 					</TabsList>
 
 					<TabsContent value="overview" className="space-y-4">
+						{/* Long Description */}
+						{meta?.longDescription && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="text-base">About</CardTitle>
+								</CardHeader>
+								<CardContent>
+									<p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
+										{meta.longDescription}
+									</p>
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Use Case */}
+						{meta?.useCase && (
+							<Card className="border-primary/20 bg-primary/5">
+								<CardContent className="pt-6">
+									<p className="text-sm font-medium text-primary mb-1">Use Case</p>
+									<p className="text-sm text-muted-foreground">{meta.useCase}</p>
+								</CardContent>
+							</Card>
+						)}
+
 						<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 							{/* Info Card */}
 							<Card className="md:col-span-2">
@@ -254,18 +409,22 @@ export function PackageDetailView({
 									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
-									{manifest.keywords.length > 0 && (
-										<div>
-											<h4 className="text-sm font-medium mb-2">Keywords</h4>
-											<div className="flex flex-wrap gap-1">
-												{manifest.keywords.map((kw) => (
-													<Badge key={kw} variant="outline">
-														{kw}
-													</Badge>
-												))}
+									{(() => {
+										const tags = meta?.tags?.length ? meta.tags : manifest.keywords;
+										if (!tags.length) return null;
+										return (
+											<div>
+												<h4 className="text-sm font-medium mb-2">Tags</h4>
+												<div className="flex flex-wrap gap-1">
+													{tags.map((t) => (
+														<Badge key={t} variant="outline">
+															{t}
+														</Badge>
+													))}
+												</div>
 											</div>
-										</div>
-									)}
+										);
+									})()}
 
 									{manifest.authors.length > 0 && (
 										<div>
@@ -322,23 +481,51 @@ export function PackageDetailView({
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
-									{manifest.homepage && (
+									{(meta?.website || manifest.homepage) && (
 										<a
-											href={manifest.homepage}
+											href={meta?.website || manifest.homepage}
 											target="_blank"
 											rel="noopener noreferrer"
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Globe className="h-4 w-4" />
-											Homepage
+											Website
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
-									{!manifest.repository && !manifest.homepage && (
-										<p className="text-sm text-muted-foreground">
-											No external links provided
-										</p>
+									{meta?.docsUrl && (
+										<a
+											href={meta.docsUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-2 text-sm hover:underline"
+										>
+											<BookOpen className="h-4 w-4" />
+											Documentation
+											<ExternalLink className="h-3 w-3" />
+										</a>
 									)}
+									{meta?.supportUrl && (
+										<a
+											href={meta.supportUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-2 text-sm hover:underline"
+										>
+											<HelpCircle className="h-4 w-4" />
+											Support
+											<ExternalLink className="h-3 w-3" />
+										</a>
+									)}
+									{!manifest.repository &&
+										!manifest.homepage &&
+										!meta?.website &&
+										!meta?.docsUrl &&
+										!meta?.supportUrl && (
+											<p className="text-sm text-muted-foreground">
+												No external links provided
+											</p>
+										)}
 								</CardContent>
 							</Card>
 						</div>
@@ -541,6 +728,35 @@ export function PackageDetailView({
 							</CardContent>
 						</Card>
 					</TabsContent>
+
+					{currentUserPermission != null &&
+						isMaintainer(currentUserPermission) &&
+						fetcher && (
+							<>
+								<TabsContent value="access" className="space-y-4">
+									<PackageAccessTab
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+									/>
+								</TabsContent>
+								<TabsContent value="users" className="space-y-4">
+									<PackageUsersContainer
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+										currentUserPermission={currentUserPermission}
+									/>
+								</TabsContent>
+								<TabsContent value="metadata" className="space-y-4">
+									<PackageMetaTab
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+									/>
+								</TabsContent>
+							</>
+						)}
 				</Tabs>
 			</div>
 		</main>

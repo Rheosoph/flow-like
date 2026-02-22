@@ -51,6 +51,8 @@ pub struct Model {
     pub template_id: Option<String>,
     #[sea_orm(column_name = "widgetId", column_type = "Text", nullable)]
     pub widget_id: Option<String>,
+    #[sea_orm(column_name = "wasmPackageId", column_type = "Text", nullable)]
+    pub wasm_package_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
@@ -99,6 +101,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Widget,
+    #[sea_orm(
+        belongs_to = "super::wasm_package::Entity",
+        from = "Column::WasmPackageId",
+        to = "super::wasm_package::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    WasmPackage,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -128,6 +138,12 @@ impl Related<super::template::Entity> for Entity {
 impl Related<super::widget::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Widget.def()
+    }
+}
+
+impl Related<super::wasm_package::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WasmPackage.def()
     }
 }
 

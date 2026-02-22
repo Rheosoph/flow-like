@@ -103,6 +103,10 @@ pub struct Hub {
     #[serde(default)]
     pub supported_sinks: Option<SupportedSinks>,
 
+    /// WASM registry configuration
+    #[serde(default)]
+    pub wasm_registry_config: WasmRegistryConfig,
+
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
 
@@ -352,6 +356,36 @@ impl SupportedSinks {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberLeavePolicy {
+    /// Remove packages added by the departing member from the app
+    Remove,
+    /// Mark packages as stale — frozen version, no updates, cannot be placed on new boards
+    Stale,
+}
+
+impl Default for MemberLeavePolicy {
+    fn default() -> Self {
+        Self::Stale
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct WasmRegistryConfig {
+    /// What happens to app packages when the member who added them leaves the app
+    #[serde(default)]
+    pub on_member_leave: MemberLeavePolicy,
+}
+
+impl Default for WasmRegistryConfig {
+    fn default() -> Self {
+        Self {
+            on_member_leave: MemberLeavePolicy::Stale,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct Features {
     pub model_hosting: bool,
@@ -363,6 +397,12 @@ pub struct Features {
     pub premium: bool,
     #[serde(default)]
     pub wasm_registry: bool,
+    #[serde(default)]
+    pub wasm_server_compilation: bool,
+    #[serde(default)]
+    pub app_package_linking: bool,
+    #[serde(default)]
+    pub wasm_package_user_management: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

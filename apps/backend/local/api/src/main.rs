@@ -44,31 +44,46 @@ async fn main() {
         Some(guard)
     };
 
-    let cdn_bucket = std::env::var("CDN_BUCKET_NAME").unwrap();
-    let cdn_bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
-    let cdn_bucket_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
-    let cdn_bucket_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
+    let content_bucket_name =
+        std::env::var("CONTENT_BUCKET").or_else(|_| std::env::var("CDN_BUCKET_NAME")).unwrap();
+    let cdn_bucket_name =
+        std::env::var("CDN_BUCKET_NAME").unwrap_or_else(|_| content_bucket_name.clone());
+    let meta_bucket_name =
+        std::env::var("META_BUCKET").unwrap_or_else(|_| content_bucket_name.clone());
 
-    let mut cdn_bucket = AmazonS3Builder::new().with_bucket_name(cdn_bucket);
-    if let Some(endpoint) = cdn_bucket_endpoint
-        && !endpoint.is_empty()
-    {
-        cdn_bucket = cdn_bucket.with_endpoint(endpoint);
-    }
+    let bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
+    let bucket_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
+    let bucket_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
 
-    if let (Some(access_key), Some(secret_key)) = (cdn_bucket_access_key, cdn_bucket_secret_key)
-        && !access_key.is_empty()
-        && !secret_key.is_empty()
-    {
-        cdn_bucket = cdn_bucket.with_access_key_id(access_key);
-        cdn_bucket = cdn_bucket.with_secret_access_key(secret_key);
-    }
+    let build_s3 = |name: String| -> flow_like_storage::files::store::FlowLikeStore {
+        let mut builder = AmazonS3Builder::new().with_bucket_name(name);
+        if let Some(endpoint) = &bucket_endpoint {
+            if !endpoint.is_empty() {
+                builder = builder.with_endpoint(endpoint);
+            }
+        }
+        if let (Some(ak), Some(sk)) = (&bucket_access_key, &bucket_secret_key) {
+            if !ak.is_empty() && !sk.is_empty() {
+                builder = builder.with_access_key_id(ak).with_secret_access_key(sk);
+            }
+        }
+        flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(builder.build().unwrap()))
+    };
 
-    let cdn_bucket =
-        flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_bucket.build().unwrap()));
+    let content_bucket = build_s3(content_bucket_name);
+    let cdn_bucket = build_s3(cdn_bucket_name);
+    let meta_bucket = build_s3(meta_bucket_name);
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket)).await);
+    let state = Arc::new(
+        flow_like_api::state::State::new(
+            catalog,
+            Arc::new(content_bucket),
+            Arc::new(cdn_bucket),
+            Arc::new(meta_bucket),
+        )
+        .await,
+    );
 
     let app = construct_router(state);
 

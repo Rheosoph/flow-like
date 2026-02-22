@@ -1,12 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
 	PackageUpdate,
+	RequestAccessParams,
+	RequestAccessResponse,
 	SearchFilters,
 	SearchResults,
+	WasmPurchaseParams,
+	WasmPurchaseResponse,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import type { IRegistryState } from "@tm9657/flow-like-ui/state/backend-state/registry-state";
+import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
 export class RegistryState implements IRegistryState {
@@ -57,5 +63,75 @@ export class RegistryState implements IRegistryState {
 
 	async checkForUpdates(): Promise<PackageUpdate[]> {
 		return invoke("registry_check_for_updates");
+	}
+
+	async purchasePackage(
+		packageId: string,
+		params?: WasmPurchaseParams,
+	): Promise<WasmPurchaseResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in to purchase a package.");
+		}
+		return fetcher<WasmPurchaseResponse>(
+			this.backend.profile,
+			`registry/package/${packageId}/purchase`,
+			{ method: "POST", body: JSON.stringify(params ?? {}) },
+			this.backend.auth,
+		);
+	}
+
+	async requestAccess(
+		packageId: string,
+		params?: RequestAccessParams,
+	): Promise<RequestAccessResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in to request access.");
+		}
+		return fetcher<RequestAccessResponse>(
+			this.backend.profile,
+			`registry/package/${packageId}/access`,
+			{ method: "PUT", body: JSON.stringify(params ?? {}) },
+			this.backend.auth,
+		);
+	}
+
+	async listAccessRequests(packageId: string): Promise<AccessRequest[]> {
+		if (!this.backend.profile || !this.backend.auth) return [];
+		return fetcher<AccessRequest[]>(
+			this.backend.profile,
+			`registry/package/${packageId}/access`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async acceptAccessRequest(
+		packageId: string,
+		requestId: string,
+	): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in.");
+		}
+		await fetcher<void>(
+			this.backend.profile,
+			`registry/package/${packageId}/access/${requestId}`,
+			{ method: "POST" },
+			this.backend.auth,
+		);
+	}
+
+	async rejectAccessRequest(
+		packageId: string,
+		requestId: string,
+	): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in.");
+		}
+		await fetcher<void>(
+			this.backend.profile,
+			`registry/package/${packageId}/access/${requestId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
 	}
 }

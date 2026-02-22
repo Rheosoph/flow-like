@@ -35,6 +35,9 @@
 		"premium": true,
 		"wasm_registry": true
 	},
+	"wasm_registry_config": {
+		"on_member_leave": "stale"
+	},
 	"supported_sinks": {
 		"http": true,
 		"webhook": true,

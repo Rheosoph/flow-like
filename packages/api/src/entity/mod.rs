@@ -4,6 +4,7 @@ pub mod prelude;
 
 pub mod app;
 pub mod app_discount;
+pub mod app_package;
 pub mod app_purchase;
 pub mod app_sales_daily;
 pub mod bit;
@@ -51,6 +52,10 @@ pub mod transaction;
 pub mod user;
 pub mod wasm_package;
 pub mod wasm_package_author;
+pub mod wasm_package_invitation;
+pub mod wasm_package_join_queue;
+pub mod wasm_package_purchase;
 pub mod wasm_package_review;
+pub mod wasm_package_user;
 pub mod wasm_package_version;
 pub mod widget;

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
 	Download,
+	KeyRound,
 	Package,
 	Search,
 	Shield,
@@ -11,10 +12,11 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import type {
 	PackageSummary,
 	SearchFilters,
@@ -25,6 +27,7 @@ import {
 	type GenericFetcher,
 	StorePackageDetail,
 } from "../pages/store/store-package-detail";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Input } from "../ui/input";
 import type { CompileStatus } from "../ui/package-status-badge";
 import {
@@ -50,49 +53,93 @@ interface PackagesStorePageProps {
 }
 
 function PackageCard({ pkg }: { pkg: PackageSummary }) {
+	const { primaryHue, isDark } = useThemeInfo();
+	const gradient = useMemo(
+		() => hashToGradient(pkg.id, primaryHue, isDark),
+		[pkg.id, primaryHue, isDark],
+	);
+	const displayName = pkg.metadata?.name ?? pkg.name;
+	const displayDesc = pkg.metadata?.description ?? pkg.description;
+	const icon = pkg.metadata?.icon;
+
 	return (
 		<Link
 			href={`/store/packages?id=${pkg.id}`}
-			className="group block rounded-2xl bg-card/60 border border-border/20 p-5 transition-all hover:bg-card/80 hover:border-border/40 hover:shadow-sm"
+			className="group relative flex items-stretch rounded-xl border border-border/30 bg-card/70 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/30 hover:bg-card/90 hover:shadow-md"
 		>
-			<div className="flex items-start justify-between mb-2">
-				<div className="flex items-center gap-2">
-					<Package className="h-4 w-4 text-muted-foreground/50" />
-					<h3 className="text-sm font-semibold group-hover:text-primary transition-colors">
-						{pkg.name}
-					</h3>
+			{/* Left accent strip with icon */}
+			<div className="relative w-20 shrink-0 flex items-center justify-center overflow-hidden">
+				<div
+					className="absolute inset-0"
+					style={{
+						background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+						opacity: gradient.opacity,
+					}}
+				/>
+				<div className="absolute inset-0 bg-linear-to-r from-transparent to-card/80" />
+				<Avatar className="relative z-10 w-10 h-10 rounded-lg shadow-sm border border-white/20">
+					{icon ? (
+						<AvatarImage src={icon} alt={displayName} className="rounded-lg" />
+					) : null}
+					<AvatarFallback className="rounded-lg text-xs font-bold bg-background/60 backdrop-blur-sm">
+						<Package className="h-4 w-4" />
+					</AvatarFallback>
+				</Avatar>
+			</div>
+
+			{/* Content */}
+			<div className="flex-1 min-w-0 px-4 py-3.5 flex flex-col justify-between gap-1.5">
+				<div className="flex items-start justify-between gap-2">
+					<div className="min-w-0">
+						<div className="flex items-center gap-2">
+							<h3 className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+								{displayName}
+							</h3>
+							{pkg.verified && (
+								<Shield className="h-3 w-3 text-blue-500 shrink-0" />
+							)}
+						</div>
+						<p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+							{displayDesc}
+						</p>
+					</div>
+					<div className="shrink-0">
+						{pkg.price > 0 ? (
+							<span className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2.5 py-0.5 text-xs font-semibold">
+								€{(pkg.price / 100).toFixed(2)}
+							</span>
+						) : pkg.visibility === "public_request_access" ? (
+							<span className="inline-flex items-center gap-1 rounded-full bg-muted/40 px-2.5 py-0.5 text-xs text-muted-foreground">
+								<KeyRound className="h-3 w-3" /> Request
+							</span>
+						) : null}
+					</div>
 				</div>
-				{pkg.verified && (
-					<span className="flex items-center gap-1 text-xs text-muted-foreground">
-						<Shield className="h-3 w-3" />
-						Verified
+
+				<div className="flex items-center gap-3 text-[11px] text-muted-foreground/60">
+					<span className="font-mono bg-muted/30 rounded px-1.5 py-0.5">
+						v{pkg.latestVersion}
 					</span>
-				)}
-			</div>
-			<p className="text-xs text-muted-foreground line-clamp-2 mb-3">
-				{pkg.description}
-			</p>
-			<div className="flex flex-wrap gap-1.5 mb-3">
-				{pkg.keywords.slice(0, 3).map((kw) => (
-					<span
-						key={kw}
-						className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] capitalize"
-					>
-						{kw}
+					<span className="flex items-center gap-1">
+						<Download className="h-3 w-3" />
+						{pkg.downloadCount.toLocaleString()}
 					</span>
-				))}
-				{pkg.keywords.length > 3 && (
-					<span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px]">
-						+{pkg.keywords.length - 3}
-					</span>
-				)}
-			</div>
-			<div className="flex items-center gap-4 text-xs text-muted-foreground/60">
-				<span className="flex items-center gap-1">
-					<Download className="h-3 w-3" />
-					{pkg.downloadCount.toLocaleString()}
-				</span>
-				<span>v{pkg.latestVersion}</span>
+					{pkg.keywords.length > 0 && (
+						<span className="hidden sm:inline-flex items-center gap-1 border-l border-border/30 pl-3">
+							{pkg.keywords.slice(0, 2).map((kw) => (
+								<span
+									key={kw}
+									className="rounded-full bg-muted/30 px-2 py-0.5 text-[10px] capitalize"
+								>
+									{kw}
+								</span>
+							))}
+							{pkg.keywords.length > 2 && (
+								<span className="text-[10px]">+{pkg.keywords.length - 2}</span>
+							)}
+						</span>
+					)}
+				</div>
 			</div>
 		</Link>
 	);
@@ -100,18 +147,22 @@ function PackageCard({ pkg }: { pkg: PackageSummary }) {
 
 function PackageCardSkeleton() {
 	return (
-		<div className="rounded-2xl bg-card/60 border border-border/20 p-5 space-y-3">
-			<div className="flex items-start justify-between">
-				<Skeleton className="h-4 w-32 rounded-full" />
-				<Skeleton className="h-4 w-14 rounded-full" />
+		<div className="flex items-stretch rounded-xl border border-border/30 bg-card/70 overflow-hidden">
+			<div className="w-20 shrink-0 bg-muted/20" />
+			<div className="flex-1 px-4 py-3.5 space-y-2">
+				<div className="flex items-start justify-between">
+					<div className="space-y-1.5 flex-1">
+						<Skeleton className="h-4 w-32 rounded" />
+						<Skeleton className="h-3 w-full rounded" />
+					</div>
+					<Skeleton className="h-5 w-14 rounded-full ml-2" />
+				</div>
+				<div className="flex gap-2">
+					<Skeleton className="h-4 w-14 rounded" />
+					<Skeleton className="h-4 w-10 rounded" />
+					<Skeleton className="h-4 w-12 rounded-full" />
+				</div>
 			</div>
-			<Skeleton className="h-8 w-full rounded-lg" />
-			<div className="flex gap-1.5">
-				<Skeleton className="h-4 w-12 rounded-full" />
-				<Skeleton className="h-4 w-16 rounded-full" />
-				<Skeleton className="h-4 w-10 rounded-full" />
-			</div>
-			<Skeleton className="h-3 w-24 rounded-full" />
 		</div>
 	);
 }
@@ -128,6 +179,19 @@ function PackageDetailWrapper({
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const packageId = searchParams.get("id") ?? "";
+	const purchaseStatus = searchParams.get("purchase");
+
+	useEffect(() => {
+		if (!purchaseStatus) return;
+		if (purchaseStatus === "success") {
+			toast.success("Purchase successful! You now have access to this package.", { duration: 5000 });
+		} else if (purchaseStatus === "canceled") {
+			toast.info("Purchase was canceled. You can try again anytime.");
+		}
+		const url = new URL(window.location.href);
+		url.searchParams.delete("purchase");
+		router.replace(url.pathname + url.search, { scroll: false });
+	}, [purchaseStatus, router]);
 
 	const handleBack = useCallback(() => router.back(), [router]);
 	const compileStatus = getPackageStatus?.(packageId);
@@ -180,6 +244,7 @@ function PackageListContent({
 			verifiedOnly,
 			offset,
 			limit,
+			language: navigator.language?.split("-")[0] ?? "en",
 		};
 	}, [debouncedQuery, sortBy, verifiedOnly, offset, limit]);
 
@@ -194,6 +259,7 @@ function PackageListContent({
 			params.set("verified_only", String(verifiedOnly));
 			params.set("offset", String(offset));
 			params.set("limit", String(limit));
+			params.set("language", navigator.language?.split("-")[0] ?? "en");
 
 			return fetcher<SearchResults>(
 				profile.data.hub_profile,
@@ -278,7 +344,7 @@ function PackageListContent({
 				)}
 
 				{searchResults.isLoading ? (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 						{Array.from({ length: 8 }).map((_, i) => (
 							<PackageCardSkeleton key={i} />
 						))}
@@ -292,7 +358,7 @@ function PackageListContent({
 						</p>
 					</div>
 				) : (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 						{searchResults.data?.packages.map((pkg) => (
 							<PackageCard key={pkg.id} pkg={pkg} />
 						))}

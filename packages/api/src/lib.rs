@@ -35,6 +35,7 @@ pub mod storage_config;
 pub mod user_management;
 
 pub mod backend_jwt;
+pub mod compilation;
 pub mod execution;
 
 pub use routes::registry::ServerRegistry;

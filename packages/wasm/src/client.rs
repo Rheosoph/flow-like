@@ -3,14 +3,15 @@
 use crate::{
     manifest::PackageManifest,
     registry::{
-        CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, LocalRegistryState,
-        PackageSource, PackageSummary, PackageVersion, PublishRequest, PublishResponse,
-        RegistryConfig, RegistryEntry, RegistryIndex, SearchFilters, SearchResults,
+        CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
+        LocalRegistryState, PackageSource, PackageSummary, PackageVersion, PublishRequest,
+        PublishResponse, RegistryConfig, RegistryEntry, RegistryIndex, SearchFilters,
+        SearchResults,
     },
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Registry client for managing WASM packages
@@ -38,9 +39,20 @@ impl RegistryClient {
         tokio::fs::create_dir_all(&self.config.cache_dir).await?;
         tokio::fs::create_dir_all(self.config.cache_dir.join("packages")).await?;
         tokio::fs::create_dir_all(self.config.cache_dir.join("manifests")).await?;
+        tokio::fs::create_dir_all(self.config.cache_dir.join("wasm").join("nodes")).await?;
 
         self.load_state().await?;
         Ok(())
+    }
+
+    fn versioned_wasm_path(&self, package_id: &str, version: &str) -> PathBuf {
+        self.config
+            .cache_dir
+            .join("wasm")
+            .join("nodes")
+            .join(package_id)
+            .join(version)
+            .join("node.wasm")
     }
 
     async fn load_state(&self) -> Result<()> {
@@ -273,31 +285,46 @@ impl RegistryClient {
             return Err(anyhow!("No download URL or WASM data in response"));
         };
 
-        let cache_key = format!("{}@{}", download.package_id, download.version);
-        let wasm_path = self
-            .config
-            .cache_dir
-            .join("packages")
-            .join(format!("{}.wasm", cache_key));
-
+        let wasm_path = self.versioned_wasm_path(&download.package_id, &download.version);
+        if let Some(parent) = wasm_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         tokio::fs::write(&wasm_path, &wasm_data).await?;
 
-        let installed = InstalledPackage {
-            id: download.package_id.clone(),
+        let now = Utc::now();
+        let installed_version = InstalledVersion {
             version: download.version.clone(),
-            source: PackageSource::Remote {
-                registry_url: self.config.default_registry.clone(),
-                download_url: download.download_url.clone().unwrap_or(url.clone()),
-            },
-            installed_at: Utc::now(),
             wasm_path: wasm_path.clone(),
+            installed_at: now,
             manifest: download.manifest.clone(),
         };
 
         let mut state = self.state.write().await;
-        state
-            .installed
-            .insert(download.package_id.clone(), installed);
+        if let Some(existing) = state.installed.get_mut(&download.package_id) {
+            existing.version = download.version.clone();
+            existing.installed_at = now;
+            existing.wasm_path = wasm_path.clone();
+            existing.manifest = download.manifest.clone();
+            existing
+                .versions
+                .insert(download.version.clone(), installed_version);
+        } else {
+            let installed = InstalledPackage {
+                id: download.package_id.clone(),
+                version: download.version.clone(),
+                source: PackageSource::Remote {
+                    registry_url: self.config.default_registry.clone(),
+                    download_url: download.download_url.clone().unwrap_or(url.clone()),
+                },
+                installed_at: now,
+                wasm_path: wasm_path.clone(),
+                manifest: download.manifest.clone(),
+                versions: HashMap::from([(download.version.clone(), installed_version)]),
+            };
+            state
+                .installed
+                .insert(download.package_id.clone(), installed);
+        }
         drop(state);
         self.save_state().await?;
 
@@ -334,6 +361,37 @@ impl RegistryClient {
     /// Install a package (download + register)
     pub async fn install(&self, package_id: &str, version: Option<&str>) -> Result<CachedPackage> {
         self.download_package(package_id, version).await
+    }
+
+    pub async fn install_version(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> Result<CachedPackage> {
+        let state = self.state.read().await;
+        if let Some(installed) = state.installed.get(package_id) {
+            if let Some(iv) = installed.get_version(version) {
+                if iv.wasm_path.exists() {
+                    let wasm_data = tokio::fs::read(&iv.wasm_path).await?;
+                    return Ok(self.cached_package_from_version(installed, iv, wasm_data));
+                }
+            }
+        }
+        drop(state);
+
+        self.download_package(package_id, Some(version)).await
+    }
+
+    pub async fn batch_install(
+        &self,
+        packages: &[(String, Option<String>)],
+    ) -> Result<Vec<(String, Result<CachedPackage>)>> {
+        let mut results = Vec::with_capacity(packages.len());
+        for (package_id, version) in packages {
+            let result = self.install(package_id, version.as_deref()).await;
+            results.push((package_id.clone(), result));
+        }
+        Ok(results)
     }
 
     /// Uninstall a package
@@ -499,6 +557,39 @@ impl RegistryClient {
         state.installed.get(package_id).cloned()
     }
 
+    fn cached_package_from_version(
+        &self,
+        installed: &InstalledPackage,
+        iv: &InstalledVersion,
+        wasm_data: Vec<u8>,
+    ) -> CachedPackage {
+        CachedPackage {
+            entry: RegistryEntry {
+                id: installed.id.clone(),
+                manifest: iv.manifest.clone(),
+                versions: vec![PackageVersion {
+                    version: iv.version.clone(),
+                    wasm_hash: String::new(),
+                    wasm_size: wasm_data.len() as u64,
+                    download_url: None,
+                    published_at: iv.installed_at,
+                    min_flow_like_version: None,
+                    release_notes: None,
+                    yanked: false,
+                }],
+                status: crate::registry::PackageStatus::Active,
+                download_count: 0,
+                created_at: iv.installed_at,
+                updated_at: iv.installed_at,
+                source: installed.source.clone(),
+                verified: false,
+            },
+            wasm_data,
+            cached_at: iv.installed_at,
+            expires_at: None,
+        }
+    }
+
     /// Load WASM nodes from an installed package
     /// Returns one WasmNodeLogic per node definition (supports multi-node packages)
     pub async fn load_nodes(
@@ -539,6 +630,41 @@ impl RegistryClient {
             .collect();
 
         Ok(nodes)
+    }
+
+    pub async fn load_nodes_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        engine: Arc<crate::WasmEngine>,
+    ) -> Result<Vec<crate::WasmNodeLogic>> {
+        let installed = self
+            .get_installed(package_id)
+            .await
+            .ok_or_else(|| anyhow!("Package '{}' is not installed", package_id))?;
+
+        let iv = installed
+            .get_version(version)
+            .ok_or_else(|| anyhow!("Version '{}' not installed for '{}'", version, package_id))?;
+
+        let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
+        let security = iv.manifest.permissions.to_security_config();
+        let loaded = engine.load_auto(&wasm_bytes).await?;
+        let mut instance = loaded.instantiate(&engine, security.clone()).await?;
+        let definitions = instance.call_get_nodes().await?;
+
+        Ok(definitions
+            .into_iter()
+            .map(|def| {
+                crate::WasmNodeLogic::from_loaded_with_target(
+                    loaded.clone(),
+                    engine.clone(),
+                    security.clone(),
+                    def,
+                )
+                .with_package_id(package_id.to_string())
+            })
+            .collect())
     }
 
     /// Load all nodes from all installed packages

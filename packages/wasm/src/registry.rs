@@ -338,15 +338,37 @@ pub struct LocalRegistryState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledVersion {
+    pub version: String,
+    pub wasm_path: PathBuf,
+    pub installed_at: chrono::DateTime<chrono::Utc>,
+    pub manifest: PackageManifest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPackage {
     pub id: String,
     pub version: String,
     pub source: PackageSource,
     pub installed_at: chrono::DateTime<chrono::Utc>,
-    /// Path to cached WASM file
     pub wasm_path: PathBuf,
-    /// Manifest snapshot at install time
     pub manifest: PackageManifest,
+    #[serde(default)]
+    pub versions: HashMap<String, InstalledVersion>,
+}
+
+impl InstalledPackage {
+    pub fn active_version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn get_version(&self, version: &str) -> Option<&InstalledVersion> {
+        self.versions.get(version)
+    }
+
+    pub fn has_version(&self, version: &str) -> bool {
+        self.versions.contains_key(version)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

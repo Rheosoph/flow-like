@@ -156,6 +156,17 @@ impl ApiError {
         )
     }
 
+    pub fn payment_required(msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::warn!("Payment required: {}", msg);
+        Self::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "PAYMENT_REQUIRED",
+            Some(msg),
+            ReportPolicy::Ignore,
+        )
+    }
+
     pub fn gone(msg: impl Into<String>) -> Self {
         let msg = msg.into();
         tracing::warn!("Gone: {}", msg);

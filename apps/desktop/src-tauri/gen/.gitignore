@@ -1,1 +1,3 @@
-schemas/
+schemas/**/*
+schemas
+./schemas

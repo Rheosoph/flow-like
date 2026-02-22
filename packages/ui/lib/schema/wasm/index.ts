@@ -52,13 +52,55 @@ export interface PackagePermissions {
 	models: boolean;
 }
 
+export interface NodeScores {
+	privacy: number;
+	security: number;
+	performance: number;
+	governance: number;
+	reliability: number;
+	cost: number;
+}
+
+export interface PinOptions {
+	sensitive?: boolean;
+	validValues?: string[];
+	range?: [number, number];
+	step?: number;
+	enforceSchema?: boolean;
+	enforceGenericValueType?: boolean;
+}
+
+export interface Pin {
+	id: string;
+	name: string;
+	friendlyName?: string;
+	pinType: "Input" | "Output";
+	dataType: string;
+	defaultValue?: unknown;
+	options?: PinOptions;
+	schema?: unknown;
+	depends_on: string[];
+	connected_to: string[];
+}
+
 export interface PackageNodeEntry {
 	id: string;
 	name: string;
+	friendlyName?: string;
 	description: string;
 	category: string;
 	icon?: string;
+	scores?: NodeScores;
+	pins: Record<string, Pin>;
+	start?: boolean;
+	longRunning?: boolean;
+	docs?: string;
+	eventCallback?: boolean;
 	oauthProviders: string[];
+	requiredOauthScopes?: Record<string, string[]>;
+	onlyOffline: boolean;
+	version?: number;
+	permissions: string[];
 	metadata: Record<string, unknown>;
 }
 
@@ -115,6 +157,9 @@ export interface RegistryEntry {
 	updatedAt: string;
 	source: PackageSource;
 	verified: boolean;
+	price: number;
+	visibility: string;
+	currentUserPermission?: number;
 }
 
 export interface CachedPackage {
@@ -133,6 +178,9 @@ export interface PackageSummary {
 	status: PackageStatus;
 	keywords: string[];
 	verified: boolean;
+	price: number;
+	visibility: string;
+	metadata?: MetaSummary;
 }
 
 export interface SearchResults {
@@ -162,12 +210,15 @@ export interface SearchFilters {
 	sortDesc?: boolean;
 	offset?: number;
 	limit?: number;
+	language?: string;
 }
 
 export interface PackageUpdate {
 	packageId: string;
+	packageName: string;
 	currentVersion: string;
 	latestVersion: string;
+	releaseNotes?: string;
 }
 
 // Admin types for package management
@@ -190,14 +241,17 @@ export interface PackageDetails {
 	repository?: string;
 	keywords: string[];
 	status: PackageAdminStatus;
+	visibility: PackageVisibility;
 	verified: boolean;
 	downloadCount: number;
 	wasmSize: number;
 	nodes: PackageNodeEntry[];
 	permissions: PackagePermissions;
+	price: number;
 	createdAt: string;
 	updatedAt: string;
 	publishedAt?: string;
+	readme?: string;
 	submitterId?: string;
 }
 
@@ -250,4 +304,184 @@ export interface AdminPackageListResponse {
 export interface AdminPackageDetailResponse {
 	package: PackageDetails;
 	reviews: PackageReview[];
+}
+
+// Package visibility and compilation
+export type PackageVisibility = "private" | "public" | "public_request_access";
+
+export type CompilationStatus = "compiled" | "local_only" | "pending";
+
+export type InvitationStatus = "pending" | "accepted" | "rejected" | "expired";
+
+// Package user/team management
+export type PackagePermissionLevel = "owner" | "maintainer" | "user" | "buyer";
+
+export interface PackageUser {
+	id: string;
+	userId: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	permission: number;
+	grantedAt: string;
+}
+
+export interface PackageInvitation {
+	id: string;
+	packageId: string;
+	inviteeId: string;
+	invitedById: string;
+	permission: number;
+	status: InvitationStatus;
+	createdAt: string;
+	expiresAt?: string;
+}
+
+export interface InviteUserRequest {
+	inviteeId: string;
+	permission: number;
+}
+
+export interface UpdateUserPermissionRequest {
+	permission: number;
+}
+
+// Two-step publish flow
+export interface UploadUrlResponse {
+	uploadUrl: string;
+	tmpPath: string;
+	expiresInSecs: number;
+}
+
+export interface TwoStepPublishRequest {
+	manifest: PackageManifest;
+	tmpPath: string;
+}
+
+// Recompile
+export interface RecompileRequest {
+	packageId: string;
+	version: string;
+}
+
+export interface RecompileResponse {
+	success: boolean;
+	message: string;
+}
+
+export interface MetaSummary {
+	lang: string;
+	name: string;
+	description: string;
+	icon?: string;
+	thumbnail?: string;
+}
+
+export interface PackageMeta {
+	id: string;
+	lang: string;
+	name: string;
+	description?: string;
+	longDescription?: string;
+	tags?: string[];
+	icon?: string;
+	thumbnail?: string;
+	website?: string;
+	supportUrl?: string;
+	docsUrl?: string;
+	useCase?: string;
+	releaseNotes?: string;
+	previewMedia?: string[];
+	ageRating?: number;
+}
+
+export interface UpsertPackageMetaRequest {
+	name: string;
+	description?: string;
+	longDescription?: string;
+	tags?: string[];
+	website?: string;
+	supportUrl?: string;
+	docsUrl?: string;
+	useCase?: string;
+	releaseNotes?: string;
+	ageRating?: number;
+}
+
+export interface PushMediaResponse {
+	signed_url: string;
+}
+
+// App package management
+export interface AppPackage {
+	id: string;
+	appId: string;
+	packageId: string;
+	packageName?: string;
+	version: string;
+	autoUpdate: boolean;
+	addedAt: string;
+	stale: boolean;
+	metadata?: MetaSummary;
+}
+
+export interface AddAppPackageRequest {
+	packageId: string;
+	version: string;
+	autoUpdate: boolean;
+}
+
+export interface UpdateAppPackageRequest {
+	version?: string;
+	autoUpdate?: boolean;
+}
+
+// Extended PackageVersion with compilation info
+export interface PackageVersionExtended extends PackageVersion {
+	compilationStatus: CompilationStatus;
+	compiledPlatforms: string[];
+	compilationError?: string;
+	duplicateOfPackageId?: string;
+	duplicateOfVersion?: string;
+	duplicateFlagged: boolean;
+	nodes: PackageNodeEntry[];
+}
+
+// Extended PackageDetails with visibility
+export interface PackageDetailsExtended extends PackageDetails {
+	visibility: PackageVisibility;
+	readme?: string;
+	users: PackageUser[];
+}
+
+// Purchase and access request types
+
+export interface WasmPurchaseParams {
+	successUrl?: string;
+	cancelUrl?: string;
+}
+
+export interface WasmPurchaseResponse {
+	checkoutUrl?: string;
+	alreadyHasAccess: boolean;
+	packageId: string;
+}
+
+export interface RequestAccessParams {
+	comment?: string;
+}
+
+export interface RequestAccessResponse {
+	granted: boolean;
+	queued: boolean;
+	requiresPurchase: boolean;
+	packageId: string;
+}
+
+export interface AccessRequest {
+	id: string;
+	userId: string;
+	packageId: string;
+	comment?: string;
+	createdAt: string;
 }

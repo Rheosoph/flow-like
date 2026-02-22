@@ -5,6 +5,8 @@ use flow_like_types::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub use flow_like_types::dispatch::{DispatchPayload, WasmPackageRef};
+
 /// Board version as a tuple (major, minor, patch)
 pub type BoardVersion = (u32, u32, u32);
 
@@ -46,6 +48,10 @@ pub struct ExecutionRequest {
     /// User profile (bits, hubs, settings) - pre-filtered for cloud deployments
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<serde_json::Value>,
+    /// Pre-resolved WASM packages needed for this execution.
+    /// Map of package_id → (version, wasm_hash) pre-resolved by the API from AppPackage records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_packages: Option<HashMap<String, WasmPackageRef>>,
 }
 
 /// Result of an execution
@@ -102,4 +108,34 @@ pub enum EventType {
     NodeStart,
     NodeEnd,
     Custom(String),
+}
+
+impl TryFrom<DispatchPayload> for ExecutionRequest {
+    type Error = serde_json::Error;
+
+    fn try_from(p: DispatchPayload) -> Result<Self, Self::Error> {
+        let credentials: SharedCredentials = serde_json::from_value(p.credentials)?;
+        let runtime_variables = p
+            .runtime_variables
+            .map(serde_json::from_value)
+            .transpose()?;
+        let user_context = p.user_context.map(serde_json::from_value).transpose()?;
+
+        Ok(Self {
+            credentials,
+            app_id: p.app_id,
+            board_id: p.board_id,
+            board_version: p.board_version,
+            node_id: p.node_id,
+            event_json: p.event_json,
+            payload: p.payload,
+            executor_jwt: p.executor_jwt,
+            oauth_tokens: p.oauth_tokens,
+            stream_state: p.stream_state,
+            runtime_variables,
+            user_context,
+            profile: p.profile,
+            wasm_packages: p.wasm_packages,
+        })
+    }
 }

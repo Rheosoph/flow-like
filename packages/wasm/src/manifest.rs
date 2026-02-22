@@ -303,6 +303,9 @@ pub struct PackageNodeEntry {
     pub id: String,
     /// Display name
     pub name: String,
+    /// Optional human-friendly name
+    #[serde(default)]
+    pub friendly_name: Option<String>,
     /// Description
     pub description: String,
     /// Category path
@@ -310,10 +313,45 @@ pub struct PackageNodeEntry {
     /// Icon (optional, base64 or URL)
     #[serde(default)]
     pub icon: Option<String>,
+    /// Node quality / impact scores
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    pub scores: Option<flow_like::flow::node::NodeScores>,
+    /// Pin definitions keyed by pin id
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<String, Object>))]
+    pub pins: HashMap<String, flow_like::flow::pin::Pin>,
+    /// Whether this node is a start node
+    #[serde(default)]
+    pub start: Option<bool>,
+    /// Whether the node is long-running
+    #[serde(default)]
+    pub long_running: Option<bool>,
+    /// Documentation / help text
+    #[serde(default)]
+    pub docs: Option<String>,
+    /// Whether the node supports event callbacks
+    #[serde(default)]
+    pub event_callback: Option<bool>,
+    /// Function references
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    pub fn_refs: Option<flow_like::flow::node::FnRefs>,
     /// Which OAuth providers this specific node needs
-    /// (subset of package-level oauth_scopes)
     #[serde(default)]
     pub oauth_providers: Vec<String>,
+    /// Required OAuth scopes per provider
+    #[serde(default)]
+    pub required_oauth_scopes: Option<HashMap<String, Vec<String>>>,
+    /// Whether this node can only run offline
+    #[serde(default)]
+    pub only_offline: bool,
+    /// Schema version of this node entry
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// Node-level permission labels
+    #[serde(default)]
+    pub permissions: Vec<String>,
     /// Additional node-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,

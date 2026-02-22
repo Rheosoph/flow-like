@@ -14,7 +14,7 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        is_jwt_configured, proxy_sse_response, sign_execution_jwt,
+        is_jwt_configured, proxy_sse_response, resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -188,6 +188,9 @@ pub async fn trigger_event(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    let wasm_packages =
+        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+
     // Build dispatch request
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -207,6 +210,7 @@ pub async fn trigger_event(
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -437,6 +441,9 @@ pub async fn trigger_http(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    let wasm_packages =
+        resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
+
     // Build dispatch request
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -456,6 +463,7 @@ pub async fn trigger_http(
         runtime_variables: None,
         user_context: None, // HTTP sink triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -775,6 +783,9 @@ pub async fn trigger_telegram(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    let wasm_packages =
+        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -794,6 +805,7 @@ pub async fn trigger_telegram(
         runtime_variables: None,
         user_context: None, // Telegram webhook triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -1083,6 +1095,9 @@ pub async fn trigger_discord(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    let wasm_packages =
+        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -1102,6 +1117,7 @@ pub async fn trigger_discord(
         runtime_variables: None,
         user_context: None, // Discord webhook triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record

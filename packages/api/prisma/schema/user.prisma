@@ -45,8 +45,12 @@ model User {
   invitations                 Invitation[]
   transactions                Transaction[]
   notifications               Notification[]
-  authoredWasmPackages        WasmPackageAuthor[]
+  wasmPackageAccess           WasmPackageUser[]
   wasmPackageReviews          WasmPackageReview[]
+  wasmInvitesSent             WasmPackageInvitation[] @relation("WasmInviter")
+  wasmInvitesReceived         WasmPackageInvitation[] @relation("WasmInvitee")
+  wasmPackageJoinQueue        WasmPackageJoinQueue[]
+  wasmPackagePurchases        WasmPackagePurchase[]
   purchases                   AppPurchase[]
   interactions                Interaction[]
 

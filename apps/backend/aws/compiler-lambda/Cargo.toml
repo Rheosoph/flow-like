@@ -1,0 +1,28 @@
+[package]
+name = "aws-compiler-lambda"
+version = "0.1.0"
+edition = "2021"
+description = "Flow-Like AWS Lambda WASM Compiler (SQS consumer)"
+
+[dependencies]
+flow-like-compiler.workspace = true
+flow-like-types.workspace = true
+
+aws_lambda_events = { version = "0.16.0", default-features = false, features = ["sqs"] }
+lambda_runtime.workspace = true
+mimalloc.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing-subscriber.workspace = true
+sentry.workspace = true
+sentry-tracing.workspace = true
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

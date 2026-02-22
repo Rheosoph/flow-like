@@ -22,6 +22,7 @@
 //! - **LambdaStream**: AWS Lambda SDK streaming invocation (returns streaming response)
 //! - **KubernetesJob**: Native K8s Job creation for isolated executions
 //! - **Sqs**: AWS SQS queue for batch processing with Lambda consumer
+//! - **SqsEventBridge**: SQS → EventBridge Pipe → ECS RunTask (payload staged to storage)
 //! - **Kafka**: Apache Kafka queue for high-throughput batch processing
 //! - **Redis**: Redis queue for Docker Compose / Kubernetes async dispatch
 //!
@@ -84,6 +85,7 @@
 //! | Low latency | HTTP → Warm Pool (K8s/Lambda) |
 //! | Untrusted code | KubernetesJob or Lambda |
 //! | Batch processing | SQS, Kafka, or Redis (decoupled, retry built-in) |
+//! | Long-running batch | SqsEventBridge (ECS with no timeout limits) |
 //! | High-throughput batch | Kafka (millions/sec, partitioned) |
 //! | Streaming response | HTTP or LambdaStream |
 //! | Cost optimization | HTTP → Warm Pool |
@@ -101,6 +103,8 @@
 
 use flow_like_types::create_id;
 use serde::{Deserialize, Serialize};
+use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::Path as StorePath;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -130,6 +134,10 @@ pub enum ExecutionBackend {
     Kafka,
     /// Redis queue for Docker Compose / Kubernetes async dispatch
     Redis,
+    /// SQS → EventBridge Pipe → ECS RunTask for long-running executions.
+    /// Stages full payload to object storage (avoids 8 KB ECS env var limit)
+    /// and sends only a presigned URL reference via SQS.
+    SqsEventBridge,
 }
 
 impl ExecutionBackend {
@@ -153,6 +161,7 @@ impl ExecutionBackend {
             "sqs" | "aws_sqs" => Self::Sqs,
             "kafka" => Self::Kafka,
             "redis" | "redis_queue" => Self::Redis,
+            "sqs_event_bridge" | "sqs_ecs" | "ecs" => Self::SqsEventBridge,
             _ => Self::Http,
         }
     }
@@ -162,7 +171,7 @@ impl ExecutionBackend {
     }
 
     pub fn is_queue(&self) -> bool {
-        matches!(self, Self::Sqs | Self::Kafka | Self::Redis)
+        matches!(self, Self::Sqs | Self::SqsEventBridge | Self::Kafka | Self::Redis)
     }
 }
 
@@ -185,6 +194,8 @@ pub struct DispatchConfig {
     pub k8s_executor_image: String,
     /// SQS queue URL (for Sqs backend)
     pub sqs_queue_url: Option<String>,
+    /// SQS queue URL for EventBridge Pipe → ECS dispatch
+    pub sqs_event_bridge_queue_url: Option<String>,
     /// Kafka bootstrap servers (comma-separated)
     pub kafka_brokers: Option<String>,
     /// Kafka topic name
@@ -215,6 +226,7 @@ impl DispatchConfig {
             k8s_executor_image: std::env::var("K8S_EXECUTOR_IMAGE")
                 .unwrap_or_else(|_| "flow-like-executor:latest".into()),
             sqs_queue_url: std::env::var("SQS_EXECUTION_QUEUE_URL").ok(),
+            sqs_event_bridge_queue_url: std::env::var("SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL").ok(),
             kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("KAFKA_EXECUTION_TOPIC").ok(),
             redis_url: std::env::var("REDIS_URL").ok(),
@@ -259,6 +271,9 @@ pub struct DispatchRequest {
     /// User profile data for execution context (bits, settings, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<serde_json::Value>,
+    /// Pre-resolved WASM packages with presigned download URLs for executor
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_packages: Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
 }
 
 /// Response from dispatch
@@ -294,6 +309,7 @@ pub enum DispatchError {
 #[derive(Clone)]
 pub struct Dispatcher {
     config: Arc<DispatchConfig>,
+    staging_bucket: Option<Arc<FlowLikeStore>>,
     #[cfg(feature = "lambda")]
     lambda_client: Option<aws_sdk_lambda::Client>,
     #[cfg(feature = "sqs")]
@@ -303,7 +319,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub async fn new(config: DispatchConfig) -> Self {
+    pub async fn new(config: DispatchConfig, staging_bucket: Option<Arc<FlowLikeStore>>) -> Self {
         #[cfg(feature = "lambda")]
         let lambda_client = if config.backend.is_lambda() || config.async_backend.is_lambda() {
             let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
@@ -315,6 +331,8 @@ impl Dispatcher {
         #[cfg(feature = "sqs")]
         let sqs_client = if config.backend == ExecutionBackend::Sqs
             || config.async_backend == ExecutionBackend::Sqs
+            || config.backend == ExecutionBackend::SqsEventBridge
+            || config.async_backend == ExecutionBackend::SqsEventBridge
         {
             let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
             Some(aws_sdk_sqs::Client::new(&aws_config))
@@ -336,6 +354,7 @@ impl Dispatcher {
 
         Self {
             config: Arc::new(config),
+            staging_bucket,
             #[cfg(feature = "lambda")]
             lambda_client,
             #[cfg(feature = "sqs")]
@@ -348,6 +367,7 @@ impl Dispatcher {
     pub fn from_config(config: DispatchConfig) -> Self {
         Self {
             config: Arc::new(config),
+            staging_bucket: None,
             #[cfg(feature = "lambda")]
             lambda_client: None,
             #[cfg(feature = "sqs")]
@@ -404,6 +424,7 @@ impl Dispatcher {
             )),
             ExecutionBackend::KubernetesJob => self.dispatch_k8s_job(&job_id, &request).await,
             ExecutionBackend::Sqs => self.dispatch_sqs(&job_id, &request).await,
+            ExecutionBackend::SqsEventBridge => self.dispatch_sqs_event_bridge(&job_id, &request).await,
             ExecutionBackend::Kafka => self.dispatch_kafka(&job_id, &request).await,
             ExecutionBackend::Redis => self.dispatch_redis(&job_id, &request).await,
         }
@@ -725,6 +746,85 @@ impl Dispatcher {
         ))
     }
 
+    /// Dispatch via SQS → EventBridge Pipe → ECS RunTask.
+    ///
+    /// Stages the full payload to object storage as JSON, signs a GET URL,
+    /// and sends only a compact `DispatchPayloadRef::Remote` reference via SQS.
+    /// This avoids ECS container-override env var size limits (~8 KB).
+    #[cfg(feature = "sqs")]
+    async fn dispatch_sqs_event_bridge(
+        &self,
+        job_id: &str,
+        request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        let queue_url = self.config.sqs_event_bridge_queue_url.as_ref().ok_or_else(|| {
+            DispatchError::Configuration("SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL not configured".into())
+        })?;
+
+        let staging = self.staging_bucket.as_ref().ok_or_else(|| {
+            DispatchError::Configuration("Staging bucket not configured for SqsEventBridge backend".into())
+        })?;
+
+        let client = self
+            .sqs_client
+            .as_ref()
+            .ok_or_else(|| DispatchError::Configuration("SQS client not initialized".into()))?;
+
+        let body = build_executor_payload(job_id, request);
+        let payload_bytes = serde_json::to_vec(&body)
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
+
+        let staging_path = StorePath::from(format!("tmp/sqs/{}.json", job_id));
+        staging
+            .put(&staging_path, payload_bytes)
+            .await
+            .map_err(|e| DispatchError::Sqs(format!("Failed to stage payload: {}", e)))?;
+
+        let presigned_url = staging
+            .sign("GET", &staging_path, std::time::Duration::from_secs(86400))
+            .await
+            .map_err(|e| DispatchError::Sqs(format!("Failed to sign staging URL: {}", e)))?;
+
+        let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
+            remote_url: presigned_url.to_string(),
+        };
+        let message_body = serde_json::to_string(&reference)
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
+
+        client
+            .send_message()
+            .queue_url(queue_url)
+            .message_body(&message_body)
+            .message_group_id(&request.app_id)
+            .message_deduplication_id(job_id)
+            .send()
+            .await
+            .map_err(|e| DispatchError::Sqs(e.to_string()))?;
+
+        tracing::info!(
+            job_id = %job_id,
+            staging_path = %staging_path,
+            "Dispatched execution via SQS → EventBridge → ECS"
+        );
+
+        Ok(DispatchResponse {
+            job_id: job_id.to_string(),
+            status: "queued".into(),
+            backend: "sqs_event_bridge".into(),
+        })
+    }
+
+    #[cfg(not(feature = "sqs"))]
+    async fn dispatch_sqs_event_bridge(
+        &self,
+        _job_id: &str,
+        _request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        Err(DispatchError::Configuration(
+            "SQS EventBridge dispatch requires the 'sqs' feature".into(),
+        ))
+    }
+
     /// Dispatch via Apache Kafka for high-throughput batch processing
     async fn dispatch_kafka(
         &self,
@@ -825,30 +925,43 @@ impl Dispatcher {
 
 /// Build the payload sent to the executor
 fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json::Value {
-    // Parse credentials_json back to an object so executor receives proper JSON structure
     let credentials: serde_json::Value = serde_json::from_str(&request.credentials_json)
         .unwrap_or_else(|_| serde_json::Value::String(request.credentials_json.clone()));
 
-    serde_json::json!({
-        "job_id": job_id,
-        "run_id": request.run_id,
-        "app_id": request.app_id,
-        "board_id": request.board_id,
-        "board_version": request.board_version,
-        "node_id": request.node_id,
-        "event_json": request.event_json,
-        "payload": request.payload,
-        "user_id": request.user_id,
-        "credentials": credentials,
-        "executor_jwt": request.jwt,
-        "callback_url": request.callback_url,
-        "token": request.token,
-        "oauth_tokens": request.oauth_tokens,
-        "stream_state": request.stream_state,
-        "runtime_variables": request.runtime_variables,
-        "user_context": request.user_context,
-        "profile": request.profile,
-    })
+    let oauth_tokens = request.oauth_tokens.as_ref().map(|tokens| {
+        tokens
+            .iter()
+            .filter_map(|(k, v)| {
+                serde_json::from_value::<flow_like_types::OAuthTokenInput>(v.clone())
+                    .ok()
+                    .map(|t| (k.clone(), t))
+            })
+            .collect()
+    });
+
+    let payload = flow_like_types::dispatch::DispatchPayload {
+        job_id: job_id.to_string(),
+        run_id: request.run_id.clone(),
+        app_id: request.app_id.clone(),
+        board_id: request.board_id.clone(),
+        board_version: request.board_version,
+        node_id: request.node_id.clone(),
+        event_json: request.event_json.clone(),
+        payload: request.payload.clone(),
+        user_id: request.user_id.clone(),
+        credentials,
+        executor_jwt: request.jwt.clone(),
+        callback_url: request.callback_url.clone(),
+        token: request.token.clone(),
+        oauth_tokens,
+        stream_state: request.stream_state,
+        runtime_variables: request.runtime_variables.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+        user_context: request.user_context.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+        profile: request.profile.clone(),
+        wasm_packages: request.wasm_packages.clone(),
+    };
+
+    serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
 }
 
 /// Wrap executor payload in API Gateway v2 HTTP event format.

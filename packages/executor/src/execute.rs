@@ -120,7 +120,26 @@ pub async fn execute(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
 
     let catalog_arc = Arc::new(catalog);
-    let registry = FlowNodeRegistryInner::prepare(&catalog_arc);
+    let mut registry = FlowNodeRegistryInner::prepare(&catalog_arc);
+
+    // Load WASM packages from presigned URLs if any are specified
+    if let Some(ref wasm_packages) = request.wasm_packages {
+        if !wasm_packages.is_empty() {
+            match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
+                Ok(wasm_nodes) => {
+                    tracing::info!(count = wasm_nodes.len(), "Loaded WASM nodes for execution");
+                    for logic in wasm_nodes {
+                        let node = logic.get_node();
+                        registry.insert(node, logic);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to load WASM packages");
+                }
+            }
+        }
+    }
+
     state.node_registry.write().await.node_registry = Arc::new(registry);
 
     let state = Arc::new(state);

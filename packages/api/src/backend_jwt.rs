@@ -46,6 +46,8 @@ const ISSUER: &str = "flow-like";
 pub enum TokenType {
     /// Token for executors to call back to API (progress, events)
     Executor,
+    /// Token for compilation workers to call back to API (status)
+    Compiler,
     /// Token for users to poll execution status
     User,
     /// Token for realtime collaboration (y-webrtc)
@@ -59,6 +61,7 @@ impl TokenType {
     pub fn audience(&self) -> &'static str {
         match self {
             TokenType::Executor => "flow-like-executor",
+            TokenType::Compiler => "flow-like-compiler",
             TokenType::User => "flow-like-user",
             TokenType::Realtime => "y-webrtc",
             TokenType::InteractionResponder => "flow-like-interaction-responder",
@@ -69,6 +72,7 @@ impl TokenType {
     pub fn default_ttl_seconds(&self) -> i64 {
         match self {
             TokenType::Executor => 24 * 60 * 60,       // 24 hours
+            TokenType::Compiler => 24 * 60 * 60,       // 24 hours
             TokenType::User => 60 * 60,                // 1 hour
             TokenType::Realtime => 3 * 60 * 60,        // 3 hours
             TokenType::InteractionResponder => 5 * 60, // 5 minutes

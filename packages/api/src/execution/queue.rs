@@ -24,9 +24,6 @@
 //! QUEUE_POLL_TIMEOUT_SECS=30
 //! ```
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
 pub use flow_like_types::OAuthTokenInput;
 
 /// Queue configuration
@@ -67,38 +64,8 @@ impl QueueConfig {
     }
 }
 
-/// Job payload from the queue (matches build_executor_payload in dispatch.rs)
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QueuedJob {
-    pub job_id: String,
-    pub run_id: String,
-    pub app_id: String,
-    pub board_id: String,
-    /// Board version as tuple (major, minor, patch)
-    pub board_version: Option<(u32, u32, u32)>,
-    /// Node ID to start execution from
-    pub node_id: String,
-    /// Serialized Event struct when executing via event trigger
-    pub event_json: Option<String>,
-    pub payload: Option<serde_json::Value>,
-    pub user_id: String,
-    pub credentials: String,
-    pub executor_jwt: String,
-    pub callback_url: String,
-    pub token: Option<String>,
-    pub oauth_tokens: Option<HashMap<String, OAuthTokenInput>>,
-    #[serde(default)]
-    pub stream_state: bool,
-    /// Runtime-configured variables to override board variables
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime_variables: Option<HashMap<String, flow_like::flow::variable::Variable>>,
-    /// User execution context (role, permissions, attributes)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_context: Option<flow_like::flow::execution::UserExecutionContext>,
-    /// User profile data for execution context (bits, settings, etc.)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<serde_json::Value>,
-}
+/// Job payload from the queue — type alias for the shared dispatch payload.
+pub type QueuedJob = flow_like_types::dispatch::DispatchPayload;
 
 /// Queue worker errors
 #[derive(Debug, thiserror::Error)]

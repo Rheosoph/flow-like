@@ -101,6 +101,7 @@ model App {
   events Event[]
   sinks  EventSink[]
 
+  packages   AppPackage[]
   purchases  AppPurchase[]
   discounts  AppDiscount[]
   salesDaily AppSalesDaily[]
@@ -551,4 +552,29 @@ model AppSalesDaily {
   @@unique([appId, date])
   @@index([appId])
   @@index([appId, date])
+}
+
+model AppPackage {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  /// Nullable: set to null when the member who added this package leaves
+  membership   Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  membershipId String?
+
+  packageId String
+  version   String
+
+  addedAt    DateTime @default(now())
+  autoUpdate Boolean  @default(false)
+
+  /// When true the package is frozen: can’t be updated, version-changed, or placed on new boards
+  stale Boolean @default(false)
+
+  @@unique([appId, packageId])
+  @@index([appId])
+  @@index([packageId])
+  @@index([membershipId])
 }

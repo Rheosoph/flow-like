@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use bit::{delete_bit, push_meta, upsert_bit};
 
@@ -9,6 +9,7 @@ use crate::state::AppState;
 pub mod bit;
 pub mod packages;
 pub mod profiles;
+pub mod publication;
 pub mod sinks;
 pub mod solutions;
 
@@ -37,6 +38,15 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/solutions/{solution_id}/logs",
             post(solutions::add_log::add_solution_log),
+        )
+        // Publication review routes
+        .route(
+            "/publication/requests",
+            get(publication::get_requests::get_requests),
+        )
+        .route(
+            "/publication/requests/{request_id}",
+            patch(publication::upsert_requests::upsert_request),
         )
         // Package management routes
         .route("/packages", get(packages::get_packages::get_packages))

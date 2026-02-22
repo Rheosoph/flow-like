@@ -16,7 +16,9 @@ pub mod events;
 pub mod invoke;
 pub mod meta;
 pub mod notifications;
+pub mod packages;
 pub mod page;
+pub mod publication;
 pub mod roles;
 pub mod sales;
 pub mod team;
@@ -27,6 +29,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(internal::get_apps::get_apps))
         .route("/nodes", get(internal::get_nodes::get_nodes))
+        .route("/{app_id}/nodes", get(internal::get_nodes::get_app_nodes))
         .route("/search", get(internal::search_apps::search_apps))
         .route(
             "/{app_id}",
@@ -51,6 +54,8 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/team", team::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())
+        .nest("/{app_id}/publication", publication::routes())
+        .nest("/{app_id}/packages", packages::routes())
         .nest("/{app_id}/data", data::routes())
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())

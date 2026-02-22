@@ -37,6 +37,9 @@ model Meta {
   widget   Widget? @relation(fields: [widgetId], references: [id], onDelete: Cascade)
   widgetId String?
 
+  wasmPackage   WasmPackage? @relation(fields: [wasmPackageId], references: [id], onDelete: Cascade)
+  wasmPackageId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -46,6 +49,7 @@ model Meta {
   @@index([courseId, lang])
   @@index([templateId, lang])
   @@index([widgetId, lang])
+  @@index([wasmPackageId, lang])
   @@index([lang])
   @@index([tags])
 }

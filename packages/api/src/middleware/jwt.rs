@@ -24,6 +24,18 @@ use serde::{Deserialize, Deserializer};
 
 use crate::state::{AppState, CachedAuth};
 
+fn pat_id_from_token(pat_str: &str) -> Result<String> {
+    if !pat_str.starts_with("pat_") {
+        return Err(anyhow!("Not a PAT")).into();
+    }
+    let pat_parts = &pat_str[4..];
+    let parts: Vec<&str> = pat_parts.split('.').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("Invalid PAT format")).into();
+    }
+    Ok(parts[0].to_string())
+}
+
 fn deserialize_opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
 where
     D: Deserializer<'de>,
@@ -212,6 +224,26 @@ impl AppUser {
                 "Unauthorized user does not have a sub"
             ))),
         }
+    }
+
+    // Adds the exact method of access (OpenID, PAT, API Key) to the audit log for better traceability
+    pub async fn audit_id(&self) -> Result<String, AuthorizationError> {
+        let sub = self.executor_scoped_sub()?;
+        let method = match self {
+            AppUser::OpenID(_) => "openid",
+            AppUser::PAT(_) => "pat",
+            AppUser::APIKey(_) => "api_key",
+            AppUser::Executor(_) => "executor",
+            AppUser::Unauthorized => "unauthorized",
+        };
+        let method_id = match self {
+            AppUser::OpenID(_user) => None,
+            AppUser::PAT(user) => Some(pat_id_from_token(&user.pat)?),
+            AppUser::APIKey(api_key) => Some(api_key.key_id.clone()),
+            AppUser::Executor(executor) => Some(executor.run_id.clone()),
+            AppUser::Unauthorized => None,
+        };
+        Ok(format!("{}:{}:{}", method, sub, method_id.unwrap_or_default()))
     }
 
     pub async fn tracking_id(

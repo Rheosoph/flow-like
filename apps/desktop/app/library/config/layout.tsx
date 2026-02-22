@@ -64,6 +64,7 @@ import {
 	Maximize2Icon,
 	MenuIcon,
 	Minimize2Icon,
+	PackageIcon,
 	PlayCircleIcon,
 	SparklesIcon,
 	SquarePenIcon,
@@ -140,6 +141,12 @@ const navigationItems = [
 		label: "Explore Data",
 		icon: DatabaseIcon,
 		description: "Browse and query your data",
+	},
+	{
+		href: "/library/config/packages",
+		label: "Packages",
+		icon: PackageIcon,
+		description: "Manage WASM packages for this app",
 	},
 	{
 		href: "/library/config/team",

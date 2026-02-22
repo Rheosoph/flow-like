@@ -36,6 +36,11 @@ pub struct WasmConfig {
     pub cache_dir: Option<PathBuf>,
     /// Default security configuration
     pub default_security: WasmSecurityConfig,
+    /// Cross-compilation target triple (e.g. "x86_64-unknown-linux-gnu").
+    /// When set the engine produces artifacts for this target instead of
+    /// the host platform.  Use `Engine::precompile_module` / `precompile_component`
+    /// because `Module::new` is not available for cross targets.
+    pub target: Option<String>,
 }
 
 impl Default for WasmConfig {
@@ -49,6 +54,7 @@ impl Default for WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::default(),
+            target: None,
         }
     }
 }
@@ -69,6 +75,7 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: None,
             default_security: WasmSecurityConfig::default(),
+            target: None,
         }
     }
 
@@ -83,6 +90,7 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::default(),
+            target: None,
         }
     }
 
@@ -97,6 +105,7 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::permissive(),
+            target: None,
         }
     }
 
@@ -112,6 +121,13 @@ impl WasmConfig {
 
     pub fn with_security(mut self, security: WasmSecurityConfig) -> Self {
         self.default_security = security;
+        self
+    }
+
+    /// Set a cross-compilation target triple (e.g. `"x86_64-unknown-linux-gnu"`).
+    /// The resulting engine can only precompile; `Module::new` will fail.
+    pub fn with_target(mut self, triple: impl Into<String>) -> Self {
+        self.target = Some(triple.into());
         self
     }
 
@@ -139,6 +155,16 @@ impl WasmConfig {
         // Apply resource limits
         let limits = &self.default_security.limits;
         config.max_wasm_stack(limits.max_stack_depth as usize * 1024);
+
+        // Cross-compilation target
+        if let Some(ref triple) = self.target {
+            config.target(triple).map_err(|e| {
+                WasmError::compilation(format!(
+                    "Unsupported cross-compilation target '{}': {}",
+                    triple, e
+                ))
+            })?;
+        }
 
         Ok(config)
     }
@@ -195,6 +221,23 @@ impl WasmEngine {
     /// Get configuration
     pub fn config(&self) -> &WasmConfig {
         &self.config
+    }
+
+    /// AOT-compile a raw `.wasm` binary into serialized bytes.
+    ///
+    /// Works for both host and cross-compilation targets.
+    /// Auto-detects whether the input is a core module or a Component Model binary.
+    pub fn precompile(&self, wasm_bytes: &[u8]) -> WasmResult<Vec<u8>> {
+        #[cfg(feature = "component-model")]
+        if crate::component::is_component_model(wasm_bytes) {
+            return self
+                .engine
+                .precompile_component(wasm_bytes)
+                .map_err(|e| WasmError::compilation(format!("Failed to precompile component: {}", e)));
+        }
+        self.engine
+            .precompile_module(wasm_bytes)
+            .map_err(|e| WasmError::compilation(format!("Failed to precompile module: {}", e)))
     }
 
     /// Start the epoch ticker for timeout enforcement

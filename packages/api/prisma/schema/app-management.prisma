@@ -71,7 +71,8 @@ model Membership {
   role   Role   @relation(fields: [roleId], references: [id])
   roleId String
 
-  invitations Invitation[]
+  invitations   Invitation[]
+  addedPackages AppPackage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

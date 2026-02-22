@@ -91,6 +91,14 @@ app.kubernetes.io/component: executor
 {{- end }}
 
 {{/*
+Compiler labels
+*/}}
+{{- define "flow-like.compiler.labels" -}}
+{{ include "flow-like.labels" . }}
+app.kubernetes.io/component: compiler
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "flow-like.serviceAccountName" -}}

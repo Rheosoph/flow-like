@@ -10,6 +10,7 @@ pub mod payload_storage;
 pub mod queue;
 mod sse_proxy;
 pub mod state;
+pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
@@ -30,6 +31,7 @@ pub use jwt::{
 pub use queue::QueueWorker;
 pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
 pub use sse_proxy::proxy_sse_response;
+pub use wasm_resolve::resolve_wasm_packages;
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,
     ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,

@@ -1,12 +1,17 @@
 import type { IRegistryState } from "@tm9657/flow-like-ui";
 import type {
+	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
 	PackageUpdate,
+	RequestAccessParams,
+	RequestAccessResponse,
 	SearchFilters,
 	SearchResults,
+	WasmPurchaseParams,
+	WasmPurchaseResponse,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
-import { type WebBackendRef, apiDelete, apiGet, apiPost } from "./api-utils";
+import { type WebBackendRef, apiDelete, apiGet, apiPost, apiPut } from "./api-utils";
 
 export class WebRegistryState implements IRegistryState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -110,5 +115,59 @@ export class WebRegistryState implements IRegistryState {
 		} catch {
 			return [];
 		}
+	}
+
+	async purchasePackage(
+		packageId: string,
+		params?: WasmPurchaseParams,
+	): Promise<WasmPurchaseResponse> {
+		return apiPost<WasmPurchaseResponse>(
+			`registry/package/${packageId}/purchase`,
+			params ?? {},
+			this.backend.auth,
+		);
+	}
+
+	async requestAccess(
+		packageId: string,
+		params?: RequestAccessParams,
+	): Promise<RequestAccessResponse> {
+		return apiPut<RequestAccessResponse>(
+			`registry/package/${packageId}/access`,
+			params ?? {},
+			this.backend.auth,
+		);
+	}
+
+	async listAccessRequests(packageId: string): Promise<AccessRequest[]> {
+		try {
+			return await apiGet<AccessRequest[]>(
+				`registry/package/${packageId}/access`,
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async acceptAccessRequest(
+		packageId: string,
+		requestId: string,
+	): Promise<void> {
+		await apiPost(
+			`registry/package/${packageId}/access/${requestId}`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async rejectAccessRequest(
+		packageId: string,
+		requestId: string,
+	): Promise<void> {
+		await apiDelete(
+			`registry/package/${packageId}/access/${requestId}`,
+			this.backend.auth,
+		);
 	}
 }
