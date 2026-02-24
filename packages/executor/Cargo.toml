@@ -5,9 +5,11 @@ edition = "2021"
 description = "Environment-agnostic execution runtime for Flow-Like"
 
 [features]
-default = ["execute"]
+default = []
 execute = ["flow-like-catalog/execute"]
 all-execute = ["flow-like-catalog/all-execute"]
+server-execute = ["flow-like-catalog/server-execute"]
+all-server-execute = ["flow-like-catalog/all-server-execute"]
 local-ml = ["flow-like-catalog/local-ml"]
 tauri = ["flow-like-catalog/tauri"]
 

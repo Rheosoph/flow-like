@@ -49,6 +49,21 @@ execute = [
     "flow-like-catalog-automation/execute"
 ]
 
+# Server execution - same as execute but without desktop/RPA automation nodes
+# Use this for headless server deployments (ECS, Lambda, etc.)
+server-execute = [
+    "flow-like-catalog-core/execute",
+    "flow-like-catalog-std/execute",
+    "flow-like-catalog-data/execute",
+    "flow-like-catalog-web/execute",
+    "flow-like-catalog-media/execute",
+    "flow-like-catalog-ml/execute",
+    "flow-like-catalog-onnx/execute",
+    "flow-like-catalog-llm/execute",
+    "flow-like-catalog-processing/execute",
+    "flow-like-catalog-geo/execute",
+]
+
 # Data lake formats
 delta = ["flow-like-catalog-data/delta"]
 iceberg = ["flow-like-catalog-data/iceberg"]
@@ -86,6 +101,9 @@ all-with-odbc = ["all-lakes", "all-databases-with-odbc", "all-databases-federati
 
 # Full with execution (for executors and desktop app)
 all-execute = ["all", "execute"]
+
+# Full with server execution (no RPA/desktop automation)
+all-server-execute = ["all", "server-execute"]
 
 [dependencies]
 flow-like-catalog-core.workspace = true

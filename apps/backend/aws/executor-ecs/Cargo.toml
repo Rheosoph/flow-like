@@ -6,9 +6,9 @@ description = "Flow-Like ECS Executor (EventBridge Pipe → ECS RunTask)"
 
 [dependencies]
 flow-like.workspace = true
-flow-like-catalog = { workspace = true, features = ["execute", "remote-ml", "remote"] }
+flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
 flow-like-types.workspace = true
-flow-like-executor = { workspace = true, features = ["all-execute"] }
+flow-like-executor = { workspace = true, features = ["all-server-execute"] }
 
 mimalloc.workspace = true
 tracing.workspace = true
