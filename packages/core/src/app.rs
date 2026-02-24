@@ -14,7 +14,7 @@ use flow_like_types::{FromProto, ToProto, create_id, proto, sync::Mutex};
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::SystemTime, vec};
+use std::{collections::HashMap, sync::Arc, time::SystemTime, vec};
 pub mod sharing;
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
@@ -148,6 +148,10 @@ pub struct App {
     #[serde(default)]
     pub page_ids: Vec<String>,
 
+    /// WASM packages required by this app: package_id -> version
+    #[serde(default)]
+    pub packages: HashMap<String, String>,
+
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
 }
@@ -181,6 +185,7 @@ impl Clone for App {
             frontend: self.frontend.clone(),
             widget_ids: self.widget_ids.clone(),
             page_ids: self.page_ids.clone(),
+            packages: self.packages.clone(),
         }
     }
 }
@@ -225,6 +230,7 @@ impl App {
             frontend: None,
             widget_ids: vec![],
             page_ids: vec![],
+            packages: HashMap::new(),
             app_state: Some(app_state.clone()),
         };
 
@@ -1240,6 +1246,7 @@ mod tests {
             frontend: None,
             widget_ids: vec![],
             page_ids: vec![],
+            packages: std::collections::HashMap::new(),
         };
 
         let mut buf = Vec::new();

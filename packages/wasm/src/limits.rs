@@ -126,6 +126,12 @@ bitflags::bitflags! {
         const HTTP_WRITE        = 0b00000000_00000000_00000000_00010000;
         /// Open WebSocket connections
         const WEBSOCKET         = 0b00000000_00000000_10000000_00000000;
+        /// Open TCP socket connections
+        const TCP               = 0b00000000_00000001_00000000_00000000;
+        /// Open UDP socket connections
+        const UDP               = 0b00000000_00000010_00000000_00000000;
+        /// Perform DNS lookups
+        const DNS               = 0b00000000_00000100_00000000_00000000;
 
         // === Flow Context ===
         /// Read variables
@@ -164,8 +170,8 @@ bitflags::bitflags! {
         const HTTP_ALL      = Self::HTTP_GET.bits() | Self::HTTP_WRITE.bits();
         /// Alias for HTTP request capability
         const HTTP_REQUEST  = Self::HTTP_ALL.bits();
-        /// All network operations (HTTP + WebSocket)
-        const NETWORK_ALL   = Self::HTTP_ALL.bits() | Self::WEBSOCKET.bits();
+        /// All network operations (HTTP + WebSocket + TCP + UDP + DNS)
+        const NETWORK_ALL   = Self::HTTP_ALL.bits() | Self::WEBSOCKET.bits() | Self::TCP.bits() | Self::UDP.bits() | Self::DNS.bits();
         /// All variable operations
         const VARIABLES_ALL = Self::VARIABLES_READ.bits() | Self::VARIABLES_WRITE.bits();
         /// All cache operations
@@ -236,6 +242,9 @@ impl WasmCapabilities {
                 "http_write" => caps |= Self::HTTP_WRITE,
                 "http_all" | "http" => caps |= Self::HTTP_ALL,
                 "websocket" | "network:websocket" | "ws" => caps |= Self::WEBSOCKET,
+                "tcp" | "network:tcp" => caps |= Self::TCP,
+                "udp" | "network:udp" => caps |= Self::UDP,
+                "dns" | "network:dns" => caps |= Self::DNS,
                 "network_all" | "network" => caps |= Self::NETWORK_ALL,
                 "variables_read" => caps |= Self::VARIABLES_READ,
                 "variables_write" => caps |= Self::VARIABLES_WRITE,

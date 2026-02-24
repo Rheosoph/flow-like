@@ -37,11 +37,15 @@ async fn main() -> Result<(), Error> {
     };
 
     let content_bucket_name =
-        std::env::var("CONTENT_BUCKET").or_else(|_| std::env::var("CDN_BUCKET_NAME")).unwrap();
+        std::env::var("CONTENT_BUCKET")
+            .or_else(|_| std::env::var("CONTENT_BUCKET_NAME"))
+            .expect("CONTENT_BUCKET or CONTENT_BUCKET_NAME must be set");
     let cdn_bucket_name =
         std::env::var("CDN_BUCKET_NAME").unwrap_or_else(|_| content_bucket_name.clone());
     let meta_bucket_name =
-        std::env::var("META_BUCKET").unwrap_or_else(|_| content_bucket_name.clone());
+        std::env::var("META_BUCKET")
+            .or_else(|_| std::env::var("META_BUCKET_NAME"))
+            .unwrap_or_else(|_| content_bucket_name.clone());
 
     let bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
     let bucket_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();

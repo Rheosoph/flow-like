@@ -61,12 +61,6 @@ pub async fn publish(
         )));
     }
 
-    if !request.tmp_path.starts_with("tmp/wasm/") || !request.tmp_path.ends_with(".wasm") {
-        return Err(ApiError::bad_request(
-            "Invalid tmp_path: must be tmp/wasm/<id>.wasm",
-        ));
-    }
-
     let email = {
         use crate::entity::user;
         use sea_orm::EntityTrait;
@@ -77,6 +71,12 @@ pub async fn publish(
             .flatten()
             .and_then(|u| u.email)
     };
+
+    if !request.tmp_path.starts_with("tmp/wasm/") || !request.tmp_path.ends_with(".wasm") {
+        return Err(ApiError::bad_request(
+            "Invalid tmp_path: must be tmp/wasm/<id>.wasm",
+        ));
+    }
 
     let response = registry
         .publish_from_tmp(

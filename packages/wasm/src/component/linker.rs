@@ -19,9 +19,8 @@ impl ComponentStoreData {
     pub fn new(security: &WasmSecurityConfig) -> Self {
         let mut builder = WasiCtxBuilder::new();
 
-        let has_network_caps = security
-            .capabilities
-            .intersects(WasmCapabilities::NETWORK_ALL);
+        let caps = security.capabilities;
+        let has_network_caps = caps.intersects(WasmCapabilities::NETWORK_ALL);
 
         // Provide stdio/env/args so Component Model runtimes (C#, TypeScript)
         // that target wasi:cli/command can function correctly.
@@ -41,7 +40,24 @@ impl ComponentStoreData {
             } else {
                 builder.inherit_network();
             }
+        }
+
+        // DNS lookups require explicit opt-in
+        if security.allow_wasi_network
+            || caps.intersects(WasmCapabilities::DNS)
+            || caps.intersects(WasmCapabilities::NETWORK_ALL)
+        {
             builder.allow_ip_name_lookup(true);
+        }
+
+        // TCP sockets
+        if security.allow_wasi_network || caps.intersects(WasmCapabilities::TCP) {
+            builder.allow_tcp(true);
+        }
+
+        // UDP sockets
+        if security.allow_wasi_network || caps.intersects(WasmCapabilities::UDP) {
+            builder.allow_udp(true);
         }
 
         Self {

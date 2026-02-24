@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::{entity::app, state::AppState};
@@ -241,6 +242,7 @@ impl From<app::Model> for flow_like::app::App {
         Self {
             id: model.id,
             price: Some(model.price as u32),
+            packages: HashMap::new(),
             execution_mode: match model.execution_mode {
                 crate::entity::sea_orm_active_enums::ExecutionMode::Any => {
                     flow_like::app::AppExecutionMode::Any

@@ -2,7 +2,10 @@ use crate::{
     entity::profile,
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::profile::{delete_old_image, generate_upload_url},
+    routes::{
+        profile::{delete_old_image, generate_upload_url},
+        user::ensure_user_exists,
+    },
     state::AppState,
 };
 use axum::{
@@ -68,6 +71,7 @@ pub async fn upsert_profile(
     Json(profile_body): Json<ProfileBody>,
 ) -> Result<Json<UpsertProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
     let found_profile = profile::Entity::find()
         .filter(
             profile::Column::Id

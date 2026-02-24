@@ -1,12 +1,47 @@
-use crate::state::AppState;
+use crate::{entity::user, state::AppState};
 use axum::{
     Router,
     routing::{get, post},
 };
 use billing::get_billing_session;
+use flow_like_types::create_id;
 use info::user_info;
 use pricing::get_pricing;
+use sea_orm::{EntityTrait, sea_query::OnConflict};
 use subscribe::create_subscription_checkout;
+
+/// Ensures a user row exists in the DB for the given `sub`.
+/// Uses INSERT ... ON CONFLICT DO NOTHING so it's safe to call concurrently.
+pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate::error::ApiError> {
+    let existing = user::Entity::find_by_id(sub).one(&state.db).await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let user = user::ActiveModel {
+        id: sea_orm::ActiveValue::Set(sub.to_string()),
+        tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
+        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    };
+
+    let res = user::Entity::insert(user)
+        .on_conflict(
+            OnConflict::column(user::Column::Id)
+                .do_nothing()
+                .to_owned(),
+        )
+        .do_nothing()
+        .exec(&state.db)
+        .await;
+
+    match res {
+        Ok(_) => Ok(()),
+        Err(sea_orm::DbErr::RecordNotInserted) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
 
 pub async fn sign_avatar(
     sub: &str,

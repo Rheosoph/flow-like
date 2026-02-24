@@ -114,6 +114,15 @@ pub struct NetworkPermissions {
     /// Allow WebSocket connections
     #[serde(default)]
     pub websocket_enabled: bool,
+    /// Allow TCP socket connections
+    #[serde(default)]
+    pub tcp_enabled: bool,
+    /// Allow UDP socket connections
+    #[serde(default)]
+    pub udp_enabled: bool,
+    /// Allow DNS lookups
+    #[serde(default)]
+    pub dns_enabled: bool,
 }
 
 /// File system access requirements
@@ -181,6 +190,15 @@ impl PackagePermissions {
         }
         if self.network.websocket_enabled {
             caps |= WasmCapabilities::WEBSOCKET;
+        }
+        if self.network.tcp_enabled {
+            caps |= WasmCapabilities::TCP;
+        }
+        if self.network.udp_enabled {
+            caps |= WasmCapabilities::UDP;
+        }
+        if self.network.dns_enabled {
+            caps |= WasmCapabilities::DNS;
         }
 
         // Filesystem
@@ -296,7 +314,7 @@ impl PackagePermissions {
 }
 
 /// Node entry in the package manifest
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PackageNodeEntry {
     /// Node identifier (used in code)
@@ -558,6 +576,7 @@ mod tests {
             icon: None,
             oauth_providers: Vec::new(),
             metadata: HashMap::new(),
+            ..Default::default()
         });
 
         // Should pass now
@@ -582,6 +601,7 @@ mod tests {
             icon: None,
             oauth_providers: vec!["google".to_string()],
             metadata: HashMap::new(),
+            ..Default::default()
         });
 
         // Should fail - OAuth provider not declared

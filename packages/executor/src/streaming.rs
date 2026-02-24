@@ -3,7 +3,7 @@
 //! Provides streaming execution that yields events as they occur,
 //! suitable for Lambda streaming responses or SSE endpoints.
 
-use crate::config::{model_provider_config_from_env, ExecutorConfig};
+use crate::config::{ExecutorConfig};
 use crate::error::ExecutorError;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
@@ -12,6 +12,7 @@ use flow_like::flow::board::Board;
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::{InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
+use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
 use flow_like::utils::http::HTTPClient;
@@ -172,7 +173,7 @@ async fn execute_inner(
     }
 
     // Load model provider configuration from environment
-    let model_provider_config = model_provider_config_from_env();
+    let model_provider_config = ModelProviderConfiguration::default();
 
     let http_client = HTTPClient::new_without_refetch();
     let state =

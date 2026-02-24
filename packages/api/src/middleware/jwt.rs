@@ -388,8 +388,8 @@ impl AppUser {
                 .one(&state.db)
                 .await?
                 .ok_or_else(|| {
-                    tracing::error!("Role not found for user {} in app {}", sub, app_id);
-                    ApiError::from(anyhow!("Role not found for user {sub} in app {app_id}"))
+                    tracing::debug!("Role not found for user {} in app {}", sub, app_id);
+                    ApiError::FORBIDDEN
                 })?;
 
             let permissions = RolePermissions::from_bits(role_model.permissions)

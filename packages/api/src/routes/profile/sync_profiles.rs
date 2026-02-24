@@ -2,7 +2,10 @@ use crate::{
     entity::profile,
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::profile::{delete_old_image, generate_upload_url},
+    routes::{
+        profile::{delete_old_image, generate_upload_url},
+        user::ensure_user_exists,
+    },
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
@@ -88,6 +91,7 @@ pub async fn sync_profiles(
     Json(profiles): Json<Vec<SyncProfileRequest>>,
 ) -> Result<Json<SyncProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
     println!(
         "[ProfileSync] sync_profiles called by user={}, profile_count={}",
         sub,
