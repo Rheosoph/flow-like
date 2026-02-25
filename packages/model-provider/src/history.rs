@@ -691,6 +691,17 @@ impl History {
         None
     }
 
+    /// Extracts and removes the system prompt from messages, returning its text.
+    /// Use this to move the system prompt into preamble before rig conversion,
+    /// preventing System→User conversion that breaks role alternation.
+    pub fn take_system_prompt(&mut self) -> Option<String> {
+        let prompt = self.get_system_prompt();
+        if prompt.is_some() {
+            self.messages.retain(|msg| msg.role != Role::System);
+        }
+        prompt
+    }
+
     pub fn set_system_prompt(&mut self, prompt: String) {
         if let Some(index) = self.get_system_prompt_index() {
             self.messages[index].content = MessageContent::Contents(vec![Content::Text {
@@ -718,6 +729,46 @@ impl History {
 
     pub fn set_stream(&mut self, stream: bool) {
         self.stream = Some(stream);
+    }
+
+    /// Merges adjacent messages that share the same role into a single message.
+    /// This ensures strict role alternation (user/assistant/user/assistant/...)
+    /// required by models like Gemma loaded in LM Studio.
+    ///
+    /// Tool and Function messages are left untouched since they carry
+    /// tool_call_id metadata that must not be merged.
+    pub fn normalize_for_alternation(&mut self) {
+        if self.messages.len() <= 1 {
+            return;
+        }
+
+        let mut normalized: Vec<HistoryMessage> = Vec::with_capacity(self.messages.len());
+
+        for msg in self.messages.drain(..) {
+            let dominated_by_tool_meta = matches!(msg.role, Role::Tool | Role::Function)
+                || msg.tool_call_id.is_some();
+
+            if let Some(prev) = normalized.last_mut()
+                && prev.role == msg.role
+                && !dominated_by_tool_meta
+                && !matches!(prev.role, Role::Tool | Role::Function)
+                && prev.tool_call_id.is_none()
+            {
+                let prev_text = prev.as_str();
+                let next_text = msg.as_str();
+                prev.content = MessageContent::String(format!("{prev_text}\n\n{next_text}"));
+
+                if let Some(next_calls) = msg.tool_calls {
+                    prev.tool_calls
+                        .get_or_insert_with(Vec::new)
+                        .extend(next_calls);
+                }
+            } else {
+                normalized.push(msg);
+            }
+        }
+
+        self.messages = normalized;
     }
 
     /// Extracts prompt and history messages suitable for rig completion
