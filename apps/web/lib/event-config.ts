@@ -10,7 +10,6 @@ import {
 	type IEventMapping,
 	SimpleChatConfig,
 	UserMailConfig,
-	WebhookConfig,
 } from "@tm9657/flow-like-ui";
 
 export const EVENT_CONFIG: IEventMapping = {
@@ -114,7 +113,7 @@ export const EVENT_CONFIG: IEventMapping = {
 	events_simple: {
 		configInterfaces: {
 			quick_action: GenericFormConfig,
-			api: WebhookConfig,
+			api: ApiConfig,
 			cron: CronJobConfig,
 			deeplink: DeeplinkConfig,
 		},
@@ -139,6 +138,11 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 		},
 		configs: {
+			api: {
+				method: "GET",
+				path: `/${createId()}`,
+				public_endpoint: false,
+			},
 			cron: {
 				expression: "* */1 * * *",
 			},
