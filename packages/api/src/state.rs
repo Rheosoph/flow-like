@@ -170,14 +170,12 @@ impl State {
             CompilationDispatcher::new(compilation_config, content_bucket.clone(), meta_bucket.clone()).await,
         );
 
-        // Initialize WASM registry if enabled (uses PostgreSQL + CDN)
+        // Initialize WASM registry if enabled (uses PostgreSQL)
         let wasm_registry = if platform_config.features.wasm_registry {
-            let cdn_base_url = platform_config.cdn.clone();
             let registry = ServerRegistry::new(
                 db.clone(),
                 content_bucket.clone(),
                 meta_bucket.clone(),
-                cdn_base_url,
             )
             .with_compilation_dispatcher(compilation_dispatcher.clone());
             Some(Arc::new(registry))

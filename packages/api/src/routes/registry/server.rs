@@ -244,7 +244,6 @@ pub struct ServerRegistry {
     db: DatabaseConnection,
     content_bucket: Arc<FlowLikeStore>,
     meta_bucket: Arc<FlowLikeStore>,
-    cdn_base_url: Option<String>,
     compilation_dispatcher: Option<Arc<crate::compilation::CompilationDispatcher>>,
 }
 
@@ -253,13 +252,11 @@ impl ServerRegistry {
         db: DatabaseConnection,
         content_bucket: Arc<FlowLikeStore>,
         meta_bucket: Arc<FlowLikeStore>,
-        cdn_base_url: Option<String>,
     ) -> Self {
         Self {
             db,
             content_bucket,
             meta_bucket,
-            cdn_base_url,
             compilation_dispatcher: None,
         }
     }
@@ -412,7 +409,7 @@ impl ServerRegistry {
             let ver = version.to_string();
 
             flow_like_types::tokio::spawn(async move {
-                let inline_registry = ServerRegistry::new(db.clone(), content_bucket, meta_bucket, None);
+                let inline_registry = ServerRegistry::new(db.clone(), content_bucket, meta_bucket);
                 let wasm_path = ServerRegistry::wasm_path(&pkg_id, &ver);
                 let data = match inline_registry.content_bucket.as_generic().get(&wasm_path).await {
                     Ok(d) => d,
@@ -472,11 +469,6 @@ impl ServerRegistry {
         version: &str,
     ) -> flow_like_types::Result<String> {
         let path = Self::wasm_path(package_id, version);
-
-        // If CDN is configured, return direct CDN URL (public access)
-        if let Some(cdn_url) = &self.cdn_base_url {
-            return Ok(format!("{}/{}", cdn_url, path));
-        }
 
         // Otherwise generate a signed URL (valid for 1 hour)
         let url = self
@@ -1356,7 +1348,7 @@ impl ServerRegistry {
             }
         } else {
             let tmp_registry =
-                ServerRegistry::new(compile_db.clone(), compile_content, compile_meta, None);
+                ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
             match tmp_registry
                 .compile_and_store_artifact(
                     &compile_pkg_id,
