@@ -207,6 +207,17 @@ impl ApiError {
         .with_report(msg, None)
     }
 
+    pub fn bad_gateway(msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::warn!("Bad gateway: {}", msg);
+        Self::new(
+            StatusCode::BAD_GATEWAY,
+            "BAD_GATEWAY",
+            Some(msg),
+            ReportPolicy::Ignore,
+        )
+    }
+
     // Legacy constructor removed; use `bad_request`/`internal_error`.
 }
 

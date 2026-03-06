@@ -80,6 +80,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .nest("/ai", routes::ai::routes())
         .nest("/admin", routes::admin::routes())
         .nest("/tmp", routes::tmp::routes())
+        .nest("/og", routes::og::routes())
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
         .nest("/interaction", routes::interaction::routes())

@@ -12,6 +12,7 @@ pub mod health;
 pub mod info;
 pub mod interaction;
 pub mod oauth;
+pub mod og;
 pub mod profile;
 pub mod registry;
 pub mod sink;

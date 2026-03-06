@@ -111,6 +111,8 @@ impl Modify for SecurityAddon {
         // Health routes
         crate::routes::health::health,
         crate::routes::health::db_health,
+        // OG metadata
+        crate::routes::og::fetch_og_metadata,
         // Auth routes
         crate::routes::auth::openid_config,
         crate::routes::auth::discovery,

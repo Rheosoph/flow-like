@@ -47,18 +47,30 @@ async fn main() -> Result<(), Error> {
             .or_else(|_| std::env::var("META_BUCKET_NAME"))
             .unwrap_or_else(|_| content_bucket_name.clone());
 
-    let bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
-    let bucket_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
-    let bucket_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
+    let cdn_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
+    let cdn_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
+    let cdn_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
 
-    let build_s3 = |name: String| -> flow_like_storage::files::store::FlowLikeStore {
+    let content_endpoint = std::env::var("CONTENT_BUCKET_ENDPOINT").ok();
+    let content_access_key = std::env::var("CONTENT_BUCKET_ACCESS_KEY_ID").ok();
+    let content_secret_key = std::env::var("CONTENT_BUCKET_SECRET_ACCESS_KEY").ok();
+
+    let meta_endpoint = std::env::var("META_BUCKET_ENDPOINT").ok();
+    let meta_access_key = std::env::var("META_BUCKET_ACCESS_KEY_ID").ok();
+    let meta_secret_key = std::env::var("META_BUCKET_SECRET_ACCESS_KEY").ok();
+
+    let build_s3 = |name: String,
+                    endpoint: &Option<String>,
+                    access_key: &Option<String>,
+                    secret_key: &Option<String>|
+     -> flow_like_storage::files::store::FlowLikeStore {
         let mut builder = AmazonS3Builder::new().with_bucket_name(name);
-        if let Some(endpoint) = &bucket_endpoint {
-            if !endpoint.is_empty() {
-                builder = builder.with_endpoint(endpoint);
+        if let Some(ep) = endpoint {
+            if !ep.is_empty() {
+                builder = builder.with_endpoint(ep);
             }
         }
-        if let (Some(ak), Some(sk)) = (&bucket_access_key, &bucket_secret_key) {
+        if let (Some(ak), Some(sk)) = (access_key, secret_key) {
             if !ak.is_empty() && !sk.is_empty() {
                 builder = builder.with_access_key_id(ak).with_secret_access_key(sk);
             }
@@ -66,9 +78,9 @@ async fn main() -> Result<(), Error> {
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(builder.build().unwrap()))
     };
 
-    let content_bucket = build_s3(content_bucket_name);
-    let cdn_bucket = build_s3(cdn_bucket_name);
-    let meta_bucket = build_s3(meta_bucket_name);
+    let content_bucket = build_s3(content_bucket_name, &content_endpoint, &content_access_key, &content_secret_key);
+    let cdn_bucket = build_s3(cdn_bucket_name, &cdn_endpoint, &cdn_access_key, &cdn_secret_key);
+    let meta_bucket = build_s3(meta_bucket_name, &meta_endpoint, &meta_access_key, &meta_secret_key);
 
     let catalog = Arc::new(get_catalog());
     let state = Arc::new(
