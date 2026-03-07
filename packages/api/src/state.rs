@@ -89,14 +89,30 @@ pub struct State {
 impl State {
     pub async fn new(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
-        content_bucket: Arc<FlowLikeStore>,
         cdn_bucket: Arc<FlowLikeStore>,
-        meta_bucket: Arc<FlowLikeStore>,
     ) -> Self {
         let platform_config: Hub =
             serde_json::from_str(CONFIG).expect("Failed to parse config file");
 
         let jwks = flow_like_types::json::from_str::<JwkSet>(JWKS).expect("Failed to parse JWKS");
+
+        // Create content + meta buckets from master credentials (same mechanism
+        // that board/storage already uses — works with IAM roles, STS, etc.)
+        let master_creds = RuntimeCredentials::master_credentials()
+            .await
+            .expect("Failed to load master credentials");
+        let content_bucket = Arc::new(
+            master_creds
+                .to_store(false)
+                .await
+                .expect("Failed to create content store from master credentials"),
+        );
+        let meta_bucket = Arc::new(
+            master_creds
+                .to_store(true)
+                .await
+                .expect("Failed to create meta store from master credentials"),
+        );
 
         let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let mut opt = ConnectOptions::new(db_url.to_owned());
