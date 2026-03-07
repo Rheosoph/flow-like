@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::{entity::app, state::AppState};
+use crate::{
+    entity::{app, sea_orm_active_enums::Visibility},
+    error::ApiError,
+    state::AppState,
+};
 use axum::{
     Router,
     routing::{get, patch, post},
 };
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub mod internal;
 
@@ -95,6 +100,21 @@ macro_rules! ensure_permissions {
         }
         sub
     }};
+}
+
+pub async fn ensure_app_publicly_visible(
+    app_id: &str,
+    state: &AppState,
+) -> Result<app::Model, ApiError> {
+    app::Entity::find_by_id(app_id)
+        .filter(
+            app::Column::Visibility
+                .eq(Visibility::Public)
+                .or(app::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+        )
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::FORBIDDEN)
 }
 
 impl From<crate::entity::sea_orm_active_enums::Category> for flow_like::app::AppCategory {

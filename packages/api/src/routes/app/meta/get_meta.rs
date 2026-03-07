@@ -1,7 +1,10 @@
 use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::app::meta::{MetaMode, MetaQuery},
+    routes::app::{
+        ensure_app_publicly_visible,
+        meta::{MetaMode, MetaQuery},
+    },
     state::AppState,
 };
 use axum::{
@@ -16,7 +19,7 @@ use sea_orm::TransactionTrait;
     get,
     path = "/apps/{app_id}/meta",
     tag = "meta",
-    description = "Get metadata for an app, template, or course.",
+    description = "Get metadata for an app, template, or course. Public apps are readable without membership.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("language" = Option<String>, Query, description = "Language code (default en)"),
@@ -43,7 +46,14 @@ pub async fn get_meta(
     Path(app_id): Path<String>,
 ) -> Result<Json<Metadata>, ApiError> {
     let mode = MetaMode::new(&query, &app_id);
-    mode.ensure_read_permission(&user, &app_id, &state).await?;
+
+    if mode.ensure_read_permission(&user, &app_id, &state).await.is_err() {
+        user.sub()?;
+        match mode {
+            MetaMode::App(_) => { ensure_app_publicly_visible(&app_id, &state).await?; }
+            _ => return Err(ApiError::FORBIDDEN),
+        }
+    }
 
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());
     let txn = state.db.begin().await?;
