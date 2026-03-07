@@ -130,6 +130,7 @@ pub struct RegistryIndex {
 
 /// Lightweight package summary for index
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageSummary {
     pub id: String,
     pub name: String,
@@ -209,6 +210,7 @@ pub enum SortField {
 
 /// Search results
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResults {
     pub packages: Vec<PackageSummary>,
     pub total_count: usize,
