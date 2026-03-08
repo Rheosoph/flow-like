@@ -1,5 +1,6 @@
 //! WASM Package Registry API
 
+pub mod check_id;
 pub mod download;
 pub mod hash_check;
 mod index;
@@ -123,6 +124,7 @@ pub fn routes() -> Router<AppState> {
         .route("/download", post(download::download))
         .route("/publish", post(publish::publish))
         .route("/upload-url", post(upload::get_upload_url))
+        .route("/check-id", post(check_id::check_id))
         .route("/recompile", post(recompile::recompile))
         .route("/hash-check", post(hash_check::hash_check))
         .route("/prerun-check", post(prerun_check::prerun_check))

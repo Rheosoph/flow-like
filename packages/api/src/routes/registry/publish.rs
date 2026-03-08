@@ -1,7 +1,7 @@
 //! Package publish endpoint — two-step flow
 //!
-//! 1. Client uploads WASM via presigned URL to tmp/wasm/{uuid}.wasm
-//! 2. Client calls this endpoint with manifest + tmp_path
+//! 1. Client uploads WASM via presigned URL to tmp/wasm/{sub}/{id}/{version}.wasm
+//! 2. Client calls this endpoint with manifest (server constructs tmp path from sub)
 //! 3. Server fetches WASM from tmp, hashes, moves to final path, compiles in parallel
 
 use crate::error::ApiError;
@@ -16,11 +16,10 @@ use utoipa::ToSchema;
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TwoStepPublishRequest {
     pub manifest: flow_like_wasm::manifest::PackageManifest,
-    pub tmp_path: String,
 }
 
 /// POST /registry/publish
-/// Publish a package using two-step flow: WASM already uploaded to tmp_path
+/// Publish a package using two-step flow: WASM already uploaded via upload-url
 #[utoipa::path(
     post,
     path = "/registry/publish",
@@ -30,6 +29,7 @@ pub struct TwoStepPublishRequest {
         (status = 200, description = "Package published successfully", body = PublishResponse),
         (status = 400, description = "Invalid manifest or WASM binary"),
         (status = 401, description = "Authentication required"),
+        (status = 403, description = "Not authorized to publish to this package"),
         (status = 503, description = "WASM registry not configured")
     ),
     security(("bearer_auth" = []))
@@ -61,6 +61,25 @@ pub async fn publish(
         )));
     }
 
+    // If the package already exists, verify the caller is owner or maintainer
+    {
+        use crate::entity::wasm_package;
+        use sea_orm::EntityTrait;
+
+        if let Some(_existing) = wasm_package::Entity::find_by_id(&request.manifest.id)
+            .one(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        {
+            crate::ensure_wasm_permission!(
+                state,
+                &sub,
+                &request.manifest.id,
+                crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer
+            );
+        }
+    }
+
     let email = {
         use crate::entity::user;
         use sea_orm::EntityTrait;
@@ -72,17 +91,10 @@ pub async fn publish(
             .and_then(|u| u.email)
     };
 
-    if !request.tmp_path.starts_with("tmp/wasm/") || !request.tmp_path.ends_with(".wasm") {
-        return Err(ApiError::bad_request(
-            "Invalid tmp_path: must be tmp/wasm/<id>.wasm",
-        ));
-    }
-
     let response = registry
-        .publish_from_tmp(
+        .finalize_publish(
             request.manifest.clone(),
-            &request.tmp_path,
-            Some(sub),
+            &sub,
             email,
         )
         .await?;

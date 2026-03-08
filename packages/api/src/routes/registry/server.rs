@@ -892,29 +892,29 @@ impl ServerRegistry {
     /// Search packages with visibility filtering.
     /// Public packages are always returned. When `include_own` is true and a
     /// caller_id is provided, private packages the caller has access to are
-    /// included as well.
+    /// included as well. When `owned_only` is true, only packages the caller
+    /// has explicit access to (via wasm_package_user) are returned.
     pub async fn search_with_visibility(
         &self,
         filters: &SearchFilters,
         caller_id: Option<&str>,
         include_own: bool,
+        owned_only: bool,
     ) -> flow_like_types::Result<SearchResults> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
         use sea_orm::Condition;
 
         let mut query = wasm_package::Entity::find();
 
-        if !filters.include_deprecated {
-            query = query.filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
-        }
-
         if filters.verified_only {
             query = query.filter(wasm_package::Column::Verified.eq(true));
         }
 
-        // Visibility filtering
-        match (caller_id, include_own) {
-            (Some(uid), true) => {
+        // Combined status + visibility filtering.
+        // The user's own packages bypass the Active-only status filter so they
+        // can see PendingReview / Disabled / etc. packages they own.
+        if owned_only {
+            if let Some(uid) = caller_id {
                 let user_package_ids: Vec<String> = wasm_package_user::Entity::find()
                     .filter(wasm_package_user::Column::UserId.eq(uid))
                     .all(&self.db)
@@ -923,25 +923,66 @@ impl ServerRegistry {
                     .map(|r| r.package_id)
                     .collect();
 
-                query = query.filter(
-                    Condition::any()
-                        .add(
-                            wasm_package::Column::Visibility
-                                .eq(WasmPackageVisibility::Public),
-                        )
-                        .add(
-                            wasm_package::Column::Visibility
-                                .eq(WasmPackageVisibility::PublicRequestAccess),
-                        )
-                        .add(wasm_package::Column::Id.is_in(user_package_ids)),
-                );
+                // Show all owned packages regardless of status (except deprecated unless requested)
+                let mut cond = Condition::all()
+                    .add(wasm_package::Column::Id.is_in(user_package_ids));
+                if !filters.include_deprecated {
+                    cond = cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
+                }
+                query = query.filter(cond);
+            } else {
+                return Ok(SearchResults {
+                    packages: vec![],
+                    total_count: 0,
+                    offset: filters.offset,
+                    limit: filters.limit,
+                });
             }
-            _ => {
-                query = query.filter(
-                    Condition::any()
+        } else {
+            match (caller_id, include_own) {
+                (Some(uid), true) => {
+                    let user_package_ids: Vec<String> = wasm_package_user::Entity::find()
+                        .filter(wasm_package_user::Column::UserId.eq(uid))
+                        .all(&self.db)
+                        .await?
+                        .into_iter()
+                        .map(|r| r.package_id)
+                        .collect();
+
+                    // Public/PublicRequestAccess must be Active (unless include_deprecated),
+                    // but user's own packages bypass the status filter.
+                    let mut public_cond = Condition::any()
                         .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
-                        .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess)),
-                );
+                        .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess));
+
+                    if !filters.include_deprecated {
+                        public_cond = Condition::all()
+                            .add(public_cond)
+                            .add(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
+                    }
+
+                    let mut own_cond = Condition::all()
+                        .add(wasm_package::Column::Id.is_in(user_package_ids));
+                    if !filters.include_deprecated {
+                        own_cond = own_cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
+                    }
+
+                    query = query.filter(
+                        Condition::any()
+                            .add(public_cond)
+                            .add(own_cond),
+                    );
+                }
+                _ => {
+                    query = query.filter(
+                        Condition::any()
+                            .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
+                            .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess)),
+                    );
+                    if !filters.include_deprecated {
+                        query = query.filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
+                    }
+                }
             }
         }
 
@@ -1101,15 +1142,15 @@ impl ServerRegistry {
 
         Ok((bytes, entry.manifest, ver.version))
     }
-    /// Two-step publish: fetch WASM from tmp path, hash, move to final location, create DB records
-    pub async fn publish_from_tmp(
+    /// Finalize a two-step publish: construct the tmp path from the submitter
+    /// identity, fetch WASM, hash, move to final location, create DB records.
+    pub async fn finalize_publish(
         &self,
         manifest: PackageManifest,
-        tmp_path: &str,
-        submitter_id: Option<String>,
-        _submitter_email: Option<String>,
+        submitter_id: &str,
+        submitter_email: Option<String>,
     ) -> flow_like_types::Result<PublishResponse> {
-        use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
+        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
 
         let now = chrono::Utc::now().naive_utc();
 
@@ -1127,7 +1168,11 @@ impl ServerRegistry {
             ));
         }
 
-        let tmp_object_path = Path::from(tmp_path);
+        let tmp_path = format!(
+            "tmp/wasm/{}/{}/{}.wasm",
+            submitter_id, manifest.id, manifest.version
+        );
+        let tmp_object_path = Path::from(tmp_path.as_str());
         let data = self
             .content_bucket
             .as_generic()
@@ -1194,7 +1239,7 @@ impl ServerRegistry {
                 homepage: Set(manifest.homepage.clone()),
                 repository: Set(manifest.repository.clone()),
                 keywords: Set(Some(manifest.keywords.clone())),
-                status: Set(WasmPackageStatus::PendingReview),
+                status: Set(WasmPackageStatus::Active),
                 visibility: Set(WasmPackageVisibility::Private),
                 verified: Set(false),
                 download_count: Set(0),
@@ -1211,36 +1256,18 @@ impl ServerRegistry {
             };
             package_model.insert(&self.db).await?;
 
-            if let Some(ref user_id) = submitter_id {
-                let user_model = wasm_package_user::ActiveModel {
-                    id: Set(create_id()),
-                    package_id: Set(manifest.id.clone()),
-                    user_id: Set(user_id.clone()),
-                    permission: Set(
-                        crate::permission::wasm_package_permission::WasmPackagePermission::Owner
-                            .bits(),
-                    ),
-                    granted_by: Set(None),
-                    granted_at: Set(now),
-                };
-                user_model.insert(&self.db).await?;
-            }
-
-            let review_model = wasm_package_review::ActiveModel {
+            let user_model = wasm_package_user::ActiveModel {
                 id: Set(create_id()),
                 package_id: Set(manifest.id.clone()),
-                reviewer_id: Set(submitter_id
-                    .clone()
-                    .unwrap_or_else(|| "anonymous".to_string())),
-                action: Set(WasmReviewAction::Submitted),
-                comment: Set(None),
-                internal_note: Set(None),
-                security_score: Set(None),
-                code_quality_score: Set(None),
-                documentation_score: Set(None),
-                created_at: Set(now),
+                user_id: Set(submitter_id.to_string()),
+                permission: Set(
+                    crate::permission::wasm_package_permission::WasmPackagePermission::Owner
+                        .bits(),
+                ),
+                granted_by: Set(None),
+                granted_at: Set(now),
             };
-            review_model.insert(&self.db).await?;
+            user_model.insert(&self.db).await?;
 
             // Auto-create default English meta from manifest
             let meta_model = meta::ActiveModel {
@@ -1320,7 +1347,7 @@ impl ServerRegistry {
                 .compilation_dispatcher
                 .clone()
                 .ok_or_else(|| flow_like_types::anyhow!("Compilation dispatcher not configured"))?;
-            let sub = submitter_id.clone().unwrap_or_default();
+            let sub = submitter_id.to_string();
             let params = crate::compilation::DispatchParams {
                 package_id: compile_pkg_id.clone(),
                 version: compile_version.clone(),

@@ -36,10 +36,12 @@ pub struct SearchQuery {
     pub language: Option<String>,
     #[serde(default)]
     pub include_own: bool,
+    #[serde(default)]
+    pub owned_only: bool,
 }
 
 impl SearchQuery {
-    fn into_parts(self) -> (SearchFilters, bool) {
+    fn into_parts(self) -> (SearchFilters, bool, bool) {
         let filters = SearchFilters {
             query: self.query,
             category: self.category,
@@ -53,7 +55,7 @@ impl SearchQuery {
             sort_desc: self.sort_desc,
             language: self.language,
         };
-        (filters, self.include_own)
+        (filters, self.include_own, self.owned_only)
     }
 }
 
@@ -75,7 +77,8 @@ impl SearchQuery {
         ("limit" = Option<usize>, Query, description = "Pagination limit"),
         ("sort_by" = Option<String>, Query, description = "Sort field: relevance, name, downloads, updated_at, created_at"),
         ("sort_desc" = Option<bool>, Query, description = "Sort direction (descending if true)"),
-        ("include_own" = Option<bool>, Query, description = "Include private packages the caller has access to")
+        ("include_own" = Option<bool>, Query, description = "Include private packages the caller has access to"),
+        ("owned_only" = Option<bool>, Query, description = "Return only packages the caller owns or has access to")
     ),
     responses(
         (status = 200, description = "Search results", body = SearchResults),
@@ -94,10 +97,10 @@ pub async fn search(
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
     let caller_id = user.sub().ok();
-    let (filters, include_own) = query.into_parts();
+    let (filters, include_own, owned_only) = query.into_parts();
 
     let results = registry
-        .search_with_visibility(&filters, caller_id.as_deref(), include_own)
+        .search_with_visibility(&filters, caller_id.as_deref(), include_own, owned_only)
         .await?;
     Ok(Json(results))
 }

@@ -5,14 +5,18 @@ use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use flow_like_types::create_id;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UploadUrlRequest {
+    pub id: String,
+    pub version: String,
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UploadUrlResponse {
     pub upload_url: String,
-    pub tmp_path: String,
     pub expires_in_secs: u64,
 }
 
@@ -22,8 +26,10 @@ pub struct UploadUrlResponse {
     post,
     path = "/registry/upload-url",
     tag = "registry",
+    request_body = UploadUrlRequest,
     responses(
         (status = 200, description = "Presigned upload URL", body = UploadUrlResponse),
+        (status = 400, description = "Invalid request"),
         (status = 401, description = "Authentication required"),
         (status = 503, description = "WASM registry not configured")
     ),
@@ -32,6 +38,7 @@ pub struct UploadUrlResponse {
 pub async fn get_upload_url(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
+    Json(request): Json<UploadUrlRequest>,
 ) -> Result<Json<UploadUrlResponse>, ApiError> {
     let sub = user
         .sub()
@@ -41,12 +48,16 @@ pub async fn get_upload_url(
         return Err(ApiError::unauthorized("Authentication required"));
     }
 
+    if request.id.is_empty() || request.version.is_empty() {
+        return Err(ApiError::bad_request("id and version are required"));
+    }
+
     let registry = state
         .wasm_registry
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
-    let tmp_path = format!("tmp/wasm/{}.wasm", create_id());
+    let tmp_path = format!("tmp/wasm/{}/{}/{}.wasm", sub, request.id, request.version);
 
     let upload_url = registry
         .get_upload_url(&tmp_path)
@@ -55,7 +66,6 @@ pub async fn get_upload_url(
 
     Ok(Json(UploadUrlResponse {
         upload_url,
-        tmp_path,
         expires_in_secs: 3600,
     }))
 }
