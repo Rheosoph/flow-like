@@ -5,13 +5,16 @@ use crate::{
     registry::{
         CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
         LocalRegistryState, PackageSource, PackageSummary, PackageVersion, PublishRequest,
-        PublishResponse, RegistryConfig, RegistryEntry, RegistryIndex, SearchFilters,
-        SearchResults,
+        PublishResponse, RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
     },
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Registry client for managing WASM packages
@@ -74,142 +77,71 @@ impl RegistryClient {
         Ok(())
     }
 
-    /// Fetch package index from remote registry
-    pub async fn fetch_index(&self, registry_url: &str) -> Result<RegistryIndex> {
-        let url = format!("{}/index.json", registry_url);
-        let response = self.http_client.get(&url).send().await?;
+    /// Set the auth token for authenticated API requests
+    pub fn set_auth_token(&mut self, token: Option<String>) {
+        self.config.auth_token = token;
+    }
+
+    fn build_search_url(&self, filters: &SearchFilters, include_own: bool) -> String {
+        let base = format!("{}/search", self.config.default_registry);
+        let mut url = reqwest::Url::parse(&base).expect("invalid registry URL");
+
+        {
+            let mut params = url.query_pairs_mut();
+            if let Some(q) = &filters.query {
+                params.append_pair("query", q);
+            }
+            if let Some(cat) = &filters.category {
+                params.append_pair("category", cat);
+            }
+            for kw in &filters.keywords {
+                params.append_pair("keywords", kw);
+            }
+            if let Some(author) = &filters.author {
+                params.append_pair("author", author);
+            }
+            if filters.verified_only {
+                params.append_pair("verified_only", "true");
+            }
+            if filters.include_deprecated {
+                params.append_pair("include_deprecated", "true");
+            }
+            params.append_pair("offset", &filters.offset.to_string());
+            params.append_pair("limit", &filters.limit.to_string());
+            let sort_str = match filters.sort_by {
+                crate::registry::SortField::Relevance => "relevance",
+                crate::registry::SortField::Name => "name",
+                crate::registry::SortField::Downloads => "downloads",
+                crate::registry::SortField::UpdatedAt => "updated_at",
+                crate::registry::SortField::CreatedAt => "created_at",
+            };
+            params.append_pair("sort_by", sort_str);
+            params.append_pair("sort_desc", &filters.sort_desc.to_string());
+            if include_own {
+                params.append_pair("include_own", "true");
+            }
+        }
+
+        url.to_string()
+    }
+
+    /// Search packages via the remote registry API
+    pub async fn search(&self, filters: &SearchFilters) -> Result<SearchResults> {
+        let url = self.build_search_url(filters, self.config.auth_token.is_some());
+
+        let mut request = self.http_client.get(&url);
+        if let Some(token) = &self.config.auth_token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let response = request.send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to fetch registry index: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Failed to search registry: {}", response.status()));
         }
 
-        let index: RegistryIndex = response.json().await?;
-
-        let index_file = sanitize_filename(registry_url);
-        let index_path = self
-            .config
-            .cache_dir
-            .join(format!("{}.index.json", index_file));
-        let data = serde_json::to_string_pretty(&index)?;
-        tokio::fs::write(&index_path, data).await?;
-
-        let mut state = self.state.write().await;
-        state
-            .index_refresh
-            .insert(registry_url.to_string(), Utc::now());
-        drop(state);
-        self.save_state().await?;
-
-        Ok(index)
-    }
-
-    /// Get cached index (offline-first)
-    pub async fn get_index(&self) -> Result<RegistryIndex> {
-        let registry_url = &self.config.default_registry;
-        let index_file = sanitize_filename(registry_url);
-        let index_path = self
-            .config
-            .cache_dir
-            .join(format!("{}.index.json", index_file));
-
-        let state = self.state.read().await;
-        let last_refresh = state.index_refresh.get(registry_url).cloned();
-        drop(state);
-
-        let should_refresh = match last_refresh {
-            Some(time) => {
-                let age_hours = Utc::now().signed_duration_since(time).num_hours();
-                age_hours >= self.config.cache_duration_hours as i64
-            }
-            None => true,
-        };
-
-        if !should_refresh && index_path.exists() {
-            let data = tokio::fs::read_to_string(&index_path).await?;
-            if let Ok(index) = serde_json::from_str::<RegistryIndex>(&data) {
-                return Ok(index);
-            }
-        }
-
-        match self.fetch_index(registry_url).await {
-            Ok(index) => Ok(index),
-            Err(e) => {
-                if index_path.exists() {
-                    tracing::warn!("Using stale index due to network error: {}", e);
-                    let data = tokio::fs::read_to_string(&index_path).await?;
-                    Ok(serde_json::from_str(&data)?)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Search packages with filters
-    pub async fn search(&self, filters: &SearchFilters) -> Result<SearchResults> {
-        let index = self.get_index().await?;
-
-        let mut results: Vec<PackageSummary> = index
-            .packages
-            .into_iter()
-            .filter(|pkg| {
-                if let Some(query) = &filters.query {
-                    let q = query.to_lowercase();
-                    let name_match = pkg.name.to_lowercase().contains(&q);
-                    let desc_match = pkg.description.to_lowercase().contains(&q);
-                    let keyword_match = pkg.keywords.iter().any(|k| k.to_lowercase().contains(&q));
-                    if !name_match && !desc_match && !keyword_match {
-                        return false;
-                    }
-                }
-
-                if filters.verified_only && !pkg.verified {
-                    return false;
-                }
-
-                true
-            })
-            .collect();
-
-        let total_count = results.len();
-
-        match filters.sort_by {
-            crate::registry::SortField::Downloads => {
-                results.sort_by(|a, b| {
-                    if filters.sort_desc {
-                        b.download_count.cmp(&a.download_count)
-                    } else {
-                        a.download_count.cmp(&b.download_count)
-                    }
-                });
-            }
-            crate::registry::SortField::Name => {
-                results.sort_by(|a, b| {
-                    if filters.sort_desc {
-                        b.name.cmp(&a.name)
-                    } else {
-                        a.name.cmp(&b.name)
-                    }
-                });
-            }
-            _ => {}
-        }
-
-        let results: Vec<PackageSummary> = results
-            .into_iter()
-            .skip(filters.offset)
-            .take(filters.limit)
-            .collect();
-
-        Ok(SearchResults {
-            packages: results,
-            total_count,
-            offset: filters.offset,
-            limit: filters.limit,
-        })
+        let results: SearchResults = response.json().await?;
+        Ok(results)
     }
 
     /// Download and cache a package
@@ -363,11 +295,7 @@ impl RegistryClient {
         self.download_package(package_id, version).await
     }
 
-    pub async fn install_version(
-        &self,
-        package_id: &str,
-        version: &str,
-    ) -> Result<CachedPackage> {
+    pub async fn install_version(&self, package_id: &str, version: &str) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if let Some(iv) = installed.get_version(version) {
@@ -422,15 +350,24 @@ impl RegistryClient {
         let installed: Vec<_> = state
             .installed
             .iter()
+            .filter(|(_, v)| !matches!(v.source, PackageSource::Local { .. }))
             .map(|(k, v)| (k.clone(), v.version.clone()))
             .collect();
         drop(state);
 
-        let index = self.get_index().await?;
-        let mut updates = Vec::new();
+        if installed.is_empty() {
+            return Ok(Vec::new());
+        }
 
+        let filters = SearchFilters {
+            limit: 200,
+            ..Default::default()
+        };
+        let results = self.search(&filters).await?;
+
+        let mut updates = Vec::new();
         for (id, current_version) in installed {
-            if let Some(pkg) = index.packages.iter().find(|p| p.id == id) {
+            if let Some(pkg) = results.packages.iter().find(|p| p.id == id) {
                 if pkg.latest_version != current_version {
                     updates.push((id, current_version, pkg.latest_version.clone()));
                 }

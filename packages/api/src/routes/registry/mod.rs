@@ -37,9 +37,9 @@ pub use server::ServerRegistry;
 #[macro_export]
 macro_rules! ensure_wasm_permission {
     ($state:expr, $user_id:expr, $package_id:expr, $required:expr) => {{
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
         use $crate::entity::wasm_package_user;
         use $crate::permission::wasm_package_permission::WasmPackagePermission;
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
         let perm = if let Some(cached) = $state.check_wasm_permission($user_id, $package_id) {
             cached
@@ -73,9 +73,9 @@ macro_rules! ensure_wasm_permission {
 #[macro_export]
 macro_rules! check_wasm_access {
     ($state:expr, $user_id:expr, $package_id:expr) => {{
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
         use $crate::entity::wasm_package_user;
         use $crate::permission::wasm_package_permission::WasmPackagePermission;
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
         if let Some(cached) = $state.check_wasm_permission($user_id, $package_id) {
             if cached.is_empty() {
@@ -96,7 +96,11 @@ macro_rules! check_wasm_access {
                 .unwrap_or(WasmPackagePermission::empty());
 
             $state.put_wasm_permission($user_id, $package_id, resolved);
-            if resolved.is_empty() { None } else { Some(resolved) }
+            if resolved.is_empty() {
+                None
+            } else {
+                Some(resolved)
+            }
         }
     }};
 }
@@ -107,15 +111,13 @@ async fn compilation_callback(
     body: Json<flow_like_types::dispatch::CompilationResult>,
 ) -> Result<
     Json<crate::compilation::callback::CallbackResponse>,
-    (StatusCode, Json<crate::compilation::callback::CallbackResponse>),
+    (
+        StatusCode,
+        Json<crate::compilation::callback::CallbackResponse>,
+    ),
 > {
     let db = std::sync::Arc::new(state.db.clone());
-    crate::compilation::callback::handle_compilation_callback(
-        State(db),
-        headers,
-        body,
-    )
-    .await
+    crate::compilation::callback::handle_compilation_callback(State(db), headers, body).await
 }
 
 pub fn routes() -> Router<AppState> {
@@ -128,10 +130,7 @@ pub fn routes() -> Router<AppState> {
         .route("/recompile", post(recompile::recompile))
         .route("/hash-check", post(hash_check::hash_check))
         .route("/prerun-check", post(prerun_check::prerun_check))
-        .route(
-            "/compilation-callback",
-            post(compilation_callback),
-        )
+        .route("/compilation-callback", post(compilation_callback))
         .route("/package/{id}", get(index::get_package))
         .route("/package/{id}/versions", get(index::get_versions))
         .route(
@@ -169,13 +168,9 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/package/{package_id}/access/{request_id}",
-            post(join_queue::accept_access_request)
-                .delete(join_queue::reject_access_request),
+            post(join_queue::accept_access_request).delete(join_queue::reject_access_request),
         )
-        .route(
-            "/package/{package_id}/purchase",
-            post(purchase::purchase),
-        )
+        .route("/package/{package_id}/purchase", post(purchase::purchase))
         .route(
             "/invitation/{invitation_id}/accept",
             post(users::accept_invitation),

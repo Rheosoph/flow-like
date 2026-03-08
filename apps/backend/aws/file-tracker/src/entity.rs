@@ -177,7 +177,12 @@ pub mod user {
         pub email: Option<String>,
         #[sea_orm(column_type = "Text", nullable, unique)]
         pub username: Option<String>,
-        #[sea_orm(column_name = "preferredUsername", column_type = "Text", nullable, unique)]
+        #[sea_orm(
+            column_name = "preferredUsername",
+            column_type = "Text",
+            nullable,
+            unique
+        )]
         pub preferred_username: Option<String>,
         #[sea_orm(column_type = "Text", nullable)]
         pub name: Option<String>,
@@ -185,7 +190,11 @@ pub mod user {
         pub description: Option<String>,
         #[sea_orm(column_type = "Text", nullable)]
         pub avatar: Option<String>,
-        #[sea_orm(column_name = "additionalInformation", column_type = "JsonBinary", nullable)]
+        #[sea_orm(
+            column_name = "additionalInformation",
+            column_type = "JsonBinary",
+            nullable
+        )]
         pub additional_information: Option<Json>,
         pub permission: i64,
         #[sea_orm(column_name = "acceptedTermsVersion", column_type = "Text", nullable)]

@@ -101,10 +101,10 @@
 //! ASYNC_EXECUTION_BACKEND=redis
 //! ```
 
+use flow_like_storage::Path as StorePath;
+use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::create_id;
 use serde::{Deserialize, Serialize};
-use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_storage::Path as StorePath;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -171,7 +171,10 @@ impl ExecutionBackend {
     }
 
     pub fn is_queue(&self) -> bool {
-        matches!(self, Self::Sqs | Self::SqsEventBridge | Self::Kafka | Self::Redis)
+        matches!(
+            self,
+            Self::Sqs | Self::SqsEventBridge | Self::Kafka | Self::Redis
+        )
     }
 }
 
@@ -273,7 +276,8 @@ pub struct DispatchRequest {
     pub profile: Option<serde_json::Value>,
     /// Pre-resolved WASM packages with presigned download URLs for executor
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm_packages: Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
+    pub wasm_packages:
+        Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
 }
 
 /// Response from dispatch
@@ -424,7 +428,9 @@ impl Dispatcher {
             )),
             ExecutionBackend::KubernetesJob => self.dispatch_k8s_job(&job_id, &request).await,
             ExecutionBackend::Sqs => self.dispatch_sqs(&job_id, &request).await,
-            ExecutionBackend::SqsEventBridge => self.dispatch_sqs_event_bridge(&job_id, &request).await,
+            ExecutionBackend::SqsEventBridge => {
+                self.dispatch_sqs_event_bridge(&job_id, &request).await
+            }
             ExecutionBackend::Kafka => self.dispatch_kafka(&job_id, &request).await,
             ExecutionBackend::Redis => self.dispatch_redis(&job_id, &request).await,
         }
@@ -757,12 +763,20 @@ impl Dispatcher {
         job_id: &str,
         request: &DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
-        let queue_url = self.config.sqs_event_bridge_queue_url.as_ref().ok_or_else(|| {
-            DispatchError::Configuration("SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL not configured".into())
-        })?;
+        let queue_url = self
+            .config
+            .sqs_event_bridge_queue_url
+            .as_ref()
+            .ok_or_else(|| {
+                DispatchError::Configuration(
+                    "SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL not configured".into(),
+                )
+            })?;
 
         let staging = self.staging_bucket.as_ref().ok_or_else(|| {
-            DispatchError::Configuration("Staging bucket not configured for SqsEventBridge backend".into())
+            DispatchError::Configuration(
+                "Staging bucket not configured for SqsEventBridge backend".into(),
+            )
         })?;
 
         let client = self
@@ -771,8 +785,8 @@ impl Dispatcher {
             .ok_or_else(|| DispatchError::Configuration("SQS client not initialized".into()))?;
 
         let body = build_executor_payload(job_id, request);
-        let payload_bytes = serde_json::to_vec(&body)
-            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
+        let payload_bytes =
+            serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
         let staging_path = StorePath::from(format!("tmp/sqs/{}.json", job_id));
         staging
@@ -955,8 +969,14 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         token: request.token.clone(),
         oauth_tokens,
         stream_state: request.stream_state,
-        runtime_variables: request.runtime_variables.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-        user_context: request.user_context.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+        runtime_variables: request
+            .runtime_variables
+            .as_ref()
+            .and_then(|v| serde_json::to_value(v).ok()),
+        user_context: request
+            .user_context
+            .as_ref()
+            .and_then(|v| serde_json::to_value(v).ok()),
         profile: request.profile.clone(),
         wasm_packages: request.wasm_packages.clone(),
     };

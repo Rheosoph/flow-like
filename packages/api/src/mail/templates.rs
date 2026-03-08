@@ -907,7 +907,9 @@ Questions? Contact us at help@great-co.de
         headline = headline,
         app_name = app_name,
         visibility = target_visibility.replace('_', " "),
-        description = description.replace("<strong style=\"color: #ffffff;\">", "").replace("</strong>", ""),
+        description = description
+            .replace("<strong style=\"color: #ffffff;\">", "")
+            .replace("</strong>", ""),
         message_section = reviewer_message
             .filter(|m| !m.is_empty())
             .map(|m| format!("\nReviewer message:\n{}\n", m))

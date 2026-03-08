@@ -4,7 +4,7 @@
 //! and generates presigned download URLs so the executor can fetch them.
 
 use crate::entity::{app_package, wasm_package_version};
-use crate::routes::registry::server::{executor_target_platform, ServerRegistry};
+use crate::routes::registry::server::{ServerRegistry, executor_target_platform};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,7 +53,10 @@ pub async fn resolve_wasm_packages(
             }
         };
 
-        match registry.sign_cwasm_urls(&pkg.package_id, &pkg.version, &target).await {
+        match registry
+            .sign_cwasm_urls(&pkg.package_id, &pkg.version, &target)
+            .await
+        {
             Ok((cwasm_url, checksum_url)) => {
                 let resolved = flow_like_types::dispatch::WasmPackageRef {
                     version: pkg.version.clone(),

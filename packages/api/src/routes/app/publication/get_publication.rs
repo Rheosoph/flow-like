@@ -1,9 +1,6 @@
 use crate::{
-    entity::publication_request,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    state::AppState,
+    entity::publication_request, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,

@@ -188,8 +188,7 @@ pub async fn trigger_event(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
-    let wasm_packages =
-        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -441,8 +440,7 @@ pub async fn trigger_http(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
-    let wasm_packages =
-        resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -783,8 +781,7 @@ pub async fn trigger_telegram(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
-    let wasm_packages =
-        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1095,8 +1092,7 @@ pub async fn trigger_discord(
         .and_then(|encrypted| decrypt_token(encrypted))
         .and_then(|json| serde_json::from_str(&json).ok());
 
-    let wasm_packages =
-        resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {

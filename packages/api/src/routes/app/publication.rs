@@ -1,5 +1,8 @@
-use axum::{Router, routing::{get, post}};
 use crate::state::AppState;
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 pub mod get_publication;
 pub mod upsert_publication;

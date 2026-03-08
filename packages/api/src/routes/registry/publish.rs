@@ -4,12 +4,12 @@
 //! 2. Client calls this endpoint with manifest (server constructs tmp path from sub)
 //! 3. Server fetches WASM from tmp, hashes, moves to final path, compiles in parallel
 
+use super::types::PublishResponse;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use super::types::PublishResponse;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -92,11 +92,7 @@ pub async fn publish(
     };
 
     let response = registry
-        .finalize_publish(
-            request.manifest.clone(),
-            &sub,
-            email,
-        )
+        .finalize_publish(request.manifest.clone(), &sub, email)
         .await?;
 
     Ok(Json(response))

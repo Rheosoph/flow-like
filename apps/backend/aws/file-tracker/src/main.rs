@@ -1,8 +1,8 @@
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_lambda_events::sqs::SqsEvent;
 use aws_sdk_dynamodb::Client as DynamoClient;
-use sea_orm::{ConnectOptions, Database};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use sea_orm::{ConnectOptions, Database};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 mod entity;
 mod event_handler;

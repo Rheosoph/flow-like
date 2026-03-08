@@ -1,5 +1,6 @@
 //! Package download endpoint
 
+use super::types::{DownloadRequest, DownloadResponse};
 use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
 use crate::entity::wasm_package;
 use crate::error::ApiError;
@@ -7,7 +8,6 @@ use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use super::types::{DownloadRequest, DownloadResponse};
 use sea_orm::EntityTrait;
 
 /// POST /registry/download
@@ -52,19 +52,18 @@ pub async fn download(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::not_found("Package not found"))?;
 
-    let is_free_public =
-        package.visibility == WasmPackageVisibility::Public && package.price <= 0;
+    let is_free_public = package.visibility == WasmPackageVisibility::Public && package.price <= 0;
 
     if !is_free_public {
         let access = crate::check_wasm_access!(state, &sub, &request.package_id);
         if access.is_none() {
             return match package.visibility {
-                WasmPackageVisibility::Public if package.price > 0 => {
-                    Err(ApiError::payment_required("Purchase required to download this package"))
-                }
-                WasmPackageVisibility::PublicRequestAccess => {
-                    Err(ApiError::forbidden("Access request required for this package"))
-                }
+                WasmPackageVisibility::Public if package.price > 0 => Err(
+                    ApiError::payment_required("Purchase required to download this package"),
+                ),
+                WasmPackageVisibility::PublicRequestAccess => Err(ApiError::forbidden(
+                    "Access request required for this package",
+                )),
                 _ => Err(ApiError::FORBIDDEN),
             };
         }

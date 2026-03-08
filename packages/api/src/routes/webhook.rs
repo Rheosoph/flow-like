@@ -393,8 +393,9 @@ async fn handle_wasm_purchase_completed(
     client_ref: &str,
 ) -> Result<(), ApiError> {
     use crate::entity::{
-        notification, user, wasm_package, wasm_package_purchase, wasm_package_user,
+        notification,
         sea_orm_active_enums::{NotificationType, PurchaseStatus},
+        user, wasm_package, wasm_package_purchase, wasm_package_user,
     };
     use crate::mail::{EmailMessage, templates::purchase_confirmation};
 

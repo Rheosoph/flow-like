@@ -31,9 +31,9 @@ pub use jwt::{
 pub use queue::QueueWorker;
 pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
 pub use sse_proxy::proxy_sse_response;
-pub use wasm_resolve::resolve_wasm_packages;
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,
     ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,
     UpdateRunInput, create_state_store,
 };
+pub use wasm_resolve::resolve_wasm_packages;

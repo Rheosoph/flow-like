@@ -2,10 +2,10 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_catalog::initialize as initialize_catalog;
-use flow_like_executor::{ExecutionRequest, ExecutorConfig, resolve_payload_from_str};
+use flow_like_executor::{resolve_payload_from_str, ExecutionRequest, ExecutorConfig};
 use flow_like_types::dispatch::DispatchPayload;
 use std::time::Duration;
-use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
 
 const DEFAULT_TASK_TIMEOUT_SECS: u64 = 3600;
 
@@ -120,20 +120,27 @@ async fn main() -> std::process::ExitCode {
             }
         };
 
-        let result =
-            match tokio::time::timeout(task_timeout, flow_like_executor::execute(request, config.clone())).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(e)) => {
-                    tracing::error!(index = idx, error = %e, "Execution failed");
-                    had_failure = true;
-                    continue;
-                }
-                Err(_) => {
-                    tracing::error!(index = idx, "Execution timed out after {task_timeout_secs}s");
-                    had_failure = true;
-                    continue;
-                }
-            };
+        let result = match tokio::time::timeout(
+            task_timeout,
+            flow_like_executor::execute(request, config.clone()),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                tracing::error!(index = idx, error = %e, "Execution failed");
+                had_failure = true;
+                continue;
+            }
+            Err(_) => {
+                tracing::error!(
+                    index = idx,
+                    "Execution timed out after {task_timeout_secs}s"
+                );
+                had_failure = true;
+                continue;
+            }
+        };
 
         tracing::info!(
             run_id = %result.run_id,

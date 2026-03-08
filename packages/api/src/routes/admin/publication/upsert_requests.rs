@@ -1,8 +1,7 @@
 use crate::{
     entity::{
         app, membership, meta, publication_log, publication_request,
-        sea_orm_active_enums::PublicationRequestStatus,
-        user,
+        sea_orm_active_enums::PublicationRequestStatus, user,
     },
     error::ApiError,
     mail::{EmailMessage, templates::app_publication_update},
@@ -15,7 +14,9 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -85,7 +86,11 @@ pub async fn upsert_request(
         "approve" | "accept" => PublicationRequestStatus::Accepted,
         "reject" => PublicationRequestStatus::Rejected,
         "hold" => PublicationRequestStatus::OnHold,
-        _ => return Err(ApiError::bad_request("Invalid action. Use 'approve', 'reject', or 'hold'.".to_string())),
+        _ => {
+            return Err(ApiError::bad_request(
+                "Invalid action. Use 'approve', 'reject', or 'hold'.".to_string(),
+            ));
+        }
     };
 
     let mut active: publication_request::ActiveModel = request.clone().into_active_model();

@@ -114,7 +114,12 @@ pub async fn update_readme(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    crate::ensure_wasm_permission!(state, &user_id, &package_id, WasmPackagePermission::Maintainer);
+    crate::ensure_wasm_permission!(
+        state,
+        &user_id,
+        &package_id,
+        WasmPackagePermission::Maintainer
+    );
 
     let update = wasm_package::ActiveModel {
         id: Set(package_id.clone()),
@@ -349,7 +354,9 @@ pub async fn get_meta(
     let mut resp = PackageMetaResponse::from(best.clone());
 
     // Presign icon, thumbnail and preview_media CUIDs to full URLs
-    let prefix = FlowPath::from("media").child("packages").child(package_id.as_str());
+    let prefix = FlowPath::from("media")
+        .child("packages")
+        .child(package_id.as_str());
     if let Ok(master_creds) = state.master_credentials().await {
         if let Ok(store) = master_creds.to_store(false).await {
             if let Some(icon) = &resp.icon {
@@ -372,7 +379,8 @@ pub async fn get_meta(
                 for item in media.iter_mut() {
                     if !item.starts_with("http://") && !item.starts_with("https://") {
                         let path = prefix.child(format!("{item}.webp"));
-                        if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                        if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await
+                        {
                             *item = url.to_string();
                         }
                     }
@@ -542,7 +550,12 @@ pub async fn push_package_media(
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
-    crate::ensure_wasm_permission!(state, &user_id, &package_id, WasmPackagePermission::Maintainer);
+    crate::ensure_wasm_permission!(
+        state,
+        &user_id,
+        &package_id,
+        WasmPackagePermission::Maintainer
+    );
 
     let txn = state.db.begin().await?;
 
@@ -662,7 +675,12 @@ pub async fn remove_package_media(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    crate::ensure_wasm_permission!(state, &user_id, &package_id, WasmPackagePermission::Maintainer);
+    crate::ensure_wasm_permission!(
+        state,
+        &user_id,
+        &package_id,
+        WasmPackagePermission::Maintainer
+    );
 
     let txn = state.db.begin().await?;
 

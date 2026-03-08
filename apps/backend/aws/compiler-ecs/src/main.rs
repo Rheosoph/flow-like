@@ -1,9 +1,9 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use flow_like_compiler::{CompilationJob, CompilerConfig, process_job};
+use flow_like_compiler::{process_job, CompilationJob, CompilerConfig};
 use std::time::Duration;
-use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
 
 const DEFAULT_TASK_TIMEOUT_SECS: u64 = 3600; // 1 hour
 
@@ -58,16 +58,16 @@ async fn main() -> std::process::ExitCode {
         }
     };
 
-    let jobs: Vec<CompilationJob> =
-        serde_json::from_str::<Vec<CompilationJob>>(&job_json).unwrap_or_else(|_| {
-            match serde_json::from_str::<CompilationJob>(&job_json) {
+    let jobs: Vec<CompilationJob> = serde_json::from_str::<Vec<CompilationJob>>(&job_json)
+        .unwrap_or_else(
+            |_| match serde_json::from_str::<CompilationJob>(&job_json) {
                 Ok(single) => vec![single],
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to parse COMPILATION_JOB");
                     Vec::new()
                 }
-            }
-        });
+            },
+        );
 
     if jobs.is_empty() {
         tracing::error!("No valid compilation jobs found");
@@ -96,7 +96,9 @@ async fn main() -> std::process::ExitCode {
             "Processing compilation job"
         );
 
-        let result = match tokio::time::timeout(task_timeout, process_job(job.clone(), &config)).await {
+        let result = match tokio::time::timeout(task_timeout, process_job(job.clone(), &config))
+            .await
+        {
             Ok(r) => r,
             Err(_) => {
                 tracing::error!(job_id = %job.job_id, "Compilation timed out after {task_timeout_secs}s");

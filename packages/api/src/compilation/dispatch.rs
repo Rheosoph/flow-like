@@ -235,7 +235,14 @@ impl CompilationDispatcher {
         sub: String,
         params: DispatchParams,
     ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
-        let job = build_compilation_job(sub, params, &self.config, &self.content_bucket, &self.meta_bucket).await?;
+        let job = build_compilation_job(
+            sub,
+            params,
+            &self.config,
+            &self.content_bucket,
+            &self.meta_bucket,
+        )
+        .await?;
         self.dispatch_job(&job).await
     }
 
@@ -397,9 +404,7 @@ impl CompilationDispatcher {
             CompilationDispatchError::Configuration("KAFKA_BROKERS not configured".into())
         })?;
         let topic = self.config.kafka_topic.as_ref().ok_or_else(|| {
-            CompilationDispatchError::Configuration(
-                "KAFKA_COMPILATION_TOPIC not configured".into(),
-            )
+            CompilationDispatchError::Configuration("KAFKA_COMPILATION_TOPIC not configured".into())
         })?;
 
         let message_body = serde_json::to_string(job)
@@ -499,8 +504,7 @@ impl CompilationDispatcher {
             .await
             .map_err(|e| CompilationDispatchError::Kubernetes(e.to_string()))?;
 
-        let jobs_api: Api<K8sJob> =
-            Api::namespaced(kube_client, &self.config.k8s_namespace);
+        let jobs_api: Api<K8sJob> = Api::namespaced(kube_client, &self.config.k8s_namespace);
 
         let job_payload = serde_json::to_string(job)
             .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
@@ -620,7 +624,9 @@ pub async fn build_compilation_job(
             Duration::from_secs(URL_TTL_SECS),
         )
         .await
-        .map_err(|e| CompilationDispatchError::Configuration(format!("Failed to sign .wasm GET URL: {e}")))?
+        .map_err(|e| {
+            CompilationDispatchError::Configuration(format!("Failed to sign .wasm GET URL: {e}"))
+        })?
         .to_string();
 
     // Use all known targets so the external worker gets upload URLs for every

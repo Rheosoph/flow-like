@@ -3,20 +3,20 @@
 //! Stores WASM binaries in CDN/content bucket and metadata in PostgreSQL.
 //! Custom nodes are public after admin approval.
 
+use super::types::{
+    MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
+    RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
+};
+use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageVisibility};
 use crate::entity::{
     meta, user, wasm_package, wasm_package_author, wasm_package_review, wasm_package_user,
     wasm_package_version,
 };
-use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageVisibility};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
 use flow_like_wasm::manifest::PackageManifest;
-use super::types::{
-    MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
-    RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
-};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -296,15 +296,14 @@ impl ServerRegistry {
             )
             .all(&self.db)
             .await?;
-        Ok(metas.into_iter().fold(
-            std::collections::HashMap::new(),
-            |mut acc, m| {
+        Ok(metas
+            .into_iter()
+            .fold(std::collections::HashMap::new(), |mut acc, m| {
                 if let Some(ref pkg_id) = m.wasm_package_id {
                     acc.entry(pkg_id.clone()).or_default().push(m);
                 }
                 acc
-            },
-        ))
+            }))
     }
 
     /// Get a presigned PUT URL for uploading a WASM binary to temporary storage
@@ -392,7 +391,9 @@ impl ServerRegistry {
                 wasm_path,
                 wasm_hash: version_record.wasm_hash,
             };
-            let resp = dispatcher.dispatch(sub, params).await
+            let resp = dispatcher
+                .dispatch(sub, params)
+                .await
                 .map_err(|e| flow_like_types::anyhow!("Dispatch failed: {e}"))?;
             tracing::info!(
                 pkg = %package_id,
@@ -411,7 +412,12 @@ impl ServerRegistry {
             flow_like_types::tokio::spawn(async move {
                 let inline_registry = ServerRegistry::new(db.clone(), content_bucket, meta_bucket);
                 let wasm_path = ServerRegistry::wasm_path(&pkg_id, &ver);
-                let data = match inline_registry.content_bucket.as_generic().get(&wasm_path).await {
+                let data = match inline_registry
+                    .content_bucket
+                    .as_generic()
+                    .get(&wasm_path)
+                    .await
+                {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::error!(pkg = %pkg_id, ver = %ver, err = %e, "Failed to fetch WASM for recompilation");
@@ -426,7 +432,10 @@ impl ServerRegistry {
                     }
                 };
 
-                match inline_registry.compile_and_store_artifact(&pkg_id, &ver, &wasm_bytes).await {
+                match inline_registry
+                    .compile_and_store_artifact(&pkg_id, &ver, &wasm_bytes)
+                    .await
+                {
                     Ok(platforms) => {
                         let version_record = wasm_package_version::Entity::find()
                             .filter(wasm_package_version::Column::PackageId.eq(&pkg_id))
@@ -436,7 +445,7 @@ impl ServerRegistry {
                         if let Ok(Some(record)) = version_record {
                             let mut active: wasm_package_version::ActiveModel = record.into();
                             active.compilation_status = Set(WasmCompilationStatus::Compiled);
-                            active.compiled_platforms = Set(platforms);
+                            active.compiled_platforms = Set(Some(platforms));
                             active.compilation_error = Set(None);
                             let _ = active.update(&db).await;
                         }
@@ -518,7 +527,10 @@ impl ServerRegistry {
             .filter(
                 Condition::any()
                     .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
-                    .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess)),
+                    .add(
+                        wasm_package::Column::Visibility
+                            .eq(WasmPackageVisibility::PublicRequestAccess),
+                    ),
             )
             .order_by_desc(wasm_package::Column::DownloadCount)
             .all(&self.db)
@@ -608,6 +620,19 @@ impl ServerRegistry {
             .one(&self.db)
             .await?
         else {
+            return Ok(None);
+        };
+
+        self.build_registry_entry(pkg).await.map(Some)
+    }
+
+    /// Get a package entry by ID regardless of status — for authors/maintainers
+    /// who need to see their own pending/disabled packages.
+    pub async fn get_package_any_status(
+        &self,
+        id: &str,
+    ) -> flow_like_types::Result<Option<RegistryEntry>> {
+        let Some(pkg) = wasm_package::Entity::find_by_id(id).one(&self.db).await? else {
             return Ok(None);
         };
 
@@ -781,7 +806,9 @@ impl ServerRegistry {
         query = query.filter(
             sea_orm::Condition::any()
                 .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
-                .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess)),
+                .add(
+                    wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess),
+                ),
         );
 
         // Filter by verified only
@@ -924,8 +951,8 @@ impl ServerRegistry {
                     .collect();
 
                 // Show all owned packages regardless of status (except deprecated unless requested)
-                let mut cond = Condition::all()
-                    .add(wasm_package::Column::Id.is_in(user_package_ids));
+                let mut cond =
+                    Condition::all().add(wasm_package::Column::Id.is_in(user_package_ids));
                 if !filters.include_deprecated {
                     cond = cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
                 }
@@ -953,7 +980,10 @@ impl ServerRegistry {
                     // but user's own packages bypass the status filter.
                     let mut public_cond = Condition::any()
                         .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
-                        .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess));
+                        .add(
+                            wasm_package::Column::Visibility
+                                .eq(WasmPackageVisibility::PublicRequestAccess),
+                        );
 
                     if !filters.include_deprecated {
                         public_cond = Condition::all()
@@ -961,26 +991,27 @@ impl ServerRegistry {
                             .add(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
                     }
 
-                    let mut own_cond = Condition::all()
-                        .add(wasm_package::Column::Id.is_in(user_package_ids));
+                    let mut own_cond =
+                        Condition::all().add(wasm_package::Column::Id.is_in(user_package_ids));
                     if !filters.include_deprecated {
-                        own_cond = own_cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
+                        own_cond = own_cond
+                            .add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
                     }
 
-                    query = query.filter(
-                        Condition::any()
-                            .add(public_cond)
-                            .add(own_cond),
-                    );
+                    query = query.filter(Condition::any().add(public_cond).add(own_cond));
                 }
                 _ => {
                     query = query.filter(
                         Condition::any()
                             .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::Public))
-                            .add(wasm_package::Column::Visibility.eq(WasmPackageVisibility::PublicRequestAccess)),
+                            .add(
+                                wasm_package::Column::Visibility
+                                    .eq(WasmPackageVisibility::PublicRequestAccess),
+                            ),
                     );
                     if !filters.include_deprecated {
-                        query = query.filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
+                        query = query
+                            .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active));
                     }
                 }
             }
@@ -1261,8 +1292,7 @@ impl ServerRegistry {
                 package_id: Set(manifest.id.clone()),
                 user_id: Set(submitter_id.to_string()),
                 permission: Set(
-                    crate::permission::wasm_package_permission::WasmPackagePermission::Owner
-                        .bits(),
+                    crate::permission::wasm_package_permission::WasmPackagePermission::Owner.bits(),
                 ),
                 granted_by: Set(None),
                 granted_at: Set(now),
@@ -1318,7 +1348,7 @@ impl ServerRegistry {
             yanked: Set(false),
             status: Set(WasmPackageStatus::PendingReview),
             compilation_status: Set(WasmCompilationStatus::Pending),
-            compiled_platforms: Set(vec![]),
+            compiled_platforms: Set(Some(vec![])),
             compilation_error: Set(None),
             duplicate_of_package_id: Set(dup_pkg_id),
             duplicate_of_version: Set(dup_version),
@@ -1377,18 +1407,14 @@ impl ServerRegistry {
             let tmp_registry =
                 ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
             match tmp_registry
-                .compile_and_store_artifact(
-                    &compile_pkg_id,
-                    &compile_version,
-                    &compile_wasm_data,
-                )
+                .compile_and_store_artifact(&compile_pkg_id, &compile_version, &compile_wasm_data)
                 .await
             {
                 Ok(platforms) => {
                     let _ = wasm_package_version::ActiveModel {
                         id: Set(version_id.clone()),
                         compilation_status: Set(WasmCompilationStatus::Compiled),
-                        compiled_platforms: Set(platforms),
+                        compiled_platforms: Set(Some(platforms)),
                         compilation_error: Set(None),
                         ..Default::default()
                     }
@@ -1625,8 +1651,7 @@ impl ServerRegistry {
                 let pending_versions = wasm_package_version::Entity::find()
                     .filter(wasm_package_version::Column::PackageId.eq(package_id))
                     .filter(
-                        wasm_package_version::Column::Status
-                            .eq(WasmPackageStatus::PendingReview),
+                        wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview),
                     )
                     .order_by_desc(wasm_package_version::Column::PublishedAt)
                     .all(&self.db)
@@ -1769,7 +1794,7 @@ impl ServerRegistry {
             let compiled_base = Path::from(WASM_COMPILED_PATH)
                 .child(package_id)
                 .child(version.version.as_str());
-            for platform in &version.compiled_platforms {
+            for platform in version.compiled_platforms.as_deref().unwrap_or_default() {
                 let cwasm_path = compiled_base.child(format!("{}.cwasm", platform));
                 let hash_path = compiled_base.child(format!("{}.cwasm.b3", platform));
                 let _ = self.meta_bucket.as_generic().delete(&cwasm_path).await;

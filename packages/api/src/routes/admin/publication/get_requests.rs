@@ -64,8 +64,8 @@ pub async fn get_requests(
     let limit = query.limit.unwrap_or(25).min(100);
     let offset = (page - 1) * limit;
 
-    let mut select = publication_request::Entity::find()
-        .order_by_desc(publication_request::Column::CreatedAt);
+    let mut select =
+        publication_request::Entity::find().order_by_desc(publication_request::Column::CreatedAt);
 
     if let Some(status_filter) = &query.status {
         let status = match status_filter.to_uppercase().as_str() {

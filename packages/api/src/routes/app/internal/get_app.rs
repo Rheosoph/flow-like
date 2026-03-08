@@ -1,9 +1,6 @@
 use crate::{
-    entity::app,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    routes::app::ensure_app_publicly_visible,
-    state::AppState,
+    entity::app, error::ApiError, middleware::jwt::AppUser,
+    routes::app::ensure_app_publicly_visible, state::AppState,
 };
 use axum::{
     Extension, Json,

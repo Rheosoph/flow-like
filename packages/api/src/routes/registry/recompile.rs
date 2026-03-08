@@ -49,7 +49,12 @@ pub async fn recompile(
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
-    crate::ensure_wasm_permission!(state, &sub, &request.package_id, WasmPackagePermission::Maintainer);
+    crate::ensure_wasm_permission!(
+        state,
+        &sub,
+        &request.package_id,
+        WasmPackagePermission::Maintainer
+    );
 
     let version_record = wasm_package_version::Entity::find()
         .filter(wasm_package_version::Column::PackageId.eq(&request.package_id))

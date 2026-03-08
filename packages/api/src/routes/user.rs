@@ -27,11 +27,7 @@ pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate
     };
 
     let res = user::Entity::insert(user)
-        .on_conflict(
-            OnConflict::column(user::Column::Id)
-                .do_nothing()
-                .to_owned(),
-        )
+        .on_conflict(OnConflict::column(user::Column::Id).do_nothing().to_owned())
         .do_nothing()
         .exec(&state.db)
         .await;

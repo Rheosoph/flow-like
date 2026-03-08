@@ -64,10 +64,7 @@ pub async fn review_package(
 
         let owners = wasm_package_user::Entity::find()
             .filter(wasm_package_user::Column::PackageId.eq(&package_id))
-            .filter(
-                wasm_package_user::Column::Permission
-                    .eq(WasmPackagePermission::Owner.bits()),
-            )
+            .filter(wasm_package_user::Column::Permission.eq(WasmPackagePermission::Owner.bits()))
             .all(&state.db)
             .await
             .unwrap_or_default();

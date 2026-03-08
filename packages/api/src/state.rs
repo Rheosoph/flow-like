@@ -183,17 +183,19 @@ impl State {
         let compilation_config = CompilationDispatchConfig::from_env();
         tracing::info!(backend = ?compilation_config.backend, "Compilation dispatch backend");
         let compilation_dispatcher = Arc::new(
-            CompilationDispatcher::new(compilation_config, content_bucket.clone(), meta_bucket.clone()).await,
+            CompilationDispatcher::new(
+                compilation_config,
+                content_bucket.clone(),
+                meta_bucket.clone(),
+            )
+            .await,
         );
 
         // Initialize WASM registry if enabled (uses PostgreSQL)
         let wasm_registry = if platform_config.features.wasm_registry {
-            let registry = ServerRegistry::new(
-                db.clone(),
-                content_bucket.clone(),
-                meta_bucket.clone(),
-            )
-            .with_compilation_dispatcher(compilation_dispatcher.clone());
+            let registry =
+                ServerRegistry::new(db.clone(), content_bucket.clone(), meta_bucket.clone())
+                    .with_compilation_dispatcher(compilation_dispatcher.clone());
             Some(Arc::new(registry))
         } else {
             None

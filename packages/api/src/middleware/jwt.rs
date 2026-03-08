@@ -243,7 +243,12 @@ impl AppUser {
             AppUser::Executor(executor) => Some(executor.run_id.clone()),
             AppUser::Unauthorized => None,
         };
-        Ok(format!("{}:{}:{}", method, sub, method_id.unwrap_or_default()))
+        Ok(format!(
+            "{}:{}:{}",
+            method,
+            sub,
+            method_id.unwrap_or_default()
+        ))
     }
 
     pub async fn tracking_id(

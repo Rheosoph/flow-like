@@ -230,10 +230,9 @@ impl WasmEngine {
     pub fn precompile(&self, wasm_bytes: &[u8]) -> WasmResult<Vec<u8>> {
         #[cfg(feature = "component-model")]
         if crate::component::is_component_model(wasm_bytes) {
-            return self
-                .engine
-                .precompile_component(wasm_bytes)
-                .map_err(|e| WasmError::compilation(format!("Failed to precompile component: {}", e)));
+            return self.engine.precompile_component(wasm_bytes).map_err(|e| {
+                WasmError::compilation(format!("Failed to precompile component: {}", e))
+            });
         }
         self.engine
             .precompile_module(wasm_bytes)

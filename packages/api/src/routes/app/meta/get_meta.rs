@@ -47,10 +47,16 @@ pub async fn get_meta(
 ) -> Result<Json<Metadata>, ApiError> {
     let mode = MetaMode::new(&query, &app_id);
 
-    if mode.ensure_read_permission(&user, &app_id, &state).await.is_err() {
+    if mode
+        .ensure_read_permission(&user, &app_id, &state)
+        .await
+        .is_err()
+    {
         user.sub()?;
         match mode {
-            MetaMode::App(_) => { ensure_app_publicly_visible(&app_id, &state).await?; }
+            MetaMode::App(_) => {
+                ensure_app_publicly_visible(&app_id, &state).await?;
+            }
             _ => return Err(ApiError::FORBIDDEN),
         }
     }

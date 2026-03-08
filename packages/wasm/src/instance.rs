@@ -94,6 +94,9 @@ impl WasmInstance {
                     export_name: "memory".to_string(),
                 })?;
 
+        // Store memory reference in StoreData so host functions can access it
+        store.data_mut().memory = Some(memory);
+
         // Get function exports
         // Try get_node (single-node) first, then get_nodes (multi-node package)
         let get_node_func = instance
@@ -326,13 +329,31 @@ impl WasmInstance {
             Ok(ptr as u32)
         } else {
             // Use bump allocator
-            let allocator = self
-                .store
-                .data_mut()
-                .allocator
-                .as_mut()
-                .ok_or_else(|| WasmError::Internal("Allocator not initialized".to_string()))?;
-            allocator.bump_alloc(size, 8)
+            let ptr = {
+                let allocator =
+                    self.store.data_mut().allocator.as_mut().ok_or_else(|| {
+                        WasmError::Internal("Allocator not initialized".to_string())
+                    })?;
+                allocator.bump_alloc(size, 8)?
+            };
+
+            // Grow WASM memory if the allocation extends beyond current size
+            let end = ptr as u64 + size as u64;
+            let current_size = self.memory.data_size(&self.store) as u64;
+            if end > current_size {
+                let page_size: u64 = 65536;
+                let needed_pages = (end.saturating_sub(current_size) + page_size - 1) / page_size;
+                self.memory
+                    .grow(&mut self.store, needed_pages)
+                    .map_err(|e| {
+                        WasmError::memory_access(format!(
+                            "Failed to grow memory by {} pages: {}",
+                            needed_pages, e
+                        ))
+                    })?;
+            }
+
+            Ok(ptr)
         }
     }
 

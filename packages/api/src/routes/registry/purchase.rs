@@ -133,7 +133,10 @@ pub async fn purchase(
             currency: stripe::Currency::EUR,
             product_data: Some(stripe::CreateCheckoutSessionLineItemsPriceDataProductData {
                 name: package.name.clone(),
-                description: Some(format!("One-time purchase of WASM package: {}", package.name)),
+                description: Some(format!(
+                    "One-time purchase of WASM package: {}",
+                    package.name
+                )),
                 ..Default::default()
             }),
             unit_amount: Some(package.price),

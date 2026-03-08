@@ -45,8 +45,7 @@ impl MetaSummary {
 }
 
 /// Registry entry status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[derive(ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageStatus {
     #[default]
@@ -60,12 +59,16 @@ pub enum PackageStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PackageSource {
-    Local { path: std::path::PathBuf },
+    Local {
+        path: std::path::PathBuf,
+    },
     Remote {
         registry_url: String,
         download_url: String,
     },
-    Embedded { data: Vec<u8> },
+    Embedded {
+        data: Vec<u8>,
+    },
 }
 
 /// Registry entry for a single package version

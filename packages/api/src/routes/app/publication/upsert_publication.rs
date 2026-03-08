@@ -75,7 +75,7 @@ pub async fn request_publication(
         _ => {
             return Err(ApiError::bad_request(
                 "Invalid target visibility".to_string(),
-            ))
+            ));
         }
     };
 

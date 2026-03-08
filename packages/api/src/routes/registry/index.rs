@@ -1,15 +1,15 @@
 //! Registry index endpoints
 
+use super::types::{PackageVersion, RegistryEntry};
 use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
+use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::Extension;
 use sea_orm::EntityTrait;
-use super::types::{PackageVersion, RegistryEntry};
 
 /// GET /registry/package/{id}
 /// Returns full package entry details.
@@ -52,7 +52,10 @@ pub async fn get_package(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
 
-    if package.status != crate::entity::sea_orm_active_enums::WasmPackageStatus::Active {
+    let non_active =
+        package.status != crate::entity::sea_orm_active_enums::WasmPackageStatus::Active;
+
+    if non_active {
         if let Some(ref uid) = sub {
             let access = crate::check_wasm_access!(state, uid, &id);
             if access.is_none() {
@@ -71,10 +74,17 @@ pub async fn get_package(
         }
     }
 
-    let mut entry = registry
-        .get_package(&id)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
+    let mut entry = if non_active {
+        registry
+            .get_package_any_status(&id)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?
+    } else {
+        registry
+            .get_package(&id)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?
+    };
 
     if let Some(ref uid) = sub {
         let access = crate::check_wasm_access!(state, uid, &id);

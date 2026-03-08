@@ -1,5 +1,10 @@
 use crate::{
-    ensure_permission, entity::{app_package, wasm_package_version}, error::ApiError, middleware::jwt::AppUser, permission::role_permission::RolePermissions, state::AppState
+    ensure_permission,
+    entity::{app_package, wasm_package_version},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -98,7 +103,6 @@ pub async fn get_app_nodes(
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
 
     for pkg in &packages {
-
         // The catalog does not need to show stale packages
         if pkg.stale {
             continue;

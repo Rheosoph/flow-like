@@ -44,6 +44,10 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> WasmResult<()>
     register_auth_functions(linker)?;
     register_env_functions(linker)?;
     register_model_functions(linker)?;
+    register_additional_model_functions(linker)?;
+    register_schema_functions(linker)?;
+    register_image_functions(linker)?;
+    register_db_functions(linker)?;
     register_wasi_stubs(linker)?;
     register_emscripten_stubs(linker)?;
 
@@ -1354,6 +1358,285 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         )
         .map_err(|e| {
             WasmError::Initialization(format!("Failed to register models.embed_text: {}", e))
+        })?;
+
+    Ok(())
+}
+
+fn register_schema_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    // get_type_schema — returns JSON schema string for a well-known type
+    // Capability-gated: FlowPath requires STORAGE_READ, others require MODELS
+    linker
+        .func_wrap(
+            "flowlike_schema",
+            "get_type_schema",
+            |caller: Caller<'_, StoreData>, name_ptr: u32, name_len: u32| -> u64 {
+                let name = match read_string_from_caller(&caller, name_ptr, name_len) {
+                    Ok(n) => n,
+                    Err(_) => return 0,
+                };
+
+                let required = crate::host_functions::schema::required_capability(&name);
+                if !caller.data().host_state.has_capability(required) {
+                    return 0;
+                }
+
+                match crate::host_functions::schema::get_type_schema(&name) {
+                    Some(schema) => {
+                        let (ptr, len) = caller.data().host_state.store_result(schema.as_bytes());
+                        pack_ptr_len(ptr, len)
+                    }
+                    None => 0,
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register schema.get_type_schema: {}", e))
+        })?;
+
+    // list_type_schemas — returns JSON array of type names the caller has access to
+    linker
+        .func_wrap(
+            "flowlike_schema",
+            "list_types",
+            |caller: Caller<'_, StoreData>| -> u64 {
+                let names: Vec<&str> = crate::host_functions::schema::list_type_names()
+                    .into_iter()
+                    .filter(|name| {
+                        let required = crate::host_functions::schema::required_capability(name);
+                        caller.data().host_state.has_capability(required)
+                    })
+                    .collect();
+                match serde_json::to_vec(&names) {
+                    Ok(json) => {
+                        let (ptr, len) = caller.data().host_state.store_result(&json);
+                        pack_ptr_len(ptr, len)
+                    }
+                    Err(_) => 0,
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register schema.list_types: {}", e))
+        })?;
+
+    Ok(())
+}
+
+fn register_image_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    // from_bytes — create image from raw bytes, return NodeImage JSON ref
+    linker
+        .func_wrap(
+            "flowlike_image",
+            "from_bytes",
+            |caller: Caller<'_, StoreData>,
+             data_ptr: u32,
+             data_len: u32,
+             fmt_ptr: u32,
+             fmt_len: u32|
+             -> u64 {
+                if !caller
+                    .data()
+                    .host_state
+                    .has_capability(WasmCapabilities::MODELS)
+                {
+                    return 0;
+                }
+                // Stub — image creation requires host-side DynamicImage.
+                // Will return the JSON for a NodeImage handle once host builds one.
+                let _ = (data_ptr, data_len, fmt_ptr, fmt_len);
+                let _ = &caller;
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register image.from_bytes: {}", e))
+        })?;
+
+    // to_bytes — get raw bytes from image handle
+    linker
+        .func_wrap(
+            "flowlike_image",
+            "to_bytes",
+            |caller: Caller<'_, StoreData>,
+             ref_ptr: u32,
+             ref_len: u32,
+             fmt_ptr: u32,
+             fmt_len: u32|
+             -> u64 {
+                if !caller
+                    .data()
+                    .host_state
+                    .has_capability(WasmCapabilities::MODELS)
+                {
+                    return 0;
+                }
+                let _ = (ref_ptr, ref_len, fmt_ptr, fmt_len);
+                let _ = &caller;
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register image.to_bytes: {}", e))
+        })?;
+
+    Ok(())
+}
+
+fn register_db_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    // query — unified DB operation dispatch
+    // op: 1=vector_search, 2=fts_search, 3=hybrid_search, 4=insert, 5=upsert, 6=delete, 7=list, 8=count
+    linker
+        .func_wrap_async(
+            "flowlike_db",
+            "query",
+            |caller: Caller<'_, StoreData>,
+             (op, conn_ptr, conn_len, payload_ptr, payload_len): (
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            )| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+
+                    let _conn_json =
+                        match read_string_from_caller(&caller, conn_ptr, conn_len) {
+                            Ok(s) => s,
+                            Err(_) => return 0,
+                        };
+
+                    let _payload_json =
+                        match read_string_from_caller(&caller, payload_ptr, payload_len) {
+                            Ok(s) => s,
+                            Err(_) => return 0,
+                        };
+
+                    // Stub — DB operations require host-side LanceDB connection.
+                    // op determines which method to call on the resolved CachedDB.
+                    let _ = op;
+                    0u64
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register db.query: {}", e))
+        })?;
+
+    Ok(())
+}
+
+fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    // embed_text_query — embed texts for retrieval queries
+    linker
+        .func_wrap_async(
+            "flowlike_models",
+            "embed_text_query",
+            |caller: Caller<'_, StoreData>,
+             (model_ptr, model_len, texts_ptr, texts_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+                    let _ = (model_ptr, model_len, texts_ptr, texts_len);
+                    0u64
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register models.embed_text_query: {}", e))
+        })?;
+
+    // embed_text_document — embed texts for document indexing
+    linker
+        .func_wrap_async(
+            "flowlike_models",
+            "embed_text_document",
+            |caller: Caller<'_, StoreData>,
+             (model_ptr, model_len, texts_ptr, texts_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+                    let _ = (model_ptr, model_len, texts_ptr, texts_len);
+                    0u64
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register models.embed_text_document: {}",
+                e
+            ))
+        })?;
+
+    // embed_image — embed an image using an embedding model
+    linker
+        .func_wrap_async(
+            "flowlike_models",
+            "embed_image",
+            |caller: Caller<'_, StoreData>,
+             (model_ptr, model_len, image_ptr, image_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+                    let _ = (model_ptr, model_len, image_ptr, image_len);
+                    0u64
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register models.embed_image: {}", e))
+        })?;
+
+    // llm_prompt — send a completion prompt to an LLM/VLM
+    linker
+        .func_wrap_async(
+            "flowlike_models",
+            "llm_prompt",
+            |caller: Caller<'_, StoreData>,
+             (bit_ptr, bit_len, messages_ptr, messages_len, stream): (
+                u32,
+                u32,
+                u32,
+                u32,
+                i32,
+            )| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+                    let _ = (bit_ptr, bit_len, messages_ptr, messages_len, stream);
+                    0u64
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register models.llm_prompt: {}", e))
         })?;
 
     Ok(())

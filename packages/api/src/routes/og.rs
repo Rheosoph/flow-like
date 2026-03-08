@@ -50,10 +50,7 @@ fn parse_og_tags(html: &str) -> OgMetadata {
 
     fn get_attr_value<'a>(tag_lower: &str, tag_orig: &'a str, attr: &str) -> Option<&'a str> {
         // Try: attr="value", attr='value', attr=value (unquoted)
-        for prefix in &[
-            format!("{}=\"", attr),
-            format!("{}='", attr),
-        ] {
+        for prefix in &[format!("{}=\"", attr), format!("{}='", attr)] {
             if let Some(pos) = tag_lower.find(prefix.as_str()) {
                 let delim = prefix.chars().last().unwrap();
                 let val_start = pos + prefix.len();
@@ -72,7 +69,8 @@ fn parse_og_tags(html: &str) -> OgMetadata {
             let rest = &tag_orig[val_start..];
             // Must not start with a quote (already handled above)
             if !rest.starts_with('"') && !rest.starts_with('\'') {
-                let val_end = rest.find(|c: char| c.is_whitespace() || c == '>')
+                let val_end = rest
+                    .find(|c: char| c.is_whitespace() || c == '>')
                     .unwrap_or(rest.len());
                 let v = rest[..val_end].trim();
                 if !v.is_empty() {
@@ -140,7 +138,11 @@ fn parse_og_tags(html: &str) -> OgMetadata {
                         return Some(format!(
                             "{}{}",
                             base_url.trim_end_matches('/'),
-                            if href.starts_with('/') { href.to_string() } else { format!("/{}", href) }
+                            if href.starts_with('/') {
+                                href.to_string()
+                            } else {
+                                format!("/{}", href)
+                            }
                         ));
                     }
                 }
@@ -200,11 +202,12 @@ pub async fn fetch_og_metadata(
     tracing::Span::current().record("url", &url.as_str());
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(ApiError::bad_request("URL must start with http:// or https://"));
+        return Err(ApiError::bad_request(
+            "URL must start with http:// or https://",
+        ));
     }
 
-    let parsed = reqwest::Url::parse(&url)
-        .map_err(|_| ApiError::bad_request("Invalid URL"))?;
+    let parsed = reqwest::Url::parse(&url).map_err(|_| ApiError::bad_request("Invalid URL"))?;
 
     if parsed.host_str().is_none() {
         return Err(ApiError::bad_request("URL must have a valid host"));
@@ -290,7 +293,10 @@ mod tests {
         assert_eq!(og.description.as_deref(), Some("A cool description"));
         assert_eq!(og.image.as_deref(), Some("https://example.com/img.png"));
         assert_eq!(og.site_name.as_deref(), Some("Example"));
-        assert_eq!(og.favicon.as_deref(), Some("https://example.com/favicon.ico"));
+        assert_eq!(
+            og.favicon.as_deref(),
+            Some("https://example.com/favicon.ico")
+        );
     }
 
     #[test]
@@ -373,10 +379,7 @@ mod tests {
             og.title.is_some(),
             "flow-like.com should have an og:title or <title>"
         );
-        assert!(
-            og.image.is_some(),
-            "flow-like.com should have an og:image"
-        );
+        assert!(og.image.is_some(), "flow-like.com should have an og:image");
 
         let title = og.title.unwrap();
         assert!(
@@ -386,7 +389,10 @@ mod tests {
 
         // description is optional — log it if present
         if let Some(desc) = &og.description {
-            assert!(!desc.is_empty(), "description should not be empty if present");
+            assert!(
+                !desc.is_empty(),
+                "description should not be empty if present"
+            );
         }
     }
 }

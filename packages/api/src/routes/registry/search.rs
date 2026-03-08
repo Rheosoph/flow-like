@@ -1,14 +1,16 @@
 //! Package search endpoint
 
+use super::types::{SearchFilters, SearchResults, SortField};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use super::types::{SearchFilters, SearchResults, SortField};
 use serde::Deserialize;
 
-fn default_limit() -> usize { 50 }
+fn default_limit() -> usize {
+    50
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {

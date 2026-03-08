@@ -78,11 +78,7 @@ pub async fn remove_user(
 
     let membership_id = membership.id.clone();
 
-    match state
-        .platform_config
-        .wasm_registry_config
-        .on_member_leave
-    {
+    match state.platform_config.wasm_registry_config.on_member_leave {
         MemberLeavePolicy::Stale => {
             let packages = app_package::Entity::find()
                 .filter(app_package::Column::MembershipId.eq(membership_id.clone()))

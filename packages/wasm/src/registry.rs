@@ -131,6 +131,7 @@ pub struct RegistryIndex {
 /// Lightweight package summary for index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct PackageSummary {
     pub id: String,
     pub name: String,
@@ -140,6 +141,10 @@ pub struct PackageSummary {
     pub status: PackageStatus,
     pub keywords: Vec<String>,
     pub verified: bool,
+    #[serde(default)]
+    pub price: i64,
+    #[serde(default)]
+    pub visibility: String,
 }
 
 /// Registry configuration
@@ -164,6 +169,9 @@ pub struct RegistryConfig {
     /// Allow unverified packages
     #[serde(default)]
     pub allow_unverified: bool,
+    /// Bearer token for authenticated API requests
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 fn default_cache_hours() -> u32 {
@@ -187,6 +195,7 @@ impl Default for RegistryConfig {
             cache_duration_hours: default_cache_hours(),
             auto_update_index: true,
             allow_unverified: false,
+            auth_token: None,
         }
     }
 }
@@ -263,6 +272,7 @@ pub enum SortField {
 /// Search results
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResults {
     pub packages: Vec<PackageSummary>,
     pub total_count: usize,
@@ -631,6 +641,8 @@ mod tests {
                 status: PackageStatus::Active,
                 keywords: vec!["test".to_string()],
                 verified: true,
+                price: 0,
+                visibility: "public".to_string(),
             }],
             total_count: 1,
             offset: 0,

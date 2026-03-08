@@ -1,9 +1,9 @@
 use crate::compilation::jwt;
 use crate::entity::sea_orm_active_enums::WasmCompilationStatus;
 use crate::entity::wasm_package_version;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use flow_like_types::dispatch::{CompilationResult, CompilationStatus};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -90,14 +90,10 @@ pub async fn handle_compilation_callback(
     let (status, platforms, error) = match result.status {
         CompilationStatus::Compiled => (
             WasmCompilationStatus::Compiled,
-            result.compiled_platforms,
+            Some(result.compiled_platforms),
             None,
         ),
-        CompilationStatus::Failed => (
-            WasmCompilationStatus::LocalOnly,
-            Vec::new(),
-            result.error,
-        ),
+        CompilationStatus::Failed => (WasmCompilationStatus::LocalOnly, Some(Vec::new()), result.error),
     };
 
     let mut update = wasm_package_version::ActiveModel {

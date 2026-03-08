@@ -73,7 +73,7 @@ pub use module::WasmModule;
 pub use node::{build_node_from_definition, WasmNodeLogic};
 pub use registry::{
     CachedPackage, DownloadRequest, DownloadResponse, PackageSource, PackageStatus, PackageSummary,
-    PackageVersion, PublishRequest, PublishResponse, RegistryConfig, RegistryEntry, RegistryIndex,
-    SearchFilters, SearchResults, SortField,
+    PackageVersion, PublishRequest, PublishResponse, RegistryConfig, RegistryEntry, SearchFilters,
+    SearchResults, SortField,
 };
 pub use unified::{LoadedWasm, UnifiedInstance};

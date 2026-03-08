@@ -50,16 +50,16 @@ async fn main() -> Result<(), Error> {
     }
     if let (Some(ak), Some(sk)) = (&cdn_access_key, &cdn_secret_key) {
         if !ak.is_empty() && !sk.is_empty() {
-            cdn_builder = cdn_builder.with_access_key_id(ak).with_secret_access_key(sk);
+            cdn_builder = cdn_builder
+                .with_access_key_id(ak)
+                .with_secret_access_key(sk);
         }
     }
     let cdn_bucket =
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_builder.build().unwrap()));
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(
-        flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket)).await,
-    );
+    let state = Arc::new(flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket)).await);
     let app = construct_router(state);
 
     run_with_streaming_response(app).await

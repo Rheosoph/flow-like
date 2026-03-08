@@ -105,6 +105,9 @@ pub fn register_component_host_functions(
     register_metadata(linker)?;
     register_storage(linker)?;
     register_models(linker)?;
+    register_schema(linker)?;
+    register_image(linker)?;
+    register_db(linker)?;
     register_auth(linker)?;
     register_http(linker)?;
     register_websocket(linker)?;
@@ -739,6 +742,195 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
             },
         )
         .map_err(map_err)?;
+
+    // embed-text-query — embed texts for retrieval queries
+    models
+        .func_wrap_async(
+            "embed-text-query",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, texts_json): (String, String)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, texts_json);
+                    // Stub — embedding model resolution via CachedEmbeddingModel
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // embed-text-document — embed texts for document indexing
+    models
+        .func_wrap_async(
+            "embed-text-document",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, texts_json): (String, String)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, texts_json);
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // embed-image — embed an image via embedding model
+    models
+        .func_wrap_async(
+            "embed-image",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, image_data): (String, Vec<u8>)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, image_data);
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // llm-prompt — send prompt to LLM/VLM
+    models
+        .func_wrap_async(
+            "llm-prompt",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (bit_json, messages_json, stream): (String, String, bool)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (bit_json, messages_json, stream);
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_schema(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut schema = linker
+        .instance("flow-like:node/schema@0.1.0")
+        .map_err(map_err)?;
+
+    schema
+        .func_wrap(
+            "get-type-schema",
+            |_store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (type_name,): (String,)| {
+                use crate::host_functions::schema;
+                Ok((schema::get_type_schema(&type_name).map(|s| s.to_string()),))
+            },
+        )
+        .map_err(map_err)?;
+
+    schema
+        .func_wrap(
+            "list-types",
+            |_store: wasmtime::StoreContextMut<'_, ComponentStoreData>, ()| {
+                use crate::host_functions::schema;
+                let names = schema::list_type_names();
+                match serde_json::to_string(&names) {
+                    Ok(json) => Ok((Some(json),)),
+                    Err(_) => Ok((None::<String>,)),
+                }
+            },
+        )
+        .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_image(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut img = linker
+        .instance("flow-like:node/image@0.1.0")
+        .map_err(map_err)?;
+
+    img.func_wrap(
+        "from-bytes",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (data, format): (Vec<u8>, String)| {
+            if !store
+                .data()
+                .host_state
+                .has_capability(WasmCapabilities::MODELS)
+            {
+                return Ok((None::<String>,));
+            }
+            let _ = (data, format);
+            // Stub — image creation from bytes
+            Ok((None::<String>,))
+        },
+    )
+    .map_err(map_err)?;
+
+    img.func_wrap(
+        "to-bytes",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (image_ref, format): (String, String)| {
+            if !store
+                .data()
+                .host_state
+                .has_capability(WasmCapabilities::MODELS)
+            {
+                return Ok((None::<Vec<u8>>,));
+            }
+            let _ = (image_ref, format);
+            // Stub — image to bytes conversion
+            Ok((None::<Vec<u8>>,))
+        },
+    )
+    .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_db(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut db = linker
+        .instance("flow-like:node/db@0.1.0")
+        .map_err(map_err)?;
+
+    db.func_wrap_async(
+        "query",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (op, connection_json, payload_json): (u32, String, String)| {
+            Box::new(async move {
+                if !store
+                    .data()
+                    .host_state
+                    .has_capability(WasmCapabilities::MODELS)
+                {
+                    return Ok((None::<String>,));
+                }
+                let _ = (op, connection_json, payload_json);
+                // Stub — DB operations via connection cache key
+                Ok((None::<String>,))
+            })
+        },
+    )
+    .map_err(map_err)?;
 
     Ok(())
 }

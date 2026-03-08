@@ -62,6 +62,7 @@ model WasmPackage {
   invitations WasmPackageInvitation[]
   joinQueue   WasmPackageJoinQueue[]
   purchases   WasmPackagePurchase[]
+  authors     WasmPackageAuthor[]
 
   @@unique([id, version])
   @@index([name])
@@ -194,6 +195,24 @@ enum InvitationStatus {
   ACCEPTED
   REJECTED
   EXPIRED
+}
+
+/// Authors / contributors of a WASM package
+model WasmPackageAuthor {
+  id String @id @default(cuid())
+
+  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  role    String?
+  addedAt DateTime @default(now())
+
+  @@unique([packageId, userId])
+  @@index([packageId])
+  @@index([userId])
 }
 
 /// Join queue for packages with PublicRequestAccess visibility

@@ -9,6 +9,7 @@ pub mod linker;
 pub mod logging;
 pub mod metadata;
 pub mod pins;
+pub mod schema;
 pub mod storage;
 pub mod streaming;
 pub mod variables;

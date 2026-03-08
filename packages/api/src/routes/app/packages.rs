@@ -13,9 +13,7 @@ use utoipa::ToSchema;
 use crate::{
     ensure_in_project, ensure_permission,
     entity::{
-        app_package, membership, meta,
-        sea_orm_active_enums::WasmPackageVisibility,
-        wasm_package,
+        app_package, membership, meta, sea_orm_active_enums::WasmPackageVisibility, wasm_package,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -106,7 +104,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_packages).post(add_package))
         .route("/updates", get(check_updates))
-        .route("/{package_id}", delete(remove_package).patch(update_package))
+        .route(
+            "/{package_id}",
+            delete(remove_package).patch(update_package),
+        )
         .route("/{package_id}/reactivate", post(reactivate_package))
         .route("/{package_id}/patch-info", get(get_patch_info))
 }
@@ -290,7 +291,10 @@ pub async fn add_package(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/packages/{package_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/packages/{package_id}",
+    skip(state, user)
+)]
 pub async fn remove_package(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -334,7 +338,10 @@ pub async fn remove_package(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PATCH /apps/{app_id}/packages/{package_id}", skip(state, user, request))]
+#[tracing::instrument(
+    name = "PATCH /apps/{app_id}/packages/{package_id}",
+    skip(state, user, request)
+)]
 pub async fn update_package(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -408,7 +415,10 @@ pub async fn update_package(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/packages/{package_id}/patch-info", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/packages/{package_id}/patch-info",
+    skip(state, user)
+)]
 pub async fn get_patch_info(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
