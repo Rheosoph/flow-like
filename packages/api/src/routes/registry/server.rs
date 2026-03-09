@@ -613,7 +613,7 @@ impl ServerRegistry {
 
     /// Get a package entry by ID (public - only returns active packages)
     pub async fn get_package(&self, id: &str) -> flow_like_types::Result<Option<RegistryEntry>> {
-        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+        use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibility};
 
         let Some(pkg) = wasm_package::Entity::find_by_id(id)
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active))
@@ -623,7 +623,9 @@ impl ServerRegistry {
             return Ok(None);
         };
 
-        self.build_registry_entry(pkg).await.map(Some)
+        // Private packages always expose all versions to anyone who has access.
+        let show_all = pkg.visibility == WasmPackageVisibility::Private;
+        self.build_registry_entry(pkg, show_all).await.map(Some)
     }
 
     /// Get a package entry by ID regardless of status — for authors/maintainers
@@ -636,7 +638,50 @@ impl ServerRegistry {
             return Ok(None);
         };
 
-        self.build_registry_entry(pkg).await.map(Some)
+        // any-status callers are always owners/admins — show everything.
+        self.build_registry_entry(pkg, true).await.map(Some)
+    }
+
+    /// Fetch a package applying correct version-visibility rules for a given viewer:
+    /// - Private → all versions (to any caller with access)
+    /// - Public / PublicRequestAccess + owner/maintainer → all versions
+    /// - Public / PublicRequestAccess + regular user → approved versions only
+    ///
+    /// Access control (who may call this) is the caller's responsibility.
+    pub async fn get_package_as_viewer(
+        &self,
+        id: &str,
+        viewer_sub: Option<&str>,
+    ) -> flow_like_types::Result<Option<RegistryEntry>> {
+        use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
+
+        let Some(pkg) = wasm_package::Entity::find_by_id(id).one(&self.db).await? else {
+            return Ok(None);
+        };
+
+        let show_all = match pkg.visibility {
+            WasmPackageVisibility::Private => true,
+            _ => match viewer_sub {
+                Some(sub) => self.is_package_author(sub, id).await?,
+                None => false,
+            },
+        };
+
+        self.build_registry_entry(pkg, show_all).await.map(Some)
+    }
+
+    /// Returns `true` when `user_id` has an author record on `package_id`.
+    async fn is_package_author(
+        &self,
+        user_id: &str,
+        package_id: &str,
+    ) -> flow_like_types::Result<bool> {
+        let record = wasm_package_author::Entity::find()
+            .filter(wasm_package_author::Column::PackageId.eq(package_id))
+            .filter(wasm_package_author::Column::UserId.eq(user_id))
+            .one(&self.db)
+            .await?;
+        Ok(record.is_some())
     }
 
     /// Get a package entry by ID (admin - returns any status)
@@ -704,19 +749,26 @@ impl ServerRegistry {
         Ok(authors)
     }
 
-    /// Build a RegistryEntry from a package model
+    /// Build a RegistryEntry from a package model.
+    /// `show_all_versions`: when `true`, all versions are included regardless of
+    /// approval status; when `false`, only `Active` versions are returned.
     async fn build_registry_entry(
         &self,
         pkg: wasm_package::Model,
+        show_all_versions: bool,
     ) -> flow_like_types::Result<RegistryEntry> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
 
-        let versions = wasm_package_version::Entity::find()
+        let mut version_query = wasm_package_version::Entity::find()
             .filter(wasm_package_version::Column::PackageId.eq(&pkg.id))
-            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::Active))
-            .order_by_desc(wasm_package_version::Column::PublishedAt)
-            .all(&self.db)
-            .await?;
+            .order_by_desc(wasm_package_version::Column::PublishedAt);
+
+        if !show_all_versions {
+            version_query = version_query
+                .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::Active));
+        }
+
+        let versions = version_query.all(&self.db).await?;
 
         // Get authors from junction table
         let author_infos = self.get_package_authors(&pkg.id).await?;
@@ -1125,21 +1177,23 @@ impl ServerRegistry {
             ));
         };
 
-        let ver = if let Some(v) = version {
+        // Prefer the version from the approved-versions list; fall back to the
+        // version field on the package row itself (e.g. still pending approval).
+        let version_str = if let Some(v) = version {
             entry
                 .get_version(v)
-                .ok_or_else(|| flow_like_types::anyhow!("Version not found: {}", v))?
-                .clone()
+                .map(|v| v.version.clone())
+                .unwrap_or_else(|| v.to_string())
         } else {
             entry
                 .latest_version()
-                .ok_or_else(|| flow_like_types::anyhow!("No versions available"))?
-                .clone()
+                .map(|v| v.version.clone())
+                .unwrap_or_else(|| entry.manifest.version.clone())
         };
 
-        let download_url = self.get_download_url(package_id, &ver.version).await?;
+        let download_url = self.get_download_url(package_id, &version_str).await?;
 
-        Ok((download_url, entry.manifest, ver.version))
+        Ok((download_url, entry.manifest, version_str))
     }
 
     /// Download package WASM binary directly (for backward compatibility)

@@ -23,10 +23,10 @@ pub async fn load_wasm_packages(
         return Ok(Vec::new());
     }
 
-    let engine = Arc::new(
-        WasmEngine::new(WasmConfig::default())
-            .map_err(|e| ExecutorError::Execution(format!("Failed to create WASM engine: {}", e)))?,
-    );
+    let engine =
+        Arc::new(WasmEngine::new(WasmConfig::default()).map_err(|e| {
+            ExecutorError::Execution(format!("Failed to create WASM engine: {}", e))
+        })?);
     engine.start_epoch_ticker();
 
     let http = reqwest::Client::new();
@@ -63,16 +63,19 @@ async fn load_single_package(
     package_id: &str,
     pkg_ref: &WasmPackageRef,
 ) -> Result<Vec<Arc<dyn NodeLogic>>, ExecutorError> {
-    let cwasm_resp = http
-        .get(&pkg_ref.cwasm_url)
-        .send()
-        .await
-        .map_err(|e| ExecutorError::Storage(format!("Failed to download cwasm for {}: {}", package_id, e)))?;
+    let cwasm_resp = http.get(&pkg_ref.cwasm_url).send().await.map_err(|e| {
+        ExecutorError::Storage(format!(
+            "Failed to download cwasm for {}: {}",
+            package_id, e
+        ))
+    })?;
 
     if !cwasm_resp.status().is_success() {
         return Err(ExecutorError::Storage(format!(
             "cwasm download failed for {} v{}: HTTP {}",
-            package_id, pkg_ref.version, cwasm_resp.status()
+            package_id,
+            pkg_ref.version,
+            cwasm_resp.status()
         )));
     }
 
@@ -85,12 +88,19 @@ async fn load_single_package(
         .get(&pkg_ref.cwasm_checksum_url)
         .send()
         .await
-        .map_err(|e| ExecutorError::Storage(format!("Failed to download checksum for {}: {}", package_id, e)))?;
+        .map_err(|e| {
+            ExecutorError::Storage(format!(
+                "Failed to download checksum for {}: {}",
+                package_id, e
+            ))
+        })?;
 
     if !checksum_resp.status().is_success() {
         return Err(ExecutorError::Storage(format!(
             "checksum download failed for {} v{}: HTTP {}",
-            package_id, pkg_ref.version, checksum_resp.status()
+            package_id,
+            pkg_ref.version,
+            checksum_resp.status()
         )));
     }
 
@@ -111,8 +121,8 @@ async fn load_single_package(
 
     // SAFETY: These `.cwasm` files were compiled by our own server from verified `.wasm`
     // bytecode and their integrity is confirmed by the blake3 checksum above.
-    let module = unsafe { wasmtime::Module::deserialize(engine.engine(), &cwasm_bytes) }
-        .map_err(|e| {
+    let module =
+        unsafe { wasmtime::Module::deserialize(engine.engine(), &cwasm_bytes) }.map_err(|e| {
             ExecutorError::Execution(format!(
                 "Failed to deserialize cwasm for {} v{}: {}",
                 package_id, pkg_ref.version, e

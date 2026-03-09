@@ -80,7 +80,11 @@ fn resolve_compilation(
                 WasmCompilationStatus::Pending => "pending",
             };
             let compiled = v.compilation_status == WasmCompilationStatus::Compiled
-                && v.compiled_platforms.as_deref().unwrap_or_default().iter().any(|k| k == platform_key);
+                && v.compiled_platforms
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|k| k == platform_key);
             (Some(status_str.to_string()), compiled)
         }
         None => (None, false),

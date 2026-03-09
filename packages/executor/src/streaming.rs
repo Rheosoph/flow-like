@@ -3,7 +3,7 @@
 //! Provides streaming execution that yields events as they occur,
 //! suitable for Lambda streaming responses or SSE endpoints.
 
-use crate::config::{ExecutorConfig};
+use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};

@@ -52,7 +52,7 @@
 	},
 	"hubs": [],
 	"cdn": "https://cdn.flow-like.com",
-	"domain": "api.alpha.flow-like.com",
+	"domain": "api.flow-like.com",
 	"secure": true,
 	"app": "app.flow-like.com",
 	"web": "flow-like.com",

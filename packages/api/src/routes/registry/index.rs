@@ -74,17 +74,11 @@ pub async fn get_package(
         }
     }
 
-    let mut entry = if non_active {
-        registry
-            .get_package_any_status(&id)
-            .await?
-            .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?
-    } else {
-        registry
-            .get_package(&id)
-            .await?
-            .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?
-    };
+    // Access / visibility control is done above; fetch with correct version visibility.
+    let mut entry = registry
+        .get_package_as_viewer(&id, sub.as_deref())
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
 
     if let Some(ref uid) = sub {
         let access = crate::check_wasm_access!(state, uid, &id);

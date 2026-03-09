@@ -125,9 +125,9 @@ async fn get_public_key() -> Result<&'static Vec<u8>, CompilerError> {
         .get_or_try_init(|| async {
             if let Ok(b64) = std::env::var(BACKEND_PUB_ENV) {
                 tracing::info!("Using {BACKEND_PUB_ENV} from environment");
-                return STANDARD
-                    .decode(&b64)
-                    .map_err(|e| CompilerError::Jwt(format!("Failed to decode {BACKEND_PUB_ENV}: {e}")));
+                return STANDARD.decode(&b64).map_err(|e| {
+                    CompilerError::Jwt(format!("Failed to decode {BACKEND_PUB_ENV}: {e}"))
+                });
             }
             fetch_public_key_from_api().await
         })

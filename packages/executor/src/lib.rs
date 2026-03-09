@@ -42,7 +42,7 @@ pub use config::ExecutorConfig;
 pub use error::ExecutorError;
 pub use execute::execute;
 pub use flow_like_types::OAuthTokenInput;
-pub use resolve::{ResolveError, resolve_payload, resolve_payload_from_str};
+pub use resolve::{resolve_payload, resolve_payload_from_str, ResolveError};
 pub use router::{executor_router, ExecutorState};
 pub use streaming::{execute_streaming, ExecutionStream, StreamEvent};
 pub use types::{BoardVersion, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};

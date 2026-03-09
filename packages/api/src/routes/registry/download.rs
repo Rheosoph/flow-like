@@ -37,10 +37,6 @@ pub async fn download(
     Extension(user): Extension<AppUser>,
     Json(request): Json<DownloadRequest>,
 ) -> Result<Json<DownloadResponse>, ApiError> {
-    let sub = user
-        .sub()
-        .map_err(|_| ApiError::unauthorized("Authentication required for downloads"))?;
-
     let registry = state
         .wasm_registry
         .as_ref()
@@ -55,6 +51,10 @@ pub async fn download(
     let is_free_public = package.visibility == WasmPackageVisibility::Public && package.price <= 0;
 
     if !is_free_public {
+        let sub = user
+            .sub()
+            .map_err(|_| ApiError::unauthorized("Authentication required for downloads"))?;
+
         let access = crate::check_wasm_access!(state, &sub, &request.package_id);
         if access.is_none() {
             return match package.visibility {

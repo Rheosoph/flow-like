@@ -224,8 +224,7 @@ async fn send_callback(
         }
 
         if attempt < config.callback_retries {
-            tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1)))
-                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1))).await;
         }
     }
 

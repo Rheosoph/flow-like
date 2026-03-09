@@ -2,7 +2,7 @@
 //!
 //! Environment-agnostic flow execution with batched callback reporting
 
-use crate::config::{ExecutorConfig};
+use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::jwt::{verify_jwt_async, ExecutorClaims};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};

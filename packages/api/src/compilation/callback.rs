@@ -93,7 +93,11 @@ pub async fn handle_compilation_callback(
             Some(result.compiled_platforms),
             None,
         ),
-        CompilationStatus::Failed => (WasmCompilationStatus::LocalOnly, Some(Vec::new()), result.error),
+        CompilationStatus::Failed => (
+            WasmCompilationStatus::LocalOnly,
+            Some(Vec::new()),
+            result.error,
+        ),
     };
 
     let mut update = wasm_package_version::ActiveModel {
