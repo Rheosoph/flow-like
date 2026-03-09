@@ -371,6 +371,14 @@ impl ServerRegistry {
             .as_ref()
             .map_or(false, |d| d.backend().is_external());
 
+        tracing::info!(
+            use_external = use_external,
+            backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
+            pkg = %package_id,
+            ver = %version,
+            "Recompilation dispatch decision"
+        );
+
         if use_external {
             let wasm_path = Self::wasm_path(package_id, version).to_string();
 
@@ -1425,6 +1433,12 @@ impl ServerRegistry {
             .as_ref()
             .map_or(false, |d| d.backend().is_external());
 
+        tracing::info!(
+            use_external = use_external,
+            backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
+            "Compilation dispatch decision"
+        );
+
         // Dispatch compilation inline (not tokio::spawn — Lambda shuts down after response)
         if use_external {
             let dispatcher = self
@@ -1449,12 +1463,20 @@ impl ServerRegistry {
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         pkg = %compile_pkg_id,
                         ver = %compile_version,
                         err = %e,
                         "Failed to dispatch compilation job"
                     );
+                    let _ = wasm_package_version::ActiveModel {
+                        id: Set(version_id.clone()),
+                        compilation_status: Set(WasmCompilationStatus::LocalOnly),
+                        compilation_error: Set(Some(format!("Dispatch failed: {e}"))),
+                        ..Default::default()
+                    }
+                    .update(&compile_db)
+                    .await;
                 }
             }
         } else {

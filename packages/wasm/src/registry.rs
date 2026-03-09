@@ -185,7 +185,7 @@ fn default_true() -> bool {
 impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
-            default_registry: "https://registry.flow-like.com".to_string(),
+            default_registry: "https://api.flow-like.com/api/v1/registry".to_string(),
             additional_registries: Vec::new(),
             local_paths: Vec::new(),
             cache_dir: dirs_next::cache_dir()
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_registry_config_default() {
         let config = RegistryConfig::default();
-        assert_eq!(config.default_registry, "https://registry.flow-like.com");
+        assert_eq!(config.default_registry, "https://api.flow-like.com/api/v1/registry");
         assert!(config.additional_registries.is_empty());
         assert!(config.local_paths.is_empty());
         assert_eq!(config.cache_duration_hours, 24 * 7);

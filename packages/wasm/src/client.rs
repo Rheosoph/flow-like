@@ -82,6 +82,11 @@ impl RegistryClient {
         self.config.auth_token = token;
     }
 
+    /// Get the current auth token (if any)
+    pub fn auth_token(&self) -> Option<&String> {
+        self.config.auth_token.as_ref()
+    }
+
     fn build_search_url(&self, filters: &SearchFilters, include_own: bool) -> String {
         let base = format!("{}/search", self.config.default_registry);
         let mut url = reqwest::Url::parse(&base).expect("invalid registry URL");
@@ -126,11 +131,12 @@ impl RegistryClient {
     }
 
     /// Search packages via the remote registry API
-    pub async fn search(&self, filters: &SearchFilters) -> Result<SearchResults> {
-        let url = self.build_search_url(filters, self.config.auth_token.is_some());
+    pub async fn search_with_token(&self, filters: &SearchFilters, auth_token: Option<&str>) -> Result<SearchResults> {
+        let effective_token = auth_token.map(String::from).or_else(|| self.config.auth_token.clone());
+        let url = self.build_search_url(filters, effective_token.is_some());
 
         let mut request = self.http_client.get(&url);
-        if let Some(token) = &self.config.auth_token {
+        if let Some(token) = &effective_token {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
 
@@ -144,11 +150,17 @@ impl RegistryClient {
         Ok(results)
     }
 
+    /// Search packages via the remote registry API (uses stored token)
+    pub async fn search(&self, filters: &SearchFilters) -> Result<SearchResults> {
+        self.search_with_token(filters, None).await
+    }
+
     /// Download and cache a package
     pub async fn download_package(
         &self,
         package_id: &str,
         version: Option<&str>,
+        auth_token: Option<&str>,
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
@@ -191,7 +203,12 @@ impl RegistryClient {
         };
 
         let url = format!("{}/download", self.config.default_registry);
-        let response = self.http_client.post(&url).json(&request).send().await?;
+        let mut req = self.http_client.post(&url).json(&request);
+        let effective_token = auth_token.map(String::from).or_else(|| self.config.auth_token.clone());
+        if let Some(token) = &effective_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let response = req.send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to download package: {}", response.status()));
@@ -291,11 +308,11 @@ impl RegistryClient {
     }
 
     /// Install a package (download + register)
-    pub async fn install(&self, package_id: &str, version: Option<&str>) -> Result<CachedPackage> {
-        self.download_package(package_id, version).await
+    pub async fn install(&self, package_id: &str, version: Option<&str>, auth_token: Option<&str>) -> Result<CachedPackage> {
+        self.download_package(package_id, version, auth_token).await
     }
 
-    pub async fn install_version(&self, package_id: &str, version: &str) -> Result<CachedPackage> {
+    pub async fn install_version(&self, package_id: &str, version: &str, auth_token: Option<&str>) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if let Some(iv) = installed.get_version(version) {
@@ -307,16 +324,17 @@ impl RegistryClient {
         }
         drop(state);
 
-        self.download_package(package_id, Some(version)).await
+        self.download_package(package_id, Some(version), auth_token).await
     }
 
     pub async fn batch_install(
         &self,
         packages: &[(String, Option<String>)],
+        auth_token: Option<&str>,
     ) -> Result<Vec<(String, Result<CachedPackage>)>> {
         let mut results = Vec::with_capacity(packages.len());
         for (package_id, version) in packages {
-            let result = self.install(package_id, version.as_deref()).await;
+            let result = self.install(package_id, version.as_deref(), auth_token).await;
             results.push((package_id.clone(), result));
         }
         Ok(results)
@@ -345,7 +363,7 @@ impl RegistryClient {
     }
 
     /// Check for updates to installed packages
-    pub async fn check_updates(&self) -> Result<Vec<(String, String, String)>> {
+    pub async fn check_updates(&self, auth_token: Option<&str>) -> Result<Vec<(String, String, String)>> {
         let state = self.state.read().await;
         let installed: Vec<_> = state
             .installed
@@ -363,7 +381,7 @@ impl RegistryClient {
             limit: 200,
             ..Default::default()
         };
-        let results = self.search(&filters).await?;
+        let results = self.search_with_token(&filters, auth_token).await?;
 
         let mut updates = Vec::new();
         for (id, current_version) in installed {

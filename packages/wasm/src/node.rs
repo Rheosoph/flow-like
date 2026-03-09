@@ -249,7 +249,9 @@ impl NodeLogic for WasmNodeLogic {
         let rt = flow_like_types::tokio::runtime::Handle::try_current();
 
         let definition = if let Ok(handle) = rt {
-            handle.block_on(async { self.get_definition().await.ok() })
+            flow_like_types::tokio::task::block_in_place(|| {
+                handle.block_on(async { self.get_definition().await.ok() })
+            })
         } else {
             None
         };

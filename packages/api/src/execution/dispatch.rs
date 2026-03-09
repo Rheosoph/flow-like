@@ -724,13 +724,17 @@ impl Dispatcher {
         let message_body = serde_json::to_string(&body)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
-        client
+        let mut req = client
             .send_message()
             .queue_url(queue_url)
             .message_body(&message_body)
-            .message_group_id(&request.app_id) // FIFO queue support - group by app
-            .message_deduplication_id(job_id)
-            .send()
+            .message_group_id(&request.app_id);
+
+        if queue_url.ends_with(".fifo") {
+            req = req.message_deduplication_id(job_id);
+        }
+
+        req.send()
             .await
             .map_err(|e| DispatchError::Sqs(e.to_string()))?;
 
@@ -805,13 +809,17 @@ impl Dispatcher {
         let message_body = serde_json::to_string(&reference)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
-        client
+        let mut req = client
             .send_message()
             .queue_url(queue_url)
             .message_body(&message_body)
-            .message_group_id(&request.app_id)
-            .message_deduplication_id(job_id)
-            .send()
+            .message_group_id(&request.app_id);
+
+        if queue_url.ends_with(".fifo") {
+            req = req.message_deduplication_id(job_id);
+        }
+
+        req.send()
             .await
             .map_err(|e| DispatchError::Sqs(e.to_string()))?;
 

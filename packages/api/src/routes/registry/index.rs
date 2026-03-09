@@ -1,15 +1,18 @@
 //! Registry index endpoints
 
 use super::types::{PackageVersion, RegistryEntry};
-use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
+use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibility};
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
+use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::state::AppState;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
-use sea_orm::EntityTrait;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+use serde::Serialize;
+use utoipa::ToSchema;
 
 /// GET /registry/package/{id}
 /// Returns full package entry details.
@@ -149,4 +152,56 @@ pub async fn get_versions(
     let versions = registry.get_versions_approved(&id).await?;
 
     Ok(Json(versions))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeletePackageResponse {
+    pub message: String,
+}
+
+/// DELETE /registry/package/{id}
+/// Soft-delete a package by setting its status to Disabled.
+/// The package no longer appears in search results but WASM artifacts are
+/// preserved so offline or already-linked projects keep working.
+#[utoipa::path(
+    delete,
+    path = "/registry/package/{id}",
+    tag = "registry",
+    description = "Soft-delete a package (sets status to Disabled). Artifacts are preserved for existing installs.",
+    params(("id" = String, Path, description = "Package ID")),
+    responses(
+        (status = 200, description = "Package disabled", body = DeletePackageResponse),
+        (status = 403, description = "Forbidden – owner permission required"),
+        (status = 404, description = "Package not found"),
+        (status = 503, description = "WASM registry not configured")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_package(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(id): Path<String>,
+) -> Result<Json<DeletePackageResponse>, ApiError> {
+    let uid = user.sub().map_err(|_| ApiError::UNAUTHORIZED)?;
+
+    crate::ensure_wasm_permission!(state, &uid, &id, WasmPackagePermission::Owner);
+
+    let _pkg = wasm_package::Entity::find_by_id(&id)
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
+
+    let mut model: wasm_package::ActiveModel = Default::default();
+    model.id = Set(id.clone());
+    model.status = Set(WasmPackageStatus::Disabled);
+    model.updated_at = Set(chrono::Utc::now().naive_utc());
+    model
+        .update(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to disable package: {}", e)))?;
+
+    Ok(Json(DeletePackageResponse {
+        message: "Package disabled. Artifacts preserved for existing installs.".to_string(),
+    }))
 }

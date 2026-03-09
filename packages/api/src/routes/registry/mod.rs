@@ -131,7 +131,7 @@ pub fn routes() -> Router<AppState> {
         .route("/hash-check", post(hash_check::hash_check))
         .route("/prerun-check", post(prerun_check::prerun_check))
         .route("/compilation-callback", post(compilation_callback))
-        .route("/package/{id}", get(index::get_package))
+        .route("/package/{id}", get(index::get_package).delete(index::delete_package))
         .route("/package/{id}/versions", get(index::get_versions))
         .route(
             "/package/{package_id}/readme",

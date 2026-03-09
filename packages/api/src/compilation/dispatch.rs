@@ -47,7 +47,31 @@ pub enum CompilationBackend {
 
 impl CompilationBackend {
     pub fn from_env() -> Self {
-        Self::from_env_var("COMPILATION_BACKEND")
+        // Explicit configuration always wins
+        if let Ok(val) = std::env::var("COMPILATION_BACKEND") {
+            if !val.is_empty() {
+                return Self::from_env_var("COMPILATION_BACKEND");
+            }
+        }
+
+        // Auto-detect on Lambda: prefer SQS (queue) over LambdaInvoke (direct)
+        // over Inline — inline AOT compilation inside the API Lambda is almost
+        // never desired (limited memory/time).
+        if std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok() {
+            if std::env::var("SQS_COMPILATION_QUEUE_URL").is_ok() {
+                tracing::info!("Lambda detected with SQS_COMPILATION_QUEUE_URL — using Sqs compilation backend");
+                return Self::Sqs;
+            }
+            if std::env::var("LAMBDA_COMPILER_FUNCTION").is_ok() {
+                tracing::info!("Lambda detected with LAMBDA_COMPILER_FUNCTION — using LambdaInvoke compilation backend");
+                return Self::LambdaInvoke;
+            }
+            tracing::warn!(
+                "Running on Lambda without COMPILATION_BACKEND, SQS_COMPILATION_QUEUE_URL, or LAMBDA_COMPILER_FUNCTION — falling back to Inline (not recommended)"
+            );
+        }
+
+        Self::Inline
     }
 
     fn from_env_var(var_name: &str) -> Self {
@@ -367,13 +391,20 @@ impl CompilationDispatcher {
         let message_body = serde_json::to_string(job)
             .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
 
-        client
+        let mut req = client
             .send_message()
             .queue_url(queue_url)
             .message_body(&message_body)
-            .message_group_id(&job.package_id)
-            .message_deduplication_id(&job.job_id)
-            .send()
+            // MessageGroupId enables fair queueing per package on standard queues
+            // and ordering per group on FIFO queues.
+            .message_group_id(&job.package_id);
+
+        // MessageDeduplicationId is only valid for FIFO queues
+        if queue_url.ends_with(".fifo") {
+            req = req.message_deduplication_id(&job.job_id);
+        }
+
+        req.send()
             .await
             .map_err(|e| CompilationDispatchError::Sqs(e.to_string()))?;
 
