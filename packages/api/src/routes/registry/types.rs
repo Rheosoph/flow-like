@@ -73,6 +73,7 @@ pub enum PackageSource {
 
 /// Registry entry for a single package version
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageVersion {
     pub version: String,
     pub wasm_hash: String,
@@ -90,6 +91,7 @@ pub struct PackageVersion {
 
 /// Full registry entry for a package
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub id: String,
     pub manifest: PackageManifest,

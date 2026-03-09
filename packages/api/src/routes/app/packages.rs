@@ -24,6 +24,7 @@ use crate::{
 use flow_like_types::create_id;
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AddPackageRequest {
     pub package_id: String,
     pub version: String,
@@ -31,12 +32,14 @@ pub struct AddPackageRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdatePackageRequest {
     pub version: Option<String>,
     pub auto_update: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AppPackageResponse {
     pub id: String,
     pub app_id: String,
@@ -44,6 +47,7 @@ pub struct AppPackageResponse {
     pub package_name: Option<String>,
     pub package_description: Option<String>,
     pub latest_version: Option<String>,
+    #[serde(rename = "version")]
     pub pinned_version: String,
     pub auto_update: bool,
     pub status: Option<String>,
@@ -86,6 +90,7 @@ fn pick_best_meta<'a>(metas: &'a [meta::Model], language: &str) -> Option<&'a me
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PatchInfo {
     pub package_id: String,
     pub version: String,
@@ -93,6 +98,7 @@ pub struct PatchInfo {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageUpdateInfo {
     pub package_id: String,
     pub package_name: String,
