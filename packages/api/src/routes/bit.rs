@@ -88,6 +88,8 @@ impl From<bit::Model> for Bit {
             repository: value.repository,
             size: value.size.map(|s| s as u64),
             version: value.version,
+            model_slug: value.model_slug,
+            model_evaluation: None,
         }
     }
 }
@@ -115,6 +117,7 @@ impl From<Bit> for bit::Model {
             repository: value.repository,
             size: value.size.map(|s| s as i64),
             version: value.version,
+            model_slug: value.model_slug,
         }
     }
 }

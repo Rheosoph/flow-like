@@ -79,6 +79,10 @@ async-stream = "0.3"
 eventsource-stream = "0.2"
 # -----
 
+# ----- Sentry (optional) ----
+sentry = { workspace = true, optional = true }
+# -----
+
 # ----- Kubernetes dependencies ----
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
@@ -109,6 +113,7 @@ sqs = ["aws-config", "aws-sdk-sqs"]
 redis = ["dep:redis", "dep:tokio"]
 dynamodb = ["aws-config", "aws-sdk-dynamodb"]  # Uses FlowLikeStore (object_store) for large payloads
 s3 = ["aws-config", "aws-sdk-s3"]
+sentry = ["dep:sentry"]
 full=[
     "aws",
     "azure",
@@ -121,6 +126,7 @@ full=[
     "redis",
     "dynamodb",
     "s3",
+    "sentry",
 ]
 urlencoding = ["dep:urlencoding"]
 

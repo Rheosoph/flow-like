@@ -30,7 +30,15 @@ pub async fn hierarchical_summarize(
 
     if sections.len() <= 1 {
         // No detectable structure: use balanced binary grouping
-        return balanced_hierarchical(chunks, instructions, entity_context, model, model_name, chunk_capacity).await;
+        return balanced_hierarchical(
+            chunks,
+            instructions,
+            entity_context,
+            model,
+            model_name,
+            chunk_capacity,
+        )
+        .await;
     }
 
     // Level 0: summarize each section's chunks
@@ -58,10 +66,16 @@ pub async fn hierarchical_summarize(
         });
     }
 
-    tracing::debug!("Hierarchical level 0: {} section summaries", section_summaries.len());
+    tracing::debug!(
+        "Hierarchical level 0: {} section summaries",
+        section_summaries.len()
+    );
 
     // Level 1+: merge section summaries into final
-    let section_texts: Vec<String> = section_summaries.iter().map(|s| s.summary.clone()).collect();
+    let section_texts: Vec<String> = section_summaries
+        .iter()
+        .map(|s| s.summary.clone())
+        .collect();
     let combined_len: usize = section_texts.iter().map(|s| s.len()).sum();
 
     let final_summary = if combined_len <= chunk_capacity {
@@ -112,7 +126,11 @@ async fn balanced_hierarchical(
         llm_calls += 1;
 
         section_summaries.push(SectionSummary {
-            title: format!("Group {}-{}", indices.first().unwrap_or(&0) + 1, indices.last().unwrap_or(&0) + 1),
+            title: format!(
+                "Group {}-{}",
+                indices.first().unwrap_or(&0) + 1,
+                indices.last().unwrap_or(&0) + 1
+            ),
             summary: summary.clone(),
             chunk_indices: indices,
         });

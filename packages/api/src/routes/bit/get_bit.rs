@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    entity::{bit, meta},
+    entity::{bit, llm_model, meta},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::LanguageParams,
@@ -11,7 +11,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::bit::{Bit, Metadata};
+use flow_like::bit::{Bit, LlmModelEvaluation, Metadata};
 use flow_like_storage::files::store::FlowLikeStore;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -70,6 +70,23 @@ pub async fn get_bit(
 
     for meta in metadata.unwrap_or_default() {
         bit.meta.insert(meta.lang.clone(), Metadata::from(meta));
+    }
+
+    if let Some(ref slug) = bit.model_slug.clone() {
+        if let Ok(Some(model)) = llm_model::Entity::find_by_id(slug).one(&state.db).await {
+            bit.model_evaluation = Some(LlmModelEvaluation {
+                slug: model.slug,
+                name: model.name,
+                release_date: model.release_date.map(|d| d.to_string()),
+                creator_name: model.creator_name,
+                creator_slug: model.creator_slug,
+                evaluations: model.evaluations,
+                pricing: model.pricing,
+                median_output_tokens_per_second: model.median_output_tokens_per_second,
+                median_time_to_first_token_seconds: model.median_time_to_first_token_seconds,
+                median_time_to_first_answer_token: model.median_time_to_first_answer_token,
+            });
+        }
     }
 
     if !state.platform_config.features.unauthorized_read {

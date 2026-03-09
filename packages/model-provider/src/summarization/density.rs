@@ -41,8 +41,7 @@ pub async fn apply_chain_of_density(
 
     // Steps 2..N: iterative refinement
     for step in 2..=clamped_steps {
-        let prompt =
-            prompts::chain_of_density_step_prompt(&current, step, clamped_steps, &instr);
+        let prompt = prompts::chain_of_density_step_prompt(&current, step, clamped_steps, &instr);
         current = invoke_llm(model, model_name, &sys, &prompt).await?;
         llm_calls += 1;
 

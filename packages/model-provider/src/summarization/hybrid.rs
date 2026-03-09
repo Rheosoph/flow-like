@@ -26,13 +26,13 @@ pub async fn hybrid_summarize(
     let mut llm_calls = 0usize;
 
     // Phase 1: Map — summarize each chunk independently (parallel)
-    let sys = format!(
-        "{}\n{}",
-        super::prompts::system_prompt(),
-        entity_context
-    );
+    let sys = format!("{}\n{}", super::prompts::system_prompt(), entity_context);
     let instr = super::noop_instructions(instructions);
-    let effective_concurrency = if concurrency == 0 { total } else { concurrency.min(total) };
+    let effective_concurrency = if concurrency == 0 {
+        total
+    } else {
+        concurrency.min(total)
+    };
 
     let mut map_summaries = Vec::with_capacity(total);
 
@@ -75,9 +75,15 @@ pub async fn hybrid_summarize(
         .map(|(i, s)| TextChunk::new(s.clone(), i))
         .collect();
 
-    let (result, refine_calls) =
-        refine::refine_summarize(&refine_chunks, instructions, entity_context, initial_summary, model, model_name)
-            .await?;
+    let (result, refine_calls) = refine::refine_summarize(
+        &refine_chunks,
+        instructions,
+        entity_context,
+        initial_summary,
+        model,
+        model_name,
+    )
+    .await?;
     llm_calls += refine_calls;
 
     // If still too long, do a reduce pass

@@ -3,10 +3,12 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use bit::{delete_bit, push_meta, upsert_bit};
+use models::{sync_models, upsert_model};
 
 use crate::state::AppState;
 
 pub mod bit;
+pub mod models;
 pub mod packages;
 pub mod profiles;
 pub mod publication;
@@ -20,6 +22,8 @@ pub fn routes() -> Router<AppState> {
             put(upsert_bit::upsert_bit).delete(delete_bit::delete_bit),
         )
         .route("/bit/{bit_id}/{language}", put(push_meta::push_meta))
+        .route("/models/sync", post(sync_models::sync_models))
+        .route("/models/{slug}", put(upsert_model::upsert_model))
         .route(
             "/profiles/media",
             get(profiles::get_signed_profile_img_url::get_signed_profile_img_url),

@@ -745,8 +745,8 @@ impl History {
         let mut normalized: Vec<HistoryMessage> = Vec::with_capacity(self.messages.len());
 
         for msg in self.messages.drain(..) {
-            let dominated_by_tool_meta = matches!(msg.role, Role::Tool | Role::Function)
-                || msg.tool_call_id.is_some();
+            let dominated_by_tool_meta =
+                matches!(msg.role, Role::Tool | Role::Function) || msg.tool_call_id.is_some();
 
             if let Some(prev) = normalized.last_mut()
                 && prev.role == msg.role

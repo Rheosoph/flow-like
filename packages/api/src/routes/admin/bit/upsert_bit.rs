@@ -103,6 +103,7 @@ pub async fn upsert_bit(
                 updated_bit.size = Set(model.size);
                 updated_bit.r#type = Set(model.r#type);
                 updated_bit.version = Set(model.version);
+                updated_bit.model_slug = Set(model.model_slug);
                 match updated_bit.update(&state_cloned.db).await {
                     Ok(updated) => {
                         let _ = tx.send(StreamMsg::Done(Bit::from(updated))).await;

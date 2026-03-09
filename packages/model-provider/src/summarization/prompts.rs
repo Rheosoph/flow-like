@@ -65,11 +65,7 @@ pub fn reduce_prompt(parts: &[String], instructions: &str) -> String {
 }
 
 /// Hierarchical merge prompt: merge sibling section summaries under a parent heading.
-pub fn hierarchical_merge_prompt(
-    heading: &str,
-    children: &[String],
-    instructions: &str,
-) -> String {
+pub fn hierarchical_merge_prompt(heading: &str, children: &[String], instructions: &str) -> String {
     let instr = instruction_block(instructions);
     let joined = children
         .iter()

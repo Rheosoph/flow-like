@@ -25,6 +25,7 @@ pub use super::invitation::Entity as Invitation;
 pub use super::invite_link::Entity as InviteLink;
 pub use super::join_queue::Entity as JoinQueue;
 pub use super::landing_page::Entity as LandingPage;
+pub use super::llm_model::Entity as LlmModel;
 pub use super::llm_usage_tracking::Entity as LlmUsageTracking;
 pub use super::membership::Entity as Membership;
 pub use super::meta::Entity as Meta;

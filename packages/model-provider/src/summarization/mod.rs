@@ -88,7 +88,10 @@ pub async fn summarize_chunks(
         let sample_indices = sample_chunk_indices(chunks.len(), 3);
         for &idx in &sample_indices {
             if let Some(chunk) = chunks.get(idx) {
-                if let Err(e) = tracker.extract_and_track(&chunk.content, model, model_name).await {
+                if let Err(e) = tracker
+                    .extract_and_track(&chunk.content, model, model_name)
+                    .await
+                {
                     tracing::warn!("Entity extraction failed for chunk {}: {}", idx, e);
                 }
                 total_llm_calls += 1;

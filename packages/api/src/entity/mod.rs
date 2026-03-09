@@ -27,6 +27,7 @@ pub mod invitation;
 pub mod invite_link;
 pub mod join_queue;
 pub mod landing_page;
+pub mod llm_model;
 pub mod llm_usage_tracking;
 pub mod membership;
 pub mod meta;

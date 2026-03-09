@@ -232,9 +232,10 @@ impl CompletionModel {
         // Prepend collected system content to the first user message
         if !system_parts.is_empty() {
             let system_text = system_parts.join("\n\n");
-            if let Some(first_user) = non_system.iter_mut().find(|m| {
-                m.get("role").and_then(|r| r.as_str()) == Some("user")
-            }) {
+            if let Some(first_user) = non_system
+                .iter_mut()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
                 let content = first_user.get("content").cloned().unwrap_or(json!(""));
                 if content.is_array() {
                     // Multimodal content — prepend system text as a text part
@@ -280,10 +281,13 @@ impl CompletionModel {
             .and_then(|r| r.as_str())
             == Some("assistant")
         {
-            normalized_messages.insert(0, json!({
-                "role": "user",
-                "content": "[Start of conversation]",
-            }));
+            normalized_messages.insert(
+                0,
+                json!({
+                    "role": "user",
+                    "content": "[Start of conversation]",
+                }),
+            );
         }
 
         let messages = normalized_messages;
