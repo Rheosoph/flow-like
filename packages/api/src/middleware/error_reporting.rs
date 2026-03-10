@@ -123,6 +123,19 @@ pub async fn error_reporting_middleware(
         .map(sanitize_text)
         .unwrap_or_else(|| "".to_string());
 
+    // Always forward to Sentry regardless of sink choice
+    #[cfg(feature = "sentry")]
+    forward_to_sentry(
+        &report.id,
+        report.status_code,
+        &report.public_code,
+        &method,
+        &path,
+        user_id.as_deref(),
+        &summary,
+        &details,
+    );
+
     if sink == "log" {
         tracing::error!(
             error_id = %report.id,
@@ -138,19 +151,6 @@ pub async fn error_reporting_middleware(
         }
         return response;
     }
-
-    // Forward to Sentry (if the feature is enabled and Sentry is initialised)
-    #[cfg(feature = "sentry")]
-    forward_to_sentry(
-        &report.id,
-        report.status_code,
-        &report.public_code,
-        &method,
-        &path,
-        user_id.as_deref(),
-        &summary,
-        &details,
-    );
 
     // Default: DB sink (best-effort)
     let details_json = if details.is_empty() {

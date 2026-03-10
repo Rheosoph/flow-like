@@ -754,9 +754,29 @@ impl History {
                 && !matches!(prev.role, Role::Tool | Role::Function)
                 && prev.tool_call_id.is_none()
             {
-                let prev_text = prev.as_str();
-                let next_text = msg.as_str();
-                prev.content = MessageContent::String(format!("{prev_text}\n\n{next_text}"));
+                let prev_parts = match std::mem::replace(
+                    &mut prev.content,
+                    MessageContent::Contents(Vec::new()),
+                ) {
+                    MessageContent::String(s) => vec![Content::Text {
+                        content_type: ContentType::Text,
+                        text: s,
+                    }],
+                    MessageContent::Contents(c) => c,
+                };
+
+                let next_parts = match msg.content {
+                    MessageContent::String(s) => vec![Content::Text {
+                        content_type: ContentType::Text,
+                        text: s,
+                    }],
+                    MessageContent::Contents(c) => c,
+                };
+
+                let mut merged = Vec::with_capacity(prev_parts.len() + next_parts.len());
+                merged.extend(prev_parts);
+                merged.extend(next_parts);
+                prev.content = MessageContent::Contents(merged);
 
                 if let Some(next_calls) = msg.tool_calls {
                     prev.tool_calls
