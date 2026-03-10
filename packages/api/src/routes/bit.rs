@@ -4,10 +4,10 @@ use axum::{
     Router,
     routing::{get, post},
 };
-use flow_like::bit::{Bit, BitTypes, Metadata};
+use flow_like::bit::{Bit, BitTypes, LlmModelEvaluation, Metadata};
 
 use crate::{
-    entity::{bit, meta::Model, sea_orm_active_enums::BitType},
+    entity::{bit, llm_model, meta::Model, sea_orm_active_enums::BitType},
     state::AppState,
 };
 
@@ -62,6 +62,21 @@ impl From<BitTypes> for BitType {
             BitTypes::Other => BitType::Other,
             BitTypes::ObjectDetection => BitType::ObjectDetection,
         }
+    }
+}
+
+pub(crate) fn llm_model_to_evaluation(model: llm_model::Model) -> LlmModelEvaluation {
+    LlmModelEvaluation {
+        slug: model.slug,
+        name: model.name,
+        release_date: model.release_date.map(|d| d.to_string()),
+        creator_name: model.creator_name,
+        creator_slug: model.creator_slug,
+        evaluations: model.evaluations,
+        pricing: model.pricing,
+        median_output_tokens_per_second: model.median_output_tokens_per_second,
+        median_time_to_first_token_seconds: model.median_time_to_first_token_seconds,
+        median_time_to_first_answer_token: model.median_time_to_first_answer_token,
     }
 }
 
