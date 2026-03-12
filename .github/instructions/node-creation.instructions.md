@@ -104,6 +104,9 @@ If you need more abstract memory, like a thread-handle or database connections y
 - for Images use: NodeImage
 - for Files use: FlowPath
 
+## Updating existing nodes interfaces
+If you update the input / output pins of an existing node, dont forget to push the version of the node too!
+
 ## Example Nodes
 <Example Pure Node>
 use flow_like::{
