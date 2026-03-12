@@ -16,6 +16,8 @@ pub mod get_element_text;
 pub mod get_element_value;
 pub mod get_iframe_src;
 pub mod get_input_placeholder;
+pub mod set_iframe_src;
+pub mod set_iframe_srcdoc;
 pub mod get_query_params;
 pub mod get_route_params;
 pub mod get_select_value;

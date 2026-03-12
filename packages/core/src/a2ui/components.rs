@@ -1026,7 +1026,10 @@ pub struct GeoMapProps {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IframeProps {
-    pub src: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srcdoc: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]

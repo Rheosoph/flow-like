@@ -44,7 +44,7 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 	progress: new Set(["value", "max", "showLabel", "variant", "color"]),
 	spinner: new Set(["size", "color"]),
 	skeleton: new Set(["width", "height", "rounded", "variant"]),
-	iframe: new Set(["src", "width", "height", "sandbox", "allow", "title"]),
+	iframe: new Set(["src", "srcdoc", "width", "height", "sandbox", "allow", "title", "referrerPolicy", "border", "loading"]),
 	table: new Set([
 		"columns", "data", "caption", "striped", "bordered", "hoverable",
 		"compact", "stickyHeader", "sortable", "searchable", "paginated",

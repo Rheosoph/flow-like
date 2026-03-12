@@ -419,7 +419,7 @@ pub fn frontend_sdk_system_prompt() -> String {
 
 ### Data Display
 - `table` - Data table (columns: [{{key, label, sortable?}}], data, pageSize, sortable, showPagination)
-- `iframe` - Embedded content (src, width, height, sandbox, allow)
+- `iframe` - Embedded content or HTML preview (src, srcdoc, width, height, sandbox, allow, referrerPolicy, border)
 - `filePreview` - File viewer (url, mimeType, width, height)
 
 ### Charts (Nivo - 25+ types)

@@ -62,7 +62,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `nivoChart` - Nivo charts (25+ chart types)
 
 ### Media Components
-- `iframe` - Embedded external content
+- `iframe` - Embedded external content or HTML preview (supports src URL and srcdoc HTML)
 - `filePreview` - Generic file preview
 
 ### Computer Vision / ML

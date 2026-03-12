@@ -1145,7 +1145,7 @@ message TerminalComponent {
 }
 
 message IframeComponent {
-  BoundValue src = 1;                   // URL to embed
+  optional BoundValue src = 1;          // URL to embed
   optional BoundValue width = 2;        // "100%", "800px"
   optional BoundValue height = 3;       // "600px", "100%"
   optional string sandbox = 4;          // sandbox attribute: "allow-scripts allow-same-origin"
@@ -1156,6 +1156,7 @@ message IframeComponent {
   optional bool border = 9;             // show border (default false)
   optional Action on_load = 10;
   optional Action on_error = 11;
+  optional BoundValue srcdoc = 12;      // raw HTML content for preview
 }
 
 message PlotlyChartComponent {

@@ -584,6 +584,37 @@ export function useSurfaceManager() {
 							};
 							break;
 						}
+						case "setIframeSrc": {
+							const src = updateValue.src as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									src: { literalString: src },
+									srcdoc: undefined,
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "setIframeSrcdoc": {
+							const srcdoc = updateValue.srcdoc as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									srcdoc: { literalString: srcdoc },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
 						case "setProps": {
 							const props = updateValue.props as Record<string, unknown>;
 							const componentData = component.component as unknown as Record<

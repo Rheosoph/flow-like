@@ -887,7 +887,8 @@ export interface MiniMapComponent extends ComponentBase {
 
 export interface IframeComponent extends ComponentBase {
 	type: "iframe";
-	src: BoundValue;
+	src?: BoundValue;
+	srcdoc?: BoundValue;
 	width?: BoundValue;
 	height?: BoundValue;
 	sandbox?: BoundValue;

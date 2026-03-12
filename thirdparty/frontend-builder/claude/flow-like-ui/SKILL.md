@@ -131,7 +131,7 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `spinner` | Loading spinner | size, color |
 | `skeleton` | Loading placeholder | width, height, rounded |
 | `divider` | Separator line | orientation, thickness |
-| `iframe` | Embedded content | src*, title, width, height |
+| `iframe` | Embedded content / HTML preview | src, srcdoc, title, width, height, sandbox, allow, referrerPolicy, border |
 | `table` | Data table | columns*, data*, striped, searchable, paginated |
 | `plotlyChart` | Plotly.js charts | chartType, title, series, data |
 | `nivoChart` | Nivo charts (25+ types) | chartType*, data, indexBy, keys |
