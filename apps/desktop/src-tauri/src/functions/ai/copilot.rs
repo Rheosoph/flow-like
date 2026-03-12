@@ -713,13 +713,8 @@ pub async fn copilot_sdk_stop() -> Result<(), String> {
     };
 
     if let Some(client) = client {
-        let stop_errors = client.stop().await;
-        if !stop_errors.is_empty() {
-            let msgs: Vec<String> = stop_errors.iter().map(|e| e.to_string()).collect();
-            return Err(format!(
-                "Failed to stop Copilot client: {}",
-                msgs.join("; ")
-            ));
+        if let Err(e) = client.stop().await {
+            return Err(format!("Failed to stop Copilot client: {}", e));
         }
     }
 
