@@ -133,7 +133,8 @@ impl NodeLogic for MLPredictNode {
                 };
 
                 // fetch database
-                let database = node_database.load(context).await?.db.clone();
+                let cached_db = node_database.load(context).await?;
+                let database = cached_db.db.clone();
 
                 // get schema and validate columns exist
                 let existing_cols: HashSet<String> = {
@@ -159,6 +160,7 @@ impl NodeLogic for MLPredictNode {
                 loop {
                     // fetch batch
                     let t0 = std::time::Instant::now();
+                    cached_db.ensure_flushed().await?;
                     let mut records = {
                         let database = database.read().await;
                         database
@@ -213,6 +215,7 @@ impl NodeLogic for MLPredictNode {
                             let new_field = make_new_field(probe, &predictions_col)?;
                             let schema = Schema::new(vec![new_field]);
                             database
+                                .inner_mut()
                                 .add_columns(NewColumnTransform::AllNulls(schema.into()), None)
                                 .await?;
                             context.log_message(

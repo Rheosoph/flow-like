@@ -1,2 +1,16 @@
+pub mod add_header_footer;
+pub mod add_hyperlink;
+pub mod add_image;
+pub mod add_page_break;
+pub mod add_paragraph;
+pub mod add_table;
+pub mod add_toc;
+pub mod create;
+pub mod extract_text;
+pub mod list_placeholders;
+pub mod merge;
+pub mod metadata;
+pub mod remove_paragraph;
 pub mod replace_image;
+pub mod replace_table_row;
 pub mod replace_text;

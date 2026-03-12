@@ -1,6 +1,9 @@
 ---
 applyTo: "packages/catalog/**/*.rs"
 ---
+
+VERY IMPORTANT: when checking nodes with cargo check probably you need the execute feature!
+
 # Node Creation Guidelines
 
 Apply the [general coding guidelines](./general-coding.instructions.md) to all code.

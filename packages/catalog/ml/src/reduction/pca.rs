@@ -124,9 +124,11 @@ impl NodeLogic for FitPcaNode {
                 let records_col: String = context.evaluate_pin("records").await?;
                 let output_col: String = context.evaluate_pin("output_col").await?;
 
-                let database = node_database.load(context).await?.db.clone();
+                let cached_db = node_database.load(context).await?;
+                let database = cached_db.db.clone();
 
                 let t0 = std::time::Instant::now();
+                cached_db.ensure_flushed().await?;
                 let records = {
                     let database = database.read().await;
                     let schema = database.schema().await?;
@@ -208,6 +210,7 @@ impl NodeLogic for FitPcaNode {
                         let new_field = make_new_field(probe, &output_col)?;
                         let schema = Schema::new(vec![new_field]);
                         database
+                            .inner_mut()
                             .add_columns(NewColumnTransform::AllNulls(schema.into()), None)
                             .await?;
                         context.log_message(

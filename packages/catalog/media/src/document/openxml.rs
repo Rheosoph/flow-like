@@ -100,6 +100,20 @@ pub enum OpenXmlFormat {
     Pptx,
 }
 
+/// Semantic block type for a formatted run.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BlockType {
+    #[default]
+    Normal,
+    Heading(u8),
+    BlockQuote,
+    TableHeader,
+    TableCell,
+    TableRowEnd,
+    Image { url: String, alt: String },
+    CodeBlock { language: Option<String> },
+}
+
 /// A single run of formatted text for OpenXML insertion.
 #[derive(Debug, Clone)]
 pub struct FormattedRun {
@@ -108,13 +122,14 @@ pub struct FormattedRun {
     pub italic: bool,
     pub code: bool,
     pub strikethrough: bool,
+    pub block_type: BlockType,
 }
 
 /// Convert markdown text to a series of FormattedRun structs.
 pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<FormattedRun> {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-    let options = Options::ENABLE_STRIKETHROUGH;
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
     let parser = Parser::new_ext(markdown, options);
 
     let mut runs: Vec<FormattedRun> = Vec::new();
@@ -124,19 +139,27 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
     let mut strikethrough = false;
     let mut in_paragraph = false;
     let mut paragraph_count = 0u32;
+    let mut heading_level: Option<u8> = None;
+    let mut in_blockquote = false;
+    let mut in_table_header = false;
+    let mut in_table_cell = false;
+    let mut code_language: Option<String> = None;
+
+    let newline_run = || FormattedRun {
+        text: "\n".to_string(),
+        bold: false,
+        italic: false,
+        code: false,
+        strikethrough: false,
+        block_type: BlockType::Normal,
+    };
 
     for event in parser {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
                     if in_paragraph && paragraph_count > 0 {
-                        runs.push(FormattedRun {
-                            text: "\n".to_string(),
-                            bold: false,
-                            italic: false,
-                            code: false,
-                            strikethrough: false,
-                        });
+                        runs.push(newline_run());
                     }
                     in_paragraph = true;
                     paragraph_count += 1;
@@ -144,7 +167,16 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                 Tag::Strong => bold = true,
                 Tag::Emphasis => italic = true,
                 Tag::Strikethrough => strikethrough = true,
-                Tag::CodeBlock(_) => code = true,
+                Tag::CodeBlock(kind) => {
+                    code = true;
+                    code_language = match kind {
+                        pulldown_cmark::CodeBlockKind::Fenced(lang) => {
+                            let l = lang.trim().to_string();
+                            if l.is_empty() { None } else { Some(l) }
+                        }
+                        _ => None,
+                    };
+                }
                 Tag::List(_) => {}
                 Tag::Item => {
                     runs.push(FormattedRun {
@@ -153,9 +185,36 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                         italic: false,
                         code: false,
                         strikethrough: false,
+                        block_type: BlockType::Normal,
                     });
                 }
-                Tag::Heading { .. } => bold = true,
+                Tag::Heading { level, .. } => {
+                    heading_level = Some(level as u8);
+                    bold = true;
+                }
+                Tag::BlockQuote(_) => {
+                    in_blockquote = true;
+                }
+                Tag::Table(_) => {}
+                Tag::TableHead => {
+                    in_table_header = true;
+                }
+                Tag::TableRow => {}
+                Tag::TableCell => {
+                    in_table_cell = true;
+                }
+                Tag::Image { dest_url, title, .. } => {
+                    let url = dest_url.to_string();
+                    let alt = title.to_string();
+                    runs.push(FormattedRun {
+                        text: String::new(),
+                        bold: false,
+                        italic: false,
+                        code: false,
+                        strikethrough: false,
+                        block_type: BlockType::Image { url, alt },
+                    });
+                }
                 _ => {}
             },
             Event::End(tag_end) => match tag_end {
@@ -165,54 +224,96 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                 TagEnd::Strong => bold = false,
                 TagEnd::Emphasis => italic = false,
                 TagEnd::Strikethrough => strikethrough = false,
-                TagEnd::CodeBlock => code = false,
+                TagEnd::CodeBlock => {
+                    code = false;
+                    code_language = None;
+                    runs.push(newline_run());
+                }
                 TagEnd::Heading(_) => {
                     bold = false;
-                    runs.push(FormattedRun {
-                        text: "\n".to_string(),
-                        bold: false,
-                        italic: false,
-                        code: false,
-                        strikethrough: false,
-                    });
+                    heading_level = None;
+                    runs.push(newline_run());
                 }
                 TagEnd::Item => {
+                    runs.push(newline_run());
+                }
+                TagEnd::BlockQuote(_) => {
+                    in_blockquote = false;
+                }
+                TagEnd::TableHead => {
+                    in_table_header = false;
+                }
+                TagEnd::TableCell => {
+                    in_table_cell = false;
+                }
+                TagEnd::TableRow => {
                     runs.push(FormattedRun {
                         text: "\n".to_string(),
                         bold: false,
                         italic: false,
                         code: false,
                         strikethrough: false,
+                        block_type: BlockType::TableRowEnd,
                     });
+                }
+                TagEnd::Table => {
+                    runs.push(newline_run());
                 }
                 _ => {}
             },
             Event::Text(text) => {
+                let block_type = if let Some(level) = heading_level {
+                    BlockType::Heading(level)
+                } else if in_blockquote {
+                    BlockType::BlockQuote
+                } else if in_table_header {
+                    BlockType::TableHeader
+                } else if in_table_cell {
+                    BlockType::TableCell
+                } else if code {
+                    BlockType::CodeBlock { language: code_language.clone() }
+                } else {
+                    BlockType::Normal
+                };
+
+                // For image alt text, update the last Image run
+                if let Some(last) = runs.last_mut() {
+                    if let BlockType::Image { .. } = &last.block_type {
+                        if last.text.is_empty() {
+                            last.text = text.to_string();
+                            continue;
+                        }
+                    }
+                }
+
                 runs.push(FormattedRun {
                     text: text.to_string(),
                     bold,
                     italic,
                     code,
                     strikethrough,
+                    block_type,
                 });
             }
             Event::Code(text) => {
+                let block_type = if in_table_header {
+                    BlockType::TableHeader
+                } else if in_table_cell {
+                    BlockType::TableCell
+                } else {
+                    BlockType::Normal
+                };
                 runs.push(FormattedRun {
                     text: text.to_string(),
                     bold,
                     italic,
                     code: true,
                     strikethrough,
+                    block_type,
                 });
             }
             Event::SoftBreak | Event::HardBreak => {
-                runs.push(FormattedRun {
-                    text: "\n".to_string(),
-                    bold: false,
-                    italic: false,
-                    code: false,
-                    strikethrough: false,
-                });
+                runs.push(newline_run());
             }
             _ => {}
         }
@@ -230,6 +331,7 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
             italic: false,
             code: false,
             strikethrough: false,
+            block_type: BlockType::Normal,
         });
     }
 
@@ -251,12 +353,12 @@ fn build_formatted_run_xml(
     let has_formatting =
         run.bold || run.italic || run.code || run.strikethrough || base_rpr.is_some();
     if has_formatting {
-        xml.push_str(&format!("<{}>", run_props_element));
-        if let Some(base) = base_rpr {
-            xml.push_str(base);
-        }
         match format {
             OpenXmlFormat::Docx => {
+                xml.push_str(&format!("<{}>", run_props_element));
+                if let Some(base) = base_rpr {
+                    xml.push_str(base);
+                }
                 if run.bold {
                     xml.push_str("<w:b/>");
                 }
@@ -266,20 +368,31 @@ fn build_formatted_run_xml(
                 if run.strikethrough {
                     xml.push_str("<w:strike/>");
                 }
+                xml.push_str(&format!("</{}>", run_props_element));
             }
             OpenXmlFormat::Pptx => {
+                // PPTX uses attributes on the rPr element, not child elements
+                let mut attrs = String::new();
                 if run.bold {
-                    xml.push_str(" b=\"1\"");
+                    attrs.push_str(" b=\"1\"");
                 }
                 if run.italic {
-                    xml.push_str(" i=\"1\"");
+                    attrs.push_str(" i=\"1\"");
                 }
                 if run.strikethrough {
-                    xml.push_str(" strike=\"sngStrike\"");
+                    attrs.push_str(" strike=\"sngStrike\"");
+                }
+                if let Some(base) = base_rpr {
+                    // base_rpr may contain child elements, so use full open/close
+                    xml.push_str(&format!("<{}{}>{}"  , run_props_element, attrs, base));
+                    xml.push_str(&format!("</{}>", run_props_element));
+                } else if attrs.is_empty() {
+                    xml.push_str(&format!("<{}/>", run_props_element));
+                } else {
+                    xml.push_str(&format!("<{}{}/>", run_props_element, attrs));
                 }
             }
         }
-        xml.push_str(&format!("</{}>", run_props_element));
     }
 
     let preserve = if run.text.contains(' ') || run.text.contains('\t') {
@@ -538,14 +651,26 @@ fn replace_run_containing_placeholder(
             continue;
         }
 
-        // Find the enclosing run element
+        // Find the enclosing run element (not rPr or other tags starting with run_element prefix)
         let before_text = &result[..text_start];
-        let run_start = match before_text.rfind(&run_open) {
-            Some(p) => p,
-            None => {
-                // No enclosing run, fall back to plain text replacement
-                search_from = content_end + close_tag.len();
-                continue;
+        let run_start = {
+            let mut found = None;
+            let mut pos = before_text.len();
+            while let Some(p) = before_text[..pos].rfind(&run_open) {
+                // Verify this is actually the run element, not e.g. <w:rPr> when searching for <w:r
+                let after = &before_text[p + run_open.len()..];
+                if after.starts_with('>') || after.starts_with(' ') || after.starts_with('/') {
+                    found = Some(p);
+                    break;
+                }
+                pos = p;
+            }
+            match found {
+                Some(p) => p,
+                None => {
+                    search_from = content_end + close_tag.len();
+                    continue;
+                }
             }
         };
 
