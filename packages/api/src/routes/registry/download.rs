@@ -1,6 +1,7 @@
 //! Package download endpoint
 
-use super::types::{DownloadRequest, DownloadResponse};
+use super::types::{DownloadRequest, DownloadResponse, MetaSummary};
+use crate::entity::meta;
 use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
 use crate::entity::wasm_package;
 use crate::error::ApiError;
@@ -8,7 +9,7 @@ use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 /// POST /registry/download
 /// Get download URL for a package WASM binary.
@@ -76,11 +77,30 @@ pub async fn download(
     let package_id = package.id.clone();
     let _ = registry.increment_downloads(&package_id).await;
 
+    // Fetch metadata (icon, thumbnail, localized name) for the package
+    let mut metadata = meta::Entity::find()
+        .filter(meta::Column::WasmPackageId.eq(&package_id))
+        .all(&state.db)
+        .await
+        .ok()
+        .and_then(|metas| {
+            MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model)
+        });
+
+    if let Some(meta) = &mut metadata {
+        if let Ok(master_creds) = state.master_credentials().await {
+            if let Ok(store) = master_creds.to_store(false).await {
+                meta.presign_media(&package_id, &store).await;
+            }
+        }
+    }
+
     Ok(Json(DownloadResponse {
-        package_id: package_id,
+        package_id,
         version,
         wasm_base64: String::new(),
         download_url: Some(download_url),
         manifest,
+        metadata,
     }))
 }

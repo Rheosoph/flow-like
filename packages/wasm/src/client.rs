@@ -172,6 +172,7 @@ impl RegistryClient {
                     entry: RegistryEntry {
                         id: installed.id.clone(),
                         manifest: installed.manifest.clone(),
+                        nodes: vec![],
                         versions: vec![PackageVersion {
                             version: installed.version.clone(),
                             wasm_hash: String::new(),
@@ -246,6 +247,7 @@ impl RegistryClient {
             wasm_path: wasm_path.clone(),
             installed_at: now,
             manifest: download.manifest.clone(),
+            metadata: download.metadata.clone(),
         };
 
         let mut state = self.state.write().await;
@@ -254,6 +256,7 @@ impl RegistryClient {
             existing.installed_at = now;
             existing.wasm_path = wasm_path.clone();
             existing.manifest = download.manifest.clone();
+            existing.metadata = download.metadata.clone();
             existing
                 .versions
                 .insert(download.version.clone(), installed_version);
@@ -269,6 +272,7 @@ impl RegistryClient {
                 wasm_path: wasm_path.clone(),
                 manifest: download.manifest.clone(),
                 versions: HashMap::from([(download.version.clone(), installed_version)]),
+                metadata: download.metadata.clone(),
             };
             state
                 .installed
@@ -281,6 +285,7 @@ impl RegistryClient {
             entry: RegistryEntry {
                 id: download.package_id.clone(),
                 manifest: download.manifest,
+                nodes: vec![],
                 versions: vec![PackageVersion {
                     version: download.version.clone(),
                     wasm_hash: calculate_hash(&wasm_data),
@@ -455,6 +460,7 @@ impl RegistryClient {
         let entry = RegistryEntry {
             id: manifest.id.clone(),
             manifest: manifest.clone(),
+            nodes: vec![],
             versions: vec![PackageVersion {
                 version: manifest.version.clone(),
                 wasm_hash: calculate_hash(&wasm_data),
@@ -481,6 +487,62 @@ impl RegistryClient {
             cached_at: Utc::now(),
             expires_at: None,
         })
+    }
+
+    /// Register a local package in the installed list without downloading.
+    /// Used for developer projects so they appear in `list_installed()`.
+    pub async fn register_local_package(
+        &self,
+        wasm_path: &Path,
+        manifest: PackageManifest,
+    ) -> Result<InstalledPackage> {
+        let now = Utc::now();
+        let version_entry = InstalledVersion {
+            version: manifest.version.clone(),
+            wasm_path: wasm_path.to_path_buf(),
+            installed_at: now,
+            manifest: manifest.clone(),
+            metadata: None,
+        };
+        let installed = InstalledPackage {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            source: PackageSource::Local {
+                path: wasm_path.to_path_buf(),
+            },
+            installed_at: now,
+            wasm_path: wasm_path.to_path_buf(),
+            manifest,
+            versions: HashMap::from([(version_entry.version.clone(), version_entry)]),
+            metadata: None,
+        };
+
+        let mut state = self.state.write().await;
+        state
+            .installed
+            .insert(installed.id.clone(), installed.clone());
+        drop(state);
+        self.save_state().await?;
+
+        Ok(installed)
+    }
+
+    /// Unregister a local package without deleting its WASM file.
+    pub async fn unregister_local_package(&self, package_id: &str) -> Result<bool> {
+        let mut state = self.state.write().await;
+        let was_local = state
+            .installed
+            .get(package_id)
+            .map(|p| matches!(p.source, PackageSource::Local { .. }))
+            .unwrap_or(false);
+        if !was_local {
+            return Ok(false);
+        }
+        state.installed.remove(package_id);
+        state.cache_metadata.remove(package_id);
+        drop(state);
+        self.save_state().await?;
+        Ok(true)
     }
 
     /// Clear all cached packages
@@ -522,6 +584,7 @@ impl RegistryClient {
             entry: RegistryEntry {
                 id: installed.id.clone(),
                 manifest: iv.manifest.clone(),
+                nodes: vec![],
                 versions: vec![PackageVersion {
                     version: iv.version.clone(),
                     wasm_hash: String::new(),
@@ -567,9 +630,16 @@ impl RegistryClient {
 
         let security = installed.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
+        let wasm_hash = loaded.hash().to_string();
 
-        let mut instance = loaded.instantiate(&engine, security.clone()).await?;
-        let definitions = instance.call_get_nodes().await?;
+        let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
+            cached
+        } else {
+            let mut instance = loaded.instantiate(&engine, security.clone()).await?;
+            let defs = instance.call_get_nodes().await?;
+            engine.cache_definitions(wasm_hash, defs.clone());
+            defs
+        };
 
         let nodes: Vec<crate::WasmNodeLogic> = definitions
             .into_iter()
@@ -605,8 +675,16 @@ impl RegistryClient {
         let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
         let security = iv.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
-        let mut instance = loaded.instantiate(&engine, security.clone()).await?;
-        let definitions = instance.call_get_nodes().await?;
+        let wasm_hash = loaded.hash().to_string();
+
+        let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
+            cached
+        } else {
+            let mut instance = loaded.instantiate(&engine, security.clone()).await?;
+            let defs = instance.call_get_nodes().await?;
+            engine.cache_definitions(wasm_hash, defs.clone());
+            defs
+        };
 
         Ok(definitions
             .into_iter()

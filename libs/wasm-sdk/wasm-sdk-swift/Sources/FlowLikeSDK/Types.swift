@@ -32,6 +32,24 @@ public enum DataType: Sendable {
     }
 }
 
+// MARK: - ValueType
+
+public enum ValueTypeKind: Sendable {
+    case normal
+    case array
+    case hashMap
+    case hashSet
+
+    public var rawValue: Swift.String {
+        switch self {
+        case .normal: return "Normal"
+        case .array: return "Array"
+        case .hashMap: return "HashMap"
+        case .hashSet: return "HashSet"
+        }
+    }
+}
+
 // MARK: - PinType
 
 public enum PinType: Sendable {
@@ -107,6 +125,10 @@ public struct PinDefinition: Sendable {
     public var defaultValue: Swift.String?
     public var valueType: Swift.String?
     public var schema: Swift.String?
+    public var step: Double?
+    public var sensitive: Bool?
+    public var enforceSchema: Bool?
+    public var enforceGenericValueType: Bool?
 
     public init(
         name: Swift.String,
@@ -134,9 +156,39 @@ public struct PinDefinition: Sendable {
         return copy
     }
 
+    public func withValueType(_ vt: ValueTypeKind) -> PinDefinition {
+        var copy = self
+        copy.valueType = vt.rawValue
+        return copy
+    }
+
     public func withSchema(_ s: Swift.String) -> PinDefinition {
         var copy = self
         copy.schema = s
+        return copy
+    }
+
+    public func withStep(_ step: Double) -> PinDefinition {
+        var copy = self
+        copy.step = step
+        return copy
+    }
+
+    public func withSensitive(_ sensitive: Bool = true) -> PinDefinition {
+        var copy = self
+        copy.sensitive = sensitive
+        return copy
+    }
+
+    public func withEnforceSchema(_ enforce: Bool = true) -> PinDefinition {
+        var copy = self
+        copy.enforceSchema = enforce
+        return copy
+    }
+
+    public func withEnforceGenericValueType(_ enforce: Bool = true) -> PinDefinition {
+        var copy = self
+        copy.enforceGenericValueType = enforce
         return copy
     }
 
@@ -156,6 +208,18 @@ public struct PinDefinition: Sendable {
         }
         if let sc = schema {
             b.addKey("schema"); b.addString(sc)
+        }
+        if let st = step {
+            b.addKey("step"); b.addRaw(Swift.String(st))
+        }
+        if let sn = sensitive {
+            b.addKey("sensitive"); b.addBool(sn)
+        }
+        if let es = enforceSchema {
+            b.addKey("enforce_schema"); b.addBool(es)
+        }
+        if let eg = enforceGenericValueType {
+            b.addKey("enforce_generic_value_type"); b.addBool(eg)
         }
         b.endObject()
         return b.build()

@@ -45,6 +45,9 @@ export const zhCommon = {
 	"footer.privacy": "隐私政策",
 	"footer.legal": "法律声明",
 	"footer.dataDeletion": "数据删除",
+	"footer.security": "安全",
+	"footer.dpa": "数据处理协议",
+	"footer.subprocessors": "子处理者",
 
 	// BI Preview Section
 	"bi.preview.badge": "商业智能",

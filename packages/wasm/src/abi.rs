@@ -122,6 +122,18 @@ pub struct WasmPinDefinition {
     /// Range for numeric pins (min, max)
     #[serde(default)]
     pub range: Option<(f64, f64)>,
+    /// Step for numeric pins (slider increment)
+    #[serde(default)]
+    pub step: Option<f64>,
+    /// Whether the pin value is sensitive (e.g. passwords, API keys)
+    #[serde(default)]
+    pub sensitive: Option<bool>,
+    /// Enforce that the value matches the declared JSON schema
+    #[serde(default)]
+    pub enforce_schema: Option<bool>,
+    /// Enforce that the generic value type matches at connection time
+    #[serde(default)]
+    pub enforce_generic_value_type: Option<bool>,
 }
 
 /// Node quality scores

@@ -4,7 +4,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "../ui/tooltip";
 import { Cloud, Download } from "lucide-react";
 
 export type NodeAccessMode = "local" | "remote" | "installable";

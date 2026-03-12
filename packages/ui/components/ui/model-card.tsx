@@ -39,6 +39,8 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./dropdown-menu";
+import { IntelligenceIndexBadge } from "./model-benchmarks";
+import type { IModelEvaluation } from "./model-benchmarks";
 import { Progress } from "./progress";
 
 export type ModelCardVariant = "grid" | "list";
@@ -390,6 +392,9 @@ function ModelCardGridVariant({
 					isHosted={isHosted}
 					bitSize={bitSize}
 				/>
+				<IntelligenceIndexBadge
+					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
+				/>
 				{contextLength && (
 					<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
 						{formatContextLength(contextLength)}
@@ -497,6 +502,9 @@ function ModelCardListVariant({
 					isInstalled={isInstalled}
 					isHosted={isHosted}
 					bitSize={bitSize}
+				/>
+				<IntelligenceIndexBadge
+					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
 				/>
 				{contextLength && (
 					<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">

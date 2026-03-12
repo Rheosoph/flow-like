@@ -258,6 +258,228 @@ const CHART_EXAMPLES = [
 	{ title: "Plotly Custom (JSON)", content: EXAMPLE_PLOTLY_JSON },
 ];
 
+// ========== CALLOUT / ADMONITION EXAMPLES ==========
+
+const EXAMPLE_CALLOUT_INFO = `:::info
+Workflow \`daily-report-gen\` completed in 3.2s. 47/47 nodes executed.
+:::`;
+
+const EXAMPLE_CALLOUT_SUCCESS = `:::success
+All 12 TISAX validation checks passed. Audit trail archived.
+:::`;
+
+const EXAMPLE_CALLOUT_WARNING = `:::warning Rate Limiting
+API node \`fetch-market-data\` is approaching the rate limit (847/1000 requests). Consider adding a throttle node.
+:::`;
+
+const EXAMPLE_CALLOUT_ERROR = `:::error
+Node \`transform-payload\` failed: TypeError — Cannot read property 'items' of undefined.
+Input schema mismatch detected. Check upstream node output.
+:::`;
+
+const EXAMPLE_CALLOUT_TIP = `:::tip
+The \`csv-parse\` → \`filter\` → \`aggregate\` chain can be replaced with a single \`sql-query\` node.
+:::`;
+
+// ========== SPOILER EXAMPLES ==========
+
+const EXAMPLE_SPOILER_BLOCK = `:::spoiler Full Stack Trace
+\`\`\`
+Error: Connection refused at 10.0.0.5:5432
+    at TCPConnectWrap.afterConnect [as oncomplete] (net.js:1141:16)
+    at Protocol._enqueue (/app/node_modules/pg/lib/protocol.js:28:15)
+    at Client.query (/app/node_modules/pg/lib/client.js:123:27)
+\`\`\`
+:::`;
+
+const EXAMPLE_SPOILER_INLINE = `The credentials are ||admin:supersecret123|| — rotate immediately.
+
+The API key is ||sk-1234-abcd-5678|| and should be rotated.`;
+
+// ========== EMBED EXAMPLES ==========
+
+const EXAMPLE_EMBED_YOUTUBE = `\`\`\`embed
+https://youtube.com/watch?v=dQw4w9WgXcQ
+\`\`\``;
+
+const EXAMPLE_EMBED_YOUTUBE_OPTIONS = `\`\`\`embed
+url: https://youtube.com/watch?v=dQw4w9WgXcQ
+start: 45
+\`\`\``;
+
+const EXAMPLE_EMBED_GITHUB = `\`\`\`embed
+https://github.com/TM9657/flow-like
+\`\`\``;
+
+const EXAMPLE_EMBED_GITHUB_ISSUE = `\`\`\`embed
+https://github.com/TM9657/flow-like/issues/525
+\`\`\``;
+
+const EXAMPLE_EMBED_TWITTER = `\`\`\`embed
+https://x.com/greatco_de/status/2022279156558356739
+\`\`\``;
+
+const EXAMPLE_EMBED_REDDIT = `\`\`\`embed
+https://www.reddit.com/r/selfhosted/comments/1n41uu6/ive_spent_5000_hours_building_a_typed_workflow/
+\`\`\``;
+
+const EXAMPLE_EMBED_SPOTIFY = `\`\`\`embed
+https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT
+\`\`\``;
+
+const EXAMPLE_EMBED_STACKOVERFLOW = `\`\`\`embed
+https://stackoverflow.com/questions/927358/how-do-i-undo-the-most-recent-local-commits-in-git
+\`\`\``;
+
+const EXAMPLE_EMBED_LINKEDIN = `\`\`\`embed
+https://www.linkedin.com/posts/activity-7123456789012345678
+\`\`\``;
+
+const EXAMPLE_EMBED_HACKERNEWS = `\`\`\`embed
+https://news.ycombinator.com/item?id=12345
+\`\`\``;
+
+const EXAMPLE_EMBED_GENERIC = `\`\`\`embed
+https://flow-like.com
+\`\`\``;
+
+// ========== MAP EXAMPLES ==========
+
+const EXAMPLE_MAP_SINGLE = `\`\`\`map
+lat: 48.1351
+lng: 11.5820
+label: Flow-Like HQ
+zoom: 14
+\`\`\``;
+
+const EXAMPLE_MAP_MULTI_CSV = `\`\`\`map
+title: Global Infrastructure
+zoom: 2
+---
+lat,lng,label,color
+48.1351,11.5820,EU-West (Primary),red
+37.7749,-122.4194,US-West,blue
+35.6762,139.6503,AP-Northeast,orange
+\`\`\``;
+
+const EXAMPLE_MAP_ROUTE = `\`\`\`map
+type: route
+mode: driving
+---
+lat,lng,label
+48.1351,11.5820,Munich Office
+48.2082,16.3738,Vienna DC
+47.4979,19.0402,Budapest Client
+\`\`\``;
+
+const EXAMPLE_MAP_JSON = `\`\`\`map
+{
+  "zoom": 4,
+  "markers": [
+    { "lat": 48.1351, "lng": 11.5820, "label": "EU-West", "color": "blue" },
+    { "lat": 37.7749, "lng": -122.4194, "label": "US-West", "color": "green" }
+  ]
+}
+\`\`\``;
+
+// ========== COMBINED FULL EXAMPLE ==========
+
+const EXAMPLE_ALL_ELEMENTS = `# All Extended Markdown Elements
+
+## Callouts
+
+:::info
+Informational message — neutral context, stats, metadata.
+:::
+
+:::success
+All validation checks passed. Ready for deployment.
+:::
+
+:::warning TISAX Compliance
+Data leaving the EU boundary was detected in node \`s3-upload\`.
+:::
+
+:::error
+Node \`fetch-api-data\` failed: HTTP 503 Service Unavailable
+:::
+
+:::tip
+You can parallelize the \`transform-*\` nodes to cut execution time by ~40%.
+:::
+
+## Spoilers
+
+The credentials are ||admin:supersecret123|| — rotate immediately.
+
+:::spoiler Raw API Response
+\`\`\`json
+{ "secret": "sk-1234", "tokens": 48291 }
+\`\`\`
+:::
+
+## Embeds
+
+\`\`\`embed
+https://github.com/TM9657/flow-like
+\`\`\`
+
+\`\`\`embed
+https://x.com/elikiiii/status/1802394840273530979
+\`\`\`
+
+\`\`\`embed
+https://www.reddit.com/r/selfhosted/comments/1abc123/flow_like
+\`\`\`
+
+\`\`\`embed
+https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT
+\`\`\`
+
+## Maps
+
+\`\`\`map
+lat: 48.1351
+lng: 11.5820
+label: Munich Office
+zoom: 14
+\`\`\`
+`;
+
+const CALLOUT_EXAMPLES = [
+	{ title: "Info", content: EXAMPLE_CALLOUT_INFO },
+	{ title: "Success", content: EXAMPLE_CALLOUT_SUCCESS },
+	{ title: "Warning (custom title)", content: EXAMPLE_CALLOUT_WARNING },
+	{ title: "Error", content: EXAMPLE_CALLOUT_ERROR },
+	{ title: "Tip", content: EXAMPLE_CALLOUT_TIP },
+];
+
+const SPOILER_EXAMPLES = [
+	{ title: "Block Spoiler", content: EXAMPLE_SPOILER_BLOCK },
+	{ title: "Inline Spoiler", content: EXAMPLE_SPOILER_INLINE },
+];
+
+const EMBED_EXAMPLES = [
+	{ title: "YouTube", content: EXAMPLE_EMBED_YOUTUBE },
+	{ title: "YouTube (with options)", content: EXAMPLE_EMBED_YOUTUBE_OPTIONS },
+	{ title: "GitHub Repo", content: EXAMPLE_EMBED_GITHUB },
+	{ title: "GitHub Issue", content: EXAMPLE_EMBED_GITHUB_ISSUE },
+	{ title: "X (Twitter)", content: EXAMPLE_EMBED_TWITTER },
+	{ title: "Reddit", content: EXAMPLE_EMBED_REDDIT },
+	{ title: "Spotify", content: EXAMPLE_EMBED_SPOTIFY },
+	{ title: "Stack Overflow", content: EXAMPLE_EMBED_STACKOVERFLOW },
+	{ title: "LinkedIn", content: EXAMPLE_EMBED_LINKEDIN },
+	{ title: "Hacker News", content: EXAMPLE_EMBED_HACKERNEWS },
+	{ title: "Generic", content: EXAMPLE_EMBED_GENERIC },
+];
+
+const MAP_EXAMPLES = [
+	{ title: "Single Location", content: EXAMPLE_MAP_SINGLE },
+	{ title: "Multi Marker (CSV)", content: EXAMPLE_MAP_MULTI_CSV },
+	{ title: "Route", content: EXAMPLE_MAP_ROUTE },
+	{ title: "JSON Mode", content: EXAMPLE_MAP_JSON },
+];
+
 export default function DebugMarkdownPage() {
 	const [customMarkdown, setCustomMarkdown] = useState(EXAMPLE_FULL_MARKDOWN);
 
@@ -266,9 +488,8 @@ export default function DebugMarkdownPage() {
 			<div>
 				<h1 className="text-3xl font-bold mb-2">Markdown Debug Preview</h1>
 				<p className="text-muted-foreground">
-					Debug page for testing markdown rendering including{" "}
-					<code>```nivo```</code> and <code>```plotly```</code> chart code
-					blocks.
+					Debug page for testing markdown rendering including charts, callouts,
+					spoilers, embeds, and maps.
 				</p>
 			</div>
 
@@ -300,38 +521,111 @@ export default function DebugMarkdownPage() {
 						</div>
 					</div>
 				</div>
+				<div className="flex flex-wrap gap-2">
+					<button
+						type="button"
+						className="text-xs px-3 py-1.5 rounded-md border bg-muted/50 hover:bg-muted"
+						onClick={() => setCustomMarkdown(EXAMPLE_ALL_ELEMENTS)}
+					>
+						Load All Elements
+					</button>
+					<button
+						type="button"
+						className="text-xs px-3 py-1.5 rounded-md border bg-muted/50 hover:bg-muted"
+						onClick={() => setCustomMarkdown(EXAMPLE_FULL_MARKDOWN)}
+					>
+						Load Basic Markdown
+					</button>
+				</div>
 			</section>
 
+			{/* Callout Examples */}
+			<ExampleSection
+				title="Callout / Admonition Examples"
+				examples={CALLOUT_EXAMPLES}
+				onLoad={setCustomMarkdown}
+			/>
+
+			{/* Spoiler Examples */}
+			<ExampleSection
+				title="Spoiler Examples"
+				examples={SPOILER_EXAMPLES}
+				onLoad={setCustomMarkdown}
+			/>
+
+			{/* Embed Examples */}
+			<ExampleSection
+				title="Embed Examples"
+				examples={EMBED_EXAMPLES}
+				onLoad={setCustomMarkdown}
+			/>
+
+			{/* Map Examples */}
+			<ExampleSection
+				title="Map Examples"
+				examples={MAP_EXAMPLES}
+				onLoad={setCustomMarkdown}
+			/>
+
 			{/* Chart Examples */}
-			<section className="space-y-4">
-				<h2 className="text-xl font-semibold">Chart Examples</h2>
-				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-					{CHART_EXAMPLES.map((example) => (
-						<div
-							key={example.title}
-							className="border rounded-lg overflow-hidden"
-						>
-							<div className="bg-muted/50 px-4 py-2 flex items-center justify-between">
-								<h3 className="font-medium text-sm">{example.title}</h3>
+			<ExampleSection
+				title="Chart Examples"
+				examples={CHART_EXAMPLES}
+				onLoad={setCustomMarkdown}
+			/>
+		</div>
+	);
+}
+
+function ExampleSection({
+	title,
+	examples,
+	onLoad,
+}: {
+	title: string;
+	examples: { title: string; content: string }[];
+	onLoad: (content: string) => void;
+}) {
+	return (
+		<section className="space-y-4">
+			<h2 className="text-xl font-semibold">{title}</h2>
+			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+				{examples.map((example) => (
+					<div
+						key={example.title}
+						className="border rounded-lg overflow-hidden"
+					>
+						<div className="bg-muted/50 px-4 py-2 flex items-center justify-between">
+							<h3 className="font-medium text-sm">{example.title}</h3>
+							<div className="flex gap-2">
 								<button
 									type="button"
 									className="text-xs text-muted-foreground hover:text-foreground"
-									onClick={() => setCustomMarkdown(example.content)}
+									onClick={() => {
+										void navigator.clipboard.writeText(example.content);
+									}}
+								>
+									Copy
+								</button>
+								<button
+									type="button"
+									className="text-xs text-muted-foreground hover:text-foreground"
+									onClick={() => onLoad(example.content)}
 								>
 									Load
 								</button>
 							</div>
-							<div className="p-4 min-h-[300px]">
-								<TextEditor
-									initialContent={example.content}
-									isMarkdown={true}
-									editable={false}
-								/>
-							</div>
 						</div>
-					))}
-				</div>
-			</section>
-		</div>
+						<div className="p-4 min-h-[200px]">
+							<TextEditor
+								initialContent={example.content}
+								isMarkdown={true}
+								editable={false}
+							/>
+						</div>
+					</div>
+				))}
+			</div>
+		</section>
 	);
 }

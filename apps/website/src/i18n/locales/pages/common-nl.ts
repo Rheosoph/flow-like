@@ -46,6 +46,9 @@ export const nlCommon = {
 	"footer.privacy": "Privacybeleid",
 	"footer.legal": "Juridische kennisgeving",
 	"footer.dataDeletion": "Gegevens verwijderen",
+	"footer.security": "Beveiliging",
+	"footer.dpa": "Verwerkersovereenkomst",
+	"footer.subprocessors": "Sub-verwerkers",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

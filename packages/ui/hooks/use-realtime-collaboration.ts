@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactFlowInstance } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RemoteSelectionParticipant } from "../components/flow/flow-node";
 import { createRealtimeSession } from "../lib";
 import { normalizeSelectionNodes } from "../lib/flow-board-utils";
@@ -24,7 +24,7 @@ interface UseRealtimeCollaborationProps {
 	/** The authenticated user's sub (subject) from the auth token */
 	sub?: string;
 	hub: any;
-	mousePosition: { x: number; y: number };
+	mousePositionRef: RefObject<{ x: number; y: number }>;
 	layerPath: string | undefined;
 	screenToFlowPosition: ReactFlowInstance["screenToFlowPosition"];
 	commandAwarenessRef: React.MutableRefObject<any>;
@@ -39,7 +39,7 @@ export function useRealtimeCollaboration({
 	backend,
 	sub,
 	hub,
-	mousePosition,
+	mousePositionRef,
 	layerPath,
 	screenToFlowPosition,
 	commandAwarenessRef,
@@ -218,18 +218,22 @@ export function useRealtimeCollaboration({
 		};
 	}, [awareness, board]);
 
-	// Broadcast cursor position
+	// Broadcast cursor position via throttled interval (avoids 60fps rerenders)
 	useEffect(() => {
 		if (!awareness) return;
-		const flowPoint = screenToFlowPosition({
-			x: mousePosition.x,
-			y: mousePosition.y,
-		});
-		awareness.setLocalStateField("cursor", {
-			x: flowPoint.x,
-			y: flowPoint.y,
-		});
-	}, [mousePosition.x, mousePosition.y, awareness, screenToFlowPosition]);
+		const interval = setInterval(() => {
+			const pos = mousePositionRef.current;
+			const flowPoint = screenToFlowPosition({
+				x: pos.x,
+				y: pos.y,
+			});
+			awareness.setLocalStateField("cursor", {
+				x: flowPoint.x,
+				y: flowPoint.y,
+			});
+		}, 50);
+		return () => clearInterval(interval);
+	}, [awareness, screenToFlowPosition]);
 
 	// Broadcast layer path
 	useEffect(() => {

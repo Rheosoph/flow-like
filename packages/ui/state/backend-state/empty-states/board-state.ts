@@ -27,7 +27,7 @@ export class EmptyBoardState implements IBoardState {
 	getBoards(appId: string): Promise<IBoard[]> {
 		throw new Error("Method not implemented.");
 	}
-	getCatalog(): Promise<INode[]> {
+	getCatalog(appId: string): Promise<INode[]> {
 		throw new Error("Method not implemented.");
 	}
 	getBoard(

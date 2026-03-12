@@ -8,6 +8,7 @@ import {
 	Input,
 	PackageStatusBadge,
 	Skeleton,
+	StorePackageDetail,
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
@@ -15,23 +16,28 @@ import {
 } from "@tm9657/flow-like-ui";
 import type {
 	InstalledPackage,
+	PackageSummary,
 	PackageUpdate,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import {
 	AlertTriangle,
+	Download,
 	FolderOpen,
 	Loader2,
 	Package,
 	RefreshCw,
 	Search,
+	Shield,
 	Trash2,
 	Upload,
 	X,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../../hooks/use-package-status";
+import { fetcher } from "../../../../lib/api";
 
 function PackageItem({
 	pkg,
@@ -40,6 +46,7 @@ function PackageItem({
 	latestVersion,
 	onUninstall,
 	onUpdate,
+	onSelect,
 	isLoading,
 	compileStatus,
 }: {
@@ -49,16 +56,21 @@ function PackageItem({
 	latestVersion?: string;
 	onUninstall: (id: string) => void;
 	onUpdate: (id: string) => void;
+	onSelect?: (id: string) => void;
 	isLoading: boolean;
 	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
 }) {
 	return (
 		<div
-			className={`rounded-xl border p-4 transition-all ${
+			className={`rounded-xl border p-4 transition-all cursor-pointer ${
 				isLocal
 					? "border-dashed border-primary/20 bg-card/50 hover:bg-muted/10"
 					: "border-border/20 bg-card/50 hover:bg-muted/10"
 			}`}
+			onClick={() => onSelect?.(pkg.id)}
+			onKeyDown={(e) => e.key === "Enter" && onSelect?.(pkg.id)}
+			role="button"
+			tabIndex={0}
 		>
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0 flex-1 space-y-1.5">
@@ -116,7 +128,7 @@ function PackageItem({
 									variant="ghost"
 									size="icon"
 									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-									onClick={() => onUpdate(pkg.id)}
+								onClick={(e) => { e.stopPropagation(); onUpdate(pkg.id); }}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -135,7 +147,7 @@ function PackageItem({
 								variant="ghost"
 								size="icon"
 								className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-destructive/80 hover:bg-destructive/10"
-								onClick={() => onUninstall(pkg.id)}
+								onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
 								disabled={isLoading}
 							>
 								{isLoading && !hasUpdate ? (
@@ -170,16 +182,111 @@ function ItemSkeleton() {
 	);
 }
 
+function OwnedRegistryItem({
+	pkg,
+	onInstall,
+	onSelect,
+	isLoading,
+	compileStatus,
+}: {
+	pkg: PackageSummary;
+	onInstall: (id: string) => void;
+	onSelect?: (id: string) => void;
+	isLoading: boolean;
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+}) {
+	return (
+		<div
+			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
+			onClick={() => onSelect?.(pkg.id)}
+			onKeyDown={(e) => e.key === "Enter" && onSelect?.(pkg.id)}
+			role="button"
+			tabIndex={0}
+		>
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0 flex-1 space-y-1.5">
+					<div className="flex items-center gap-2 flex-wrap">
+						<span className="text-sm font-medium truncate">{pkg.name}</span>
+						<Badge
+							variant="outline"
+							className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
+						>
+							v{pkg.latestVersion}
+						</Badge>
+						{pkg.verified && (
+							<Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+						)}
+						{pkg.visibility && pkg.visibility !== "public" && (
+							<Badge
+								variant="secondary"
+								className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
+							>
+								{pkg.visibility}
+							</Badge>
+						)}
+						{compileStatus && compileStatus !== "idle" && (
+							<PackageStatusBadge status={compileStatus} />
+						)}
+					</div>
+					{pkg.description && (
+						<p className="text-sm text-muted-foreground/70 line-clamp-2">
+							{pkg.description}
+						</p>
+					)}
+					{pkg.keywords.length > 0 && (
+						<div className="flex flex-wrap gap-1 pt-0.5">
+							{pkg.keywords.slice(0, 4).map((keyword) => (
+								<span
+									key={keyword}
+									className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted/40 text-muted-foreground/60"
+								>
+									{keyword}
+								</span>
+							))}
+						</div>
+					)}
+				</div>
+				<div className="flex items-center gap-1 shrink-0">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="h-8 gap-1.5 rounded-full text-xs text-muted-foreground/70 hover:text-foreground/80 hover:bg-muted/30 px-3"
+								onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
+								disabled={isLoading}
+							>
+								{isLoading ? (
+									<Loader2 className="h-3.5 w-3.5 animate-spin" />
+								) : (
+									<>
+										<Download className="h-3.5 w-3.5" />
+										Install
+									</>
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Install v{pkg.latestVersion}</TooltipContent>
+					</Tooltip>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 export default function InstalledPackagesPage() {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
 	const [installedPackages, setInstalledPackages] = useState<
 		InstalledPackage[]
 	>([]);
 	const [localPackages, setLocalPackages] = useState<InstalledPackage[]>([]);
+	const [ownedPackages, setOwnedPackages] = useState<PackageSummary[]>([]);
 	const [updates, setUpdates] = useState<PackageUpdate[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [loadingPackage, setLoadingPackage] = useState<string | null>(null);
@@ -207,15 +314,21 @@ export default function InstalledPackagesPage() {
 		if (!backend?.registryState || !isInitialized) return;
 		setIsLoading(true);
 		try {
-			const [packages, updateList] = await Promise.all([
+			const [packages, updateList, ownedResults] = await Promise.all([
 				backend.registryState.getInstalledPackages(),
 				backend.registryState.checkForUpdates(),
+				backend.registryState.getOwnedPackages(),
 			]);
 			const registry = packages.filter((p) => !p.id.startsWith("local."));
 			const local = packages.filter((p) => p.id.startsWith("local."));
 			setInstalledPackages(registry);
 			setLocalPackages(local);
 			setUpdates(updateList);
+
+			const installedIds = new Set(packages.map((p) => p.id));
+			setOwnedPackages(
+				ownedResults.packages.filter((p) => !installedIds.has(p.id)),
+			);
 		} catch (err) {
 			console.error("Failed to fetch installed packages:", err);
 		} finally {
@@ -285,6 +398,21 @@ export default function InstalledPackagesPage() {
 		}
 	};
 
+	const handleInstall = async (packageId: string) => {
+		if (!backend?.registryState) return;
+		setLoadingPackage(packageId);
+		try {
+			await backend.registryState.installPackage(packageId);
+			toast.success("Package installed");
+			await fetchInstalled();
+		} catch (err) {
+			console.error("Failed to install package:", err);
+			toast.error(`Failed to install: ${err}`);
+		} finally {
+			setLoadingPackage(null);
+		}
+	};
+
 	const updateMap = new Map(updates.map((u) => [u.packageId, u.latestVersion]));
 
 	const filteredPackages = installedPackages.filter((pkg) => {
@@ -305,6 +433,15 @@ export default function InstalledPackagesPage() {
 		);
 	});
 
+	const filteredOwnedPackages = ownedPackages.filter((pkg) => {
+		if (!searchQuery) return true;
+		const query = searchQuery.toLowerCase();
+		return (
+			pkg.name.toLowerCase().includes(query) ||
+			pkg.description.toLowerCase().includes(query)
+		);
+	});
+
 	if (isInitializing) {
 		return (
 			<div className="flex items-center justify-center h-full">
@@ -318,7 +455,33 @@ export default function InstalledPackagesPage() {
 		);
 	}
 
-	const totalCount = filteredPackages.length + filteredLocalPackages.length;
+	const totalCount = filteredPackages.length + filteredLocalPackages.length + filteredOwnedPackages.length;
+
+	if (selectedPackageId) {
+		return (
+			<StorePackageDetail
+				packageId={selectedPackageId}
+				onBack={() => setSelectedPackageId(null)}
+				onInstallSuccess={() => {
+					toast.success("Package installed");
+					fetchInstalled();
+				}}
+				onUninstallSuccess={() => {
+					toast.success("Package uninstalled");
+					fetchInstalled();
+				}}
+				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
+				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onDeleteSuccess={() => {
+					setSelectedPackageId(null);
+					fetchInstalled();
+				}}
+				fetcher={fetcher}
+				auth={auth}
+				compileStatus={packageStatusMap.get(selectedPackageId)}
+			/>
+		);
+	}
 
 	return (
 		<div className="flex flex-col h-full">
@@ -457,6 +620,7 @@ export default function InstalledPackagesPage() {
 											isLocal
 											onUninstall={handleUninstall}
 											onUpdate={handleUpdate}
+											onSelect={setSelectedPackageId}
 											isLoading={loadingPackage === pkg.id}
 											compileStatus={packageStatusMap.get(pkg.id)}
 										/>
@@ -469,7 +633,7 @@ export default function InstalledPackagesPage() {
 						{filteredPackages.length > 0 && (
 							<div className="space-y-3">
 								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-									Registry
+									Installed
 								</span>
 								<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
 									{filteredPackages.map((pkg) => (
@@ -481,6 +645,28 @@ export default function InstalledPackagesPage() {
 											latestVersion={updateMap.get(pkg.id)}
 											onUninstall={handleUninstall}
 											onUpdate={handleUpdate}
+											onSelect={setSelectedPackageId}
+											isLoading={loadingPackage === pkg.id}
+											compileStatus={packageStatusMap.get(pkg.id)}
+										/>
+									))}
+								</div>
+							</div>
+						)}
+
+						{/* Owned but not installed */}
+						{filteredOwnedPackages.length > 0 && (
+							<div className="space-y-3">
+								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+									Not Installed
+								</span>
+								<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+									{filteredOwnedPackages.map((pkg) => (
+										<OwnedRegistryItem
+											key={pkg.id}
+											pkg={pkg}
+											onInstall={handleInstall}
+											onSelect={setSelectedPackageId}
 											isLoading={loadingPackage === pkg.id}
 											compileStatus={packageStatusMap.get(pkg.id)}
 										/>

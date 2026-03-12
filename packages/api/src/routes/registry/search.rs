@@ -101,8 +101,19 @@ pub async fn search(
     let caller_id = user.sub().ok();
     let (filters, include_own, owned_only) = query.into_parts();
 
-    let results = registry
+    let mut results = registry
         .search_with_visibility(&filters, caller_id.as_deref(), include_own, owned_only)
         .await?;
+
+    if let Ok(master_creds) = state.master_credentials().await {
+        if let Ok(store) = master_creds.to_store(false).await {
+            for pkg in &mut results.packages {
+                if let Some(meta) = &mut pkg.metadata {
+                    meta.presign_media(&pkg.id, &store).await;
+                }
+            }
+        }
+    }
+
     Ok(Json(results))
 }

@@ -97,6 +97,7 @@ async fn reload_wasm_nodes(app_handle: &AppHandle) -> Result<(), TauriFunctionEr
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchFiltersInput {
     #[serde(default)]
     pub query: Option<String>,
@@ -174,11 +175,12 @@ pub async fn registry_install_package(
     app_handle: AppHandle,
     package_id: String,
     version: Option<String>,
+    token: Option<String>,
 ) -> Result<CachedPackage, TauriFunctionError> {
     emit_package_status(&app_handle, &package_id, "downloading");
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
     let installed = registry_client
-        .install(&package_id, version.as_deref())
+        .install(&package_id, version.as_deref(), token.as_deref())
         .await
         .inspect_err(|_e| {
             emit_package_status(&app_handle, &package_id, "error");
@@ -240,11 +242,12 @@ pub async fn registry_update_package(
     app_handle: AppHandle,
     package_id: String,
     version: Option<String>,
+    token: Option<String>,
 ) -> Result<CachedPackage, TauriFunctionError> {
     emit_package_status(&app_handle, &package_id, "downloading");
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
     let installed = registry_client
-        .install(&package_id, version.as_deref())
+        .install(&package_id, version.as_deref(), token.as_deref())
         .await
         .inspect_err(|_e| {
             emit_package_status(&app_handle, &package_id, "error");
@@ -267,9 +270,10 @@ pub struct PackageUpdate {
 #[tauri::command]
 pub async fn registry_check_for_updates(
     app_handle: AppHandle,
+    token: Option<String>,
 ) -> Result<Vec<PackageUpdate>, TauriFunctionError> {
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
-    let update_tuples = registry_client.check_updates().await?;
+    let update_tuples = registry_client.check_updates(token.as_deref()).await?;
 
     let updates: Vec<PackageUpdate> = update_tuples
         .into_iter()
@@ -281,6 +285,24 @@ pub async fn registry_check_for_updates(
         .collect();
 
     Ok(updates)
+}
+
+#[tauri::command]
+pub async fn registry_set_auth_token(
+    app_handle: AppHandle,
+    token: Option<String>,
+) -> Result<(), TauriFunctionError> {
+    use tauri::Manager;
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| TauriFunctionError::new("Registry state not found"))?;
+
+    let mut guard = state.0.lock().await;
+    if let Some(client) = guard.as_mut() {
+        client.set_auth_token(token);
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,9 +347,20 @@ pub async fn registry_init(
 
     let default_registry = config
         .and_then(|c| c.registry_url)
-        .unwrap_or_else(|| "https://api.flow-like.com/registry".to_string());
+        .unwrap_or_else(|| "https://api.flow-like.com/api/v1/registry".to_string());
 
     drop(settings_guard);
+
+    // Preserve auth token from existing client (if any) so re-init doesn't
+    // lose the token that was set via pushAuthContext / setAuthToken.
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
+
+    let existing_token = {
+        let guard = state.0.lock().await;
+        guard.as_ref().and_then(|c| c.auth_token().cloned())
+    };
 
     let registry_config = RegistryConfig {
         default_registry,
@@ -337,14 +370,11 @@ pub async fn registry_init(
         cache_duration_hours: 24 * 7,
         auto_update_index: true,
         allow_unverified: false,
+        auth_token: existing_token,
     };
 
     let client = RegistryClient::new(registry_config)?;
     client.init().await?;
-
-    let state = app_handle
-        .try_state::<TauriRegistryState>()
-        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
 
     let mut guard = state.0.lock().await;
     *guard = Some(client);
@@ -353,6 +383,8 @@ pub async fn registry_init(
     if let Err(e) = reload_wasm_nodes(&app_handle).await {
         tracing::warn!("Failed to load WASM nodes during registry init: {:?}", e);
     }
+
+    super::developer::register_all_developer_packages(&app_handle).await;
 
     Ok(())
 }

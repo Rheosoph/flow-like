@@ -10,7 +10,9 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { EditorKit } from "../editor/editor-kit";
+import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
+import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import { Editor, EditorContainer } from "../editor/ui/editor";
 
@@ -103,6 +105,19 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
 				children: [{ text: "" }],
 			};
 		}
+		// If this is a link with spoiler:// url, convert to inline_spoiler
+		if (
+			node.type === "a" &&
+			typeof node.url === "string" &&
+			node.url.startsWith("spoiler://")
+		) {
+			const spoilerText = decodeURIComponent(node.url.replace("spoiler://", ""));
+			return {
+				type: "inline_spoiler",
+				spoilerText,
+				children: [{ text: "" }],
+			};
+		}
 		// Recursively process children
 		if (node.children && Array.isArray(node.children)) {
 			return {
@@ -154,8 +169,10 @@ export const safeDeserialize = (
 	}
 
 	// 3. Handle initial markdown content.
+	// Pre-process directive blocks (:::type ... :::) at text level before parsing.
+	const preprocessed = preprocessDirectiveBlocks(data);
 	try {
-		const nodes = editor.api.markdown.deserialize(data, { remarkPlugins });
+		const nodes = editor.api.markdown.deserialize(preprocessed, { remarkPlugins });
 		if (nodes.length > 0) return transformSpecialLinks(nodes);
 		return [{ type: "p", children: [{ text: "" }] }];
 	} catch (error) {
@@ -165,7 +182,7 @@ export const safeDeserialize = (
 		);
 
 		// 4. Fallback for broken markdown: split into blocks and deserialize individually.
-		const blocks = splitMarkdownPreservingCodeBlocks(data);
+		const blocks = splitMarkdownPreservingCodeBlocks(preprocessed);
 		const nodes = blocks.flatMap((block) => {
 			try {
 				return editor.api.markdown.deserialize(block, { remarkPlugins });
@@ -200,6 +217,7 @@ function TextEditorInner({
 			remarkEmoji as any,
 			remarkFocusNodes,
 			remarkUserMention,
+			remarkInlineSpoiler,
 		],
 		[],
 	);
@@ -223,7 +241,6 @@ function TextEditorInner({
 		<Plate
 			editor={editor}
 			onChange={({ editor }) => {
-				// Get the editor's content directly from the `editor.children` property.
 				const serializedNodes = editor.children;
 				const newContent = `${PLATE_JSON_PREFIX}${JSON.stringify(
 					serializedNodes,
@@ -258,7 +275,7 @@ function TextEditorStatic({
 	const remarkPlugins = useMemo(
 		() =>
 			minimal
-				? [remarkGfm, remarkBreaks, remarkFocusNodes, remarkUserMention]
+				? [remarkGfm, remarkBreaks, remarkFocusNodes, remarkUserMention, remarkInlineSpoiler]
 				: [
 						remarkMath,
 						remarkGfm,
@@ -268,6 +285,7 @@ function TextEditorStatic({
 						remarkEmoji as any,
 						remarkFocusNodes,
 						remarkUserMention,
+						remarkInlineSpoiler,
 					],
 		[minimal],
 	);
@@ -284,6 +302,12 @@ function TextEditorStatic({
 							return (
 								pluginId.includes("paragraph") ||
 								pluginId.includes("heading") ||
+								pluginId === "h1" ||
+								pluginId === "h2" ||
+								pluginId === "h3" ||
+								pluginId === "h4" ||
+								pluginId === "h5" ||
+								pluginId === "h6" ||
 								pluginId.includes("code") ||
 								pluginId.includes("list") ||
 								pluginId.includes("link") ||
@@ -350,7 +374,7 @@ function TextEditorStatic({
 			}}
 			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word"
 		>
-			<PlateStatic editor={editor} className="py-0" />
+			<PlateStatic editor={editor} className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0" />
 		</div>
 	);
 }

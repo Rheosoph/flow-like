@@ -333,6 +333,7 @@ export function parseBoard(
 		isOffline: boolean;
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
 	},
+	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
@@ -347,13 +348,6 @@ export function parseBoard(
 		.join(";");
 
 	for (const oldNode of oldNodes ?? []) {
-		oldNode.data.boardRef = boardRef;
-		oldNode.data.fnRefsHash = fnRefsHash;
-		// Update the node reference so fn_refs changes are reflected
-		const updatedNode = board.nodes[oldNode.id];
-		if (updatedNode) {
-			oldNode.data.node = updatedNode;
-		}
 		// Only add to oldNodesMap if we haven't seen this hash before (prevents duplicate hash collisions)
 		if (oldNode.data?.hash && !oldNodesMap.has(oldNode.data.hash)) {
 			oldNodesMap.set(oldNode.data.hash, oldNode);
@@ -379,18 +373,27 @@ export function parseBoard(
 		addedNodeIds.add(node.id);
 
 		const hash = node.hash ?? -1;
+		const isUnavailable = catalogLookup
+			? node.wasm?.package_id
+				? !catalogLookup.wasmNodeKeys.has(`${node.wasm.package_id}:${node.name}`)
+				: !catalogLookup.nodeNames.has(node.name)
+			: false;
 		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
-		if (oldNode) {
-			// Reuse old node but create new data object to ensure React detects changes
-			// Update the hash to reflect the current node state
+		const sel = selected.has(node.id);
+		if (
+			oldNode &&
+			oldNode.selected === sel &&
+			oldNode.data?.isUnavailable === isUnavailable &&
+			oldNode.data?.fnRefsHash === fnRefsHash
+		) {
+			// Hash + selected + isUnavailable + fnRefsHash all match — reuse exact reference
+			nodes.push(oldNode);
+		} else if (oldNode) {
+			// Hash matches but some derived state changed — shallow update
 			nodes.push({
 				...oldNode,
-				data: {
-					...oldNode.data,
-					node: node,
-					hash: hash,
-				},
-				selected: selected.has(node.id),
+				data: { ...oldNode.data, isUnavailable, fnRefsHash, node, boardRef },
+				selected: sel,
 			});
 		} else {
 			nodes.push({
@@ -410,6 +413,7 @@ export function parseBoard(
 					boardId: board.id,
 					appId: appId,
 					version: version,
+					isUnavailable,
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
 					},

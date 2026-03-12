@@ -40,6 +40,20 @@ proc dataTypeStr*(dt: DataType): string =
   of PathBuf: "PathBuf"
   of Struct: "Struct"
 
+type
+  ValueType* = enum
+    Normal = "Normal"
+    Array = "Array"
+    HashMap = "HashMap"
+    HashSet = "HashSet"
+
+proc valueTypeStr*(vt: ValueType): string =
+  case vt
+  of Normal: "Normal"
+  of Array: "Array"
+  of HashMap: "HashMap"
+  of HashSet: "HashSet"
+
 proc jsonQuote*(s: string): string =
   result = newStringOfCap(s.len + 2)
   result.add '"'
@@ -87,6 +101,14 @@ type
     validValues*: seq[string]
     range*: tuple[min: float64, max: float64]
     hasRange*: bool
+    step*: float64
+    hasStep*: bool
+    sensitive*: bool
+    hasSensitive*: bool
+    enforceSchema*: bool
+    hasEnforceSchema*: bool
+    enforceGenericValueType*: bool
+    hasEnforceGenericValueType*: bool
 
 proc inputPin*(name, friendlyName, description: string; dataType: DataType): PinDefinition =
   PinDefinition(
@@ -119,6 +141,26 @@ proc withRange*(pin: PinDefinition; min, max: float64): PinDefinition =
   result.range = (min: min, max: max)
   result.hasRange = true
 
+proc withStep*(pin: PinDefinition; step: float64): PinDefinition =
+  result = pin
+  result.step = step
+  result.hasStep = true
+
+proc withSensitive*(pin: PinDefinition; sensitive: bool = true): PinDefinition =
+  result = pin
+  result.sensitive = sensitive
+  result.hasSensitive = true
+
+proc withEnforceSchema*(pin: PinDefinition; enforce: bool = true): PinDefinition =
+  result = pin
+  result.enforceSchema = enforce
+  result.hasEnforceSchema = true
+
+proc withEnforceGenericValueType*(pin: PinDefinition; enforce: bool = true): PinDefinition =
+  result = pin
+  result.enforceGenericValueType = enforce
+  result.hasEnforceGenericValueType = true
+
 proc toJson*(p: PinDefinition): string =
   result = "{\"name\":" & jsonQuote(p.name) &
     ",\"friendly_name\":" & jsonQuote(p.friendlyName) &
@@ -140,6 +182,14 @@ proc toJson*(p: PinDefinition): string =
     result.add ",\"valid_values\":" & vvJson
   if p.hasRange:
     result.add ",\"range\":[" & $p.range.min & "," & $p.range.max & "]"
+  if p.hasStep:
+    result.add ",\"step\":" & $p.step
+  if p.hasSensitive:
+    result.add ",\"sensitive\":" & (if p.sensitive: "true" else: "false")
+  if p.hasEnforceSchema:
+    result.add ",\"enforce_schema\":" & (if p.enforceSchema: "true" else: "false")
+  if p.hasEnforceGenericValueType:
+    result.add ",\"enforce_generic_value_type\":" & (if p.enforceGenericValueType: "true" else: "false")
   result.add "}"
 
 type

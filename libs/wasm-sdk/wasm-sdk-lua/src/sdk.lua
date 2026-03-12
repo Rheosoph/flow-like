@@ -26,6 +26,13 @@ M.DataType = {
     Struct  = "Struct",
 }
 
+M.ValueType = {
+    Normal  = "Normal",
+    Array   = "Array",
+    HashMap = "HashMap",
+    HashSet = "HashSet",
+}
+
 M.LogLevel = {
     TRACE    = 0,
     DEBUG    = 1,
@@ -164,6 +171,29 @@ function M.withSchema(pin, s)
     return pin
 end
 
+function M.withStep(pin, step)
+    pin.step = step
+    return pin
+end
+
+function M.withSensitive(pin, sensitive)
+    if sensitive == nil then sensitive = true end
+    pin.sensitive = sensitive
+    return pin
+end
+
+function M.withEnforceSchema(pin, enforce)
+    if enforce == nil then enforce = true end
+    pin.enforce_schema = enforce
+    return pin
+end
+
+function M.withEnforceGenericValueType(pin, enforce)
+    if enforce == nil then enforce = true end
+    pin.enforce_generic_value_type = enforce
+    return pin
+end
+
 local function serialize_pin(p)
     local j = '{"name":' .. json_quote(p.name)
         .. ',"friendly_name":' .. json_quote(p.friendly_name)
@@ -178,6 +208,18 @@ local function serialize_pin(p)
     end
     if p.schema ~= nil and p.schema ~= "" then
         j = j .. ',"schema":' .. json_quote(p.schema)
+    end
+    if p.step ~= nil then
+        j = j .. ',"step":' .. json_number(p.step)
+    end
+    if p.sensitive ~= nil then
+        j = j .. ',"sensitive":' .. json_bool(p.sensitive)
+    end
+    if p.enforce_schema ~= nil then
+        j = j .. ',"enforce_schema":' .. json_bool(p.enforce_schema)
+    end
+    if p.enforce_generic_value_type ~= nil then
+        j = j .. ',"enforce_generic_value_type":' .. json_bool(p.enforce_generic_value_type)
     end
     j = j .. '}'
     return j

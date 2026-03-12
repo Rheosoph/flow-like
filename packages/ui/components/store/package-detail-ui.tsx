@@ -35,12 +35,6 @@ export interface PackageManifestUI {
 	license?: string;
 	repository?: string;
 	homepage?: string;
-	nodes: Array<{
-		id: string;
-		name: string;
-		description: string;
-		category: string;
-	}>;
 	permissions: {
 		network: boolean;
 		filesystem: boolean;
@@ -58,6 +52,12 @@ export interface PackageVersionUI {
 
 export interface PackageDataUI {
 	manifest: PackageManifestUI;
+	nodes: Array<{
+		id: string;
+		name: string;
+		description: string;
+		category: string;
+	}>;
 	versions: PackageVersionUI[];
 	downloadCount: number;
 	verified: boolean;
@@ -241,7 +241,7 @@ export function PackageDetailUI({
 					<TabsList>
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">
-							Nodes ({manifest.nodes.length})
+							Nodes ({pkg.nodes.length})
 						</TabsTrigger>
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
@@ -353,7 +353,7 @@ export function PackageDetailUI({
 					</TabsContent>
 
 					<TabsContent value="nodes">
-						{manifest.nodes.length === 0 ? (
+						{pkg.nodes.length === 0 ? (
 							<Card>
 								<CardContent className="pt-6">
 									<p className="text-sm text-muted-foreground">
@@ -363,7 +363,7 @@ export function PackageDetailUI({
 							</Card>
 						) : (
 							<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-								{manifest.nodes.map((node) => (
+								{pkg.nodes.map((node) => (
 									<NodeCard key={node.id} node={node} />
 								))}
 							</div>

@@ -52,4 +52,7 @@ export interface IAppState {
 	changeAppVisibility(appId: string, visibility: IAppVisibility): Promise<void>;
 	requestJoinApp(appId: string, comment?: string): Promise<void>;
 	purchaseApp(appId: string): Promise<IPurchaseResponse>;
+	listPackages?(appId: string): Promise<Record<string, string>>;
+	addPackage?(appId: string, packageId: string, version: string): Promise<void>;
+	removePackage?(appId: string, packageId: string): Promise<void>;
 }

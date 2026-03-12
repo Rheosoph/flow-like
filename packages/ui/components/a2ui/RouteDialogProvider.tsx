@@ -235,6 +235,23 @@ function RouteDialogRenderer({
 	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
 		console.log("[RouteDialog] Server message:", message);
 
+		if (message.type === "setCanvasSettings") {
+			setSurface((prevSurface) => {
+				if (!prevSurface || message.surfaceId !== prevSurface.id) {
+					return prevSurface;
+				}
+
+				return {
+					...prevSurface,
+					canvasSettings: {
+						...prevSurface.canvasSettings,
+						...message.canvasSettings,
+					},
+				};
+			});
+			return;
+		}
+
 		if (message.type !== "upsertElement") return;
 
 		setSurface((prevSurface) => {

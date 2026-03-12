@@ -182,7 +182,11 @@ export class ExecutionEngineProvider {
 		this.notifyGlobalListeners();
 
 		if (stream.executionPromise) {
-			return stream.executionPromise;
+			// Stream is already executing — reject so callers know the send was dropped
+			throw Object.assign(
+				new Error("A stream is already active for this session"),
+				{ isActiveStreamError: true },
+			);
 		}
 
 		// Use the executeEventFn if set (handles runtime variables), otherwise fall back to direct call

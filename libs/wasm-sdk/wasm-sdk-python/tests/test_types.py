@@ -14,6 +14,7 @@ from flow_like_wasm_sdk.types import (
     PackageNodes,
     PinDefinition,
     PinType,
+    ValueType,
 )
 
 
@@ -64,14 +65,14 @@ class TestPinDefinition:
         p = (
             PinDefinition.input_pin("x", "String")
             .with_default("abc")
-            .with_value_type("text")
+            .with_value_type(ValueType.ARRAY)
             .with_schema('{"type":"string"}')
             .with_valid_values(["a", "b"])
             .with_range(0.0, 100.0)
         )
         d = p.to_dict()
         assert d["default_value"] == "abc"
-        assert d["value_type"] == "text"
+        assert d["value_type"] == "Array"
         assert d["schema"] == '{"type":"string"}'
         assert d["valid_values"] == ["a", "b"]
         assert d["range"] == [0.0, 100.0]

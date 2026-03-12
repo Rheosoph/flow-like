@@ -3,8 +3,10 @@
 import {
 	ActivityIcon,
 	BookOpenIcon,
+	CheckIcon,
 	CircleCheckIcon,
 	CoinsIcon,
+	CopyIcon,
 	CornerRightUpIcon,
 	ExternalLinkIcon,
 	InfoIcon,
@@ -276,6 +278,45 @@ const DocsPreview = memo(({ url }: { url: string }) => {
 });
 DocsPreview.displayName = "DocsPreview";
 
+const CopySchemaButton = memo(
+	({
+		schema,
+		unrefValue,
+	}: { schema: string; unrefValue: (key: string) => string }) => {
+		const [copied, setCopied] = useState(false);
+
+		const handleCopy = useCallback(() => {
+			const resolved = unrefValue(schema);
+			navigator.clipboard.writeText(resolved).then(() => {
+				setCopied(true);
+				setTimeout(() => setCopied(false), 2000);
+			});
+		}, [schema, unrefValue]);
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-5 w-5 md:h-6 md:w-6"
+					onClick={handleCopy}
+				>
+					{copied ? (
+						<CheckIcon className="w-3 h-3 text-emerald-500" />
+					) : (
+						<CopyIcon className="w-3 h-3" />
+					)}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent>
+				<p className="text-xs">{copied ? "Copied!" : "Copy Schema"}</p>
+			</TooltipContent>
+		</Tooltip>
+	);
+});
+CopySchemaButton.displayName = "CopySchemaButton";
+
 const PinInfo = memo(
 	({ pin, unrefValue }: { pin: IPin; unrefValue: (key: string) => string }) => {
 		const color = typeToColor(pin.data_type);
@@ -295,6 +336,12 @@ const PinInfo = memo(
 								{pin.friendly_name}
 							</h4>
 							<div className="flex items-center gap-1 shrink-0">
+								{pin.schema && (
+									<CopySchemaButton
+										schema={pin.schema}
+										unrefValue={unrefValue}
+									/>
+								)}
 								<Badge
 									variant="outline"
 									className="text-[9px] md:text-[10px] px-1 md:px-1.5 py-0 h-4 md:h-5"

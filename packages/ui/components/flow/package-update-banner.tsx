@@ -1,8 +1,8 @@
 "use client";
 
 import { ArrowUpCircle, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import type { PackageUpdate } from "@/lib/schema/wasm";
+import { Button } from "../ui/button";
+import type { PackageUpdate } from "../../lib/schema/wasm";
 
 export type { PackageUpdate };
 

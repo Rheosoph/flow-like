@@ -46,6 +46,9 @@ export const itCommon = {
 	"footer.privacy": "Informativa sulla privacy",
 	"footer.legal": "Note legali",
 	"footer.dataDeletion": "Cancellazione dei dati",
+	"footer.security": "Sicurezza",
+	"footer.dpa": "ATD",
+	"footer.subprocessors": "Sub-responsabili",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

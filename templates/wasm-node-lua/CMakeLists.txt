@@ -105,5 +105,5 @@ if(EMSCRIPTEN)
         -sSUPPORT_LONGJMP=emscripten
         -O2
     )
-    target_compile_options(node PRIVATE -O2)
+    target_compile_options(node PRIVATE -msimd128 -mrelaxed-simd -O2)
 endif()

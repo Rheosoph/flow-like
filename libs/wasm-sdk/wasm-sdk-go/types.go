@@ -28,6 +28,13 @@ const (
 	DataTypeStruct  = "Struct"
 )
 
+const (
+	ValueTypeNormal  = "Normal"
+	ValueTypeArray   = "Array"
+	ValueTypeHashMap = "HashMap"
+	ValueTypeHashSet = "HashSet"
+)
+
 type NodeScores struct {
 	Privacy     uint8 `json:"privacy"`
 	Security    uint8 `json:"security"`
@@ -61,9 +68,13 @@ type PinDefinition struct {
 	Description  string  `json:"description"`
 	PinType      string  `json:"pin_type"`
 	DataType     string  `json:"data_type"`
-	DefaultValue *string `json:"default_value,omitempty"`
-	ValueType    *string `json:"value_type,omitempty"`
-	Schema       *string `json:"schema,omitempty"`
+	DefaultValue             *string  `json:"default_value,omitempty"`
+	ValueType                *string  `json:"value_type,omitempty"`
+	Schema                   *string  `json:"schema,omitempty"`
+	Step                     *float64 `json:"step,omitempty"`
+	Sensitive                *bool    `json:"sensitive,omitempty"`
+	EnforceSchema            *bool    `json:"enforce_schema,omitempty"`
+	EnforceGenericValueType  *bool    `json:"enforce_generic_value_type,omitempty"`
 }
 
 func InputPin(name, friendlyName, description, dataType string) PinDefinition {
@@ -103,6 +114,26 @@ func (p PinDefinition) WithSchema(schema string) PinDefinition {
 	return p
 }
 
+func (p PinDefinition) WithStep(step float64) PinDefinition {
+	p.Step = &step
+	return p
+}
+
+func (p PinDefinition) WithSensitive(sensitive bool) PinDefinition {
+	p.Sensitive = &sensitive
+	return p
+}
+
+func (p PinDefinition) WithEnforceSchema(enforce bool) PinDefinition {
+	p.EnforceSchema = &enforce
+	return p
+}
+
+func (p PinDefinition) WithEnforceGenericValueType(enforce bool) PinDefinition {
+	p.EnforceGenericValueType = &enforce
+	return p
+}
+
 func (p *PinDefinition) ToJSON() string {
 	var b strings.Builder
 	b.WriteString(`{"name":`)
@@ -127,6 +158,34 @@ func (p *PinDefinition) ToJSON() string {
 	if p.Schema != nil {
 		b.WriteString(`,"schema":`)
 		b.WriteString(jsonString(*p.Schema))
+	}
+	if p.Step != nil {
+		b.WriteString(`,"step":`)
+		b.WriteString(strconv.FormatFloat(*p.Step, 'f', -1, 64))
+	}
+	if p.Sensitive != nil {
+		b.WriteString(`,"sensitive":`)
+		if *p.Sensitive {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	}
+	if p.EnforceSchema != nil {
+		b.WriteString(`,"enforce_schema":`)
+		if *p.EnforceSchema {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	}
+	if p.EnforceGenericValueType != nil {
+		b.WriteString(`,"enforce_generic_value_type":`)
+		if *p.EnforceGenericValueType {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
 	}
 	b.WriteByte('}')
 	return b.String()

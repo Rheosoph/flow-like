@@ -146,8 +146,7 @@ async fn extracted_image_to_node_image(
     let cursor = Cursor::new(extracted.data.as_ref());
     let mut reader = ImageReader::new(cursor);
 
-    if let Some(format) =
-        flow_like_types::image::ImageFormat::from_mime_type(&extracted.mime_type)
+    if let Some(format) = flow_like_types::image::ImageFormat::from_mime_type(&extracted.mime_type)
     {
         reader.set_format(format);
     } else {
@@ -1040,9 +1039,8 @@ async fn invoke_model_simple_standalone(
 
     // Use a noop streaming callback to force the streaming code path, which is
     // more robust across providers (avoids JsonError when providers default to streaming).
-    let callback: LLMCallback = std::sync::Arc::new(move |_chunk: ResponseChunk| {
-        Box::pin(async move { Ok(()) })
-    });
+    let callback: LLMCallback =
+        std::sync::Arc::new(move |_chunk: ResponseChunk| Box::pin(async move { Ok(()) }));
 
     let response = model.invoke(&history, Some(callback)).await?;
 
@@ -1292,8 +1290,7 @@ impl NodeLogic for SummarizeDocumentNode {
         let chunks: Vec<TextChunk> = pages
             .iter()
             .map(|p| {
-                let content =
-                    format!("[Page {}]\n{}", p.page_number, p.content);
+                let content = format!("[Page {}]\n{}", p.page_number, p.content);
                 TextChunk::new(content, p.page_number as usize)
                     .with_metadata(format!("Page {}", p.page_number))
             })
@@ -1338,9 +1335,7 @@ impl NodeLogic for SummarizeDocumentNode {
             page_references: page_refs,
         };
 
-        context
-            .set_pin_value("summary", json!(doc_summary))
-            .await?;
+        context.set_pin_value("summary", json!(doc_summary)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

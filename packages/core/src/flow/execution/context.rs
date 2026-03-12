@@ -1008,6 +1008,16 @@ impl ExecutionContext {
         self.stream_a2ui_update(message).await
     }
 
+    pub async fn stream_a2ui_set_canvas_settings(
+        &mut self,
+        surface_id: &str,
+        canvas_settings: crate::a2ui::CanvasSettings,
+    ) -> flow_like_types::Result<()> {
+        let message =
+            crate::a2ui::A2UIServerMessage::set_canvas_settings(surface_id, canvas_settings);
+        self.stream_a2ui_update(message).await
+    }
+
     pub async fn stream_a2ui_data_update(
         &mut self,
         surface_id: &str,

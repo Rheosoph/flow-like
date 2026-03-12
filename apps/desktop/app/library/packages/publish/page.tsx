@@ -5,7 +5,6 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import {
 	MemoryTier,
 	type PackageManifest,
-	type PackageNodeEntry,
 	TimeoutTier,
 	useBackend,
 	useInvoke,
@@ -74,6 +73,27 @@ interface PublishFormData {
 
 type PublishStep = "upload" | "manifest" | "permissions" | "review";
 
+function camelToSnakeCase(key: string): string {
+	return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function toSnakeCaseKeys(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(toSnakeCaseKeys);
+	}
+
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+				camelToSnakeCase(key),
+				toSnakeCaseKeys(nested),
+			]),
+		);
+	}
+
+	return value;
+}
+
 function StepIndicator({
 	step,
 	currentStep,
@@ -122,7 +142,6 @@ export default function PublishPackagePage() {
 		path: string;
 		data: Uint8Array;
 	} | null>(null);
-	const [detectedNodes, setDetectedNodes] = useState<PackageNodeEntry[]>([]);
 	const [formData, setFormData] = useState<PublishFormData>({
 		id: "",
 		name: "",
@@ -213,6 +232,9 @@ export default function PublishPackagePage() {
 							? formData.allowedHosts.split(",").map((h) => h.trim())
 							: [],
 						websocketEnabled: formData.websocketEnabled,
+						tcpEnabled: false,
+						udpEnabled: false,
+						dnsEnabled: false,
 					},
 					filesystem: {
 						nodeStorage: formData.nodeStorage,
@@ -227,7 +249,6 @@ export default function PublishPackagePage() {
 					a2ui: formData.a2ui,
 					models: formData.models,
 				},
-				nodes: detectedNodes,
 				keywords: formData.keywords
 					? formData.keywords.split(",").map((k) => k.trim())
 					: [],
@@ -253,7 +274,7 @@ export default function PublishPackagePage() {
 				profile.data.hub_profile,
 				"registry/publish",
 				{
-					manifest,
+					manifest: toSnakeCaseKeys(manifest),
 					wasm_base64: base64,
 				},
 				auth,
@@ -558,6 +579,10 @@ export default function PublishPackagePage() {
 												<SelectItem value="intensive">
 													Intensive (256 MB)
 												</SelectItem>
+												<SelectItem value="large">Large (512 MB)</SelectItem>
+												<SelectItem value="huge">Huge (1 GB)</SelectItem>
+												<SelectItem value="extreme">Extreme (2 GB)</SelectItem>
+												<SelectItem value="maximum">Maximum (4 GB)</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -581,6 +606,12 @@ export default function PublishPackagePage() {
 												<SelectItem value="extended">Extended (60s)</SelectItem>
 												<SelectItem value="long_running">
 													Long Running (5min)
+												</SelectItem>
+												<SelectItem value="very_long">
+													Very Long (10min)
+												</SelectItem>
+												<SelectItem value="maximum">
+													Maximum (30min)
 												</SelectItem>
 											</SelectContent>
 										</Select>

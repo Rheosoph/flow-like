@@ -593,7 +593,7 @@ function DebugPageContent() {
 					variant="ghost"
 					size="icon"
 					className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-					onClick={() => router.push("/developer")}
+					onClick={() => router.push("/store/packages?tab=projects")}
 				>
 					<ArrowLeft className="h-4 w-4" />
 				</Button>

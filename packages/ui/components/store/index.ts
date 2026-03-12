@@ -24,7 +24,7 @@ export { StoreEmptyState, HeroSkeleton } from "./store-skeletons";
 export { visibilityLabel, visibilityIcon } from "./visibility";
 export { useStoreData } from "./use-store-data";
 export { ExploreAppsPage } from "./explore-apps-page";
-export { PackagesStorePage } from "./packages-store-page";
+export { PackagesStorePage, PackageListContent, PackageDetailWrapper, PackageCard } from "./packages-store-page";
 export { AppPackagesPage, type AppPackagesPageProps } from "./app-packages-page";
 export { PackageSearchDialog, type PackageSearchDialogProps } from "./package-search-dialog";
 export { PackageUsersTab } from "./package-users-tab";

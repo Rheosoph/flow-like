@@ -16,18 +16,81 @@ import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
 export class RegistryState implements IRegistryState {
+	private initPromise: Promise<void> | null = null;
+	private initialized = false;
+
 	constructor(private readonly backend: TauriBackend) {}
 
 	async init(registryUrl?: string): Promise<void> {
 		const config = registryUrl ? { registry_url: registryUrl } : null;
-		return invoke("registry_init", { config });
+		await invoke("registry_init", { config });
+		this.initialized = true;
+	}
+
+	private async ensureInit(): Promise<void> {
+		if (this.initialized) return;
+		if (!this.initPromise) {
+			this.initPromise = this.init().then(
+				() => { this.initPromise = null; },
+				(err) => { this.initPromise = null; throw err; },
+			);
+		}
+		return this.initPromise;
 	}
 
 	async searchPackages(filters?: SearchFilters): Promise<SearchResults> {
-		return invoke("registry_search_packages", { filters: filters ?? {} });
+		if (!this.backend.profile || !this.backend.auth) {
+			await this.ensureInit();
+			return invoke("registry_search_packages", { filters: filters ?? {} });
+		}
+		try {
+			return await this.fetchSearch(filters);
+		} catch {
+			return invoke("registry_search_packages", { filters: filters ?? {} });
+		}
+	}
+
+	async getOwnedPackages(filters?: SearchFilters): Promise<SearchResults> {
+		if (!this.backend.profile || !this.backend.auth) {
+			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
+		}
+		try {
+			return await this.fetchSearch({ ...filters, ownedOnly: true });
+		} catch {
+			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
+		}
+	}
+
+	private async fetchSearch(filters?: SearchFilters): Promise<SearchResults> {
+		const params = new URLSearchParams();
+		if (filters?.query) params.set("query", filters.query);
+		if (filters?.category) params.set("category", filters.category);
+		if (filters?.keywords?.length) params.set("keywords", filters.keywords.join(","));
+		if (filters?.author) params.set("author", filters.author);
+		if (filters?.verifiedOnly) params.set("verified_only", "true");
+		if (filters?.includeDeprecated) params.set("include_deprecated", "true");
+		if (filters?.sortBy) params.set("sort_by", filters.sortBy);
+		if (filters?.sortDesc !== undefined) params.set("sort_desc", String(filters.sortDesc));
+		if (filters?.offset) params.set("offset", String(filters.offset));
+		if (filters?.limit) params.set("limit", String(filters.limit));
+		if (filters?.language) params.set("language", filters.language);
+		if (filters?.ownedOnly) params.set("owned_only", "true");
+		if (!filters?.ownedOnly) params.set("include_own", "true");
+		const qs = params.toString();
+		return fetcher<SearchResults>(
+			this.backend.profile!,
+			`registry/search${qs ? `?${qs}` : ""}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	private get currentToken(): string | undefined {
+		return this.backend.auth?.user?.access_token ?? undefined;
 	}
 
 	async getPackage(packageId: string): Promise<InstalledPackage | null> {
+		await this.ensureInit();
 		return invoke("registry_get_package", { packageId });
 	}
 
@@ -35,22 +98,27 @@ export class RegistryState implements IRegistryState {
 		packageId: string,
 		version?: string,
 	): Promise<CachedPackage> {
-		return invoke("registry_install_package", { packageId, version });
+		await this.ensureInit();
+		return invoke("registry_install_package", { packageId, version, token: this.currentToken });
 	}
 
 	async uninstallPackage(packageId: string): Promise<void> {
+		await this.ensureInit();
 		return invoke("registry_uninstall_package", { packageId });
 	}
 
 	async getInstalledPackages(): Promise<InstalledPackage[]> {
+		await this.ensureInit();
 		return invoke("registry_get_installed_packages");
 	}
 
 	async isPackageInstalled(packageId: string): Promise<boolean> {
+		await this.ensureInit();
 		return invoke("registry_is_package_installed", { packageId });
 	}
 
 	async getInstalledVersion(packageId: string): Promise<string | null> {
+		await this.ensureInit();
 		return invoke("registry_get_installed_version", { packageId });
 	}
 
@@ -58,11 +126,13 @@ export class RegistryState implements IRegistryState {
 		packageId: string,
 		version?: string,
 	): Promise<CachedPackage> {
-		return invoke("registry_update_package", { packageId, version });
+		await this.ensureInit();
+		return invoke("registry_update_package", { packageId, version, token: this.currentToken });
 	}
 
 	async checkForUpdates(): Promise<PackageUpdate[]> {
-		return invoke("registry_check_for_updates");
+		await this.ensureInit();
+		return invoke("registry_check_for_updates", { token: this.currentToken });
 	}
 
 	async purchasePackage(
@@ -133,5 +203,9 @@ export class RegistryState implements IRegistryState {
 			{ method: "DELETE" },
 			this.backend.auth,
 		);
+	}
+
+	async setAuthToken(token: string | null): Promise<void> {
+		return invoke("registry_set_auth_token", { token });
 	}
 }

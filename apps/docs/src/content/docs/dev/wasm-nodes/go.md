@@ -1,16 +1,12 @@
 ---
 title: Go WASM Nodes
-description: Create custom WASM nodes using Go
+description: Create custom WASM nodes using Go and TinyGo with the WASM Component Model
 sidebar:
   order: 2
   badge:
-    text: Coming Soon
-    variant: caution
+    text: Component Model
+    variant: success
 ---
-
-:::caution[Coming Soon]
-Custom WASM nodes are currently in development. This template previews the planned API.
-:::
 
 Go can compile to WASM using **TinyGo** (recommended for smaller binaries) or standard Go.
 

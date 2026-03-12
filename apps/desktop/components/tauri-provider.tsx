@@ -149,6 +149,10 @@ export class TauriBackend implements IBackendState {
 	pushAuthContext(auth: AuthContextProps) {
 		this.auth = auth;
 		this._apiState.setAuth(auth);
+		const token = auth.user?.access_token ?? null;
+		this.registryState.setAuthToken?.(token)?.catch((e) =>
+			console.warn("[RegistryAuth] Failed to set auth token:", e),
+		);
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
@@ -392,6 +396,8 @@ export function ProfileSyncer({
 	const hubUrl = profile.data?.hub;
 
 	const syncingRef = useRef(false);
+	const lastSyncAtRef = useRef<number>(0);
+	const MIN_SYNC_INTERVAL_MS = 60_000;
 
 	useEffect(() => {
 		if (profile.data && backend instanceof TauriBackend) {
@@ -554,7 +560,13 @@ export function ProfileSyncer({
 				console.log("[ProfileSync] Already syncing, skipping");
 				return;
 			}
+			const now = Date.now();
+			if (now - lastSyncAtRef.current < MIN_SYNC_INTERVAL_MS) {
+				console.log("[ProfileSync] Cooldown active, skipping");
+				return;
+			}
 			syncingRef.current = true;
+			lastSyncAtRef.current = now;
 
 			try {
 				console.log("[ProfileSync] Starting profile sync...");
@@ -1210,7 +1222,16 @@ export function ProfileSyncer({
 		};
 
 		syncProfiles();
-	}, [backend, isAuthenticated, accessToken, hubUrl, profile.data?.updated]);
+
+		const interval = setInterval(
+			() => {
+				if (syncingRef.current) return;
+				syncProfiles();
+			},
+			5 * 60_000,
+		);
+		return () => clearInterval(interval);
+	}, [backend, isAuthenticated, accessToken, hubUrl]);
 
 	return null;
 }

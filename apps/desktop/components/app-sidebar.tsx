@@ -234,20 +234,18 @@ const data = {
 	],
 	navDev: [
 		{
+			title: "Packages",
+			url: "/store/packages",
+			icon: Package2Icon,
+			isActive: false,
+			items: [],
+		},
+		{
 			title: "Developer",
-			url: "/developer",
+			url: "/developer/new",
 			icon: Code2Icon,
 			isActive: false,
-			items: [
-				{
-					title: "My Nodes",
-					url: "/developer",
-				},
-				{
-					title: "Custom Nodes",
-					url: "/developer/installed",
-				},
-			],
+			items: [],
 		},
 	],
 };

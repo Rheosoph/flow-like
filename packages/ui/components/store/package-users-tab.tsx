@@ -260,9 +260,11 @@ export function PackageUsersTab({
 									</Badge>
 								</TableCell>
 								<TableCell className="text-sm text-muted-foreground">
-									{formatDistanceToNow(new Date(user.grantedAt), {
-										addSuffix: true,
-									})}
+									{user.grantedAt && !Number.isNaN(new Date(user.grantedAt).getTime())
+										? formatDistanceToNow(new Date(user.grantedAt), {
+												addSuffix: true,
+											})
+										: "—"}
 								</TableCell>
 								<TableCell className="text-right">
 									<UserActions

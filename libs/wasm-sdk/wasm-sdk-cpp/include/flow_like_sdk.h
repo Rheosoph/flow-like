@@ -40,6 +40,18 @@ inline const char* data_type_str(DataType dt) {
     return "String";
 }
 
+enum class ValueTypeKind { Normal, Array, HashMap, HashSet };
+
+inline const char* value_type_str(ValueTypeKind vt) {
+    switch (vt) {
+        case ValueTypeKind::Normal:  return "Normal";
+        case ValueTypeKind::Array:   return "Array";
+        case ValueTypeKind::HashMap: return "HashMap";
+        case ValueTypeKind::HashSet: return "HashSet";
+    }
+    return "Normal";
+}
+
 // ============================================================================
 // Node scores
 // ============================================================================
@@ -68,6 +80,14 @@ struct PinDefinition {
     std::string default_value;  // empty ⇒ absent
     std::string value_type;
     std::string schema;
+    double      step        = 0.0;
+    bool        has_step    = false;
+    bool        sensitive   = false;
+    bool        has_sensitive = false;
+    bool        enforce_schema = false;
+    bool        has_enforce_schema = false;
+    bool        enforce_generic_value_type = false;
+    bool        has_enforce_generic_value_type = false;
 
     static PinDefinition input(const std::string& name,
                                const std::string& friendly_name,
@@ -86,6 +106,11 @@ struct PinDefinition {
 
     /// Attach a raw JSON Schema string to this pin.
     PinDefinition& with_schema(const std::string& v) { schema = v; return *this; }
+
+    PinDefinition& with_step(double v) { step = v; has_step = true; return *this; }
+    PinDefinition& with_sensitive(bool v = true) { sensitive = v; has_sensitive = true; return *this; }
+    PinDefinition& with_enforce_schema(bool v = true) { enforce_schema = v; has_enforce_schema = true; return *this; }
+    PinDefinition& with_enforce_generic_value_type(bool v = true) { enforce_generic_value_type = v; has_enforce_generic_value_type = true; return *this; }
 
     std::string to_json() const;
 };

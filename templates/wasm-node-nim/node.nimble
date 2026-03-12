@@ -21,7 +21,7 @@ task build, "Build WASM node":
     -d:release \
     --noMain:on \
     --mm:arc \
-    --passC:"-fno-exceptions -O2 -I../wasm-sdk-nim/src" \
+    --passC:"-fno-exceptions -msimd128 -mrelaxed-simd -O2 -I../wasm-sdk-nim/src" \
     --passL:"-s STANDALONE_WASM -s EXPORTED_FUNCTIONS=['_get_node','_get_nodes','_run','_alloc','_dealloc','_get_abi_version'] -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s ALLOW_MEMORY_GROWTH=1 --no-entry -O2" \
     -o:build/node.wasm \
     src/node.nim"""

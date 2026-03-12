@@ -11,6 +11,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Skeleton,
+	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
 import type {
@@ -30,8 +31,10 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../../hooks/use-package-status";
+import { fetcher } from "../../../../lib/api";
 
 type SortOption =
 	| "relevance"
@@ -54,6 +57,7 @@ function PackageItem({
 	installedVersion,
 	onInstall,
 	onUninstall,
+	onSelect,
 	isLoading,
 	compileStatus,
 }: {
@@ -62,11 +66,18 @@ function PackageItem({
 	installedVersion?: string;
 	onInstall: (id: string) => void;
 	onUninstall: (id: string) => void;
+	onSelect?: (id: string) => void;
 	isLoading: boolean;
 	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
 }) {
 	return (
-		<div className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all">
+		<div
+			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
+			onClick={() => onSelect?.(pkg.id)}
+			onKeyDown={(e) => e.key === "Enter" && onSelect?.(pkg.id)}
+			role="button"
+			tabIndex={0}
+		>
 			<div className="flex items-start justify-between gap-3 mb-2">
 				<div className="flex items-center gap-2 min-w-0 flex-1">
 					<span className="truncate text-sm font-medium">{pkg.name}</span>
@@ -120,7 +131,7 @@ function PackageItem({
 							size="sm"
 							variant="ghost"
 							className="h-7 w-7 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 p-0"
-							onClick={() => onUninstall(pkg.id)}
+							onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
 							disabled={isLoading}
 						>
 							{isLoading ? (
@@ -135,7 +146,7 @@ function PackageItem({
 						size="sm"
 						variant="ghost"
 						className="h-7 gap-1.5 rounded-full text-xs text-muted-foreground/70 hover:text-foreground/80 hover:bg-muted/30 px-3"
-						onClick={() => onInstall(pkg.id)}
+						onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
 						disabled={isLoading}
 					>
 						{isLoading ? (
@@ -177,10 +188,12 @@ function PackageItemSkeleton() {
 
 export default function ExplorePackagesPage() {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [sortBy, setSortBy] = useState<SortOption>("relevance");
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 	const [searchResults, setSearchResults] = useState<SearchResults | null>(
 		null,
 	);
@@ -294,6 +307,32 @@ export default function ExplorePackagesPage() {
 		);
 	}
 
+	if (selectedPackageId) {
+		return (
+			<StorePackageDetail
+				packageId={selectedPackageId}
+				onBack={() => setSelectedPackageId(null)}
+				onInstallSuccess={() => {
+					toast.success("Package installed");
+					fetchInstalled();
+				}}
+				onUninstallSuccess={() => {
+					toast.success("Package uninstalled");
+					fetchInstalled();
+				}}
+				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
+				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onDeleteSuccess={() => {
+					setSelectedPackageId(null);
+					fetchInstalled();
+				}}
+				fetcher={fetcher}
+				auth={auth}
+				compileStatus={packageStatusMap.get(selectedPackageId)}
+			/>
+		);
+	}
+
 	return (
 		<div className="flex flex-col h-full gap-4">
 			<div className="flex items-center gap-2">
@@ -372,6 +411,7 @@ export default function ExplorePackagesPage() {
 								installedVersion={installedVersionMap.get(pkg.id)}
 								onInstall={handleInstall}
 								onUninstall={handleUninstall}
+								onSelect={setSelectedPackageId}
 								isLoading={loadingPackage === pkg.id}
 								compileStatus={packageStatusMap.get(pkg.id)}
 							/>

@@ -23,7 +23,11 @@ export function EnumVariable({
 	setValue: (value: any) => void;
 }>) {
 	return (
-		<div className="flex flex-row items-center justify-start ml-1">
+		<div
+			className="flex flex-row items-center justify-start ml-1"
+			onMouseDown={(e) => e.stopPropagation()}
+			onPointerDown={(e) => e.stopPropagation()}
+		>
 			<Select
 				defaultValue={parseUint8ArrayToJson(value)}
 				value={parseUint8ArrayToJson(value)}

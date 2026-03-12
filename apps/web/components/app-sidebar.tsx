@@ -83,6 +83,7 @@ import {
 	Sparkles,
 	Sun,
 	UsersRoundIcon,
+	Code2Icon,
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
@@ -215,6 +216,24 @@ const data = {
 			],
 		},
 	],
+	navDev: [
+		{
+			title: "Developer",
+			url: "/settings/registry",
+			icon: Code2Icon,
+			isActive: false,
+			items: [
+				{
+					title: "Owned",
+					url: "/settings/registry/installed",
+				},
+				{
+					title: "Explore",
+					url: "/settings/registry/explore",
+				},
+			],
+		},
+	],
 };
 
 interface IUser {
@@ -282,7 +301,7 @@ function InnerSidebar() {
 				<SpotlightTrigger />
 			</SidebarHeader>
 			<SidebarContent>
-				<NavMain items={data.navMain} />
+				<NavMain items={data.navMain} devItems={data.navDev} />
 				<Shortcuts />
 				<Flows />
 			</SidebarContent>
@@ -831,8 +850,10 @@ function NavCollapsible({
 
 function NavMain({
 	items,
+	devItems,
 }: Readonly<{
 	items: INavItem[];
+	devItems: INavItem[];
 }>) {
 	const backend = useBackend();
 	const router = useRouter();
@@ -860,6 +881,24 @@ function NavMain({
 								<NavFlatItem key={item.title} item={item} pathname={pathname} />
 							),
 						)}
+				</SidebarMenu>
+			</SidebarGroup>
+			<SidebarGroup>
+				<SidebarGroupLabel>Development</SidebarGroupLabel>
+				<SidebarMenu>
+					{devItems.map((item) =>
+						item.items && item.items.length > 0 ? (
+							<NavCollapsible
+								key={item.title}
+								item={item}
+								pathname={pathname}
+								sidebarOpen={open}
+								onNavigate={router.push}
+							/>
+						) : (
+							<NavFlatItem key={item.title} item={item} pathname={pathname} />
+						),
+					)}
 				</SidebarMenu>
 			</SidebarGroup>
 			{(info.data?.permission ?? 0) > 0 && (

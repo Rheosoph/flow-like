@@ -4,8 +4,10 @@ from pathlib import Path
 
 from flow_like_wasm_sdk.types import (
     ABI_VERSION,
+    DataType,
     LogLevel,
     PinType,
+    ValueType,
     NodeScores,
     PinDefinition,
     NodeDefinition,
@@ -34,8 +36,10 @@ def get_bridge_path() -> Path:
 
 __all__ = [
     "ABI_VERSION",
+    "DataType",
     "LogLevel",
     "PinType",
+    "ValueType",
     "NodeScores",
     "PinDefinition",
     "NodeDefinition",

@@ -24,6 +24,13 @@ object DataType {
     const val STRUCT = "Struct"
 }
 
+object ValueType {
+    const val NORMAL = "Normal"
+    const val ARRAY = "Array"
+    const val HASH_MAP = "HashMap"
+    const val HASH_SET = "HashSet"
+}
+
 object LogLevel {
     const val DEBUG: Int = 0
     const val INFO: Int = 1
@@ -52,6 +59,10 @@ data class PinDefinition(
     @SerialName("default_value") val defaultValue: JsonElement? = null,
     @SerialName("value_type") val valueType: String? = null,
     val schema: String? = null,
+    val step: Double? = null,
+    val sensitive: Boolean? = null,
+    @SerialName("enforce_schema") val enforceSchema: Boolean? = null,
+    @SerialName("enforce_generic_value_type") val enforceGenericValueType: Boolean? = null,
 ) {
     companion object {
         fun input(name: String, friendlyName: String, description: String, dataType: String): PinDefinition =
@@ -68,6 +79,14 @@ data class PinDefinition(
 
     /** Attach a raw JSON Schema string to this pin. */
     fun withSchema(schema: String): PinDefinition = copy(schema = schema)
+
+    fun withStep(step: Double): PinDefinition = copy(step = step)
+
+    fun withSensitive(sensitive: Boolean = true): PinDefinition = copy(sensitive = sensitive)
+
+    fun withEnforceSchema(enforce: Boolean = true): PinDefinition = copy(enforceSchema = enforce)
+
+    fun withEnforceGenericValueType(enforce: Boolean = true): PinDefinition = copy(enforceGenericValueType = enforce)
 }
 
 @Serializable

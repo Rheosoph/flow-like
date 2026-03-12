@@ -15,7 +15,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-wasip2
 
       - uses: actions/cache@v4
         with:
@@ -27,19 +27,16 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --release --target wasm32-unknown-unknown
-
-      - name: Build examples
-        run: cargo build --release --target wasm32-unknown-unknown --examples
+        run: cargo build --release
 
       - name: Test
-        run: cargo test
+        run: cargo test --target x86_64-unknown-linux-gnu
 
       - uses: actions/upload-artifact@v4
         with:
           name: wasm-node
           path: |
-            target/wasm32-unknown-unknown/release/*.wasm
+            target/wasm32-wasip2/release/flow_like_wasm_node_template.wasm
             flow-like.toml
             README.md
 

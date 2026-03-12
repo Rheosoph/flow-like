@@ -265,8 +265,8 @@ export class BoardState implements IBoardState {
 
 		return boards;
 	}
-	async getCatalog(): Promise<INode[]> {
-		const nodes: INode[] = await invoke("get_catalog");
+	async getCatalog(appId: string): Promise<INode[]> {
+		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;
 	}
 	async getBoard(

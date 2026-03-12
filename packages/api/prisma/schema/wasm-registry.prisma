@@ -21,6 +21,42 @@ enum WasmCompilationStatus {
   PENDING // Compilation in progress or queued
 }
 
+enum WasmPackageCategory {
+  DOCUMENT_PROCESSING
+  DATA_TRANSFORMATION
+  WORKFLOW_AUTOMATION
+  COMMUNICATION
+  ANALYTICS_REPORTING
+  FINANCE_BILLING
+  COMPLIANCE_REGULATORY
+  HR_PEOPLE
+  AI_ML
+  INTEGRATION_CONNECTORS
+  SECURITY_IDENTITY
+  DEVOPS
+  IOT_INDUSTRIAL
+  ROBOTICS_PHYSICAL_AI
+  GAMING_SIMULATION
+  HEALTHCARE
+  VETERINARY
+  LEGAL
+  MANUFACTURING
+  AGRICULTURE
+  REAL_ESTATE
+  LOGISTICS
+  ENERGY
+  CONSTRUCTION_TRADES
+  EDUCATION
+  GOVERNMENT_DEFENSE
+  ECOMMERCE
+  INSURANCE
+  TELECOM
+  SCIENTIFIC_ENGINEERING
+  GEOSPATIAL
+  MEDIA_CONTENT
+  OTHER
+}
+
 model WasmPackage {
   id String @id
 
@@ -32,6 +68,9 @@ model WasmPackage {
   homepage    String?
   repository  String?
   keywords    String[]
+
+  primaryCategory   WasmPackageCategory?
+  secondaryCategory WasmPackageCategory?
 
   status     WasmPackageStatus     @default(PENDING_REVIEW)
   visibility WasmPackageVisibility @default(PRIVATE)
@@ -72,6 +111,8 @@ model WasmPackage {
   @@index([downloadCount])
   @@index([createdAt])
   @@index([keywords])
+  @@index([primaryCategory])
+  @@index([secondaryCategory])
   @@index([price])
 }
 

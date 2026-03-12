@@ -53,6 +53,10 @@ interface storage {
 
 interface models {
     embed-text: func(bit-json: string, texts-json: string) -> option<string>;
+    embed-text-query: func(model-json: string, texts-json: string) -> option<string>;
+    embed-text-document: func(model-json: string, texts-json: string) -> option<string>;
+    embed-image: func(model-json: string, image-data: list<u8>) -> option<string>;
+    llm-prompt: func(bit-json: string, messages-json: string, do-stream: bool) -> option<string>;
 }
 
 interface auth {
@@ -62,6 +66,27 @@ interface auth {
 
 interface http {
     request: func(method: u8, url: string, headers: string, body: option<list<u8>>) -> option<string>;
+}
+
+interface schema {
+    get-type-schema: func(type-name: string) -> option<string>;
+    list-types: func() -> option<string>;
+}
+
+interface image {
+    from-bytes: func(data: list<u8>, format: string) -> option<string>;
+    to-bytes: func(image-ref: string, format: string) -> option<list<u8>>;
+}
+
+interface db {
+    query: func(op: u32, connection-json: string, payload-json: string) -> option<string>;
+}
+
+interface websocket {
+    connect: func(url: string, headers-json: string) -> option<string>;
+    send: func(session-id: string, message: list<u8>, is-binary: bool) -> bool;
+    receive: func(session-id: string, timeout-ms: u32) -> option<string>;
+    close: func(session-id: string) -> bool;
 }
 
 world flow-like-node {
@@ -75,6 +100,10 @@ world flow-like-node {
     import models;
     import auth;
     import http;
+    import schema;
+    import image;
+    import db;
+    import websocket;
 
     export get-node: func() -> string;
     export get-nodes: func() -> string;

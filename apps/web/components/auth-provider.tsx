@@ -201,7 +201,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		backend,
 	]);
 
-	// Fetch and push profile after authentication and auth push
+	// Ensure user exists in DB, then fetch and push profile
 	useEffect(() => {
 		if (
 			!authPushed ||
@@ -214,6 +214,9 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 		(async () => {
 			try {
+				// Ensure the user record exists in DB before any profile operations
+				await backend.userState.getInfo();
+
 				console.log("Fetching profile...");
 				const profile = await backend.userState.getProfile();
 				console.log("Profile fetched:", profile);
@@ -223,7 +226,6 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 				}
 			} catch (error) {
 				console.error("Failed to fetch profile:", error);
-				// Use default profile as fallback
 				if (backend instanceof WebBackend) {
 					backend.pushProfile(DEFAULT_PROFILE);
 					setProfileLoaded(true);

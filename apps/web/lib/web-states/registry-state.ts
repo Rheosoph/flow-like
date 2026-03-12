@@ -22,14 +22,40 @@ export class WebRegistryState implements IRegistryState {
 
 	async searchPackages(filters?: SearchFilters): Promise<SearchResults> {
 		try {
-			return await apiPost<SearchResults>(
-				"registry/search",
-				filters ?? {},
-				this.backend.auth,
-			);
+			return await this.fetchSearch(filters);
 		} catch {
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
+	}
+
+	async getOwnedPackages(filters?: SearchFilters): Promise<SearchResults> {
+		try {
+			return await this.fetchSearch({ ...filters, ownedOnly: true });
+		} catch {
+			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
+		}
+	}
+
+	private async fetchSearch(filters?: SearchFilters): Promise<SearchResults> {
+		const params = new URLSearchParams();
+		if (filters?.query) params.set("query", filters.query);
+		if (filters?.category) params.set("category", filters.category);
+		if (filters?.keywords?.length) params.set("keywords", filters.keywords.join(","));
+		if (filters?.author) params.set("author", filters.author);
+		if (filters?.verifiedOnly) params.set("verified_only", "true");
+		if (filters?.includeDeprecated) params.set("include_deprecated", "true");
+		if (filters?.sortBy) params.set("sort_by", filters.sortBy);
+		if (filters?.sortDesc !== undefined) params.set("sort_desc", String(filters.sortDesc));
+		if (filters?.offset) params.set("offset", String(filters.offset));
+		if (filters?.limit) params.set("limit", String(filters.limit));
+		if (filters?.language) params.set("language", filters.language);
+		if (filters?.ownedOnly) params.set("owned_only", "true");
+		if (!filters?.ownedOnly) params.set("include_own", "true");
+		const qs = params.toString();
+		return apiGet<SearchResults>(
+			`registry/search${qs ? `?${qs}` : ""}`,
+			this.backend.auth,
+		);
 	}
 
 	async getPackage(packageId: string): Promise<InstalledPackage | null> {

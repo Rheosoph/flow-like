@@ -21,6 +21,12 @@ public final class Types {
     public static final String DATA_TYPE_PATH_BUF = "PathBuf";
     public static final String DATA_TYPE_STRUCT = "Struct";
 
+    // ValueType constants
+    public static final String VALUE_TYPE_NORMAL = "Normal";
+    public static final String VALUE_TYPE_ARRAY = "Array";
+    public static final String VALUE_TYPE_HASH_MAP = "HashMap";
+    public static final String VALUE_TYPE_HASH_SET = "HashSet";
+
     // PinType constants
     public static final String PIN_TYPE_INPUT = "Input";
     public static final String PIN_TYPE_OUTPUT = "Output";
@@ -74,6 +80,10 @@ public final class Types {
         public String defaultValue;
         public String valueType;
         public String schema;
+        public Double step;
+        public Boolean sensitive;
+        public Boolean enforceSchema;
+        public Boolean enforceGenericValueType;
 
         private PinDefinition(String name, String friendlyName, String description,
                               String pinType, String dataType) {
@@ -99,6 +109,26 @@ public final class Types {
             return this;
         }
 
+        public PinDefinition withStep(double step) {
+            this.step = step;
+            return this;
+        }
+
+        public PinDefinition withSensitive(boolean sensitive) {
+            this.sensitive = sensitive;
+            return this;
+        }
+
+        public PinDefinition withEnforceSchema(boolean enforce) {
+            this.enforceSchema = enforce;
+            return this;
+        }
+
+        public PinDefinition withEnforceGenericValueType(boolean enforce) {
+            this.enforceGenericValueType = enforce;
+            return this;
+        }
+
         public String toJson() {
             StringBuilder b = new StringBuilder();
             b.append("{\"name\":").append(Json.quote(name));
@@ -114,6 +144,18 @@ public final class Types {
             }
             if (schema != null) {
                 b.append(",\"schema\":").append(Json.quote(schema));
+            }
+            if (step != null) {
+                b.append(",\"step\":").append(step);
+            }
+            if (sensitive != null) {
+                b.append(",\"sensitive\":").append(sensitive ? "true" : "false");
+            }
+            if (enforceSchema != null) {
+                b.append(",\"enforce_schema\":").append(enforceSchema ? "true" : "false");
+            }
+            if (enforceGenericValueType != null) {
+                b.append(",\"enforce_generic_value_type\":").append(enforceGenericValueType ? "true" : "false");
             }
             b.append('}');
             return b.toString();

@@ -617,4 +617,16 @@ export class AppState implements IAppState {
 		}
 		throw new Error("You must be logged in to purchase an app.");
 	}
+
+	async listPackages(appId: string): Promise<Record<string, string>> {
+		return invoke("app_list_packages", { appId });
+	}
+
+	async addPackage(appId: string, packageId: string, version: string): Promise<void> {
+		return invoke("app_add_package", { appId, packageId, version });
+	}
+
+	async removePackage(appId: string, packageId: string): Promise<void> {
+		return invoke("app_remove_package", { appId, packageId });
+	}
 }

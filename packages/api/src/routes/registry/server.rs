@@ -7,7 +7,7 @@ use super::types::{
     MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
     RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
-use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageVisibility};
+use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageCategory, WasmPackageVisibility};
 use crate::entity::{
     meta, user, wasm_package, wasm_package_author, wasm_package_review, wasm_package_user,
     wasm_package_version,
@@ -165,6 +165,8 @@ pub struct PackageDetails {
     pub permissions: serde_json::Value,
     pub price: i64,
     pub visibility: String,
+    pub primary_category: Option<String>,
+    pub secondary_category: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -236,6 +238,27 @@ fn status_to_enum(status: &str) -> crate::entity::sea_orm_active_enums::WasmPack
         "disabled" => WasmPackageStatus::Disabled,
         _ => WasmPackageStatus::PendingReview,
     }
+}
+
+fn db_cat_to_string(cat: &WasmPackageCategory) -> String {
+    serde_json::to_value(cat)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "OTHER".to_string())
+}
+
+fn db_cat_to_manifest(
+    cat: &WasmPackageCategory,
+) -> flow_like_wasm::manifest::WasmPackageCategory {
+    let json = serde_json::to_value(cat).unwrap_or(serde_json::Value::String("OTHER".into()));
+    serde_json::from_value(json).unwrap_or(flow_like_wasm::manifest::WasmPackageCategory::Other)
+}
+
+fn manifest_cat_to_db(
+    cat: &flow_like_wasm::manifest::WasmPackageCategory,
+) -> WasmPackageCategory {
+    let json = serde_json::to_value(cat).unwrap_or(serde_json::Value::String("OTHER".into()));
+    serde_json::from_value(json).unwrap_or(WasmPackageCategory::Other)
 }
 
 /// Server-side registry for managing WASM packages
@@ -559,6 +582,8 @@ impl ServerRegistry {
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
+                    primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+                    secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
                     metadata: None,
                 }
             })
@@ -721,6 +746,8 @@ impl ServerRegistry {
             permissions: pkg.permissions,
             price: pkg.price,
             visibility: visibility_to_string(&pkg.visibility),
+            primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+            secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
             created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
             updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
             published_at: pkg
@@ -800,8 +827,9 @@ impl ServerRegistry {
             homepage: pkg.homepage.clone(),
             repository: pkg.repository.clone(),
             keywords: pkg.keywords.unwrap_or_default(),
-            nodes: serde_json::from_value(pkg.nodes.clone()).unwrap_or_default(),
             permissions: serde_json::from_value(pkg.permissions.clone()).unwrap_or_default(),
+            primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_manifest(c)),
+            secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_manifest(c)),
             min_flow_like_version: None,
             wasm_path: Some(pkg.wasm_path.clone()),
             wasm_hash: Some(pkg.wasm_hash.clone()),
@@ -829,8 +857,9 @@ impl ServerRegistry {
         let price = pkg.price;
 
         Ok(RegistryEntry {
-            id: pkg.id,
+            id: pkg.id.clone(),
             manifest,
+            nodes: serde_json::from_value(pkg.nodes.clone()).unwrap_or_default(),
             versions: package_versions,
             status: match pkg.status {
                 WasmPackageStatus::Active => PackageStatus::Active,
@@ -885,6 +914,17 @@ impl ServerRegistry {
                     .or(wasm_package::Column::Description.contains(&pattern))
                     .or(wasm_package::Column::Id.contains(&pattern)),
             );
+        }
+
+        // Filter by category
+        if let Some(cat) = &filters.category {
+            if let Ok(cat_enum) = serde_json::from_value::<WasmPackageCategory>(serde_json::Value::String(cat.clone())) {
+                query = query.filter(
+                    sea_orm::Condition::any()
+                        .add(wasm_package::Column::PrimaryCategory.eq(cat_enum.clone()))
+                        .add(wasm_package::Column::SecondaryCategory.eq(cat_enum)),
+                );
+            }
         }
 
         // Get total count before pagination
@@ -963,6 +1003,8 @@ impl ServerRegistry {
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
+                    primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+                    secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
                     metadata: resolved_meta,
                 }
             })
@@ -1087,6 +1129,17 @@ impl ServerRegistry {
             );
         }
 
+        // Filter by category
+        if let Some(cat) = &filters.category {
+            if let Ok(cat_enum) = serde_json::from_value::<WasmPackageCategory>(serde_json::Value::String(cat.clone())) {
+                query = query.filter(
+                    sea_orm::Condition::any()
+                        .add(wasm_package::Column::PrimaryCategory.eq(cat_enum.clone()))
+                        .add(wasm_package::Column::SecondaryCategory.eq(cat_enum)),
+                );
+            }
+        }
+
         let total_count = query.clone().count(&self.db).await? as usize;
 
         query = match filters.sort_by {
@@ -1159,6 +1212,8 @@ impl ServerRegistry {
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
+                    primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+                    secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
                     metadata: resolved_meta,
                 }
             })
@@ -1332,6 +1387,8 @@ impl ServerRegistry {
                 homepage: Set(manifest.homepage.clone()),
                 repository: Set(manifest.repository.clone()),
                 keywords: Set(Some(manifest.keywords.clone())),
+                primary_category: Set(manifest.primary_category.as_ref().map(manifest_cat_to_db)),
+                secondary_category: Set(manifest.secondary_category.as_ref().map(manifest_cat_to_db)),
                 status: Set(WasmPackageStatus::Active),
                 visibility: Set(WasmPackageVisibility::Private),
                 verified: Set(false),
@@ -1339,7 +1396,7 @@ impl ServerRegistry {
                 wasm_path: Set(final_wasm_path.to_string()),
                 wasm_hash: Set(hash.clone()),
                 wasm_size: Set(size),
-                nodes: Set(serde_json::to_value(&manifest.nodes)?),
+                nodes: Set(serde_json::Value::Array(vec![])),
                 permissions: Set(serde_json::to_value(&manifest.permissions)?),
                 readme: Set(None),
                 price: Set(0),
@@ -1404,7 +1461,7 @@ impl ServerRegistry {
             wasm_path: Set(final_wasm_path.to_string()),
             wasm_hash: Set(hash),
             wasm_size: Set(size),
-            nodes: Set(serde_json::to_value(&manifest.nodes)?),
+            nodes: Set(serde_json::Value::Array(vec![])),
             release_notes: Set(None),
             min_flow_like_version: Set(None),
             yanked: Set(false),
@@ -1651,6 +1708,8 @@ impl ServerRegistry {
                 permissions: pkg.permissions,
                 price: pkg.price,
                 visibility: visibility_to_string(&pkg.visibility),
+                primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+                secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
                 created_at: chrono::DateTime::from_naive_utc_and_offset(
                     pkg.created_at,
                     chrono::Utc,
@@ -2008,6 +2067,8 @@ impl ServerRegistry {
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
+                    primary_category: pkg.primary_category.as_ref().map(|c| db_cat_to_string(c)),
+                    secondary_category: pkg.secondary_category.as_ref().map(|c| db_cat_to_string(c)),
                     metadata: None,
                 }
             })

@@ -61,10 +61,10 @@
 	"version": "0.0.1",
 	"license": "apache-2.0",
 	"dependencies": [
-		"api.alpha.flow-like.com:uhif41iq95mt43kjrt0fuk6z",
-		"api.alpha.flow-like.com:b144lkg2lzk5ipd0318bb7gp",
-		"api.alpha.flow-like.com:ie0qj609330pdy5ppixyh867",
-		"api.alpha.flow-like.com:ig8jb6cmhn6ntdiumqngm0ll"
+		"api.flow-like.com:uhif41iq95mt43kjrt0fuk6z",
+		"api.flow-like.com:b144lkg2lzk5ipd0318bb7gp",
+		"api.flow-like.com:ie0qj609330pdy5ppixyh867",
+		"api.flow-like.com:ig8jb6cmhn6ntdiumqngm0ll"
 	],
 	"dependency_tree_hash": "2fd9ff95ae0bda3d738401bc634947919e232925ee586780f433f922d2579559",
 	"created": "2025-05-31T14:01:49.650+00:00",

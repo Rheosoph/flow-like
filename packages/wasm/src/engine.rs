@@ -2,6 +2,7 @@
 //!
 //! The engine is the core compilation and configuration unit for wasmtime.
 
+use crate::abi::WasmNodeDefinition;
 use crate::aot_cache::AotCache;
 use crate::error::{WasmError, WasmResult};
 use crate::limits::WasmSecurityConfig;
@@ -149,6 +150,11 @@ impl WasmConfig {
         config.wasm_exceptions(true);
         config.wasm_function_references(true);
 
+        // Enable SIMD proposals and wide arithmetic
+        config.wasm_simd(true);
+        config.wasm_relaxed_simd(true);
+        config.wasm_wide_arithmetic(true);
+
         // Memory settings
         config.memory_init_cow(true);
 
@@ -185,6 +191,8 @@ pub struct WasmEngine {
     epoch_ticker: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// AOT disk cache for precompiled artifacts
     aot_cache: Option<AotCache>,
+    /// Cached node definitions (wasm_hash -> definitions)
+    definitions_cache: DashMap<String, Vec<WasmNodeDefinition>>,
 }
 
 impl WasmEngine {
@@ -205,6 +213,7 @@ impl WasmEngine {
             component_cache: DashMap::new(),
             epoch_ticker: Arc::new(RwLock::new(None)),
             aot_cache,
+            definitions_cache: DashMap::new(),
         })
     }
 
@@ -221,6 +230,14 @@ impl WasmEngine {
     /// Get configuration
     pub fn config(&self) -> &WasmConfig {
         &self.config
+    }
+
+    pub fn get_cached_definitions(&self, wasm_hash: &str) -> Option<Vec<WasmNodeDefinition>> {
+        self.definitions_cache.get(wasm_hash).map(|v| v.clone())
+    }
+
+    pub fn cache_definitions(&self, wasm_hash: String, definitions: Vec<WasmNodeDefinition>) {
+        self.definitions_cache.insert(wasm_hash, definitions);
     }
 
     /// AOT-compile a raw `.wasm` binary into serialized bytes.

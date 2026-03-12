@@ -56,6 +56,20 @@ export function useSurfaceManager() {
 					break;
 				}
 
+				case "setCanvasSettings": {
+					const existing = next.get(message.surfaceId);
+					if (!existing) break;
+
+					next.set(message.surfaceId, {
+						...existing,
+						canvasSettings: {
+							...existing.canvasSettings,
+							...message.canvasSettings,
+						},
+					});
+					break;
+				}
+
 				case "surfaceUpdate": {
 					const existing = next.get(message.surfaceId);
 					if (existing) {

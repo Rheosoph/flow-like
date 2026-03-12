@@ -2,6 +2,7 @@
 
 use super::sea_orm_active_enums::WasmPackageStatus;
 use super::sea_orm_active_enums::WasmPackageVisibility;
+use super::sea_orm_active_enums::WasmPackageCategory;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub repository: Option<String>,
     pub keywords: Option<Vec<String>>,
+    #[sea_orm(column_name = "primaryCategory")]
+    pub primary_category: Option<WasmPackageCategory>,
+    #[sea_orm(column_name = "secondaryCategory")]
+    pub secondary_category: Option<WasmPackageCategory>,
     pub status: WasmPackageStatus,
     pub verified: bool,
     #[sea_orm(column_name = "downloadCount")]

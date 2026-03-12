@@ -193,12 +193,9 @@ impl NodeLogic for BuildOpenAiNode {
             .and_then(|json| json.as_str().map(ToOwned::to_owned))
             .unwrap_or_default();
 
-        let model_id_pin_id: Option<String> = node
-            .get_pin_by_name("model_id")
-            .map(|p| p.id.clone());
-        let version_pin_id: Option<String> = node
-            .get_pin_by_name("version")
-            .map(|p| p.id.clone());
+        let model_id_pin_id: Option<String> =
+            node.get_pin_by_name("model_id").map(|p| p.id.clone());
+        let version_pin_id: Option<String> = node.get_pin_by_name("version").map(|p| p.id.clone());
 
         // Drop borrows before mutating
         let has_model_id = model_id_pin_id.is_some();

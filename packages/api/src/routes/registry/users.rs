@@ -17,12 +17,14 @@ pub struct UpdateUserRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct InviteUserRequest {
     pub invitee_id: String,
     pub permission: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageUserResponse {
     pub id: String,
     pub user_id: String,
@@ -34,6 +36,7 @@ pub struct PackageUserResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct InvitationResponse {
     pub id: String,
     pub package_id: String,

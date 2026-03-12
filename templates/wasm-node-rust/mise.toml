@@ -2,21 +2,24 @@
 rust = "latest"
 
 [tasks.setup]
-description = "Install wasm32 target"
-run = "rustup target add wasm32-unknown-unknown"
+description = "Install wasm32-wasip2 target"
+run = "rustup target add wasm32-wasip2"
 
 [tasks.build]
-description = "Build the WASM node"
-run = "cargo build --release --target wasm32-unknown-unknown"
-
-[tasks.build-examples]
-description = "Build all example nodes"
-run = "cargo build --release --target wasm32-unknown-unknown --examples"
+description = "Build the WASM component"
+depends = ["setup"]
+run = """
+cargo build --release
+cp target/wasm32-wasip2/release/flow_like_wasm_node_template.wasm node.wasm
+"""
 
 [tasks.test]
-description = "Run unit tests"
-run = "cargo test"
+description = "Run unit tests (native)"
+run = "cargo test --target $(rustc -vV | grep host | awk '{print $2}')"
 
 [tasks.clean]
 description = "Clean build artifacts"
-run = "cargo clean"
+run = """
+cargo clean
+rm -f node.wasm
+"""

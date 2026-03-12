@@ -1,0 +1,208 @@
+[
+  {
+    "modelSlug": "gemini-3-flash-reasoning",
+    "modelName": "Gemini 3 Flash Preview (Reasoning)",
+    "missingFields": [
+      "reasoning (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "step-3-5-flash",
+    "modelName": "Step 3.5 Flash",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gpt-5-4-pro",
+    "modelName": "GPT-5.4 Pro (xhigh)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "speed (no data)"
+    ]
+  },
+  {
+    "modelSlug": "llama-3-2-instruct-3b",
+    "modelName": "Llama 3.2 Instruct 3B",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "function_calling (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-3-4b",
+    "modelName": "Gemma 3 4B Instruct",
+    "missingFields": [
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "qwen2-5-coder-7b-instruct",
+    "modelName": "Qwen2.5 Coder Instruct 7B ",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "gpt-4-5",
+    "modelName": "GPT-4.5 (Preview)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-3-12b",
+    "modelName": "Gemma 3 12B Instruct",
+    "missingFields": [
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "deepseek-r1-distill-llama-8b",
+    "modelName": "DeepSeek R1 Distill Llama 8B",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "deepseek-r1-qwen3-8b",
+    "modelName": "DeepSeek R1 0528 Qwen3 8B",
+    "missingFields": [
+      "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "claude-opus-4-6-adaptive",
+    "modelName": "Claude Opus 4.6 (Adaptive Reasoning, Max Effort)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-3-1b",
+    "modelName": "Gemma 3 1B Instruct",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "o3-mini-high",
+    "modelName": "o3-mini (high)",
+    "missingFields": [
+      "reasoning (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "qwen3-4b-instruct-reasoning",
+    "modelName": "Qwen3 4B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gemini-3-1-flash-lite-preview",
+    "modelName": "Gemini 3.1 Flash-Lite Preview",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "mercury-2",
+    "modelName": "Mercury 2",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "minimax-m2",
+    "modelName": "MiniMax-M2",
+    "missingFields": [
+      "reasoning (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "minimax-m2-5",
+    "modelName": "MiniMax-M2.5",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "grok-4-1-fast-reasoning",
+    "modelName": "Grok 4.1 Fast (Reasoning)",
+    "missingFields": [
+      "reasoning (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "deephermes-3-llama-3-1-8b-preview",
+    "modelName": "DeepHermes 3 - Llama-3.1 8B Preview (Non-reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "gpt-4o-mini",
+    "modelName": "GPT-4o mini",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "qwen-2-5-max",
+    "modelName": "Qwen2.5 Max",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "function_calling (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "claude-sonnet-4-6-adaptive",
+    "modelName": "Claude Sonnet 4.6 (Adaptive Reasoning, Max Effort)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  }
+]

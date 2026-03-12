@@ -48,6 +48,9 @@ export const enCommon = {
 	"footer.privacy": "Privacy Policy",
 	"footer.legal": "Legal Notice",
 	"footer.dataDeletion": "Data Deletion",
+	"footer.security": "Security",
+	"footer.dpa": "DPA",
+	"footer.subprocessors": "Sub-processors",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

@@ -3,7 +3,7 @@
 //! Provides types and functionality for a node package registry system.
 //! Supports local development registries and remote shared registries.
 
-use crate::manifest::PackageManifest;
+use crate::manifest::{PackageManifest, PackageNodeEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -71,6 +71,9 @@ pub struct RegistryEntry {
     pub id: String,
     /// Package manifest (latest version)
     pub manifest: PackageManifest,
+    /// Nodes extracted from the WASM binary
+    #[serde(default)]
+    pub nodes: Vec<PackageNodeEntry>,
     /// All available versions
     pub versions: Vec<PackageVersion>,
     /// Package status
@@ -145,6 +148,10 @@ pub struct PackageSummary {
     pub price: i64,
     #[serde(default)]
     pub visibility: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_category: Option<String>,
 }
 
 /// Registry configuration
@@ -312,6 +319,20 @@ pub struct DownloadRequest {
     pub version: Option<String>,
 }
 
+/// Resolved metadata summary for a single language (icon, thumbnail, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct MetaSummary {
+    pub lang: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DownloadResponse {
@@ -324,6 +345,9 @@ pub struct DownloadResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
     pub manifest: PackageManifest,
+    /// Resolved package metadata (icon, thumbnail, localized name/description)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
 }
 
 /// Registry API error
@@ -353,6 +377,8 @@ pub struct InstalledVersion {
     pub wasm_path: PathBuf,
     pub installed_at: chrono::DateTime<chrono::Utc>,
     pub manifest: PackageManifest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +391,8 @@ pub struct InstalledPackage {
     pub manifest: PackageManifest,
     #[serde(default)]
     pub versions: HashMap<String, InstalledVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
 }
 
 impl InstalledPackage {
@@ -446,6 +474,7 @@ mod tests {
         let entry = RegistryEntry {
             id: "test.package".to_string(),
             manifest,
+            nodes: vec![],
             versions: vec![
                 PackageVersion {
                     version: "0.9.0".to_string(),
@@ -496,6 +525,7 @@ mod tests {
         let entry = RegistryEntry {
             id: "test.package".to_string(),
             manifest,
+            nodes: vec![],
             versions: vec![
                 PackageVersion {
                     version: "0.9.0".to_string(),
@@ -643,6 +673,8 @@ mod tests {
                 verified: true,
                 price: 0,
                 visibility: "public".to_string(),
+                primary_category: None,
+                secondary_category: None,
             }],
             total_count: 1,
             offset: 0,

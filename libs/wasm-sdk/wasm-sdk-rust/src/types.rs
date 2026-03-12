@@ -90,20 +90,40 @@ impl PackageNodes {
         self
     }
 
-    /// Pack nodes into WASM return format
-    /// Outputs a JSON array of node definitions
-    pub fn to_wasm(&self) -> i64 {
-        // Serialize just the nodes array, not the wrapper struct
-        let json = serde_json::to_vec(&self.nodes).unwrap_or_default();
-        let len = json.len() as u32;
-        let ptr = alloc_result_buffer(len);
-
-        unsafe {
-            std::ptr::copy_nonoverlapping(json.as_ptr(), ptr as *mut u8, len as usize);
-        }
-
-        ((ptr as i64) << 32) | (len as i64)
+    /// Serialize nodes into JSON string for Component Model return
+    pub fn to_wasm(&self) -> String {
+        serde_json::to_string(&self.nodes).unwrap_or_default()
     }
+}
+
+/// Data type constants — the kind of data a pin carries.
+///
+/// These match the core `VariableType` enum. Use them as the `data_type`
+/// argument when creating pins.
+#[allow(non_snake_case)]
+pub mod DataType {
+    pub const EXEC: &str = "Exec";
+    pub const STRING: &str = "String";
+    pub const I64: &str = "I64";
+    pub const F64: &str = "F64";
+    pub const BOOL: &str = "Bool";
+    pub const GENERIC: &str = "Generic";
+    pub const BYTES: &str = "Bytes";
+    pub const DATE: &str = "Date";
+    pub const PATH_BUF: &str = "PathBuf";
+    pub const STRUCT: &str = "Struct";
+}
+
+/// Value type constants — how the data is contained (scalar vs collection).
+///
+/// These match the core `ValueType` enum. Use them with
+/// [`PinDefinition::with_value_type`].
+#[allow(non_snake_case)]
+pub mod ValueType {
+    pub const NORMAL: &str = "Normal";
+    pub const ARRAY: &str = "Array";
+    pub const HASH_MAP: &str = "HashMap";
+    pub const HASH_SET: &str = "HashSet";
 }
 
 /// Pin definition
@@ -124,6 +144,14 @@ pub struct PinDefinition {
     pub valid_values: Option<Vec<String>>,
     #[serde(default)]
     pub range: Option<(f64, f64)>,
+    #[serde(default)]
+    pub step: Option<f64>,
+    #[serde(default)]
+    pub sensitive: Option<bool>,
+    #[serde(default)]
+    pub enforce_schema: Option<bool>,
+    #[serde(default)]
+    pub enforce_generic_value_type: Option<bool>,
 }
 
 impl PinDefinition {
@@ -139,6 +167,10 @@ impl PinDefinition {
             schema: None,
             valid_values: None,
             range: None,
+            step: None,
+            sensitive: None,
+            enforce_schema: None,
+            enforce_generic_value_type: None,
         }
     }
 
@@ -154,6 +186,10 @@ impl PinDefinition {
             schema: None,
             valid_values: None,
             range: None,
+            step: None,
+            sensitive: None,
+            enforce_schema: None,
+            enforce_generic_value_type: None,
         }
     }
 
@@ -176,12 +212,12 @@ impl PinDefinition {
     /// attach it to this pin in one step.
     ///
     /// ```rust,ignore
-    /// use flow_like_wasm_sdk::{JsonSchema, PinDefinition, PinType};
+    /// use flow_like_wasm_sdk::{JsonSchema, PinDefinition, DataType};
     ///
     /// #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
     /// struct Config { threshold: f64, label: String }
     ///
-    /// let pin = PinDefinition::input("config", "Config", "Node config", PinType::STRUCT)
+    /// let pin = PinDefinition::input("config", "Config", "Node config", DataType::STRUCT)
     ///     .with_schema_type::<Config>();
     /// ```
     pub fn with_schema_type<T: JsonSchema>(self) -> Self {
@@ -197,6 +233,26 @@ impl PinDefinition {
 
     pub fn with_range(mut self, min: f64, max: f64) -> Self {
         self.range = Some((min, max));
+        self
+    }
+
+    pub fn with_step(mut self, step: f64) -> Self {
+        self.step = Some(step);
+        self
+    }
+
+    pub fn with_sensitive(mut self, sensitive: bool) -> Self {
+        self.sensitive = Some(sensitive);
+        self
+    }
+
+    pub fn with_enforce_schema(mut self, enforce: bool) -> Self {
+        self.enforce_schema = Some(enforce);
+        self
+    }
+
+    pub fn with_enforce_generic_value_type(mut self, enforce: bool) -> Self {
+        self.enforce_generic_value_type = Some(enforce);
         self
     }
 }
@@ -280,24 +336,15 @@ impl ExecutionResult {
         self
     }
 
-    /// Pack result into WASM return format (ptr << 32 | len)
-    pub fn to_wasm(&self) -> i64 {
-        let json = serde_json::to_vec(self).unwrap_or_default();
-        let len = json.len() as u32;
-        let ptr = alloc_result_buffer(len);
-
-        // Copy data to buffer
-        unsafe {
-            std::ptr::copy_nonoverlapping(json.as_ptr(), ptr as *mut u8, len as usize);
-        }
-
-        // Pack pointer and length
-        ((ptr as i64) << 32) | (len as i64)
+    /// Serialize result into JSON string for Component Model return
+    pub fn to_wasm(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
     }
 }
 
-/// Log levels
+/// Log levels (matches core `flow_like::flow::execution::LogLevel`)
 #[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
     Debug = 0,
     Info = 1,
@@ -306,40 +353,7 @@ pub enum LogLevel {
     Fatal = 4,
 }
 
-// Result buffer for returning data to host
-static mut RESULT_BUFFER: Vec<u8> = Vec::new();
 
-fn alloc_result_buffer(size: u32) -> u32 {
-    unsafe {
-        RESULT_BUFFER.clear();
-        RESULT_BUFFER.reserve(size as usize);
-        RESULT_BUFFER.set_len(size as usize);
-        RESULT_BUFFER.as_ptr() as u32
-    }
-}
-
-/// Memory allocation for host to write data
-#[no_mangle]
-pub extern "C" fn alloc(size: i32) -> i32 {
-    let mut buf: Vec<u8> = Vec::with_capacity(size as usize);
-    let ptr = buf.as_mut_ptr();
-    std::mem::forget(buf);
-    ptr as i32
-}
-
-/// Memory deallocation
-#[no_mangle]
-pub extern "C" fn dealloc(ptr: i32, size: i32) {
-    unsafe {
-        let _ = Vec::from_raw_parts(ptr as *mut u8, size as usize, size as usize);
-    }
-}
-
-/// Get ABI version
-#[no_mangle]
-pub extern "C" fn get_abi_version() -> i32 {
-    ABI_VERSION as i32
-}
 #[cfg(test)]
 mod tests {
     use super::*;

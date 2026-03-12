@@ -8,6 +8,9 @@ export interface NetworkPermissions {
 	httpEnabled: boolean;
 	allowedHosts: string[];
 	websocketEnabled: boolean;
+	tcpEnabled: boolean;
+	udpEnabled: boolean;
+	dnsEnabled: boolean;
 }
 
 export interface FileSystemPermissions {
@@ -30,6 +33,10 @@ export enum MemoryTier {
 	Standard = "standard",
 	Heavy = "heavy",
 	Intensive = "intensive",
+	Large = "large",
+	Huge = "huge",
+	Extreme = "extreme",
+	Maximum = "maximum",
 }
 
 export enum TimeoutTier {
@@ -37,7 +44,44 @@ export enum TimeoutTier {
 	Standard = "standard",
 	Extended = "extended",
 	LongRunning = "long_running",
+	VeryLong = "very_long",
+	Maximum = "maximum",
 }
+
+export type WasmPackageCategory =
+	| "DOCUMENT_PROCESSING"
+	| "DATA_TRANSFORMATION"
+	| "WORKFLOW_AUTOMATION"
+	| "COMMUNICATION"
+	| "ANALYTICS_REPORTING"
+	| "FINANCE_BILLING"
+	| "COMPLIANCE_REGULATORY"
+	| "HR_PEOPLE"
+	| "AI_ML"
+	| "INTEGRATION_CONNECTORS"
+	| "SECURITY_IDENTITY"
+	| "DEVOPS"
+	| "IOT_INDUSTRIAL"
+	| "ROBOTICS_PHYSICAL_AI"
+	| "GAMING_SIMULATION"
+	| "HEALTHCARE"
+	| "VETERINARY"
+	| "LEGAL"
+	| "MANUFACTURING"
+	| "AGRICULTURE"
+	| "REAL_ESTATE"
+	| "LOGISTICS"
+	| "ENERGY"
+	| "CONSTRUCTION_TRADES"
+	| "EDUCATION"
+	| "GOVERNMENT_DEFENSE"
+	| "ECOMMERCE"
+	| "INSURANCE"
+	| "TELECOM"
+	| "SCIENTIFIC_ENGINEERING"
+	| "GEOSPATIAL"
+	| "MEDIA_CONTENT"
+	| "OTHER";
 
 export interface PackagePermissions {
 	memory: MemoryTier;
@@ -115,8 +159,9 @@ export interface PackageManifest {
 	repository?: string;
 	homepage?: string;
 	permissions: PackagePermissions;
-	nodes: PackageNodeEntry[];
 	keywords: string[];
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
 	minFlowLikeVersion?: string;
 	wasmPath?: string;
 	wasmHash?: string;
@@ -150,6 +195,7 @@ export interface PackageVersion {
 export interface RegistryEntry {
 	id: string;
 	manifest: PackageManifest;
+	nodes: PackageNodeEntry[];
 	versions: PackageVersion[];
 	status: PackageStatus;
 	downloadCount: number;
@@ -180,6 +226,8 @@ export interface PackageSummary {
 	verified: boolean;
 	price: number;
 	visibility: string;
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
 	metadata?: MetaSummary;
 }
 
@@ -197,6 +245,7 @@ export interface InstalledPackage {
 	installedAt: string;
 	wasmPath: string;
 	manifest: PackageManifest;
+	metadata?: MetaSummary;
 }
 
 export interface SearchFilters {
@@ -211,6 +260,8 @@ export interface SearchFilters {
 	offset?: number;
 	limit?: number;
 	language?: string;
+	includeOwn?: boolean;
+	ownedOnly?: boolean;
 }
 
 export interface PackageUpdate {
@@ -248,6 +299,8 @@ export interface PackageDetails {
 	nodes: PackageNodeEntry[];
 	permissions: PackagePermissions;
 	price: number;
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
 	createdAt: string;
 	updatedAt: string;
 	publishedAt?: string;

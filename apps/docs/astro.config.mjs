@@ -164,6 +164,10 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 											label: "Extraction & Structured Output",
 											slug: "topics/genai/extraction",
 										},
+										{
+											label: "Prompt Templates",
+											slug: "topics/genai/prompt-templates",
+										},
 									],
 								},
 								{
@@ -220,6 +224,10 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 										{
 											label: "Overview",
 											slug: "topics/document-processing/overview",
+										},
+										{
+											label: "Summarization Strategies",
+											slug: "topics/document-processing/summarization-strategies",
 										},
 									],
 								},
@@ -399,10 +407,23 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 							collapsed: true,
 							items: [
 								{ label: "Rust", slug: "dev/wasm-nodes/rust" },
+								{ label: "Go", slug: "dev/wasm-nodes/go" },
 								{ label: "TypeScript", slug: "dev/wasm-nodes/typescript" },
 								{ label: "Python", slug: "dev/wasm-nodes/python" },
-								{ label: "Go", slug: "dev/wasm-nodes/go" },
 								{ label: "C++", slug: "dev/wasm-nodes/cpp" },
+								{ label: "Zig", slug: "dev/wasm-nodes/zig" },
+								{ label: "Swift", slug: "dev/wasm-nodes/swift" },
+								{ label: "C#", slug: "dev/wasm-nodes/csharp" },
+								{
+									label: "AssemblyScript",
+									slug: "dev/wasm-nodes/assemblyscript",
+								},
+								{ label: "Java", slug: "dev/wasm-nodes/java" },
+								{ label: "Kotlin", slug: "dev/wasm-nodes/kotlin" },
+								{ label: "Lua", slug: "dev/wasm-nodes/lua" },
+								{ label: "Grain", slug: "dev/wasm-nodes/grain" },
+								{ label: "MoonBit", slug: "dev/wasm-nodes/moonbit" },
+								{ label: "Nim", slug: "dev/wasm-nodes/nim" },
 							],
 						},
 						{

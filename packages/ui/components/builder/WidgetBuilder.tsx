@@ -1034,6 +1034,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
+			if (message.type === "setCanvasSettings") {
+				if (message.surfaceId !== surfaceId) return;
+
+				setPresignedCanvasSettings((prev) => ({
+					...prev,
+					...message.canvasSettings,
+				}));
+				return;
+			}
+
 			if (message.type !== "upsertElement") return;
 
 			const { element_id: elementId, value } = message;

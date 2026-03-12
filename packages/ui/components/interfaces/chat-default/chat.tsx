@@ -10,7 +10,6 @@ import {
 	useMemo,
 	useRef,
 	useState,
-	useTransition,
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import type { IEventPayloadChat } from "../../../lib";
@@ -89,17 +88,19 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
-		const [, startMessagesTransition] = useTransition();
 
 		const chatItems = useMemo(() => {
-			return localMessages
+			const filtered = currentMessage
+				? localMessages.filter((msg) => msg.id !== currentMessage.id)
+				: localMessages;
+			return filtered
 				.map((msg) => ({
 					type: "message" as const,
 					data: msg,
 					timestamp: msg.timestamp,
 				}))
 				.sort((a, b) => a.timestamp - b.timestamp);
-		}, [localMessages]);
+		}, [localMessages, currentMessage]);
 
 		// Interactions are rendered separately after currentMessage to avoid ordering issues
 		const interactionItems = useMemo<ChatItem[]>(() => {
@@ -152,11 +153,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setSendingContent("");
 		}, [sessionId]);
 
-		// Sync external messages with local state
+		// Sync external messages with local state (no useTransition to avoid flash gap)
 		useEffect(() => {
-			startMessagesTransition(() => {
-				setLocalMessages(messages);
-			});
+			setLocalMessages(messages);
 
 			// Clear optimistic sending state when the user message appears in DB
 			if (isSendingRef.current) {
@@ -166,7 +165,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					setSendingContent("");
 				}
 			}
+		}, [messages]);
 
+		// Update active tools based on last user message and available tools
+		useEffect(() => {
 			const lastUserMessage = messages
 				.slice()
 				.reverse()
@@ -184,7 +186,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 
 			setDefaultActiveTools(config?.default_tools ?? []);
-		}, [messages, config?.tools]);
+		}, [messages, config?.tools, config?.default_tools]);
 
 		// Initial scroll to bottom when messages first load
 		useEffect(() => {
@@ -397,11 +399,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									</div>
 								</div>
 							)}
-						{currentMessage &&
-							!localMessages.some((m) => m.id === currentMessage.id) && (
+						{currentMessage && (
 								<div
 									className="w-full max-w-screen-lg px-4 relative"
-									key={currentMessage.id}
+									key={`msg-${currentMessage.id}`}
 								>
 									<PuffLoader
 										color={resolvedTheme === "dark" ? "white" : "black"}

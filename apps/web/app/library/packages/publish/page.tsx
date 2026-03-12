@@ -3,7 +3,6 @@
 import {
 	MemoryTier,
 	type PackageManifest,
-	type PackageNodeEntry,
 	TimeoutTier,
 	useBackend,
 	useInvoke,
@@ -121,7 +120,6 @@ export default function PublishPackagePage() {
 		name: string;
 		data: Uint8Array;
 	} | null>(null);
-	const [detectedNodes, setDetectedNodes] = useState<PackageNodeEntry[]>([]);
 	const [formData, setFormData] = useState<PublishFormData>({
 		id: "",
 		name: "",
@@ -218,6 +216,9 @@ export default function PublishPackagePage() {
 							? formData.allowedHosts.split(",").map((h) => h.trim())
 							: [],
 						websocketEnabled: formData.websocketEnabled,
+						tcpEnabled: false,
+						udpEnabled: false,
+						dnsEnabled: false,
 					},
 					filesystem: {
 						nodeStorage: formData.nodeStorage,
@@ -232,7 +233,6 @@ export default function PublishPackagePage() {
 					a2ui: formData.a2ui,
 					models: formData.models,
 				},
-				nodes: detectedNodes,
 				keywords: formData.keywords
 					? formData.keywords.split(",").map((k) => k.trim())
 					: [],
@@ -574,6 +574,10 @@ export default function PublishPackagePage() {
 												<SelectItem value="intensive">
 													Intensive (256 MB)
 												</SelectItem>
+												<SelectItem value="large">Large (512 MB)</SelectItem>
+												<SelectItem value="huge">Huge (1 GB)</SelectItem>
+												<SelectItem value="extreme">Extreme (2 GB)</SelectItem>
+												<SelectItem value="maximum">Maximum (4 GB)</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -597,6 +601,12 @@ export default function PublishPackagePage() {
 												<SelectItem value="extended">Extended (60s)</SelectItem>
 												<SelectItem value="long_running">
 													Long Running (5min)
+												</SelectItem>
+												<SelectItem value="very_long">
+													Very Long (10min)
+												</SelectItem>
+												<SelectItem value="maximum">
+													Maximum (30min)
 												</SelectItem>
 											</SelectContent>
 										</Select>

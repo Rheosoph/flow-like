@@ -136,7 +136,7 @@ fn resolve_default_hub() -> String {
         return format!("{}://{}", protocol, domain);
     }
 
-    String::from("https://api.alpha.flow-like.com")
+    String::from("https://api.flow-like.com")
 }
 
 #[derive(Serialize, Deserialize)]

@@ -48,14 +48,38 @@ class PinType:
     BOOL = "Bool"
     GENERIC = "Generic"
     BYTES = "Bytes"
+    DATE = "Date"
+    PATH_BUF = "PathBuf"
+    STRUCT = "Struct"
 
-    _ALL = {EXEC, STRING, I64, F64, BOOL, GENERIC, BYTES}
+    _ALL = {EXEC, STRING, I64, F64, BOOL, GENERIC, BYTES, DATE, PATH_BUF, STRUCT}
 
     @classmethod
     def validate(cls, data_type: str) -> str:
         if data_type not in cls._ALL:
             raise ValueError(f"Invalid pin data type: {data_type}. Must be one of {cls._ALL}")
         return data_type
+
+
+class ValueType:
+    """How the data is contained (scalar vs collection)."""
+    NORMAL = "Normal"
+    ARRAY = "Array"
+    HASH_MAP = "HashMap"
+    HASH_SET = "HashSet"
+
+    _ALL = {NORMAL, ARRAY, HASH_MAP, HASH_SET}
+
+    @classmethod
+    def validate(cls, value_type: str) -> str:
+        if value_type not in cls._ALL:
+            raise ValueError(f"Invalid value type: {value_type}. Must be one of {cls._ALL}")
+        return value_type
+
+
+# Alias: PinType was confusingly named (in core, PinType means Input/Output).
+# Prefer DataType for clarity.
+DataType = PinType
 
 
 def _humanize(name: str) -> str:
@@ -94,6 +118,10 @@ class PinDefinition:
     schema: str | None = None
     valid_values: list[str] | None = None
     range: tuple[float, float] | None = None
+    step: float | None = None
+    sensitive: bool | None = None
+    enforce_schema: bool | None = None
+    enforce_generic_value_type: bool | None = None
 
     @classmethod
     def input_pin(
@@ -158,6 +186,7 @@ class PinDefinition:
         return self
 
     def with_value_type(self, value_type: str) -> PinDefinition:
+        ValueType.validate(value_type)
         self.value_type = value_type
         return self
 
@@ -171,6 +200,22 @@ class PinDefinition:
 
     def with_range(self, min_val: float, max_val: float) -> PinDefinition:
         self.range = (min_val, max_val)
+        return self
+
+    def with_step(self, step: float) -> PinDefinition:
+        self.step = step
+        return self
+
+    def with_sensitive(self, sensitive: bool = True) -> PinDefinition:
+        self.sensitive = sensitive
+        return self
+
+    def with_enforce_schema(self, enforce: bool = True) -> PinDefinition:
+        self.enforce_schema = enforce
+        return self
+
+    def with_enforce_generic_value_type(self, enforce: bool = True) -> PinDefinition:
+        self.enforce_generic_value_type = enforce
         return self
 
     def to_dict(self) -> dict[str, Any]:
@@ -191,6 +236,14 @@ class PinDefinition:
             d["valid_values"] = self.valid_values
         if self.range is not None:
             d["range"] = list(self.range)
+        if self.step is not None:
+            d["step"] = self.step
+        if self.sensitive is not None:
+            d["sensitive"] = self.sensitive
+        if self.enforce_schema is not None:
+            d["enforce_schema"] = self.enforce_schema
+        if self.enforce_generic_value_type is not None:
+            d["enforce_generic_value_type"] = self.enforce_generic_value_type
         return d
 
 

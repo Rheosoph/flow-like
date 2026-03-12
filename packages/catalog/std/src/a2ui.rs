@@ -8,6 +8,7 @@ pub mod instantiate_widget;
 pub mod push_to_container;
 pub mod remove_from_container;
 pub mod request_elements;
+pub mod set_surface_custom_css;
 pub mod state;
 pub mod surface_update;
 pub mod upsert_element;

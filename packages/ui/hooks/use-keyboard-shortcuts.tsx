@@ -1,7 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Redo2Icon, Undo2Icon, XIcon } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { type RefObject, useCallback, useEffect } from "react";
 import { toastError, toastSuccess } from "../lib/messages";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
@@ -13,7 +13,7 @@ interface UseKeyboardShortcutsProps {
 	version: [number, number, number] | undefined;
 	appId: string;
 	boardId: string;
-	mousePosition: { x: number; y: number };
+	mousePositionRef: RefObject<{ x: number; y: number }>;
 	placeNode: (
 		node: INode,
 		position?: { x: number; y: number },
@@ -28,7 +28,7 @@ export function useKeyboardShortcuts({
 	version,
 	appId,
 	boardId,
-	mousePosition,
+	mousePositionRef,
 	placeNode,
 	undo,
 	redo,
@@ -47,12 +47,13 @@ export function useKeyboardShortcuts({
 
 	const placeNodeShortcut = useCallback(
 		async (node: INode) => {
+			const mp = mousePositionRef.current;
 			await placeNode(node, {
-				x: mousePosition.x,
-				y: mousePosition.y,
+				x: mp.x,
+				y: mp.y,
 			});
 		},
-		[mousePosition, placeNode],
+		[placeNode],
 	);
 
 	const shortcutHandler = useCallback(

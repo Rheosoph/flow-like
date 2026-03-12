@@ -1,184 +1,185 @@
-# flow-like-wasm-sdk (Rust)
+# flow-like-wasm-sdk
 
-Rust SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes. Rust compiles to highly optimized, compact WASM binaries with zero runtime overhead.
+Rust SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes
+using the Component Model (`wasm32-wasip2`). Produces compact, zero-overhead binaries.
 
 ## Setup
 
-Add to your `Cargo.toml`:
-
 ```toml
-[dependencies]
-flow-like-wasm-sdk = { path = "../../libs/wasm-sdk/wasm-sdk-rust" }
-# or once published:
-# flow-like-wasm-sdk = "0.1"
-
 [lib]
 crate-type = ["cdylib"]
+
+[dependencies]
+flow-like-wasm-sdk = "0.2"
 ```
 
-Install the WASM target:
+Add a `.cargo/config.toml`:
+
+```toml
+[build]
+target = "wasm32-wasip2"
+```
+
+Install the target:
 
 ```bash
-rustup target add wasm32-wasip1
+rustup target add wasm32-wasip2
 ```
 
-## Quick Start — Single Node (macro)
+## Quick Start
+
+Define nodes with `#[register_node]` + `impl WasmNode`, then call `wasm_main!()`:
 
 ```rust
 use flow_like_wasm_sdk::*;
 
-node! {
-    name: "uppercase",
-    friendly_name: "Uppercase",
-    description: "Converts a string to uppercase",
-    category: "Text/Transform",
+#[register_node]
+#[derive(Default)]
+pub struct UppercaseNode;
 
-    inputs: {
-        exec: Exec,
-        text: String,
-    },
+impl WasmNode for UppercaseNode {
+    fn get_node(&self) -> NodeDefinition {
+        let mut node = NodeDefinition::new(
+            "uppercase", "Uppercase", "Converts text to uppercase", "Text/Transform",
+        );
+        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
+        node.add_pin(
+            PinDefinition::input("text", "Text", "Input text", "String")
+                .with_default(json!("")),
+        );
+        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
+        node.add_pin(PinDefinition::output("result", "Result", "Uppercased text", "String"));
+        node
+    }
 
-    outputs: {
-        exec_out: Exec,
-        result: String,
-    },
+    fn run(&self, mut ctx: Context) -> ExecutionResult {
+        let text = ctx.get_string("text").unwrap_or_default();
+        ctx.set_output("result", text.to_uppercase());
+        ctx.activate_exec("exec_out");
+        ctx.success()
+    }
 }
 
-run_node!(handle_run);
-
-fn handle_run(mut ctx: Context) -> ExecutionResult {
-    let text = ctx.get_string("text").unwrap_or_default();
-    ctx.set_output("result", text.to_uppercase());
-    ctx.success("exec_out")
-}
+wasm_main!();
 ```
 
-## Quick Start — Node Package (multiple nodes)
+Add as many `#[register_node]` structs as you like — they're auto-discovered at
+startup via the `inventory` crate. No manual routing needed.
+
+## Multi-Node Package
 
 ```rust
 use flow_like_wasm_sdk::*;
 
-package! {
-    nodes: [
-        {
-            name: "add",
-            friendly_name: "Add",
-            description: "Adds two integers",
-            category: "Math/Arithmetic",
-            inputs:  { exec: Exec, a: I64 = 0, b: I64 = 0 },
-            outputs: { exec_out: Exec, result: I64 },
-            run: |mut ctx| {
-                let a = ctx.get_i64("a").unwrap_or(0);
-                let b = ctx.get_i64("b").unwrap_or(0);
-                ctx.set_output("result", a + b);
-                ctx.success("exec_out")
-            }
-        },
-        {
-            name: "subtract",
-            friendly_name: "Subtract",
-            description: "Subtracts two integers",
-            category: "Math/Arithmetic",
-            inputs:  { exec: Exec, a: I64 = 0, b: I64 = 0 },
-            outputs: { exec_out: Exec, result: I64 },
-            run: |mut ctx| {
-                let a = ctx.get_i64("a").unwrap_or(0);
-                let b = ctx.get_i64("b").unwrap_or(0);
-                ctx.set_output("result", a - b);
-                ctx.success("exec_out")
-            }
-        }
-    ]
+#[register_node]
+#[derive(Default)]
+pub struct AddNode;
+
+impl WasmNode for AddNode {
+    fn get_node(&self) -> NodeDefinition {
+        let mut node = NodeDefinition::new("add", "Add", "Adds two integers", "Math");
+        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
+        node.add_pin(PinDefinition::input("a", "A", "First operand", "I64").with_default(json!(0)));
+        node.add_pin(PinDefinition::input("b", "B", "Second operand", "I64").with_default(json!(0)));
+        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
+        node.add_pin(PinDefinition::output("result", "Result", "Sum", "I64"));
+        node
+    }
+
+    fn run(&self, mut ctx: Context) -> ExecutionResult {
+        let a = ctx.get_i64("a").unwrap_or(0);
+        let b = ctx.get_i64("b").unwrap_or(0);
+        ctx.set_output("result", a + b);
+        ctx.activate_exec("exec_out");
+        ctx.success()
+    }
 }
+
+#[register_node]
+#[derive(Default)]
+pub struct SubtractNode;
+
+impl WasmNode for SubtractNode {
+    fn get_node(&self) -> NodeDefinition {
+        let mut node = NodeDefinition::new("subtract", "Subtract", "Subtracts B from A", "Math");
+        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
+        node.add_pin(PinDefinition::input("a", "A", "First operand", "I64").with_default(json!(0)));
+        node.add_pin(PinDefinition::input("b", "B", "Second operand", "I64").with_default(json!(0)));
+        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
+        node.add_pin(PinDefinition::output("result", "Result", "Difference", "I64"));
+        node
+    }
+
+    fn run(&self, mut ctx: Context) -> ExecutionResult {
+        let a = ctx.get_i64("a").unwrap_or(0);
+        let b = ctx.get_i64("b").unwrap_or(0);
+        ctx.set_output("result", a - b);
+        ctx.activate_exec("exec_out");
+        ctx.success()
+    }
+}
+
+wasm_main!();
 ```
 
-## Quick Start — Manual (no macros)
+## Context API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `get_string(pin)` | `Option<String>` | Read string input |
+| `get_i64(pin)` | `Option<i64>` | Read integer input |
+| `get_f64(pin)` | `Option<f64>` | Read float input |
+| `get_bool(pin)` | `Option<bool>` | Read boolean input |
+| `get_input(pin)` | `Option<&Value>` | Read raw JSON |
+| `get_input_as::<T>(pin)` | `Option<T>` | Deserialize input |
+| `require_input(pin)` | `Result<&Value>` | Required raw JSON |
+| `require_input_as::<T>(pin)` | `Result<T>` | Required + deser |
+| `set_output(pin, val)` | | Write any `Serialize` value |
+| `set_output_json(pin, &val)` | | Write explicit JSON |
+| `activate_exec(pin)` | | Fire an exec output pin |
+| `success()` | `ExecutionResult` | Return success |
+| `fail(msg)` | `ExecutionResult` | Return error |
+| `set_pending(bool)` | | Mark as long-running |
+| `finish()` | `ExecutionResult` | Return without auto-exec |
+
+## Host Modules
 
 ```rust
-use flow_like_wasm_sdk::*;
+use flow_like_wasm_sdk::{log, stream, var, util};
 
-#[no_mangle]
-pub extern "C" fn get_nodes() -> i64 {
-    let mut def = NodeDefinition::new("uppercase", "Uppercase", "Converts text to uppercase", "Text");
-    def.add_pin(PinDefinition::input_exec("exec"));
-    def.add_pin(PinDefinition::input("text", "Text", "Input text", DataType::String));
-    def.add_pin(PinDefinition::output_exec("exec_out"));
-    def.add_pin(PinDefinition::output("result", "Result", "Uppercased text", DataType::String));
-    pack_result(&serde_json::to_string(&def).unwrap())
-}
-
-#[no_mangle]
-pub extern "C" fn run(ptr: i32, len: i32) -> i64 {
-    let input = ExecutionInput::from_wasm(ptr, len);
-    let mut ctx = Context::new(input);
-    let text = ctx.get_string("text").unwrap_or_default();
-    ctx.set_output("result", text.to_uppercase());
-    pack_result(&serde_json::to_string(&ctx.success("exec_out")).unwrap())
-}
+log::info("message");
+stream::stream_text("chunk");
+var::set_variable("key", &json!("val"));
+let ts = util::now();
+let r  = util::random();
 ```
 
 ## Testing
 
-Use `MockContext` for unit tests without a running runtime:
+Unit tests run on native target:
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use flow_like_wasm_sdk::mock::*;
     use super::*;
 
     #[test]
-    fn test_uppercase() {
-        let mut ctx = MockContext::new();
-        ctx.set_input("text", "hello");
-
-        let result = handle_run(ctx.into());
-
-        assert_eq!(result.outputs.get("result").unwrap(), "\"HELLO\"");
-        assert_eq!(result.exec_output.as_deref(), Some("exec_out"));
+    fn test_definition() {
+        let node = UppercaseNode;
+        let def = node.get_node();
+        assert_eq!(def.name, "uppercase");
+        assert_eq!(def.pins.len(), 4);
     }
 }
+```
+
+```bash
+cargo test --target $(rustc -vV | grep host | awk '{print $2}')
 ```
 
 ## Building
 
 ```bash
-# Build WASM
-cargo build --target wasm32-wasip1 --release
-
-# Output: target/wasm32-wasip1/release/<your_crate>.wasm
+cargo build --release
+# output: target/wasm32-wasip2/release/<crate_name>.wasm
 ```
-
-Optionally use `wasm-opt` for further size reduction:
-
-```bash
-wasm-opt -Oz -o my_node_opt.wasm target/wasm32-wasip1/release/my_node.wasm
-```
-
-## API Reference
-
-### `Context`
-
-| Method | Description |
-|---|---|
-| `get_string(pin)` | Read a string input |
-| `get_bool(pin)` | Read a boolean input |
-| `get_i64(pin)` | Read an integer input |
-| `get_f64(pin)` | Read a float input |
-| `get_json(pin)` | Read a JSON value |
-| `set_output(pin, value)` | Write an output value |
-| `success(exec_pin)` | Return success, firing exec pin |
-| `error(message)` | Return an error result |
-
-### `log` module
-
-```rust
-flow_like_wasm_sdk::log::info("message");
-flow_like_wasm_sdk::log::debug("message");
-flow_like_wasm_sdk::log::warn("message");
-flow_like_wasm_sdk::log::error("message");
-```
-
-### `DataType` enum
-
-`Exec`, `String`, `Boolean`, `Integer`, `Float`, `Json`, `Generic`, `Array`, `HashMap`

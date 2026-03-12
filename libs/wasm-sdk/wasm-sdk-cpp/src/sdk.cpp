@@ -57,6 +57,10 @@ std::string PinDefinition::to_json() const {
     if (!default_value.empty()) j += ",\"default_value\":" + default_value;
     if (!value_type.empty())    j += ",\"value_type\":" + json::quote(value_type);
     if (!schema.empty())        j += ",\"schema\":" + json::quote(schema);
+    if (has_step)                j += ",\"step\":" + std::to_string(step);
+    if (has_sensitive)           j += ",\"sensitive\":" + std::string(sensitive ? "true" : "false");
+    if (has_enforce_schema)      j += ",\"enforce_schema\":" + std::string(enforce_schema ? "true" : "false");
+    if (has_enforce_generic_value_type) j += ",\"enforce_generic_value_type\":" + std::string(enforce_generic_value_type ? "true" : "false");
     j += "}";
     return j;
 }

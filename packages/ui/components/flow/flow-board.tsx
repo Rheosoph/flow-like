@@ -218,7 +218,7 @@ export function FlowBoard({
 	const catalog: UseQueryResult<INode[]> = useInvoke(
 		backend.boardState.getCatalog,
 		backend.boardState,
-		[],
+		[appId],
 	);
 	const board = useInvoke(
 		backend.boardState.getBoard,
@@ -242,7 +242,7 @@ export function FlowBoard({
 	const [droppedPin, setDroppedPin] = useState<IPin | undefined>(undefined);
 	const [clickPosition, setClickPosition] = useState({ x: 0, y: 0 });
 	const deletingNodesRef = useRef<Set<string>>(new Set());
-	const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+	const mousePositionRef = useRef({ x: 0, y: 0 });
 	const [pinCache, setPinCache] = useState<
 		Map<string, [IPin, INode | ILayer, boolean]>
 	>(new Map());
@@ -428,7 +428,7 @@ export function FlowBoard({
 			backend,
 			sub,
 			hub,
-			mousePosition,
+			mousePositionRef,
 			layerPath,
 			screenToFlowPosition,
 			commandAwarenessRef,
@@ -1098,9 +1098,10 @@ export function FlowBoard({
 				toastError("Cannot change old version", <XIcon />);
 				return;
 			}
+			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
-				x: mousePosition.x,
-				y: mousePosition.y,
+				x: mp.x,
+				y: mp.y,
 			});
 
 			// Try to handle media paste first (images/videos)
@@ -1121,7 +1122,6 @@ export function FlowBoard({
 		},
 		[
 			boardId,
-			mousePosition,
 			executeCommand,
 			currentLayer,
 			version,
@@ -1132,13 +1132,14 @@ export function FlowBoard({
 	const handleCopyCB = useCallback(
 		(event?: ClipboardEvent) => {
 			if (!board.data) return;
+			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
-				x: mousePosition.x,
-				y: mousePosition.y,
+				x: mp.x,
+				y: mp.y,
 			});
 			handleCopy(nodes, board.data, currentCursorPosition, event, currentLayer);
 		},
-		[nodes, mousePosition, board.data, currentLayer],
+		[nodes, board.data, currentLayer],
 	);
 
 	const openNodeInfo = useCallback((node: INode) => {
@@ -1170,16 +1171,6 @@ export function FlowBoard({
 		[setNodes],
 	);
 
-	const placeNodeShortcut = useCallback(
-		async (node: INode) => {
-			await placeNode(node, {
-				x: mousePosition.x,
-				y: mousePosition.y,
-			});
-		},
-		[mousePosition],
-	);
-
 	const placeNode = useCallback(
 		async (node: INode, position?: { x: number; y: number }) => {
 			const location = screenToFlowPosition({
@@ -1208,6 +1199,17 @@ export function FlowBoard({
 			pinCache,
 			executeCommand,
 		],
+	);
+
+	const placeNodeShortcut = useCallback(
+		async (node: INode) => {
+			const mp = mousePositionRef.current;
+			await placeNode(node, {
+				x: mp.x,
+				y: mp.y,
+			});
+		},
+		[placeNode],
 	);
 
 	const placePlaceholder = useCallback(
@@ -1249,7 +1251,7 @@ export function FlowBoard({
 		version,
 		appId,
 		boardId,
-		mousePosition,
+		mousePositionRef,
 		placeNode,
 		undo,
 		redo,
@@ -1281,15 +1283,21 @@ export function FlowBoard({
 		[catalog.data, clickPosition, boardId, droppedPin],
 	);
 
-	useEffect(() => {
-		document.addEventListener("copy", handleCopyCB);
-		document.addEventListener("paste", handlePasteCB);
+	const handleCopyRef = useRef(handleCopyCB);
+	handleCopyRef.current = handleCopyCB;
+	const handlePasteRef = useRef(handlePasteCB);
+	handlePasteRef.current = handlePasteCB;
 
+	useEffect(() => {
+		const onCopy = (e: Event) => handleCopyRef.current(e as ClipboardEvent);
+		const onPaste = (e: Event) => handlePasteRef.current(e as ClipboardEvent);
+		document.addEventListener("copy", onCopy);
+		document.addEventListener("paste", onPaste);
 		return () => {
-			document.removeEventListener("copy", handleCopyCB);
-			document.removeEventListener("paste", handlePasteCB);
+			document.removeEventListener("copy", onCopy);
+			document.removeEventListener("paste", onPaste);
 		};
-	}, [nodes]);
+	}, []);
 
 	// Keyboard shortcut: Cmd/Ctrl+Shift+P to toggle pages panel
 	useEffect(() => {
@@ -1333,16 +1341,31 @@ export function FlowBoard({
 	}, [handleDrop]);
 
 	useEffect(() => {
-		document.addEventListener("mousemove", (event) => {
-			setMousePosition({ x: event.clientX, y: event.clientY });
-		});
-
+		const handler = (event: MouseEvent) => {
+			mousePositionRef.current = { x: event.clientX, y: event.clientY };
+		};
+		document.addEventListener("mousemove", handler);
 		return () => {
-			document.removeEventListener("mousemove", (event) => {
-				setMousePosition({ x: event.clientX, y: event.clientY });
-			});
+			document.removeEventListener("mousemove", handler);
 		};
 	}, []);
+
+	// Build O(1) lookup sets for marking unavailable nodes:
+	// - nodeNames:  built-in (non-WASM) node names
+	// - wasmNodeKeys: "package_id:node_name" keys for WASM nodes
+	const catalogLookup = useMemo(() => {
+		if (!catalog.data) return undefined;
+		const nodeNames = new Set<string>();
+		const wasmNodeKeys = new Set<string>();
+		for (const n of catalog.data) {
+			if (n.wasm?.package_id) {
+				wasmNodeKeys.add(`${n.wasm.package_id}:${n.name}`);
+			} else {
+				nodeNames.add(n.name);
+			}
+		}
+		return { nodeNames, wasmNodeKeys };
+	}, [catalog.data]);
 
 	useEffect(() => {
 		if (!board.data) return;
@@ -1373,6 +1396,7 @@ export function FlowBoard({
 						onRemoteExecute: executeBoardRemote,
 					}
 				: undefined,
+			catalogLookup,
 		);
 
 		setNodes(parsed.nodes);
@@ -1388,6 +1412,7 @@ export function FlowBoard({
 		app.data,
 		executeBoardRemote,
 		backend.boardState.executeBoardRemote,
+		catalogLookup,
 	]);
 
 	const nodeTypes = useMemo(

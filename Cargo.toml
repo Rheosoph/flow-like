@@ -136,7 +136,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.17", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "a586b0d", default-features = false, features = ["rustls-tls"] }
+markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "0cfbdda", default-features = false, features = ["rustls-tls"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"

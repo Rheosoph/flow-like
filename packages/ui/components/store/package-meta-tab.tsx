@@ -34,6 +34,7 @@ import {
 	Label,
 	Separator,
 	Textarea,
+	TextEditor,
 } from "../ui";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 
@@ -85,10 +86,14 @@ export function PackageMetaTab({
 		name: "",
 	});
 	const [newTag, setNewTag] = useState("");
+	const longDescriptionRef = useRef("");
+	const releaseNotesRef = useRef("");
 	const [hasChanges, setHasChanges] = useState(false);
 
 	useEffect(() => {
 		if (meta) {
+			longDescriptionRef.current = meta.longDescription ?? "";
+			releaseNotesRef.current = meta.releaseNotes ?? "";
 			setForm({
 				name: meta.name,
 				description: meta.description,
@@ -112,12 +117,10 @@ export function PackageMetaTab({
 		const changed =
 			form.name !== meta.name ||
 			(form.description ?? "") !== (meta.description ?? "") ||
-			(form.longDescription ?? "") !== (meta.longDescription ?? "") ||
 			(form.website ?? "") !== (meta.website ?? "") ||
 			(form.supportUrl ?? "") !== (meta.supportUrl ?? "") ||
 			(form.docsUrl ?? "") !== (meta.docsUrl ?? "") ||
 			(form.useCase ?? "") !== (meta.useCase ?? "") ||
-			(form.releaseNotes ?? "") !== (meta.releaseNotes ?? "") ||
 			JSON.stringify(form.tags ?? []) !== JSON.stringify(meta.tags ?? []);
 		setHasChanges(changed);
 	}, [form, meta]);
@@ -156,17 +159,23 @@ export function PackageMetaTab({
 	);
 
 	const saveMutation = useMutation({
-		mutationFn: () =>
-			fetcher<PackageMeta>(
+		mutationFn: () => {
+			const payload = {
+				...form,
+				longDescription: longDescriptionRef.current,
+				releaseNotes: releaseNotesRef.current,
+			};
+			return fetcher<PackageMeta>(
 				profile.data!.hub_profile,
 				`registry/package/${packageId}/meta`,
 				{
 					method: "PUT",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(form),
+					body: JSON.stringify(payload),
 				},
 				auth,
-			),
+			);
+		},
 		onSuccess: () => {
 			toast.success("Metadata saved");
 			queryClient.invalidateQueries({ queryKey });
@@ -295,14 +304,18 @@ export function PackageMetaTab({
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="meta-long-description">Long Description</Label>
-						<Textarea
-							id="meta-long-description"
-							value={form.longDescription ?? ""}
-							onChange={(e) => update({ longDescription: e.target.value })}
-							placeholder="Detailed description, features, usage instructions..."
-							rows={8}
-						/>
+						<Label>Long Description (Markdown)</Label>
+						<div className="rounded-md border min-h-50">
+							<TextEditor
+								initialContent={meta?.longDescription || ""}
+								isMarkdown
+								editable
+								onChange={(content) => {
+									longDescriptionRef.current = content;
+									setHasChanges(true);
+								}}
+							/>
+						</div>
 					</div>
 					<div className="space-y-2">
 						<Label htmlFor="meta-use-case">Use Case</Label>
@@ -502,15 +515,20 @@ export function PackageMetaTab({
 			{/* Release Notes */}
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Release Notes</CardTitle>
+					<CardTitle className="text-base">Release Notes (Markdown)</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<Textarea
-						value={form.releaseNotes ?? ""}
-						onChange={(e) => update({ releaseNotes: e.target.value })}
-						placeholder="What's new in this version..."
-						rows={4}
-					/>
+					<div className="rounded-md border min-h-30">
+						<TextEditor
+							initialContent={meta?.releaseNotes || ""}
+							isMarkdown
+							editable
+							onChange={(content) => {
+								releaseNotesRef.current = content;
+								setHasChanges(true);
+							}}
+						/>
+					</div>
 				</CardContent>
 			</Card>
 		</div>

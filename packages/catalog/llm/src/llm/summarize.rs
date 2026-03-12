@@ -227,10 +227,9 @@ impl NodeLogic for SummarizeNode {
         let max_iterations = context.evaluate_pin::<i64>("max_iterations").await?;
         let density_steps = context.evaluate_pin::<i64>("density_steps").await?;
 
-        let strategy = SummarizationStrategy::try_from(strategy_str.as_str())
-            .unwrap_or_default();
-        let densification = DensificationStrategy::try_from(densification_str.as_str())
-            .unwrap_or_default();
+        let strategy = SummarizationStrategy::try_from(strategy_str.as_str()).unwrap_or_default();
+        let densification =
+            DensificationStrategy::try_from(densification_str.as_str()).unwrap_or_default();
 
         let mut model_name = model_bit.id.clone();
         if let Some(meta) = model_bit.meta.get("en") {

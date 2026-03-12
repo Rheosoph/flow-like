@@ -8,13 +8,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
+} from "../ui/dialog";
+import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
+import { ScrollArea } from "../ui/scroll-area";
+import { Checkbox } from "../ui/checkbox";
 import { ArrowRight, Package } from "lucide-react";
-import type { PackageUpdate } from "@/lib/schema/wasm";
+import type { PackageUpdate } from "../../lib/schema/wasm";
 
 export interface PackageUpdateDialogProps {
   open: boolean;

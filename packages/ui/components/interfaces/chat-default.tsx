@@ -85,38 +85,35 @@ async function prepareAttachments(
 }
 
 /**
- * Deduplicates consecutive messages with the same role.
- * Keeps the message with more content when there are consecutive same-role messages.
- * This prevents showing duplicate user/assistant messages after reconnection or streaming.
+ * Deduplicates messages by ID.
+ * When multiple messages share the same ID (e.g. from incremental saves), keeps the one with more content.
+ * Preserves legitimate consecutive same-role messages that have different IDs.
  */
 function deduplicateConsecutiveMessages(messages: IMessage[]): IMessage[] {
 	if (messages.length <= 1) return messages;
 
+	const seen = new Map<string, number>();
 	const result: IMessage[] = [];
-	for (const message of messages) {
-		const lastMessage = result[result.length - 1];
 
-		// If no previous message or different role, just add it
-		if (!lastMessage || lastMessage.inner.role !== message.inner.role) {
-			result.push(message);
+	for (const message of messages) {
+		const existingIdx = seen.get(message.id);
+		if (existingIdx !== undefined) {
+			const existing = result[existingIdx];
+			const existingLen =
+				typeof existing.inner.content === "string"
+					? existing.inner.content.length
+					: JSON.stringify(existing.inner.content).length;
+			const currentLen =
+				typeof message.inner.content === "string"
+					? message.inner.content.length
+					: JSON.stringify(message.inner.content).length;
+			if (currentLen > existingLen) {
+				result[existingIdx] = message;
+			}
 			continue;
 		}
-
-		// Same role as previous - keep the one with more content
-		const lastContent =
-			typeof lastMessage.inner.content === "string"
-				? lastMessage.inner.content
-				: JSON.stringify(lastMessage.inner.content);
-		const currentContent =
-			typeof message.inner.content === "string"
-				? message.inner.content
-				: JSON.stringify(message.inner.content);
-
-		if (currentContent.length > lastContent.length) {
-			// Replace last message with current (has more content)
-			result[result.length - 1] = message;
-		}
-		// Otherwise keep the existing one (already has more or equal content)
+		seen.set(message.id, result.length);
+		result.push(message);
 	}
 
 	return result;
@@ -368,15 +365,41 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	>([]);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
+	const interactionsBySession = useRef<Map<string, IInteractionRequest[]>>(
+		new Map(),
+	);
 	useEffect(() => {
 		activeInteractionsRef.current = activeInteractions;
 	}, [activeInteractions]);
 
+	// Keep interaction cache in sync with current session
+	useEffect(() => {
+		if (sessionIdParameter) {
+			interactionsBySession.current.set(
+				sessionIdParameter,
+				activeInteractions,
+			);
+		}
+	}, [sessionIdParameter, activeInteractions]);
+
 	const addInteractions = useCallback((interactions: IInteractionRequest[]) => {
 		setActiveInteractions((prev) => {
-			const existingIds = new Set(prev.map((i) => i.id));
-			const newOnes = interactions.filter((i) => !existingIds.has(i.id));
-			return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+			const existingMap = new Map(prev.map((i) => [i.id, i]));
+			let changed = false;
+			for (const interaction of interactions) {
+				const existing = existingMap.get(interaction.id);
+				if (!existing) {
+					existingMap.set(interaction.id, interaction);
+					changed = true;
+				} else if (
+					existing.status === "pending" &&
+					interaction.status !== "pending"
+				) {
+					existingMap.set(interaction.id, interaction);
+					changed = true;
+				}
+			}
+			return changed ? Array.from(existingMap.values()) : prev;
 		});
 	}, []);
 
@@ -541,10 +564,17 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		}
 	}, [sessionIdParameter, setQueryParams]);
 
-	// Cleanup active subscriptions and interactions on unmount or session change
+	// Cleanup active subscriptions and restore cached interactions on session change
 	useEffect(() => {
-		setActiveInteractions([]);
+		const cached =
+			interactionsBySession.current.get(sessionIdParameter) ?? [];
+		setActiveInteractions(cached);
+		processedCompletedStreams.current.clear();
 		return () => {
+			interactionsBySession.current.set(
+				sessionIdParameter,
+				activeInteractionsRef.current,
+			);
 			activeSubscriptions.current.forEach((subId) => {
 				executionEngine.unsubscribeFromEventStream(sessionIdParameter, subId);
 			});
@@ -1057,6 +1087,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			const globalStateRef = { current: tmpGlobalState };
 
 			const streamId = sessionIdParameter;
+
+			// Prevent sending while a stream is already active for this session
+			if (executionEngine.isStreamActive(streamId)) {
+				toast.error("Please wait for the current response to complete.");
+				return;
+			}
+
 			const subscriberId = `chat-${responseMessage.id}`;
 			activeSubscriptions.current.push(subscriberId);
 
@@ -1264,8 +1301,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					audioFile,
 				);
 			} catch (error) {
-				// OAuth errors are handled by execution engine - don't show error toast for those
-				if (!(error as any)?.isOAuthError) {
+				// Active stream errors and OAuth errors are handled separately
+				if ((error as any)?.isActiveStreamError) {
+					// Already shown a toast in executeChatMessage guard
+				} else if (!(error as any)?.isOAuthError) {
 					console.error("Error sending message:", error);
 					toast.error("Failed to send message. Please try again.");
 				}

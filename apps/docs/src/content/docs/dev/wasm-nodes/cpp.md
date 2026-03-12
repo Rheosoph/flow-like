@@ -1,16 +1,12 @@
 ---
 title: C/C++ WASM Nodes
-description: Create custom WASM nodes using C or C++
+description: Create custom WASM nodes using C or C++ with the WASM Component Model
 sidebar:
   order: 5
   badge:
-    text: Coming Soon
-    variant: caution
+    text: Component Model
+    variant: success
 ---
-
-:::caution[Coming Soon]
-Custom WASM nodes are currently in development. This template previews the planned API.
-:::
 
 C and C++ can compile to WASM using **wasi-sdk** (recommended) or **Emscripten**.
 

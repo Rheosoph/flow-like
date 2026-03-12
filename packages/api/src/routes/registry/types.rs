@@ -5,8 +5,11 @@
 //! `RegistryClient` used by the desktop app; JSON compatibility is all
 //! that matters at the HTTP boundary.
 
-use flow_like_wasm::manifest::PackageManifest;
+use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::Path as FlowPath;
+use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use utoipa::ToSchema;
 
 use crate::entity::meta;
@@ -41,6 +44,28 @@ impl MetaSummary {
             .find(|m| m.lang == language)
             .or_else(|| metas.iter().find(|m| m.lang == "en"))
             .or_else(|| metas.first())
+    }
+
+    pub async fn presign_media(&mut self, package_id: &str, store: &FlowLikeStore) {
+        let prefix = FlowPath::from("media")
+            .child("packages")
+            .child(package_id);
+        if let Some(icon) = &self.icon {
+            if !icon.starts_with("http://") && !icon.starts_with("https://") {
+                let path = prefix.child(format!("{icon}.webp"));
+                if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                    self.icon = Some(url.to_string());
+                }
+            }
+        }
+        if let Some(thumb) = &self.thumbnail {
+            if !thumb.starts_with("http://") && !thumb.starts_with("https://") {
+                let path = prefix.child(format!("{thumb}.webp"));
+                if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                    self.thumbnail = Some(url.to_string());
+                }
+            }
+        }
     }
 }
 
@@ -95,6 +120,8 @@ pub struct PackageVersion {
 pub struct RegistryEntry {
     pub id: String,
     pub manifest: PackageManifest,
+    #[serde(default)]
+    pub nodes: Vec<PackageNodeEntry>,
     pub versions: Vec<PackageVersion>,
     #[serde(default)]
     pub status: PackageStatus,
@@ -149,6 +176,10 @@ pub struct PackageSummary {
     pub price: i64,
     #[serde(default)]
     pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
 }
@@ -248,6 +279,9 @@ pub struct DownloadResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
     pub manifest: PackageManifest,
+    /// Resolved package metadata (icon, thumbnail, localized name/description)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

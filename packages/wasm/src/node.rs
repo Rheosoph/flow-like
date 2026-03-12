@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::execution::{LogLevel, Run};
 use flow_like::flow::node::{Node, NodeLogic, NodeScores, NodeWasm};
-use flow_like::flow::pin::{Pin, PinType, ValueType};
+use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};
 use flow_like::flow::variable::VariableType;
 use flow_like_types::{sync::Mutex, tokio::sync::RwLock, Value};
 use parking_lot::RwLock as ParkingRwLock;
@@ -165,6 +165,28 @@ impl WasmNodeLogic {
             .as_ref()
             .and_then(|v| flow_like_types::json::to_vec(v).ok());
 
+        let options = {
+            let has_any = wasm_pin.valid_values.is_some()
+                || wasm_pin.range.is_some()
+                || wasm_pin.step.is_some()
+                || wasm_pin.sensitive.is_some()
+                || wasm_pin.enforce_schema.is_some()
+                || wasm_pin.enforce_generic_value_type.is_some();
+
+            if has_any {
+                Some(PinOptions {
+                    valid_values: wasm_pin.valid_values.clone(),
+                    range: wasm_pin.range,
+                    step: wasm_pin.step,
+                    sensitive: wasm_pin.sensitive,
+                    enforce_schema: wasm_pin.enforce_schema,
+                    enforce_generic_value_type: wasm_pin.enforce_generic_value_type,
+                })
+            } else {
+                None
+            }
+        };
+
         Pin {
             id: flow_like_types::create_id(),
             name: wasm_pin.name.clone(),
@@ -178,7 +200,7 @@ impl WasmNodeLogic {
             connected_to: BTreeSet::new(),
             default_value,
             index,
-            options: None,
+            options,
             value: None,
         }
     }
@@ -363,9 +385,12 @@ impl NodeLogic for WasmNodeLogic {
         for pin in &definition.pins {
             if pin.pin_type.to_lowercase() == "input" && pin.data_type.to_lowercase() != "execution"
             {
-                if let Ok(pin_ref) = context.get_pin_by_name(&pin.name).await {
-                    if let Some(val) = pin_ref.get_raw_value().await {
+                match context.evaluate_pin::<Value>(&pin.name).await {
+                    Ok(val) => {
                         inputs.insert(pin.name.clone(), val);
+                    }
+                    Err(_) => {
+                        // No value available (unconnected, no default) — skip
                     }
                 }
             }

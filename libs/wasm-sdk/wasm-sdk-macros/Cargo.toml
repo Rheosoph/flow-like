@@ -1,0 +1,17 @@
+[package]
+name = "flow-like-wasm-sdk-macros"
+version = "0.2.2"
+edition = "2021"
+description = "Proc macros for the Flow-Like WASM SDK"
+license = "MIT"
+repository = "https://github.com/TM9657/flow-like"
+
+[workspace]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"

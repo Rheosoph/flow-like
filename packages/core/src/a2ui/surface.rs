@@ -7,7 +7,7 @@ use flow_like_types::{
 use schemars::JsonSchema;
 use std::{collections::HashMap, sync::Arc};
 
-use super::{DataModel, Style};
+use super::{CanvasSettings, DataModel, Style};
 
 /// A component in the A2UI surface
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -182,6 +182,10 @@ pub enum A2UIServerMessage {
         components: Vec<SurfaceComponent>,
         parent_id: Option<String>,
     },
+    SetCanvasSettings {
+        surface_id: String,
+        canvas_settings: CanvasSettings,
+    },
     DataModelUpdate {
         surface_id: String,
         path: Option<String>,
@@ -265,6 +269,16 @@ impl A2UIServerMessage {
             surface_id: surface_id.into(),
             components,
             parent_id: None,
+        }
+    }
+
+    pub fn set_canvas_settings(
+        surface_id: impl Into<String>,
+        canvas_settings: CanvasSettings,
+    ) -> Self {
+        Self::SetCanvasSettings {
+            surface_id: surface_id.into(),
+            canvas_settings,
         }
     }
 

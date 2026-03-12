@@ -42,7 +42,7 @@ The runtime enforces hard limits on every WASM execution:
 
 | Resource | Default | Restrictive | Permissive |
 |----------|---------|------------|------------|
-| **Memory** | 64 MB | 16 MB | 256 MB |
+| **Memory** | 64 MB | 16 MB | 4 GB |
 | **CPU fuel** | 10B instructions (~10s) | 1B (~1s) | 100B (~100s) |
 | **Timeout** | 30s | 10s | 300s |
 | **Stack depth** | Configurable | Reduced | Increased |
@@ -60,7 +60,12 @@ Rather than granting blanket access, Flow-Like uses a bitflag-based capability s
 | `STORAGE_WRITE` | Write to storage backends |
 | `STORAGE_DELETE` | Delete from storage |
 | `HTTP_GET` | Make outbound HTTP GET requests |
-| `HTTP_WRITE` | Make outbound HTTP POST/PUT/DELETE requests || `WEBSOCKET` | Open persistent WebSocket connections || `VARIABLES_READ` | Read workflow variables |
+| `HTTP_WRITE` | Make outbound HTTP POST/PUT/DELETE requests |
+| `WEBSOCKET` | Open persistent WebSocket connections |
+| `TCP` | Open TCP socket connections |
+| `UDP` | Open UDP socket connections |
+| `DNS` | Perform DNS lookups |
+| `VARIABLES_READ` | Read workflow variables |
 | `VARIABLES_WRITE` | Write workflow variables |
 | `CACHE_READ` / `CACHE_WRITE` | Use the execution cache |
 | `STREAMING` | Stream incremental output |
@@ -72,7 +77,7 @@ Rather than granting blanket access, Flow-Like uses a bitflag-based capability s
 **Default capability set (`STANDARD`):** `STORAGE_READ | HTTP_GET | VARIABLES_READ | CACHE_ALL`
 
 **Compound capabilities:**
-- `NETWORK_ALL` = `HTTP_GET | HTTP_WRITE | WEBSOCKET`
+- `NETWORK_ALL` = `HTTP_GET | HTTP_WRITE | WEBSOCKET | TCP | UDP | DNS`
 - `STORAGE_ALL` = `STORAGE_READ | STORAGE_WRITE | STORAGE_DELETE`
 - `AUTH_ALL` = `OAUTH | TOKEN`
 

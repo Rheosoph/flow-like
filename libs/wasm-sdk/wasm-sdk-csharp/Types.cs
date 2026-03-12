@@ -32,6 +32,41 @@ public static class PinType
     }
 }
 
+/// <summary>How the data is contained (scalar vs collection).</summary>
+public static class ValueType
+{
+    public const string Normal = "Normal";
+    public const string Array = "Array";
+    public const string HashMap = "HashMap";
+    public const string HashSet = "HashSet";
+
+    private static readonly HashSet<string> All = [Normal, Array, HashMap, HashSet];
+
+    public static string Validate(string valueType)
+    {
+        if (!All.Contains(valueType))
+            throw new ArgumentException($"Invalid value type: {valueType}. Must be one of [{string.Join(", ", All)}]");
+        return valueType;
+    }
+}
+
+/// <summary>Alias: prefer DataType over PinType for clarity (in core, PinType means Input/Output).</summary>
+public static class DataType
+{
+    public const string Exec = PinType.Exec;
+    public const string String = PinType.String;
+    public const string I64 = PinType.I64;
+    public const string F64 = PinType.F64;
+    public const string Bool = PinType.Bool;
+    public const string Generic = PinType.Generic;
+    public const string Bytes = PinType.Bytes;
+    public const string Date = PinType.Date;
+    public const string PathBuf = PinType.PathBuf;
+    public const string Struct = PinType.Struct;
+
+    public static string Validate(string dataType) => PinType.Validate(dataType);
+}
+
 public record NodeScores(
     int Privacy = 0,
     int Security = 0,
@@ -53,6 +88,10 @@ public class PinDefinition
     public string? Schema { get; set; }
     public List<string>? ValidValues { get; set; }
     public (double Min, double Max)? Range { get; set; }
+    public double? Step { get; set; }
+    public bool? Sensitive { get; set; }
+    public bool? EnforceSchema { get; set; }
+    public bool? EnforceGenericValueType { get; set; }
 
     public static PinDefinition InputExec(string name = "exec", string description = "")
     {
@@ -106,7 +145,7 @@ public class PinDefinition
     }
 
     public PinDefinition WithDefault(object value) { DefaultValue = value; return this; }
-    public PinDefinition WithValueType(string valueType) { ValueType = valueType; return this; }
+    public PinDefinition WithValueType(string valueType) { FlowLike.Wasm.Sdk.ValueType.Validate(valueType); this.ValueType = valueType; return this; }
     public PinDefinition WithSchema(string schema) { Schema = schema; return this; }
 
     /// <summary>
@@ -129,6 +168,10 @@ public class PinDefinition
     }
     public PinDefinition WithValidValues(List<string> values) { ValidValues = values; return this; }
     public PinDefinition WithRange(double min, double max) { Range = (min, max); return this; }
+    public PinDefinition WithStep(double step) { Step = step; return this; }
+    public PinDefinition WithSensitive(bool sensitive = true) { Sensitive = sensitive; return this; }
+    public PinDefinition WithEnforceSchema(bool enforce = true) { EnforceSchema = enforce; return this; }
+    public PinDefinition WithEnforceGenericValueType(bool enforce = true) { EnforceGenericValueType = enforce; return this; }
 
     private static string Humanize(string name) =>
         string.Join(" ", name.Split('_').Where(w => w.Length > 0).Select(w => char.ToUpper(w[0]) + w[1..]));
@@ -197,6 +240,10 @@ public class NodeDefinition
         if (p.Schema is not null) d["schema"] = p.Schema;
         if (p.ValidValues is not null) d["valid_values"] = p.ValidValues;
         if (p.Range is not null) d["range"] = new[] { p.Range.Value.Min, p.Range.Value.Max };
+        if (p.Step is not null) d["step"] = p.Step;
+        if (p.Sensitive is not null) d["sensitive"] = p.Sensitive;
+        if (p.EnforceSchema is not null) d["enforce_schema"] = p.EnforceSchema;
+        if (p.EnforceGenericValueType is not null) d["enforce_generic_value_type"] = p.EnforceGenericValueType;
         return d;
     }
 

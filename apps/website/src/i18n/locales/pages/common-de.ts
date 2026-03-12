@@ -48,6 +48,9 @@ export const deCommon = {
 	"footer.privacy": "Datenschutz",
 	"footer.legal": "Impressum",
 	"footer.dataDeletion": "Datenlöschung",
+	"footer.security": "Sicherheit",
+	"footer.dpa": "AVV",
+	"footer.subprocessors": "Unterauftrags&shy;verarbeiter",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

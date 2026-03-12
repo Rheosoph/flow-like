@@ -7,6 +7,7 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
+	useStore,
 	useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
@@ -110,6 +111,7 @@ export type FlowNode = Node<
 		onOpenInfo?: (node: INode) => void;
 		onExplain?: (nodeIds: string[]) => void;
 		executionMode?: IExecutionMode;
+		isUnavailable?: boolean;
 	},
 	"node"
 >;
@@ -117,10 +119,8 @@ export type FlowNode = Node<
 const FlowNodeInner = memo(
 	({
 		props,
-		onHover,
 	}: {
 		props: NodeProps<FlowNode>;
-		onHover: (hovered: boolean) => void;
 	}) => {
 		const { pushCommand } = useUndoRedo(props.data.appId, props.data.boardId);
 		const { resolvedTheme } = useTheme();
@@ -748,10 +748,8 @@ const FlowNodeInner = memo(
 			<div
 				key={`${props.id}__node`}
 				ref={div}
-				className={`bg-card! p-2 react-flow__node-default rounded-md! selectable focus:ring-2 relative group ${props.selected && "border-primary! border-2"} ${executionStatus === "done" ? "opacity-60" : "opacity-100"} ${isReroute && "w-4 max-w-4 max-h-3! overflow-y rounded-lg! p-[0.4rem]!"} ${!isReroute && "border-border!"}`}
+				className={`bg-card! p-2 react-flow__node-default rounded-md! selectable focus:ring-2 relative group ${props.selected && "border-primary! border-2"} ${executionStatus === "done" ? "opacity-60" : "opacity-100"} ${props.data.isUnavailable && "opacity-50 border-dashed! border-destructive/60!"} ${isReroute && "w-4 max-w-4 max-h-3! overflow-y rounded-lg! p-[0.4rem]!"} ${!isReroute && "border-border!"}`}
 				style={isReroute ? nodeStyle : {}}
-				onMouseEnter={() => onHover(true)}
-				onMouseLeave={() => onHover(false)}
 			>
 				{remoteSelections.length > 0 && (
 					<div className="pointer-events-none absolute -top-3 left-0 flex flex-col gap-1">
@@ -813,6 +811,14 @@ const FlowNodeInner = memo(
 							),
 							[],
 						)}
+					</div>
+				)}
+				{props.data.isUnavailable && !isReroute && (
+					<div
+						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-1/2 text-center bg-destructive rounded-full p-0.5"
+						title="This node's package is no longer available"
+					>
+						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
 				)}
 				{severity !== ILogLevel.Debug && (
@@ -912,6 +918,11 @@ const FlowNodeInner = memo(
 			</div>
 		);
 	},
+	(prev, next) =>
+		prev.props.data.hash === next.props.data.hash &&
+		prev.props.selected === next.props.selected &&
+		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
+		prev.props.data.isUnavailable === next.props.data.isUnavailable,
 );
 
 function FlowNode(props: NodeProps<FlowNode>) {
@@ -1201,9 +1212,8 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		[props.data.node, invalidate, pushCommands, flow],
 	);
 
-	const selectedCount = useMemo(
-		() => flow.getNodes().filter((node) => node.selected).length,
-		[flow.getNodes()],
+	const selectedCount = useStore(
+		(s) => Array.from(s.nodeLookup.values()).filter((n) => n.selected).length,
 	);
 
 	const isReadOnly = typeof props.data.version !== "undefined";
@@ -1306,11 +1316,23 @@ function FlowNode(props: NodeProps<FlowNode>) {
 						onExplain={handleExplain}
 					/>
 				)}
-				<FlowNodeInner props={props} onHover={() => {}} />
+				<FlowNodeInner props={props} />
 			</div>
 		</>
 	);
 }
 
-const node = memo(FlowNode);
+function flowNodeAreEqual(
+	prev: NodeProps<FlowNode>,
+	next: NodeProps<FlowNode>,
+) {
+	return (
+		prev.data.hash === next.data.hash &&
+		prev.selected === next.selected &&
+		prev.data.fnRefsHash === next.data.fnRefsHash &&
+		prev.data.isUnavailable === next.data.isUnavailable
+	);
+}
+
+const node = memo(FlowNode, flowNodeAreEqual);
 export { node as FlowNode };

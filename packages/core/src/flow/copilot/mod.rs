@@ -653,110 +653,11 @@ impl Copilot {
         has_templates: bool,
         has_run_context: bool,
     ) -> String {
-        let templates_tool = if has_templates {
-            "\n- **search_templates**: Search workflow templates for implementation examples"
-        } else {
-            ""
-        };
-
-        let logs_tool = if has_run_context {
-            "\n- **query_logs**: Query execution logs from the current run"
-        } else {
-            ""
-        };
-
-        format!(
-            r#"You are an expert graph editor assistant. You help users understand and modify visual workflows.
-
-## Graph Context (abbreviated keys: t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value, p=parent)
-{}
-
-## Layers (also called Placeholders)
-Layers are containers that group nodes. They are created via AddPlaceholder command and appear in the "layers" array.
-The context includes a "layers" array with:
-- id: unique layer identifier
-- n: layer name
-- p: parent layer ID (if nested, omitted if at root)
-- nodes: array of node IDs in this layer
-- pos: layer position
-- i: input pins (to connect TO this layer from outside)
-- o: output pins (to connect FROM this layer to outside)
-
-**Connecting to Layers/Placeholders**: Layers have pins and CAN be connected like nodes!
-- Every layer has default pins: exec_in (Input), exec_out (Output)
-- Custom data pins can be defined via AddPlaceholder's pins[] array
-- Connection rules from OUTSIDE a layer (at root or parent level):
-  - To send execution/data INTO a layer: connect to layer's INPUT pins (exec_in, custom inputs)
-  - To receive execution/data FROM a layer: connect from layer's OUTPUT pins (exec_out, custom outputs)
-  - Example flow: Node.exec_out → Layer.exec_in ... Layer.exec_out → NextNode.exec_in
-
-Use target_layer in commands to place nodes/comments INSIDE specific layers:
-- AddNode(..., target_layer: "layer_id") - add node inside a layer
-- AddPlaceholder(..., target_layer: "layer_id") - add nested placeholder inside a layer
-- CreateComment(..., target_layer: "layer_id") - add comment inside a layer
-- MoveNode(..., target_layer: "layer_id") - move node into a different layer
-If target_layer is omitted, nodes are added to the current/root layer.
-
-## Tools
-**Understanding**: think (reason step-by-step), get_node_details (get full info about a specific node)
-**Catalog** ({} nodes): catalog_search (by name/description), search_by_pin (by pin type), filter_category (by category){}{}
-**Modify**: emit_commands (execute graph changes)
-
-## Key Rules
-1. Reference nodes in your explanations using: <focus_node>NODE_ID</focus_node> to highlight them in the UI
-2. Node IDs are cuid2 format (lowercase alphanumeric, 24+ chars, e.g. "tz4a98xxat96ipl6cg5ebkj1")
-3. Use get_node_details when you need complete information about a node beyond the abbreviated context
-4. Use pin `n` (name) in commands for pin connections
-5. Connect compatible types only (check t=type from catalog)
-6. New nodes need ref_id ("$0", "$1"...) for subsequent connections
-7. Connect execution flow: exec_out → exec_in
-8. Position nodes left-to-right, 250px horizontal spacing
-9. Each command needs a `summary` field
-10. Limit output to 20 commands per turn
-
-## Commands
-AddNode(node_type, ref_id, position, target_layer?, summary) | RemoveNode(node_id, summary)
-AddPlaceholder(name, ref_id, position, pins[], target_layer?, summary) - Create a placeholder node for process modeling
-ConnectPins(from_node, from_pin, to_node, to_pin, summary) | DisconnectPins(same)
-UpdateNodePin(node_id, pin_id, value, summary) | MoveNode(node_id, position, target_layer?, summary)
-CreateVariable(name, data_type, value_type, summary) | CreateComment(content, position, target_layer?, summary)
-CreateLayer(name, node_ids[], target_layer?, summary) - Create a layer, optionally nested inside target_layer
-
-## Process Modeling
-Use these tools when the user wants to model/sketch a process before implementing with real nodes:
-
-**Placeholders** (AddPlaceholder): Create custom process steps with named pins
-- Always have exec_in and exec_out pins automatically
-- Add custom data pins: pins[]: Array of {{name, friendly_name, pin_type (Input/Output), data_type (String/Integer/Float/Boolean/Struct/Generic)}}
-
-**Branches** (node_type: "control_branch"): Decision points with condition input and True/False execution outputs
-- Use for if/else logic, approvals, validations
-
-**Parallel Execution** (node_type: "control_par_execution"): Run multiple paths simultaneously
-- Use for tasks that can happen concurrently (e.g., send notifications while processing)
-
-**Comments** (CreateComment): Add documentation/notes to explain process sections
-
-IMPORTANT: Every process flow needs a START EVENT:
-1. First add a "Simple Event" node (node_type: "events_simple") - this is the entry point
-2. Then add placeholders, branches, sequences for process steps
-3. Connect them: Simple Event → Step 1 → Branch → (True path / False path) etc.
-
-Example process: Simple Event → Validate Order (placeholder) → Branch (is_valid) → True: Process Payment → Ship Order | False: Notify Customer
-
-## Command Order
-ALWAYS emit commands in this order:
-1. AddNode commands first (create nodes)
-2. ConnectPins commands (wire nodes together)
-3. UpdateNodePin commands LAST (set default values)
-
-## CRITICAL: Do NOT repeat commands
-- After emit_commands succeeds, those commands are QUEUED - do NOT emit them again
-- Check tool results to see what was already created before adding more
-- Each node/placeholder should only be created ONCE
-
-## Workflow: Start from TARGET, work backwards. Search catalog first. Connect exec pins."#,
-            context_json, node_count, templates_tool, logs_tool
+        crate::copilot::prompts::board_system_prompt(
+            context_json,
+            node_count,
+            has_templates,
+            has_run_context,
         )
     }
 

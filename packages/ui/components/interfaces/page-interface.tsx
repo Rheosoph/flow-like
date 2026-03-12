@@ -61,6 +61,7 @@ function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
 		id: pageId,
 		rootComponentId,
 		components: componentsRecord,
+		canvasSettings: page.canvasSettings,
 	};
 }
 
@@ -74,6 +75,23 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 
 	const handleServerMessage = useCallback(
 		(message: A2UIServerMessage) => {
+			if (message.type === "setCanvasSettings") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id) {
+						return prevSurface;
+					}
+
+					return {
+						...prevSurface,
+						canvasSettings: {
+							...prevSurface.canvasSettings,
+							...message.canvasSettings,
+						},
+					};
+				});
+				return;
+			}
+
 			if (message.type !== "upsertElement") return;
 
 			setSurface((prevSurface) => {
@@ -978,17 +996,19 @@ function PageInterfaceInner({
 		);
 	}
 
+	const runtimeCanvasSettings = surface?.canvasSettings ?? page?.canvasSettings;
+
 	const canvasStyle: React.CSSProperties = {
-		backgroundColor: page?.canvasSettings?.backgroundColor,
-		padding: page?.canvasSettings?.padding,
-		backgroundImage: page?.canvasSettings?.backgroundImage
-			? `url(${page.canvasSettings.backgroundImage})`
+		backgroundColor: runtimeCanvasSettings?.backgroundColor,
+		padding: runtimeCanvasSettings?.padding,
+		backgroundImage: runtimeCanvasSettings?.backgroundImage
+			? `url(${runtimeCanvasSettings.backgroundImage})`
 			: undefined,
 		backgroundSize: "cover",
 		backgroundPosition: "center",
 	};
 
-	const customCss = page?.canvasSettings?.customCss;
+	const customCss = runtimeCanvasSettings?.customCss;
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">

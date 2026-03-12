@@ -34,7 +34,7 @@ export default function RegistryLayout({
 							}`}
 						>
 							<Download className="h-3.5 w-3.5" />
-							Installed
+							Owned
 						</div>
 					</Link>
 					<Link href="/settings/registry/explore">

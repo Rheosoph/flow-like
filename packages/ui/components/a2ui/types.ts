@@ -1445,6 +1445,7 @@ export interface Surface {
 	id: string;
 	rootComponentId: string;
 	components: Record<string, SurfaceComponent>;
+	canvasSettings?: CanvasSettings;
 	catalogId?: string;
 }
 
@@ -1463,6 +1464,11 @@ export type A2UIServerMessage =
 			surfaceId: string;
 			components: SurfaceComponent[];
 			parentId?: string;
+	  }
+	| {
+			type: "setCanvasSettings";
+			surfaceId: string;
+			canvasSettings: CanvasSettings;
 	  }
 	| {
 			type: "dataModelUpdate";
