@@ -604,12 +604,9 @@ impl NodeLogic for CopilotClientStopNode {
 
         context.log_message("Stopping Copilot client...", LogLevel::Info);
 
-        let stop_errors = cached_client.client.stop().await;
-
-        if !stop_errors.is_empty() {
-            let msgs: Vec<String> = stop_errors.iter().map(|e| e.message.clone()).collect();
+        if let Err(e) = cached_client.client.stop().await {
             context.log_message(
-                &format!("Copilot client stop warnings: {}", msgs.join("; ")),
+                &format!("Copilot client stop warning: {}", e),
                 LogLevel::Warn,
             );
         }

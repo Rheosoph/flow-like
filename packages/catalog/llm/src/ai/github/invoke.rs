@@ -164,7 +164,7 @@ impl NodeLogic for CopilotSendAndWaitNode {
 
         let response = cached_session
             .session
-            .send_and_collect(full_prompt.as_str(), None)
+            .send_and_wait(full_prompt.as_str())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to send message: {}", e))?;
 
