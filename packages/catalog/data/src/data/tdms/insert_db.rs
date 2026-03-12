@@ -494,7 +494,6 @@ impl NodeLogic for BatchInsertTdmsLocalDatabaseNode {
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
         let chunk_size_input: u64 = context.evaluate_pin("chunk_size").await?;
         let chunk_size = chunk_size_input.clamp(1, TDMS_MAX_CHUNK_SIZE as u64) as usize;
         if chunk_size_input > TDMS_MAX_CHUNK_SIZE as u64 {
@@ -599,7 +598,8 @@ impl NodeLogic for BatchInsertTdmsLocalDatabaseNode {
                 let batch = RecordBatch::try_new(schema, columns)?;
                 total_rows_inserted += rows_in_chunk as u64;
 
-                if let Err(e) = database.insert_record_batch(batch).await {
+                let mut database = database.write().await;
+                if let Err(e) = database.inner_mut().insert_record_batch(batch).await {
                     context.log_message(
                         &format!("Error inserting TDMS Arrow chunk: {:?}", e),
                         LogLevel::Error,

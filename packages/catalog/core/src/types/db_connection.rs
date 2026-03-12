@@ -1,5 +1,7 @@
 use flow_like::flow::execution::context::ExecutionContext;
-use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
+use flow_like_storage::databases::vector::{
+    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+};
 use flow_like_types::{
     Cacheable, JsonSchema,
     json::{Deserialize, Serialize},
@@ -14,7 +16,7 @@ pub struct NodeDBConnection {
 
 #[derive(Clone)]
 pub struct CachedDB {
-    pub db: Arc<RwLock<LanceDBVectorStore>>,
+    pub db: Arc<RwLock<BufferedVectorStore<LanceDBVectorStore>>>,
 }
 
 impl Cacheable for CachedDB {
@@ -24,6 +26,15 @@ impl Cacheable for CachedDB {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+impl CachedDB {
+    pub async fn ensure_flushed(&self) -> flow_like_types::Result<()> {
+        if self.db.read().await.is_dirty() {
+            self.db.write().await.flush().await?;
+        }
+        Ok(())
     }
 }
 

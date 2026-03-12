@@ -112,8 +112,9 @@ impl NodeLogic for HybridSearchLocalDatabaseNode {
         let limit: i64 = context.evaluate_pin("limit").await?;
         let offset: i64 = context.evaluate_pin("offset").await?;
         let rerank: bool = context.evaluate_pin("rerank").await?;
-        let database = database.load(context).await?.db.clone();
-        let database = database.read().await;
+        let cached_db = database.load(context).await?;
+        cached_db.ensure_flushed().await?;
+        let database = cached_db.db.read().await;
         let results = database
             .hybrid_search(
                 vector,
