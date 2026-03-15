@@ -19,7 +19,7 @@ use crate::routes::registry::server::{TargetSpec, all_known_targets, compilation
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_types::dispatch::{CompilationJob, CompilationTarget};
+use flow_like_types::dispatch::{CompilationJob, CompilationJobRef, CompilationTarget};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -388,18 +388,41 @@ impl CompilationDispatcher {
             CompilationDispatchError::Configuration("SQS client not initialized".into())
         })?;
 
-        let message_body = serde_json::to_string(job)
+        // Stage the full payload to object storage and send only a compact
+        // remote reference through SQS. The serialised CompilationJob with
+        // presigned URLs for all targets easily exceeds the ~8 KB ECS
+        // container-override env var limit.
+        let payload_bytes = serde_json::to_vec(job)
+            .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
+
+        let staging_path = Path::from(format!("tmp/compilation/{}.json", job.job_id));
+        self.content_bucket
+            .put(&staging_path, payload_bytes)
+            .await
+            .map_err(|e| {
+                CompilationDispatchError::Sqs(format!("Failed to stage compilation payload: {e}"))
+            })?;
+
+        let presigned_url = self
+            .content_bucket
+            .sign("GET", &staging_path, Duration::from_secs(86400))
+            .await
+            .map_err(|e| {
+                CompilationDispatchError::Sqs(format!("Failed to sign staging URL: {e}"))
+            })?;
+
+        let reference = CompilationJobRef::Remote {
+            remote_url: presigned_url.to_string(),
+        };
+        let message_body = serde_json::to_string(&reference)
             .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
 
         let mut req = client
             .send_message()
             .queue_url(queue_url)
             .message_body(&message_body)
-            // MessageGroupId enables fair queueing per package on standard queues
-            // and ordering per group on FIFO queues.
             .message_group_id(&job.package_id);
 
-        // MessageDeduplicationId is only valid for FIFO queues
         if queue_url.ends_with(".fifo") {
             req = req.message_deduplication_id(&job.job_id);
         }
@@ -407,6 +430,12 @@ impl CompilationDispatcher {
         req.send()
             .await
             .map_err(|e| CompilationDispatchError::Sqs(e.to_string()))?;
+
+        tracing::info!(
+            job_id = %job.job_id,
+            staging_path = %staging_path,
+            "Dispatched compilation via SQS (staged to S3)"
+        );
 
         Ok(CompilationDispatchResponse {
             job_id: job.job_id.clone(),

@@ -26,57 +26,58 @@ use rig::OneOrMany;
 // Conversion: rig Message → SDK ChatMessage
 // =============================================================================
 
-fn rig_user_content_to_parts(content: &OneOrMany<UserContent>) -> Vec<ContentPart> {
-    content
-        .iter()
-        .map(|uc| match uc {
-            UserContent::Text(t) => ContentPart::Text {
-                text: t.text.clone(),
+fn rig_user_content_to_part(uc: &UserContent) -> ContentPart {
+    match uc {
+        UserContent::Text(t) => ContentPart::Text {
+            text: t.text.clone(),
+        },
+        UserContent::Image(img) => ContentPart::Image {
+            image: ImageData {
+                url: img.data.to_string(),
+                media_type: img.media_type.as_ref().map(|m| m.to_mime_type().into()),
+                detail: img.detail.as_ref().map(|d| format!("{d:?}").to_lowercase()),
             },
-            UserContent::Image(img) => ContentPart::Image {
-                image: ImageData {
-                    url: img.data.to_string(),
-                    media_type: img.media_type.as_ref().map(|m| m.to_mime_type().into()),
-                    detail: img.detail.as_ref().map(|d| format!("{d:?}").to_lowercase()),
+        },
+        UserContent::Audio(aud) => ContentPart::Audio {
+            audio: AudioData {
+                url: aud.data.to_string(),
+                media_type: aud.media_type.as_ref().map(|m| m.to_mime_type().into()),
+            },
+        },
+        UserContent::Video(vid) => ContentPart::Video {
+            video: VideoData {
+                url: vid.data.to_string(),
+                media_type: vid.media_type.as_ref().map(|m| m.to_mime_type().into()),
+            },
+        },
+        UserContent::Document(doc) => ContentPart::Document {
+            document: DocumentData {
+                url: doc.data.to_string(),
+                media_type: doc.media_type.as_ref().map(|m| m.to_mime_type().into()),
+            },
+        },
+        UserContent::ToolResult(tr) => {
+            let text = tr
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    ToolResultContent::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ContentPart::ToolResult {
+                tool_result: ToolResultData {
+                    id: tr.id.clone(),
+                    content: text,
                 },
-            },
-            UserContent::Audio(aud) => ContentPart::Audio {
-                audio: AudioData {
-                    url: aud.data.to_string(),
-                    media_type: aud.media_type.as_ref().map(|m| m.to_mime_type().into()),
-                },
-            },
-            UserContent::Video(vid) => ContentPart::Video {
-                video: VideoData {
-                    url: vid.data.to_string(),
-                    media_type: vid.media_type.as_ref().map(|m| m.to_mime_type().into()),
-                },
-            },
-            UserContent::Document(doc) => ContentPart::Document {
-                document: DocumentData {
-                    url: doc.data.to_string(),
-                    media_type: doc.media_type.as_ref().map(|m| m.to_mime_type().into()),
-                },
-            },
-            UserContent::ToolResult(tr) => {
-                let text = tr
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ToolResultContent::Text(t) => Some(t.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                ContentPart::ToolResult {
-                    tool_result: ToolResultData {
-                        id: tr.id.clone(),
-                        content: text,
-                    },
-                }
             }
-        })
-        .collect()
+        }
+    }
+}
+
+fn rig_user_content_to_parts(content: &OneOrMany<UserContent>) -> Vec<ContentPart> {
+    content.iter().map(rig_user_content_to_part).collect()
 }
 
 fn rig_assistant_content_to_parts(
@@ -176,6 +177,8 @@ fn rig_message_to_chat(msg: &Message) -> ChatMessage {
 }
 
 fn completion_request_to_messages(request: &CompletionRequest) -> Vec<ChatMessage> {
+    use rig::message::{ToolResultContent, UserContent};
+
     let mut messages = Vec::new();
 
     if let Some(preamble) = &request.preamble {
@@ -183,7 +186,50 @@ fn completion_request_to_messages(request: &CompletionRequest) -> Vec<ChatMessag
     }
 
     for msg in request.chat_history.iter() {
-        messages.push(rig_message_to_chat(msg));
+        match msg {
+            // Flatten User messages that contain ToolResult items into
+            // separate "tool"-role messages (OpenAI format).
+            Message::User { content } => {
+                let has_tool_results =
+                    content.iter().any(|c| matches!(c, UserContent::ToolResult(_)));
+
+                if has_tool_results {
+                    for uc in content.iter() {
+                        match uc {
+                            UserContent::ToolResult(tr) => {
+                                let text = tr
+                                    .content
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        ToolResultContent::Text(t) => Some(t.text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                messages.push(ChatMessage {
+                                    role: "tool".into(),
+                                    content: ChatContent::Text { content: text },
+                                    tool_calls: None,
+                                    tool_call_id: Some(tr.id.clone()),
+                                });
+                            }
+                            other => {
+                                let parts = vec![rig_user_content_to_part(other)];
+                                messages.push(ChatMessage {
+                                    role: "user".into(),
+                                    content: ChatContent::Parts { parts },
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    messages.push(rig_message_to_chat(msg));
+                }
+            }
+            _ => messages.push(rig_message_to_chat(msg)),
+        }
     }
 
     messages
@@ -484,7 +530,7 @@ impl CompletionModel for FlowLikeCompletionModel {
         request: CompletionRequest,
     ) -> impl std::future::Future<
         Output = Result<CompletionResponse<Self::Response>, CompletionError>,
-    > + Send {
+    > {
         crate::host::info(&format!(
             "FlowLikeCompletionModel::completion: tools={}, history={}",
             request.tools.len(),
@@ -524,7 +570,7 @@ impl CompletionModel for FlowLikeCompletionModel {
         request: CompletionRequest,
     ) -> impl std::future::Future<
         Output = Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>,
-    > + Send {
+    > {
         let request_json = serialize_llm_request(&request);
         let result = request_json.and_then(|json| {
             let bit_json = serde_json::to_string(&self.bit).ok()?;

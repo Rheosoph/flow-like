@@ -34,6 +34,14 @@ import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
 	Button,
 	DropdownMenu,
 	DropdownMenuContent,
@@ -353,12 +361,15 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const searchParams = useSearchParams();
 	const pathname = usePathname();
 	const sessionIdParameter = searchParams.get("sessionId") ?? "";
+	const prefilledMessage = searchParams.get("message");
 	const setQueryParams = useSetQueryParams();
 	const chatRef = useRef<IChatRef>(null);
 	const activeSubscriptions = useRef<string[]>([]);
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
 	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
+	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
+	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
 	const [activeInteractions, setActiveInteractions] = useState<
 		IInteractionRequest[]
@@ -1329,6 +1340,31 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		[messagesLoaded, messages],
 	);
 
+	// Show verification dialog when prefilled message is present and no history yet
+	useEffect(() => {
+		if (
+			prefilledMessage &&
+			showWelcome &&
+			!prefilledConsumed.current
+		) {
+			setShowPrefilledConfirm(true);
+		}
+	}, [prefilledMessage, showWelcome]);
+
+	const handlePrefilledConfirm = useCallback(() => {
+		if (!prefilledMessage) return;
+		prefilledConsumed.current = true;
+		setShowPrefilledConfirm(false);
+		setQueryParams("message", undefined);
+		handleSendMessage(prefilledMessage);
+	}, [prefilledMessage, handleSendMessage, setQueryParams]);
+
+	const handlePrefilledCancel = useCallback(() => {
+		prefilledConsumed.current = true;
+		setShowPrefilledConfirm(false);
+		setQueryParams("message", undefined);
+	}, [setQueryParams]);
+
 	return (
 		<>
 			{!messagesLoaded ? (
@@ -1357,6 +1393,25 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					onRespondToInteraction={handleRespondToInteraction}
 				/>
 			)}
+			<AlertDialog open={showPrefilledConfirm} onOpenChange={(open) => {
+				if (!open) handlePrefilledCancel();
+			}}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Send prefilled message?</AlertDialogTitle>
+						<AlertDialogDescription>
+							This chat was opened with a prefilled message. Please review it before sending:
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto break-words whitespace-pre-wrap">
+						{prefilledMessage}
+					</div>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={handlePrefilledConfirm}>Send</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</>
 	);
 });

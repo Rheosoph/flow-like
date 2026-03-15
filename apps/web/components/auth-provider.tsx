@@ -291,6 +291,11 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		if (typeof window !== "undefined" && pathname) {
 			const returnUrl = window.location.pathname + window.location.search;
 			if (returnUrl && returnUrl !== "/") {
+				// Use both storages: localStorage survives cross-context mobile
+				// redirects, sessionStorage is the fallback
+				try {
+					localStorage.setItem("flow-like-return-url", returnUrl);
+				} catch {}
 				sessionStorage.setItem("flow-like-return-url", returnUrl);
 			}
 		}

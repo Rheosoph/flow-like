@@ -57,6 +57,23 @@ pub struct CompilationTarget {
     pub checksum_upload_url: String,
 }
 
+/// Reference to a compilation job that may be either embedded inline or
+/// stored remotely behind a (presigned) URL.
+///
+/// When the serialised `CompilationJob` exceeds ECS container-override env
+/// var size limits (~8 KB) the API stages the full payload to object storage
+/// and sends only the URL through SQS.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CompilationJobRef {
+    /// Full job embedded in the message body.
+    Inline(CompilationJob),
+    /// Job stored at a remote URL (presigned S3 GET URL).
+    Remote {
+        remote_url: String,
+    },
+}
+
 /// Result reported back to the API from a compilation worker.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompilationResult {
