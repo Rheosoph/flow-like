@@ -57,7 +57,7 @@ function InstalledPackageCard({
 	onUpdate: () => void;
 	isUpdating: boolean;
 	isUninstalling: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	const displayName = pkg.metadata?.name ?? pkg.manifest.name;
 	const displayDesc = pkg.metadata?.description ?? pkg.manifest.description;

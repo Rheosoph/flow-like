@@ -131,8 +131,14 @@ impl RegistryClient {
     }
 
     /// Search packages via the remote registry API
-    pub async fn search_with_token(&self, filters: &SearchFilters, auth_token: Option<&str>) -> Result<SearchResults> {
-        let effective_token = auth_token.map(String::from).or_else(|| self.config.auth_token.clone());
+    pub async fn search_with_token(
+        &self,
+        filters: &SearchFilters,
+        auth_token: Option<&str>,
+    ) -> Result<SearchResults> {
+        let effective_token = auth_token
+            .map(String::from)
+            .or_else(|| self.config.auth_token.clone());
         let url = self.build_search_url(filters, effective_token.is_some());
 
         let mut request = self.http_client.get(&url);
@@ -205,7 +211,9 @@ impl RegistryClient {
 
         let url = format!("{}/download", self.config.default_registry);
         let mut req = self.http_client.post(&url).json(&request);
-        let effective_token = auth_token.map(String::from).or_else(|| self.config.auth_token.clone());
+        let effective_token = auth_token
+            .map(String::from)
+            .or_else(|| self.config.auth_token.clone());
         if let Some(token) = &effective_token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
@@ -242,12 +250,14 @@ impl RegistryClient {
         tokio::fs::write(&wasm_path, &wasm_data).await?;
 
         let now = Utc::now();
+        let wasm_hash = Some(calculate_hash(&wasm_data));
         let installed_version = InstalledVersion {
             version: download.version.clone(),
             wasm_path: wasm_path.clone(),
             installed_at: now,
             manifest: download.manifest.clone(),
             metadata: download.metadata.clone(),
+            wasm_hash: wasm_hash.clone(),
         };
 
         let mut state = self.state.write().await;
@@ -273,6 +283,7 @@ impl RegistryClient {
                 manifest: download.manifest.clone(),
                 versions: HashMap::from([(download.version.clone(), installed_version)]),
                 metadata: download.metadata.clone(),
+                wasm_hash,
             };
             state
                 .installed
@@ -313,11 +324,21 @@ impl RegistryClient {
     }
 
     /// Install a package (download + register)
-    pub async fn install(&self, package_id: &str, version: Option<&str>, auth_token: Option<&str>) -> Result<CachedPackage> {
+    pub async fn install(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+    ) -> Result<CachedPackage> {
         self.download_package(package_id, version, auth_token).await
     }
 
-    pub async fn install_version(&self, package_id: &str, version: &str, auth_token: Option<&str>) -> Result<CachedPackage> {
+    pub async fn install_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        auth_token: Option<&str>,
+    ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if let Some(iv) = installed.get_version(version) {
@@ -329,7 +350,8 @@ impl RegistryClient {
         }
         drop(state);
 
-        self.download_package(package_id, Some(version), auth_token).await
+        self.download_package(package_id, Some(version), auth_token)
+            .await
     }
 
     pub async fn batch_install(
@@ -339,7 +361,9 @@ impl RegistryClient {
     ) -> Result<Vec<(String, Result<CachedPackage>)>> {
         let mut results = Vec::with_capacity(packages.len());
         for (package_id, version) in packages {
-            let result = self.install(package_id, version.as_deref(), auth_token).await;
+            let result = self
+                .install(package_id, version.as_deref(), auth_token)
+                .await;
             results.push((package_id.clone(), result));
         }
         Ok(results)
@@ -367,8 +391,56 @@ impl RegistryClient {
         Ok(state.installed.values().cloned().collect())
     }
 
+    /// Check which local packages have a changed WASM file on disk.
+    /// Returns a list of (package_id, stored_hash, current_hash) for stale packages.
+    pub async fn check_local_staleness(&self) -> Vec<(String, String, String)> {
+        let state = self.state.read().await;
+        let locals: Vec<_> = state
+            .installed
+            .values()
+            .filter(|p| matches!(p.source, PackageSource::Local { .. }))
+            .cloned()
+            .collect();
+        drop(state);
+
+        let mut stale = Vec::new();
+        for pkg in locals {
+            let stored_hash = match &pkg.wasm_hash {
+                Some(h) => h.clone(),
+                None => continue,
+            };
+            let current_hash = match tokio::fs::read(&pkg.wasm_path).await {
+                Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+                Err(_) => continue,
+            };
+            if stored_hash != current_hash {
+                stale.push((pkg.id.clone(), stored_hash, current_hash));
+            }
+        }
+        stale
+    }
+
+    /// Update the stored wasm_hash for a local package after reloading.
+    pub async fn update_local_hash(&self, package_id: &str, new_hash: String) -> Result<()> {
+        let mut state = self.state.write().await;
+        if let Some(pkg) = state.installed.get_mut(package_id) {
+            if matches!(pkg.source, PackageSource::Local { .. }) {
+                pkg.wasm_hash = Some(new_hash.clone());
+                for iv in pkg.versions.values_mut() {
+                    iv.wasm_hash = Some(new_hash.clone());
+                }
+            }
+        }
+        drop(state);
+        self.save_state().await?;
+        Ok(())
+    }
+
     /// Check for updates to installed packages
-    pub async fn check_updates(&self, auth_token: Option<&str>) -> Result<Vec<(String, String, String)>> {
+    pub async fn check_updates(
+        &self,
+        auth_token: Option<&str>,
+    ) -> Result<Vec<(String, String, String)>> {
         let state = self.state.read().await;
         let installed: Vec<_> = state
             .installed
@@ -497,12 +569,17 @@ impl RegistryClient {
         manifest: PackageManifest,
     ) -> Result<InstalledPackage> {
         let now = Utc::now();
+        let wasm_hash = match tokio::fs::read(wasm_path).await {
+            Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
+            Err(_) => None,
+        };
         let version_entry = InstalledVersion {
             version: manifest.version.clone(),
             wasm_path: wasm_path.to_path_buf(),
             installed_at: now,
             manifest: manifest.clone(),
             metadata: None,
+            wasm_hash: wasm_hash.clone(),
         };
         let installed = InstalledPackage {
             id: manifest.id.clone(),
@@ -515,6 +592,7 @@ impl RegistryClient {
             manifest,
             versions: HashMap::from([(version_entry.version.clone(), version_entry)]),
             metadata: None,
+            wasm_hash,
         };
 
         let mut state = self.state.write().await;

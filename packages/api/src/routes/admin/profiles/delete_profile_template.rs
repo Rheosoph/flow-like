@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     entity::template_profile, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
@@ -31,6 +32,7 @@ pub async fn delete_profile_template(
     user.check_global_permission(&state, GlobalPermission::WriteBits)
         .await?;
 
+    let audit_profile_id = profile_id.clone();
     let profiles = template_profile::Entity::delete_many()
         .filter(template_profile::Column::Id.eq(profile_id))
         .exec_with_returning(&state.db)
@@ -38,5 +40,6 @@ pub async fn delete_profile_template(
 
     let profiles: Vec<Profile> = profiles.into_iter().map(Profile::from).collect();
 
+    audit!(state, user, "admin.profile.delete", "profile_template", audit_profile_id, "Profile template deleted");
     Ok(Json(profiles))
 }

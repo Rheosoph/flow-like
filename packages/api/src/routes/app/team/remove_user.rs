@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{app_package, membership, role},
     error::ApiError,
@@ -105,5 +106,6 @@ pub async fn remove_user(
 
     txn.commit().await?;
 
+    audit_branch!(state, user, app_id, "membership.remove", "Membership", sub, "User removed from team");
     Ok(Json(()))
 }

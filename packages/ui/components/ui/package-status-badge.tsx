@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CheckCircle, Download, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle, Download, Loader2, RefreshCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Badge } from "./badge";
 
@@ -9,7 +9,8 @@ export type CompileStatus =
 	| "downloading"
 	| "compiling"
 	| "ready"
-	| "error";
+	| "error"
+	| "stale";
 
 type ActiveStatus = Exclude<CompileStatus, "idle">;
 
@@ -42,6 +43,11 @@ const STATUS_CONFIG: Record<ActiveStatus, StatusConfig> = {
 		label: "Error",
 		icon: AlertCircle,
 		className: "bg-destructive/10 text-destructive border-destructive/20",
+	},
+	stale: {
+		label: "Changed",
+		icon: RefreshCw,
+		className: "bg-orange-500/10 text-orange-600 border-orange-500/20",
 	},
 };
 

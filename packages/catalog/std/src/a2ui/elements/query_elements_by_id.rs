@@ -60,8 +60,9 @@ impl NodeLogic for QueryElementsById {
             "element_ids",
             "Element IDs",
             "Array of matching element IDs",
-            VariableType::Struct,
-        );
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_output_pin(
             "count",

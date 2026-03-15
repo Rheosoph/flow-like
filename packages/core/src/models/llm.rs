@@ -5,7 +5,7 @@ use flow_like_model_provider::llm::{
     ModelLogic, anthropic::AnthropicModel, cohere::CohereModel, deepseek::DeepseekModel,
     galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel, huggingface::HuggingfaceModel,
     hyperbolic::HyperbolicModel, lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel,
-    moonshot::MoonshotModel, ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
+    moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
     perplexity::PerplexityModel, together::TogetherModel, voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_types::{Result, sync::Mutex, tokio::time::interval};
@@ -146,6 +146,7 @@ impl ModelFactory {
             "custom:moonshot" => Arc::new(MoonshotModel::from_provider(model_provider).await?),
             "custom:galadriel" => Arc::new(GaladrielModel::from_provider(model_provider).await?),
             "custom:mira" => Arc::new(MiraModel::from_provider(model_provider).await?),
+            "custom:mozilla" => Arc::new(MozillaModel::from_provider(model_provider).await?),
             "custom:lmstudio" => Arc::new(LMStudioModel::from_provider(model_provider).await?),
             _ => {
                 return Err(flow_like_types::anyhow!(

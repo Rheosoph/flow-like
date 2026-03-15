@@ -401,10 +401,10 @@ async fn copilot_sdk_chat_internal(
         ));
     }
 
-    // For Frontend mode, restrict to ONLY emit_ui tool and exclude file editing tools
+    // For Frontend mode, restrict to ONLY emit_ui + get_component_schema and exclude file editing tools
     let (available_tools, excluded_tools) = match scope {
         CopilotScope::Frontend => (
-            Some(vec!["emit_ui".to_string()]),
+            Some(vec!["emit_ui".to_string(), "get_component_schema".to_string()]),
             Some(vec![
                 "Read".to_string(),
                 "Edit".to_string(),
@@ -595,38 +595,21 @@ pub struct CopilotAuthStatus {
     pub login: Option<String>,
 }
 
-/// Resolve the Copilot CLI path, searching beyond the (possibly limited) bundled-app PATH.
-///
-/// On macOS/Linux, apps launched from Finder/Dock inherit a minimal PATH that
-/// excludes npm-global, nvm, volta, mise, and Homebrew directories. This
-/// function probes those common locations so that prod builds can find the CLI.
-fn find_copilot_cli_path() -> Option<std::path::PathBuf> {
+/// Collect extra bin directories that are typically absent from a bundled-app
+/// PATH (Homebrew, nvm, volta, fnm, mise, pnpm, bun, npm-global, …).
+fn extra_bin_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
 
-    // 1. Explicit override via env var (the SDK checks this too, but we do it
-    //    first so the caller can pass it through `cli_path`).
-    if let Ok(p) = std::env::var("COPILOT_CLI_PATH") {
-        let p = PathBuf::from(p.trim());
-        if p.exists() {
-            return Some(p);
-        }
-    }
+    let Some(home) = dirs_next::home_dir() else {
+        return vec![];
+    };
 
-    // 2. Scan common locations that may not be in the bundled-app PATH.
-    let home = dirs_next::home_dir()?;
-
-    // Extra directories that are typically absent from a bundled-app PATH.
-    let mut extra_dirs: Vec<PathBuf> = vec![
-        // Homebrew (Apple Silicon & Intel)
+    let mut dirs: Vec<PathBuf> = vec![
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
-        // Volta
         home.join(".volta/bin"),
-        // Bun
         home.join(".bun/bin"),
-        // pnpm global
         home.join(".local/share/pnpm"),
-        // Generic local bin
         home.join(".local/bin"),
     ];
 
@@ -636,29 +619,44 @@ fn find_copilot_cli_path() -> Option<std::path::PathBuf> {
         .unwrap_or_else(|_| home.join(".nvm"));
     if let Ok(entries) = std::fs::read_dir(nvm_dir.join("versions/node")) {
         for entry in entries.flatten() {
-            extra_dirs.push(entry.path().join("bin"));
+            dirs.push(entry.path().join("bin"));
         }
     }
 
     // fnm
     if let Ok(entries) = std::fs::read_dir(home.join(".local/share/fnm/node-versions")) {
         for entry in entries.flatten() {
-            extra_dirs.push(entry.path().join("installation/bin"));
+            dirs.push(entry.path().join("installation/bin"));
         }
     }
 
     // mise / rtx node shims
-    extra_dirs.push(home.join(".local/share/mise/shims"));
+    dirs.push(home.join(".local/share/mise/shims"));
 
-    // npm global prefix (covers `npm config get prefix` + /bin)
-    let npm_prefix_dirs = [
-        home.join(".npm-global/bin"),
-        home.join(".npm-packages/bin"),
-        home.join(".npm/bin"),
-    ];
-    extra_dirs.extend_from_slice(&npm_prefix_dirs);
+    // npm global prefix variants
+    dirs.push(home.join(".npm-global/bin"));
+    dirs.push(home.join(".npm-packages/bin"));
+    dirs.push(home.join(".npm/bin"));
 
-    for dir in &extra_dirs {
+    dirs
+}
+
+/// Resolve the Copilot CLI path, searching beyond the (possibly limited) bundled-app PATH.
+///
+/// On macOS/Linux, apps launched from Finder/Dock inherit a minimal PATH that
+/// excludes npm-global, nvm, volta, mise, and Homebrew directories. This
+/// function probes those common locations so that prod builds can find the CLI.
+fn find_copilot_cli_path() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    if let Ok(p) = std::env::var("COPILOT_CLI_PATH") {
+        let p = PathBuf::from(p.trim());
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    for dir in &extra_bin_dirs() {
         let candidate = dir.join("copilot");
         if candidate.exists() {
             return Some(candidate);
@@ -666,6 +664,24 @@ fn find_copilot_cli_path() -> Option<std::path::PathBuf> {
     }
 
     None
+}
+
+/// Build an augmented PATH that prepends the extra bin directories to the
+/// current PATH so that the spawned copilot CLI process (a Node.js script)
+/// can locate `node` and other tools even in production builds.
+fn augmented_path() -> String {
+    let extra: Vec<String> = extra_bin_dirs()
+        .into_iter()
+        .filter(|d| d.exists())
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect();
+
+    let current = std::env::var("PATH").unwrap_or_default();
+    if extra.is_empty() {
+        return current;
+    }
+
+    format!("{}:{}", extra.join(":"), current)
 }
 
 /// Start the GitHub Copilot SDK client
@@ -683,12 +699,14 @@ pub async fn copilot_sdk_start(
     if let Some(url) = cli_url {
         builder = builder.cli_url(url);
     } else if let Some(cli_path) = find_copilot_cli_path() {
-        // In production builds the app inherits a minimal PATH that often does
-        // not include npm-global / nvm / volta directories. Resolve the CLI
-        // path ourselves and hand it to the SDK so it doesn't rely solely on
-        // `which`.
         builder = builder.cli_path(cli_path);
     }
+
+    // In production builds the app inherits a minimal PATH that often does
+    // not include directories where `node` lives. The copilot CLI is a
+    // Node.js script (#!/usr/bin/env node), so the spawned process needs
+    // node on its PATH. Augment PATH with common Node/tool directories.
+    builder = builder.env("PATH", augmented_path());
 
     let client = builder
         .build()
@@ -713,8 +731,9 @@ pub async fn copilot_sdk_stop() -> Result<(), String> {
     };
 
     if let Some(client) = client {
-        if let Err(e) = client.stop().await {
-            return Err(format!("Failed to stop Copilot client: {}", e));
+        let stop_errors = client.stop().await;
+        if !stop_errors.is_empty() {
+            return Err(format!("Failed to stop Copilot client: {:?}", stop_errors));
         }
     }
 
@@ -827,4 +846,249 @@ pub async fn copilot_sdk_create_agent_session(
         .map_err(|e| format!("Failed to create session: {}", e))?;
 
     Ok(session.session_id().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_test_client() -> Option<Client> {
+        let cli_path = find_copilot_cli_path();
+        if cli_path.is_none() {
+            eprintln!("SKIP: copilot CLI not found");
+            return None;
+        }
+
+        let mut builder = Client::builder().use_stdio(true).log_level(LogLevel::Error);
+
+        if let Some(path) = cli_path {
+            builder = builder.cli_path(path);
+        }
+        builder = builder.env("PATH", augmented_path());
+
+        Some(builder.build().expect("Client::builder().build() failed"))
+    }
+
+    async fn start_test_client() -> Option<Client> {
+        let client = build_test_client()?;
+        match client.start().await {
+            Ok(()) => Some(client),
+            Err(e) => {
+                let err_str = format!("{:?}", e);
+                if err_str.contains("ProtocolMismatch") {
+                    eprintln!(
+                        "SKIP: protocol mismatch — SDK expects v{}, CLI reports v3. \
+                         Update copilot-sdk dependency.",
+                        copilot_sdk::SDK_PROTOCOL_VERSION
+                    );
+                } else {
+                    eprintln!("SKIP: client.start() failed: {}", err_str);
+                }
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn extra_bin_dirs_contains_common_locations() {
+        let dirs = extra_bin_dirs();
+        assert!(!dirs.is_empty(), "extra_bin_dirs should not be empty");
+
+        let paths_str: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        let has_homebrew = paths_str.iter().any(|p| p.contains("homebrew"));
+        let has_usr_local = paths_str.iter().any(|p| p.contains("/usr/local/bin"));
+        assert!(
+            has_homebrew || has_usr_local,
+            "Should include /opt/homebrew/bin or /usr/local/bin. Got: {:?}",
+            paths_str
+        );
+    }
+
+    #[test]
+    fn augmented_path_includes_existing_dirs() {
+        let path = augmented_path();
+        assert!(!path.is_empty(), "augmented_path should not be empty");
+        // Must contain original PATH
+        let current = std::env::var("PATH").unwrap_or_default();
+        assert!(
+            path.contains(&current),
+            "augmented PATH should contain original PATH"
+        );
+    }
+
+    #[test]
+    fn augmented_path_has_node_accessible() {
+        let path = augmented_path();
+        let found_node = path.split(':').any(|dir| {
+            let candidate = std::path::Path::new(dir).join("node");
+            candidate.exists()
+        });
+        assert!(
+            found_node,
+            "augmented PATH should include a directory containing `node`. PATH = {}",
+            path
+        );
+    }
+
+    #[test]
+    fn find_copilot_cli_resolves() {
+        let cli_path = find_copilot_cli_path();
+        assert!(
+            cli_path.is_some(),
+            "find_copilot_cli_path() returned None — the `copilot` CLI binary is not installed or not on PATH. \
+             Searched in: {:?}",
+            extra_bin_dirs()
+                .iter()
+                .filter(|d| d.exists())
+                .collect::<Vec<_>>()
+        );
+        if let Some(ref p) = cli_path {
+            assert!(
+                p.exists(),
+                "resolved copilot CLI path does not exist: {:?}",
+                p
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn copilot_sdk_client_starts_and_stops() {
+        let Some(client) = build_test_client() else {
+            return;
+        };
+
+        let start_result = client.start().await;
+
+        if let Err(ref e) = start_result {
+            let err_str = format!("{:?}", e);
+            if err_str.contains("ProtocolMismatch") {
+                panic!(
+                    "COPILOT SDK PROTOCOL MISMATCH: The copilot-sdk Rust crate (protocol v{}) \
+                     is incompatible with the installed Copilot CLI (protocol v3). \
+                     Update the copilot-sdk dependency in Cargo.toml to a version supporting \
+                     protocol v3. Error: {}",
+                    copilot_sdk::SDK_PROTOCOL_VERSION,
+                    err_str
+                );
+            }
+            panic!("client.start() failed: {:?}", e);
+        }
+
+        let stop_errors = client.stop().await;
+        assert!(
+            stop_errors.is_empty(),
+            "client.stop() had errors: {:?}",
+            stop_errors
+        );
+    }
+
+    #[tokio::test]
+    async fn copilot_sdk_auth_status() {
+        let Some(client) = start_test_client().await else {
+            return;
+        };
+
+        let auth = client.get_auth_status().await;
+        assert!(auth.is_ok(), "get_auth_status() failed: {:?}", auth.err());
+
+        let status = auth.unwrap();
+        println!(
+            "Auth status: authenticated={}, login={:?}",
+            status.is_authenticated, status.login
+        );
+        assert!(
+            status.is_authenticated,
+            "Copilot is not authenticated. Run `copilot auth login` first."
+        );
+
+        let _ = client.stop().await;
+    }
+
+    #[tokio::test]
+    async fn copilot_sdk_list_models() {
+        let Some(client) = start_test_client().await else {
+            return;
+        };
+
+        let models = client.list_models().await;
+        assert!(models.is_ok(), "list_models() failed: {:?}", models.err());
+
+        let models = models.unwrap();
+        println!("Available models ({}):", models.len());
+        for m in &models {
+            println!("  - {} ({})", m.name, m.id);
+        }
+        assert!(
+            !models.is_empty(),
+            "No models returned from Copilot SDK — check subscription/auth"
+        );
+
+        let _ = client.stop().await;
+    }
+
+    #[tokio::test]
+    async fn copilot_sdk_create_session_and_chat() {
+        let Some(client) = start_test_client().await else {
+            return;
+        };
+
+        let config = copilot_sdk::SessionConfig {
+            streaming: true,
+            ..Default::default()
+        };
+
+        let session = client.create_session(config).await;
+        assert!(
+            session.is_ok(),
+            "create_session() failed: {:?}",
+            session.err()
+        );
+        let session = session.unwrap();
+
+        let mut events = session.subscribe();
+        let send_result = session.send("Reply with only the word 'pong'").await;
+        assert!(
+            send_result.is_ok(),
+            "session.send() failed: {:?}",
+            send_result.err()
+        );
+
+        let mut got_response = false;
+        let mut full_response = String::new();
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                match events.recv().await {
+                    Ok(event) => match &event.data {
+                        copilot_sdk::SessionEventData::AssistantMessageDelta(delta) => {
+                            full_response.push_str(&delta.delta_content);
+                        }
+                        copilot_sdk::SessionEventData::AssistantMessage(msg) => {
+                            if full_response.is_empty() {
+                                full_response = msg.content.clone();
+                            }
+                            got_response = true;
+                        }
+                        copilot_sdk::SessionEventData::SessionIdle(_) => break,
+                        copilot_sdk::SessionEventData::SessionError(err) => {
+                            panic!("Session error: {:?}", err);
+                        }
+                        _ => {}
+                    },
+                    Err(e) => {
+                        panic!("Event receive error: {}", e);
+                    }
+                }
+            }
+        })
+        .await;
+
+        assert!(timeout.is_ok(), "Chat timed out after 30s");
+        assert!(
+            !full_response.is_empty(),
+            "Got empty response from Copilot session"
+        );
+        println!("Chat response: {}", full_response);
+
+        let _ = client.stop().await;
+    }
 }

@@ -10,6 +10,7 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::LanguageParams,
     state::AppState,
+    audit_branch,
 };
 use axum::{
     Extension, Json,
@@ -112,6 +113,7 @@ pub async fn upsert_app(
         app.version = sea_orm::ActiveValue::Set(app_updates.version);
         app.updated_at = sea_orm::ActiveValue::Set(now);
         let app: app::Model = app.save(&state.db).await?.try_into()?;
+        audit_branch!(state, user, app_id, "app.update", "App", app_id, "Application updated");
         return Ok(Json(App::from(app)));
     }
 
@@ -288,5 +290,6 @@ pub async fn upsert_app(
             sea_orm::TransactionError::Transaction(db_err) => ApiError::from(db_err),
         })?;
 
+    audit_branch!(state, user, drive_app.id, "app.create", "App", drive_app.id, "Application created");
     Ok(Json(drive_app))
 }

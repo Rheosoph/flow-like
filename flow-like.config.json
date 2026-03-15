@@ -38,6 +38,12 @@
 	"wasm_registry_config": {
 		"on_member_leave": "stale"
 	},
+	"audit": {
+		"enabled": true,
+		"log_ip": false,
+		"ip_retention_days": null,
+		"require_signing": true
+	},
 	"supported_sinks": {
 		"http": true,
 		"webhook": true,

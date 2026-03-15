@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{app, membership, role},
     error::ApiError,
@@ -89,5 +90,6 @@ pub async fn delete_role(
         tracing::warn!(error = %e, "Failed to invalidate permission cache after role deletion");
     }
 
+    audit_branch!(state, user, app_id, "role.delete", "Role", role_id, "Role deleted");
     Ok(Json(()))
 }

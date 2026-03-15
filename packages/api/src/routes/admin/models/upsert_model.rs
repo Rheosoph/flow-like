@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     entity::llm_model, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
@@ -53,6 +54,8 @@ pub async fn upsert_model(
         .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default());
 
     let now = chrono::Utc::now().naive_utc();
+    let audit_slug = slug.clone();
+    let audit_name = body.name.clone();
 
     llm_model::Entity::insert(llm_model::ActiveModel {
         slug: Set(slug),
@@ -87,5 +90,6 @@ pub async fn upsert_model(
     .exec(&state.db)
     .await?;
 
+    audit!(state, user, "admin.model.upsert", "llm_model", audit_slug, format!("LLM model upserted: {}", audit_name));
     Ok(Json(()))
 }

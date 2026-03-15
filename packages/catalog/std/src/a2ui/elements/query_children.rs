@@ -53,8 +53,9 @@ impl NodeLogic for QueryChildren {
             "child_ids",
             "Child IDs",
             "Array of child element IDs",
-            VariableType::Struct,
-        );
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_output_pin(
             "count",

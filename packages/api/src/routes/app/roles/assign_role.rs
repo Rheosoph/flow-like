@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{app, membership, role},
     error::ApiError,
@@ -163,6 +164,7 @@ pub async fn assign_role(
             }
 
             txn.commit().await?;
+            audit_branch!(state, user, app_id, "role.assign", "Role", role_id, format!("Owner transferred to {}", sub));
             return Ok(Json(()));
         }
 
@@ -188,5 +190,6 @@ pub async fn assign_role(
         .await?;
 
     txn.commit().await?;
+    audit_branch!(state, user, app_id, "role.assign", "Role", role_id, format!("Role assigned to {}", sub));
     Ok(Json(()))
 }

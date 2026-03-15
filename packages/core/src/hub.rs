@@ -107,11 +107,45 @@ pub struct Hub {
     #[serde(default)]
     pub wasm_registry_config: WasmRegistryConfig,
 
+    /// Audit trail configuration
+    #[serde(default)]
+    pub audit: AuditConfig,
+
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
 
     #[serde(skip)]
     http_client: Option<Arc<HTTPClient>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct AuditConfig {
+    /// Master switch — when false, no audit entries are recorded
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether to capture client IP addresses in audit entries (GDPR consideration)
+    #[serde(default)]
+    pub log_ip: bool,
+    /// Auto-null stored IPs after this many days. None = retain indefinitely.
+    pub ip_retention_days: Option<u32>,
+    /// If true, the server will refuse to start without signing keys configured
+    #[serde(default)]
+    pub require_signing: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            log_ip: false,
+            ip_retention_days: None,
+            require_signing: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize, PartialEq)]

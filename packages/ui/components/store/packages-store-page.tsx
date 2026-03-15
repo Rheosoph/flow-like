@@ -347,9 +347,10 @@ export function PackageListContent({
 	const limit = 12;
 
 	const debouncedQuery = useDebounce(searchQuery, 300);
+	const isAuthenticated = !!auth?.user?.access_token;
 
 	const searchResults = useQuery({
-		queryKey: ["registry-search", debouncedQuery, sortBy, verifiedOnly, offset],
+		queryKey: ["registry-search", debouncedQuery, sortBy, verifiedOnly, offset, isAuthenticated],
 		queryFn: async () => {
 			if (!profile.data) return null;
 			const params = new URLSearchParams();

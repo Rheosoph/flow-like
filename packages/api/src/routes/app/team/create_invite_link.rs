@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission, entity::invite_link, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
@@ -62,5 +63,6 @@ pub async fn create_invite_link(
     let new_link: invite_link::ActiveModel = new_link.into();
     new_link.insert(&state.db).await?;
 
+    audit_branch!(state, user, app_id, "invite.create", "InviteLink", nonce, "Invite link created");
     Ok(Json(()))
 }

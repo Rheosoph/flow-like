@@ -10,7 +10,7 @@ use flow_like::{
     flow::{
         execution::context::ExecutionContext,
         node::{Node, NodeLogic, NodeScores},
-        pin::PinOptions,
+        pin::{PinOptions, ValueType},
         variable::VariableType,
     },
 };
@@ -275,7 +275,8 @@ impl NodeLogic for PiiMaskAiNode {
             "Array with detection details (type, original value, context)",
             VariableType::Struct,
         )
-        .set_schema::<Vec<PiiDetection>>();
+        .set_schema::<PiiDetection>()
+        .set_value_type(ValueType::Array);
 
         node.set_long_running(true);
 

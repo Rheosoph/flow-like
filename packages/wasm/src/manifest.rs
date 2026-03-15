@@ -441,7 +441,14 @@ pub enum WasmPackageCategory {
 
 impl std::fmt::Display for WasmPackageCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_value(self).unwrap_or_default().as_str().unwrap_or("OTHER"))
+        write!(
+            f,
+            "{}",
+            serde_json::to_value(self)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or("OTHER")
+        )
     }
 }
 
@@ -587,7 +594,6 @@ impl PackageManifest {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
-
 }
 
 #[cfg(test)]

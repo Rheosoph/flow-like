@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission, entity::invite_link, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
@@ -45,5 +46,6 @@ pub async fn remove_invite_link(
         .exec(&state.db)
         .await?;
 
+    audit_branch!(state, user, app_id, "invite.delete", "InviteLink", link_id, "Invite link removed");
     Ok(Json(()))
 }

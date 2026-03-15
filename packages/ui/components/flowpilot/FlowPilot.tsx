@@ -648,7 +648,8 @@ export function FlowPilot({
 								setLoadingPhase("searching");
 							} else if (
 								eventData.tool === "get_node_details" ||
-								eventData.tool === "list_board_nodes"
+								eventData.tool === "list_board_nodes" ||
+								eventData.tool === "get_component_schema"
 							) {
 								setLoadingPhase("reasoning");
 							} else if (

@@ -144,9 +144,10 @@ impl A2UICopilot {
             ));
         }
 
-        // Single-pass streaming — the model returns text with an embedded JSON block.
-        // ThinkTool may cause one round-trip for reasoning, so we allow up to 2 iterations.
-        let max_iterations = 2u64;
+        // The model returns text with an embedded JSON block.
+        // ThinkTool may cause multiple round-trips for reasoning (especially
+        // with deeper-thinking models like Sonnet/Opus), so allow enough iterations.
+        let max_iterations = 10u64;
 
         for _iteration in 0..max_iterations {
             let request = agent
@@ -270,6 +271,14 @@ impl A2UICopilot {
                 break;
             }
 
+            // If iteration text already contains extractable components,
+            // stop early — no need to burn more iterations.
+            if !iteration_text.is_empty()
+                && !Self::extract_components_from_response(&full_response).is_empty()
+            {
+                break;
+            }
+
             // Add assistant response to history for next iteration
             let assistant_content = OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                 OneOrMany::one(AssistantContent::Text(rig::message::Text {
@@ -380,10 +389,17 @@ impl A2UICopilot {
 
     /// Extract components from a markdown-fenced JSON block
     fn extract_from_fenced_json(response: &str) -> Option<Vec<SurfaceComponent>> {
-        // Find all ```json blocks and try each one
+        let response_lower = response.to_lowercase();
+
+        // Find all ```json blocks (case-insensitive) and try each one
         let mut search_from = 0;
-        while let Some(start) = response[search_from..].find("```json") {
+        while let Some(start) = response_lower[search_from..].find("```json") {
             let json_start = search_from + start + 7; // skip "```json"
+            // Skip optional trailing whitespace/newline after the fence marker
+            let json_start = response[json_start..]
+                .find(|c: char| !c.is_whitespace() || c == '\n')
+                .map(|i| json_start + i)
+                .unwrap_or(json_start);
             if let Some(end) = response[json_start..].find("```") {
                 let json_str = response[json_start..json_start + end].trim();
                 if let Some(components) = Self::parse_surface_json(json_str) {
@@ -399,7 +415,7 @@ impl A2UICopilot {
             let json_start = search_from + start + 4;
             if let Some(end) = response[json_start..].find("```") {
                 let json_str = response[json_start..json_start + end].trim();
-                if json_str.starts_with('{') {
+                if json_str.starts_with('{') || json_str.starts_with('[') {
                     if let Some(components) = Self::parse_surface_json(json_str) {
                         return Some(components);
                     }
@@ -466,25 +482,27 @@ impl A2UICopilot {
     /// Handles both `{"components": [...]}` wrapper and direct array `[...]`.
     fn parse_surface_json(json_str: &str) -> Option<Vec<SurfaceComponent>> {
         // Try as { "components": [...], ... } wrapper
-        if let Ok(wrapper) =
-            serde_json::from_str::<serde_json::Value>(json_str)
-        {
-            if let Some(components_val) = wrapper.get("components") {
-                if let Ok(components) =
-                    serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone())
-                {
-                    if !components.is_empty() {
-                        return Some(components);
+        match serde_json::from_str::<serde_json::Value>(json_str) {
+            Ok(wrapper) => {
+                if let Some(components_val) = wrapper.get("components") {
+                    match serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone()) {
+                        Ok(components) if !components.is_empty() => return Some(components),
+                        Err(e) => {
+                            println!("[A2UICopilot] Components array found but failed to deserialize: {}", e);
+                        }
+                        _ => {}
                     }
                 }
+            }
+            Err(e) => {
+                println!("[A2UICopilot] JSON parse error (will try other strategies): {}", e);
             }
         }
 
         // Try as direct array of components
-        if let Ok(components) = serde_json::from_str::<Vec<SurfaceComponent>>(json_str) {
-            if !components.is_empty() {
-                return Some(components);
-            }
+        match serde_json::from_str::<Vec<SurfaceComponent>>(json_str) {
+            Ok(components) if !components.is_empty() => return Some(components),
+            _ => {}
         }
 
         None

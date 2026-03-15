@@ -115,6 +115,7 @@ pub struct ModelProviderConfiguration {
     pub moonshot_config: Vec<MoonshotConfig>,
     pub galadriel_config: Vec<GaladrielConfig>,
     pub mira_config: Vec<MiraConfig>,
+    pub mozilla_config: Vec<MozillaConfig>,
     pub xai_config: Vec<XAIConfig>,
 }
 
@@ -220,6 +221,12 @@ pub struct GaladrielConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MiraConfig {
+    pub api_key: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MozillaConfig {
     pub api_key: Option<String>,
     pub endpoint: Option<String>,
 }

@@ -58,7 +58,7 @@ function PackageItem({
 	onUpdate: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	return (
 		<div
@@ -193,7 +193,7 @@ function OwnedRegistryItem({
 	onInstall: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	return (
 		<div

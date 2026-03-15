@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::Context;
@@ -6,7 +7,7 @@ use crate::Context;
 // FlowPath — handle to a file in an object store, resolved host-side
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FlowPath {
     pub path: String,
     pub store_ref: String,
@@ -23,16 +24,114 @@ impl FlowPath {
         }
     }
 
-    pub fn read(&self, ctx: &Context) -> Option<Vec<u8>> {
+    // ── I/O operations (require host Context) ──────────────────────────
+
+    pub fn get(&self, ctx: &Context) -> Option<Vec<u8>> {
         ctx.storage_read_typed(self)
     }
 
-    pub fn write(&self, ctx: &Context, data: &[u8]) -> bool {
+    pub fn put(&self, ctx: &Context, data: &[u8]) -> bool {
         ctx.storage_write_typed(self, data)
+    }
+
+    pub fn read(&self, ctx: &Context) -> Option<Vec<u8>> {
+        self.get(ctx)
+    }
+
+    pub fn write(&self, ctx: &Context, data: &[u8]) -> bool {
+        self.put(ctx, data)
     }
 
     pub fn list(&self, ctx: &Context) -> Option<Vec<FlowPath>> {
         ctx.storage_list_typed(self)
+    }
+
+    pub fn exists(&self, ctx: &Context) -> bool {
+        self.get(ctx).is_some()
+    }
+
+    pub fn get_string(&self, ctx: &Context) -> Option<String> {
+        self.get(ctx).and_then(|b| String::from_utf8(b).ok())
+    }
+
+    pub fn put_string(&self, ctx: &Context, data: &str) -> bool {
+        self.put(ctx, data.as_bytes())
+    }
+
+    pub fn get_json<T: serde::de::DeserializeOwned>(&self, ctx: &Context) -> Option<T> {
+        let bytes = self.get(ctx)?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    pub fn put_json<T: serde::Serialize>(&self, ctx: &Context, data: &T) -> bool {
+        match serde_json::to_vec(data) {
+            Ok(bytes) => self.put(ctx, &bytes),
+            Err(_) => false,
+        }
+    }
+
+    // ── Path manipulation (pure, no host calls) ────────────────────────
+
+    pub fn child(&self, name: &str) -> FlowPath {
+        let sep = if self.path.ends_with('/') || self.path.is_empty() {
+            ""
+        } else {
+            "/"
+        };
+        FlowPath {
+            path: format!("{}{}{}", self.path, sep, name),
+            store_ref: self.store_ref.clone(),
+            cache_store_ref: self.cache_store_ref.clone(),
+        }
+    }
+
+    pub fn parent(&self) -> Option<FlowPath> {
+        let trimmed = self.path.trim_end_matches('/');
+        trimmed.rfind('/').map(|idx| FlowPath {
+            path: trimmed[..idx].to_string(),
+            store_ref: self.store_ref.clone(),
+            cache_store_ref: self.cache_store_ref.clone(),
+        })
+    }
+
+    pub fn file_name(&self) -> Option<String> {
+        let trimmed = self.path.trim_end_matches('/');
+        trimmed
+            .rfind('/')
+            .map(|idx| trimmed[idx + 1..].to_string())
+            .or_else(|| {
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+    }
+
+    pub fn extension(&self) -> Option<String> {
+        self.file_name()
+            .and_then(|n| n.rfind('.').map(|i| n[i + 1..].to_string()))
+    }
+
+    pub fn with_extension(&self, ext: &str) -> FlowPath {
+        let trimmed = self.path.trim_end_matches('/');
+        let base = match trimmed.rfind('.') {
+            Some(i) if trimmed[i..].find('/').is_none() => &trimmed[..i],
+            _ => trimmed,
+        };
+        FlowPath {
+            path: format!("{}.{}", base, ext),
+            store_ref: self.store_ref.clone(),
+            cache_store_ref: self.cache_store_ref.clone(),
+        }
+    }
+
+    pub fn join(&self, segments: &[&str]) -> FlowPath {
+        let mut current = self.clone();
+        for seg in segments {
+            current = current.child(seg);
+        }
+        current
     }
 
     pub fn schema() -> String {
@@ -581,6 +680,112 @@ mod tests {
         let fp: FlowPath = serde_json::from_value(val).unwrap();
         assert_eq!(fp.path, "a");
         assert!(fp.cache_store_ref.is_none());
+    }
+
+    #[test]
+    fn test_flow_path_child() {
+        let fp = FlowPath::new("data".into(), "s3".into(), None);
+        let child = fp.child("file.txt");
+        assert_eq!(child.path, "data/file.txt");
+        assert_eq!(child.store_ref, "s3");
+    }
+
+    #[test]
+    fn test_flow_path_child_nested() {
+        let fp = FlowPath::new("a".into(), "s".into(), None);
+        let nested = fp.child("b").child("c.txt");
+        assert_eq!(nested.path, "a/b/c.txt");
+    }
+
+    #[test]
+    fn test_flow_path_child_trailing_slash() {
+        let fp = FlowPath::new("data/".into(), "s".into(), None);
+        let child = fp.child("file.txt");
+        assert_eq!(child.path, "data/file.txt");
+    }
+
+    #[test]
+    fn test_flow_path_child_empty_base() {
+        let fp = FlowPath::new(String::new(), "s".into(), None);
+        let child = fp.child("file.txt");
+        assert_eq!(child.path, "file.txt");
+    }
+
+    #[test]
+    fn test_flow_path_parent() {
+        let fp = FlowPath::new("a/b/c.txt".into(), "s3".into(), Some("cache".into()));
+        let parent = fp.parent().unwrap();
+        assert_eq!(parent.path, "a/b");
+        assert_eq!(parent.store_ref, "s3");
+        assert_eq!(parent.cache_store_ref, Some("cache".to_string()));
+    }
+
+    #[test]
+    fn test_flow_path_parent_root() {
+        let fp = FlowPath::new("file.txt".into(), "s".into(), None);
+        assert!(fp.parent().is_none());
+    }
+
+    #[test]
+    fn test_flow_path_file_name() {
+        let fp = FlowPath::new("a/b/readme.md".into(), "s".into(), None);
+        assert_eq!(fp.file_name(), Some("readme.md".to_string()));
+    }
+
+    #[test]
+    fn test_flow_path_file_name_no_dir() {
+        let fp = FlowPath::new("readme.md".into(), "s".into(), None);
+        assert_eq!(fp.file_name(), Some("readme.md".to_string()));
+    }
+
+    #[test]
+    fn test_flow_path_file_name_empty() {
+        let fp = FlowPath::new(String::new(), "s".into(), None);
+        assert!(fp.file_name().is_none());
+    }
+
+    #[test]
+    fn test_flow_path_extension() {
+        let fp = FlowPath::new("a/b/readme.md".into(), "s".into(), None);
+        assert_eq!(fp.extension(), Some("md".to_string()));
+    }
+
+    #[test]
+    fn test_flow_path_extension_none() {
+        let fp = FlowPath::new("a/b/readme".into(), "s".into(), None);
+        assert!(fp.extension().is_none());
+    }
+
+    #[test]
+    fn test_flow_path_with_extension() {
+        let fp = FlowPath::new("a/b/data.csv".into(), "s".into(), None);
+        let changed = fp.with_extension("json");
+        assert_eq!(changed.path, "a/b/data.json");
+        assert_eq!(changed.store_ref, "s");
+    }
+
+    #[test]
+    fn test_flow_path_with_extension_no_existing() {
+        let fp = FlowPath::new("a/b/data".into(), "s".into(), None);
+        let changed = fp.with_extension("json");
+        assert_eq!(changed.path, "a/b/data.json");
+    }
+
+    #[test]
+    fn test_flow_path_join() {
+        let fp = FlowPath::new("root".into(), "s".into(), None);
+        let joined = fp.join(&["sub", "dir", "file.txt"]);
+        assert_eq!(joined.path, "root/sub/dir/file.txt");
+    }
+
+    #[test]
+    fn test_flow_path_json_schema() {
+        let schema = schemars::schema_for!(FlowPath);
+        let json = serde_json::to_value(&schema).unwrap();
+        let props = json.get("properties").expect("must have properties");
+        assert!(props.get("path").is_some());
+        assert!(props.get("store_ref").is_some());
+        assert!(props.get("cache_store_ref").is_some());
     }
 
     // =========================================================================

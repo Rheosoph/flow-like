@@ -299,6 +299,7 @@ impl NodeLogic for ImageClassificationNode {
             "Class Predictions",
             VariableType::Struct,
         )
+        .set_schema::<ClassPrediction>()
         .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node

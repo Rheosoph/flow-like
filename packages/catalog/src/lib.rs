@@ -68,7 +68,8 @@ pub use flow_like_catalog_llm::generative;
 pub use flow_like_catalog_geo::geo;
 pub use flow_like_catalog_processing::processing;
 
-// Re-export automation modules
+// Re-export automation modules (desktop only — not available on iOS/Android)
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub use flow_like_catalog_automation::{
     browser, computer, fingerprint, llm as automation_llm, rpa, selector, vision,
 };

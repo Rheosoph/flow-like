@@ -1,5 +1,6 @@
 //! Submit review for a package
 
+use crate::audit;
 use crate::error::ApiError;
 use crate::mail::{EmailMessage, templates::package_review_update};
 use crate::middleware::jwt::AppUser;
@@ -99,5 +100,6 @@ pub async fn review_package(
         }
     }
 
+    audit!(state, user, "admin.package.review", "package", package_id, format!("Package reviewed: {}", review_action));
     Ok(Json(result))
 }

@@ -17,10 +17,11 @@
 //! impl WasmNode for MyNode {
 //!     fn get_node(&self) -> NodeDefinition {
 //!         let mut node = NodeDefinition::new("my_node", "My Node", "Description", "Category");
-//!         node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-//!         node.add_pin(PinDefinition::input("text", "Text", "Input text", "String").with_default(json!("")));
-//!         node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
-//!         node.add_pin(PinDefinition::output("result", "Result", "Output", "String"));
+//!         node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+//!         node.add_input_pin("text", "Text", "Input text", VariableType::String)
+//!             .set_default_value(json!(""));
+//!         node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
+//!         node.add_output_pin("result", "Result", "Output", VariableType::String);
 //!         node
 //!     }
 //!
@@ -38,7 +39,7 @@
 // Generate Rust bindings from the WIT file inside a submodule so that
 // `pub_export_macro: true` doesn't conflict at the crate root.
 // Re-export the key items (Guest, export!, flow_like module) at crate root.
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
 pub mod _bindings {
     wit_bindgen::generate!({
         world: "flow-like-node",
@@ -48,19 +49,20 @@ pub mod _bindings {
     });
 }
 
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
 pub use _bindings::Guest;
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
 pub use _bindings::export;
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
 pub use _bindings::flow_like;
 
-// During tests we don't have actual WIT bindings — provide stubs
-#[cfg(test)]
+// On native targets (including when compiled as a dependency of test binaries),
+// provide stubs in place of WIT bindings.
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "wit_stub.rs"]
 mod wit_stub;
 
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub use wit_stub::*;
 
 mod context;
@@ -69,6 +71,11 @@ pub mod interop;
 pub mod mock;
 #[cfg(feature = "rig")]
 pub mod rig_provider;
+#[cfg(feature = "rig")]
+pub use rig_provider::{
+    FlowLikeCompletionModel, FlowPathListTool, FlowPathReadTool, FlowPathToolError,
+    FlowPathWriteTool,
+};
 mod types;
 
 pub use context::*;
@@ -78,6 +85,8 @@ pub use interop::{
     ReasoningData, ToolCallData, ToolResultData, VectorSearchQuery, VideoData,
 };
 pub use mock::*;
+pub use schemars;
+pub use serde;
 pub use serde_json;
 pub use serde_json::json;
 pub use types::*;
@@ -106,8 +115,8 @@ pub use inventory;
 /// impl WasmNode for MyNode {
 ///     fn get_node(&self) -> NodeDefinition {
 ///         let mut node = NodeDefinition::new("my_node", "My Node", "Does something", "Custom");
-///         node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-///         node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
+///         node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+///         node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
 ///         node
 ///     }
 ///
@@ -167,7 +176,7 @@ macro_rules! wasm_main {
     () => {
         struct __WasmComponent;
 
-        #[cfg(not(test))]
+        #[cfg(target_arch = "wasm32")]
         impl $crate::Guest for __WasmComponent {
             fn get_node() -> String {
                 for entry in $crate::inventory::iter::<$crate::WasmNodeEntry> {
@@ -206,7 +215,7 @@ macro_rules! wasm_main {
             }
         }
 
-        #[cfg(not(test))]
+        #[cfg(target_arch = "wasm32")]
         $crate::export!(__WasmComponent);
     };
 }

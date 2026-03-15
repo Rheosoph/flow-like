@@ -379,6 +379,8 @@ pub struct InstalledVersion {
     pub manifest: PackageManifest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,6 +395,8 @@ pub struct InstalledPackage {
     pub versions: HashMap<String, InstalledVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_hash: Option<String>,
 }
 
 impl InstalledPackage {
@@ -597,7 +601,10 @@ mod tests {
     #[test]
     fn test_registry_config_default() {
         let config = RegistryConfig::default();
-        assert_eq!(config.default_registry, "https://api.flow-like.com/api/v1/registry");
+        assert_eq!(
+            config.default_registry,
+            "https://api.flow-like.com/api/v1/registry"
+        );
         assert!(config.additional_registries.is_empty());
         assert!(config.local_paths.is_empty());
         assert_eq!(config.cache_duration_hours, 24 * 7);

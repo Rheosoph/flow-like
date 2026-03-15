@@ -530,3 +530,207 @@ impl std::fmt::Debug for WasmNodeLogic {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pin(
+        name: &str,
+        pin_type: &str,
+        data_type: &str,
+        schema: Option<&str>,
+        enforce_schema: Option<bool>,
+        default_value: Option<serde_json::Value>,
+    ) -> WasmPinDefinition {
+        WasmPinDefinition {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            pin_type: pin_type.to_string(),
+            data_type: data_type.to_string(),
+            default_value,
+            value_type: None,
+            schema: schema.map(|s| s.to_string()),
+            valid_values: None,
+            range: None,
+            step: None,
+            sensitive: None,
+            enforce_schema,
+            enforce_generic_value_type: None,
+        }
+    }
+
+    #[test]
+    fn test_map_wasm_data_type_all_variants() {
+        assert_eq!(map_wasm_data_type("Execution"), VariableType::Execution);
+        assert_eq!(map_wasm_data_type("execution"), VariableType::Execution);
+        assert_eq!(map_wasm_data_type("String"), VariableType::String);
+        assert_eq!(map_wasm_data_type("Integer"), VariableType::Integer);
+        assert_eq!(map_wasm_data_type("Float"), VariableType::Float);
+        assert_eq!(map_wasm_data_type("Boolean"), VariableType::Boolean);
+        assert_eq!(map_wasm_data_type("Date"), VariableType::Date);
+        assert_eq!(map_wasm_data_type("PathBuf"), VariableType::PathBuf);
+        assert_eq!(map_wasm_data_type("Byte"), VariableType::Byte);
+        assert_eq!(map_wasm_data_type("Struct"), VariableType::Struct);
+        assert_eq!(map_wasm_data_type("Generic"), VariableType::Generic);
+        assert_eq!(map_wasm_data_type("unknown_thing"), VariableType::Generic);
+    }
+
+    #[test]
+    fn test_build_node_preserves_schema() {
+        let schema_json =
+            r#"{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}}}"#;
+
+        let def = WasmNodeDefinition {
+            name: "test_struct".to_string(),
+            friendly_name: "Test Struct".to_string(),
+            description: "Tests struct schema".to_string(),
+            category: "Test".to_string(),
+            icon: None,
+            pins: vec![
+                make_pin("exec", "Input", "Execution", None, None, None),
+                make_pin(
+                    "config",
+                    "Input",
+                    "Struct",
+                    Some(schema_json),
+                    Some(true),
+                    Some(serde_json::json!({"name": "default", "age": 0})),
+                ),
+                make_pin("exec_out", "Output", "Execution", None, None, None),
+                make_pin(
+                    "result",
+                    "Output",
+                    "Struct",
+                    Some(schema_json),
+                    Some(true),
+                    None,
+                ),
+            ],
+            scores: None,
+            long_running: None,
+            docs: None,
+            abi_version: Some(1),
+            permissions: vec![],
+        };
+
+        let node = build_node_from_definition(&def);
+
+        assert_eq!(node.name, "test_struct");
+        assert_eq!(node.pins.len(), 4);
+
+        let mut pins: Vec<&Pin> = node.pins.values().collect();
+        pins.sort_by_key(|p| p.index);
+
+        // Exec input
+        assert_eq!(pins[0].data_type, VariableType::Execution);
+        assert_eq!(pins[0].pin_type, PinType::Input);
+
+        // Struct input with schema
+        assert_eq!(pins[1].data_type, VariableType::Struct);
+        assert_eq!(pins[1].pin_type, PinType::Input);
+        assert_eq!(pins[1].schema.as_deref(), Some(schema_json));
+        assert!(pins[1].default_value.is_some());
+        let opts = pins[1].options.as_ref().expect("options must be set");
+        assert_eq!(opts.enforce_schema, Some(true));
+
+        // Exec output
+        assert_eq!(pins[2].data_type, VariableType::Execution);
+        assert_eq!(pins[2].pin_type, PinType::Output);
+
+        // Struct output with schema
+        assert_eq!(pins[3].data_type, VariableType::Struct);
+        assert_eq!(pins[3].pin_type, PinType::Output);
+        assert_eq!(pins[3].schema.as_deref(), Some(schema_json));
+        assert_eq!(pins[3].options.as_ref().unwrap().enforce_schema, Some(true));
+    }
+
+    #[test]
+    fn test_build_node_from_sdk_json() {
+        // Simulate what the SDK produces: enum values as strings
+        let sdk_json = r#"{
+            "name": "email_node",
+            "friendly_name": "Send Email",
+            "description": "Sends an email",
+            "category": "IO/Email",
+            "pins": [
+                {
+                    "name": "exec",
+                    "friendly_name": "Exec",
+                    "description": "Trigger",
+                    "pin_type": "Input",
+                    "data_type": "Execution"
+                },
+                {
+                    "name": "payload",
+                    "friendly_name": "Payload",
+                    "description": "Email data",
+                    "pin_type": "Input",
+                    "data_type": "Struct",
+                    "schema": "{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"}}}",
+                    "enforce_schema": true,
+                    "default_value": {"to": "user@example.com", "subject": "Hello"}
+                },
+                {
+                    "name": "exec_out",
+                    "friendly_name": "Done",
+                    "description": "Continue",
+                    "pin_type": "Output",
+                    "data_type": "Execution"
+                }
+            ]
+        }"#;
+
+        let def: WasmNodeDefinition =
+            serde_json::from_str(sdk_json).expect("SDK JSON must parse into WasmNodeDefinition");
+
+        let node = build_node_from_definition(&def);
+
+        assert_eq!(node.name, "email_node");
+
+        let mut pins: Vec<&Pin> = node.pins.values().collect();
+        pins.sort_by_key(|p| p.index);
+
+        assert_eq!(pins[0].data_type, VariableType::Execution);
+
+        assert_eq!(pins[1].data_type, VariableType::Struct);
+        assert!(pins[1].schema.is_some());
+        let schema: serde_json::Value =
+            serde_json::from_str(pins[1].schema.as_ref().unwrap()).unwrap();
+        assert!(schema["properties"]["to"].is_object());
+        assert!(schema["properties"]["subject"].is_object());
+        assert_eq!(pins[1].options.as_ref().unwrap().enforce_schema, Some(true));
+    }
+
+    #[test]
+    fn test_to_flow_pin_value_types() {
+        for (vt_str, expected) in [
+            ("Normal", ValueType::Normal),
+            ("Array", ValueType::Array),
+            ("HashMap", ValueType::HashMap),
+            ("HashSet", ValueType::HashSet),
+            ("ARRAY", ValueType::Array),
+            ("hashmap", ValueType::HashMap),
+        ] {
+            let mut pin = make_pin("p", "Input", "String", None, None, None);
+            pin.value_type = Some(vt_str.to_string());
+            let flow_pin = WasmNodeLogic::to_flow_pin(&pin, 0);
+            assert_eq!(flow_pin.value_type, expected, "failed for {vt_str}");
+        }
+    }
+
+    #[test]
+    fn test_to_flow_pin_options() {
+        let mut pin = make_pin("slider", "Input", "Float", None, None, None);
+        pin.range = Some((0.0, 100.0));
+        pin.step = Some(0.5);
+        pin.sensitive = Some(true);
+
+        let flow_pin = WasmNodeLogic::to_flow_pin(&pin, 0);
+        let opts = flow_pin.options.expect("options must be set");
+        assert_eq!(opts.range, Some((0.0, 100.0)));
+        assert_eq!(opts.step, Some(0.5));
+        assert_eq!(opts.sensitive, Some(true));
+    }
+}

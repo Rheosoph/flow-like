@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
@@ -84,7 +85,7 @@ pub async fn upsert_page(
             .await?;
 
         if !app.page_ids.contains(&page_id) {
-            app.page_ids.push(page_id);
+            app.page_ids.push(page_id.clone());
             app.save().await?;
         }
     } else {
@@ -102,5 +103,6 @@ pub async fn upsert_page(
         update_page.update(&state.db).await?;
     }
 
+    audit_branch!(state, user, app_id, "page.upsert", "Page", page_id, "Page created or updated");
     Ok(Json(page))
 }

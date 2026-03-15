@@ -202,45 +202,62 @@ impl Context {
     }
 
     // ========================================================================
-    // Storage
+    // Storage (raw Value-based)
     // ========================================================================
 
-    /// Get a FlowPath for the board's storage directory
     pub fn storage_dir(&self, node_scoped: bool) -> Option<Value> {
         crate::host::storage_dir(node_scoped)
     }
 
-    /// Get a FlowPath for the upload directory
     pub fn upload_dir(&self) -> Option<Value> {
         crate::host::upload_dir()
     }
 
-    /// Get a FlowPath for the cache directory
     pub fn cache_dir(&self, node_scoped: bool, user_scoped: bool) -> Option<Value> {
         crate::host::cache_dir(node_scoped, user_scoped)
     }
 
-    /// Get a FlowPath for the user directory
     pub fn user_dir(&self, node_scoped: bool) -> Option<Value> {
         crate::host::user_dir(node_scoped)
     }
 
-    /// Read bytes from a FlowPath
     pub fn storage_read(&self, flow_path: &Value) -> Option<Vec<u8>> {
         let json = serde_json::to_string(flow_path).ok()?;
         crate::host::storage_read(&json)
     }
 
-    /// Write bytes to a FlowPath
     pub fn storage_write(&self, flow_path: &Value, data: &[u8]) -> bool {
         let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
         crate::host::storage_write(&json, data)
     }
 
-    /// List paths under a FlowPath prefix
     pub fn storage_list(&self, flow_path: &Value) -> Option<Vec<Value>> {
         let json = serde_json::to_string(flow_path).ok()?;
         crate::host::storage_list(&json)
+    }
+
+    // ========================================================================
+    // Storage (typed FlowPath)
+    // ========================================================================
+
+    pub fn storage_path(&self, node_scoped: bool) -> Option<FlowPath> {
+        let val = self.storage_dir(node_scoped)?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn upload_path(&self) -> Option<FlowPath> {
+        let val = self.upload_dir()?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn cache_path(&self, node_scoped: bool, user_scoped: bool) -> Option<FlowPath> {
+        let val = self.cache_dir(node_scoped, user_scoped)?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn user_path(&self, node_scoped: bool) -> Option<FlowPath> {
+        let val = self.user_dir(node_scoped)?;
+        serde_json::from_value(val).ok()
     }
 
     // ========================================================================

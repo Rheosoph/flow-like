@@ -429,9 +429,6 @@ pub fn run() {
         .manage(state::TauriFlowLikeState(state_ref.clone()))
         .manage(state::TauriRegistryState(Arc::new(Mutex::new(None))))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
-        .manage(state::TauriTrayState(Arc::new(Mutex::new(
-            tray::TrayRuntimeState::default(),
-        ))))
         .manage(state::TauriRecordingState::new())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
@@ -934,6 +931,7 @@ pub fn run() {
             functions::developer::developer_read_manifest,
             functions::developer::developer_run_node,
             functions::developer::developer_load_into_catalog,
+            functions::developer::developer_check_staleness,
             functions::registry::registry_search_packages,
             functions::registry::registry_get_package,
             functions::registry::registry_install_package,

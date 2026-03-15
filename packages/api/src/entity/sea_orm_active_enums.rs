@@ -438,6 +438,20 @@ pub enum WasmPackageVisibility {
     PublicRequestAccess,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AuditActorType")]
+pub enum AuditActorType {
+    #[sea_orm(string_value = "USER")]
+    User,
+    #[sea_orm(string_value = "TECHNICAL_USER")]
+    TechnicalUser,
+    #[sea_orm(string_value = "API_KEY")]
+    ApiKey,
+    #[sea_orm(string_value = "SYSTEM")]
+    System,
+    #[sea_orm(string_value = "EXECUTOR")]
+    Executor,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "WasmReviewAction")]
 pub enum WasmReviewAction {
     #[sea_orm(string_value = "SUBMITTED")]

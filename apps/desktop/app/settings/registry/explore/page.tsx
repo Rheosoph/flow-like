@@ -68,7 +68,7 @@ function PackageItem({
 	onUninstall: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	return (
 		<div
@@ -221,6 +221,8 @@ export default function ExplorePackagesPage() {
 		initRegistry();
 	}, [initRegistry]);
 
+	const isAuthenticated = !!auth?.user?.access_token;
+
 	const fetchPackages = useCallback(async () => {
 		if (!backend?.registryState || !isInitialized) return;
 		setIsLoading(true);
@@ -238,7 +240,7 @@ export default function ExplorePackagesPage() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized, searchQuery, sortBy]);
+	}, [backend?.registryState, isInitialized, searchQuery, sortBy, isAuthenticated]);
 
 	const fetchInstalled = useCallback(async () => {
 		if (!backend?.registryState || !isInitialized) return;

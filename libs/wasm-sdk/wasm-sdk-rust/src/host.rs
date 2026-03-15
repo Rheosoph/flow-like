@@ -5,12 +5,12 @@
 
 // In production builds, the WIT bindings live under `crate::flow_like::node::*`.
 // In test builds they come from `crate::wit_stub::flow_like::node::*`.
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
 use crate::flow_like::node::{
     auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming,
     variables, websocket,
 };
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::wit_stub::flow_like::node::{
     auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming,
     variables, websocket,

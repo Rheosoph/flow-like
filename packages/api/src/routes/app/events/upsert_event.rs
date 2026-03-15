@@ -1,5 +1,7 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch,
+    ensure_permission,
+    error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -102,5 +104,6 @@ pub async fn upsert_event(
     )
     .await?;
 
+    audit_branch!(state, user, app_id, "event.upsert", "Event", event_id, "Event created or updated");
     Ok(Json(event))
 }

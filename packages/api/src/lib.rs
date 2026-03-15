@@ -26,6 +26,7 @@ pub mod openapi;
 mod routes;
 
 pub mod alerting;
+pub mod audit;
 pub mod credentials;
 pub mod error;
 pub mod mail;
@@ -64,6 +65,19 @@ pub fn warn_env_filter() -> EnvFilter {
 }
 
 pub fn construct_router(state: Arc<State>) -> Router {
+    if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
+        if state.platform_config.audit.require_signing {
+            panic!(
+                "AUDIT SIGNING REQUIRED but not configured. \
+                 Set BACKEND_KEY (base64 P-256 PEM) and BACKEND_KID env vars."
+            );
+        }
+        tracing::error!(
+            "AUDIT SIGNING NOT CONFIGURED: Set BACKEND_KEY (base64 P-256 PEM) and BACKEND_KID. \
+             Audit entries will be UNSIGNED until keys are provided."
+        );
+    }
+
     let router = Router::new()
         .route("/", get(hub_info))
         .nest("/health", routes::health::routes())
@@ -86,6 +100,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .nest("/interaction", routes::interaction::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())
+        .nest("/audit", routes::audit::routes())
         .nest("/sink", routes::sink::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
         .with_state(state.clone())

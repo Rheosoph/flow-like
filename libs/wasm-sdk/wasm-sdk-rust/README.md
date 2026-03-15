@@ -28,7 +28,8 @@ rustup target add wasm32-wasip2
 
 ## Quick Start
 
-Define nodes with `#[register_node]` + `impl WasmNode`, then call `wasm_main!()`:
+Define nodes with `#[register_node]` + `impl WasmNode`, then call `wasm_main!()`.
+The API mirrors the native catalog — use `VariableType` enums and `set_schema::<T>()` for typed pins:
 
 ```rust
 use flow_like_wasm_sdk::*;
@@ -42,13 +43,11 @@ impl WasmNode for UppercaseNode {
         let mut node = NodeDefinition::new(
             "uppercase", "Uppercase", "Converts text to uppercase", "Text/Transform",
         );
-        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-        node.add_pin(
-            PinDefinition::input("text", "Text", "Input text", "String")
-                .with_default(json!("")),
-        );
-        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
-        node.add_pin(PinDefinition::output("result", "Result", "Uppercased text", "String"));
+        node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+        node.add_input_pin("text", "Text", "Input text", VariableType::String)
+            .set_default_value(json!(""));
+        node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
+        node.add_output_pin("result", "Result", "Uppercased text", VariableType::String);
         node
     }
 
@@ -66,6 +65,27 @@ wasm_main!();
 Add as many `#[register_node]` structs as you like — they're auto-discovered at
 startup via the `inventory` crate. No manual routing needed.
 
+## Struct-Typed Pins with Schema
+
+Use `#[derive(JsonSchema)]` structs for type-safe pins — just like the native catalog:
+
+```rust
+use schemars::JsonSchema;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct Config {
+    threshold: f64,
+    label: String,
+}
+
+// In get_node():
+node.add_input_pin("config", "Config", "Configuration", VariableType::Struct)
+    .set_schema::<Config>()
+    .set_enforce_schema(true)
+    .set_default_value(json!({"threshold": 0.5, "label": "default"}));
+```
+
 ## Multi-Node Package
 
 ```rust
@@ -78,11 +98,13 @@ pub struct AddNode;
 impl WasmNode for AddNode {
     fn get_node(&self) -> NodeDefinition {
         let mut node = NodeDefinition::new("add", "Add", "Adds two integers", "Math");
-        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-        node.add_pin(PinDefinition::input("a", "A", "First operand", "I64").with_default(json!(0)));
-        node.add_pin(PinDefinition::input("b", "B", "Second operand", "I64").with_default(json!(0)));
-        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
-        node.add_pin(PinDefinition::output("result", "Result", "Sum", "I64"));
+        node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+        node.add_input_pin("a", "A", "First operand", VariableType::Integer)
+            .set_default_value(json!(0));
+        node.add_input_pin("b", "B", "Second operand", VariableType::Integer)
+            .set_default_value(json!(0));
+        node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
+        node.add_output_pin("result", "Result", "Sum", VariableType::Integer);
         node
     }
 
@@ -102,11 +124,13 @@ pub struct SubtractNode;
 impl WasmNode for SubtractNode {
     fn get_node(&self) -> NodeDefinition {
         let mut node = NodeDefinition::new("subtract", "Subtract", "Subtracts B from A", "Math");
-        node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-        node.add_pin(PinDefinition::input("a", "A", "First operand", "I64").with_default(json!(0)));
-        node.add_pin(PinDefinition::input("b", "B", "Second operand", "I64").with_default(json!(0)));
-        node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
-        node.add_pin(PinDefinition::output("result", "Result", "Difference", "I64"));
+        node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+        node.add_input_pin("a", "A", "First operand", VariableType::Integer)
+            .set_default_value(json!(0));
+        node.add_input_pin("b", "B", "Second operand", VariableType::Integer)
+            .set_default_value(json!(0));
+        node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
+        node.add_output_pin("result", "Result", "Difference", VariableType::Integer);
         node
     }
 

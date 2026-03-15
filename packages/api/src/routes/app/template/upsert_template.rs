@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{meta, template},
     error::ApiError,
@@ -177,5 +178,6 @@ pub async fn upsert_template(
     template.updated_at = Set(chrono::Utc::now().naive_utc());
     template.update(&state.db).await?;
 
+    audit_branch!(state, user, app_id, "template.update", "Template", app_upsert.0, "Template updated");
     Ok(Json(app_upsert))
 }

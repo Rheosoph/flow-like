@@ -320,7 +320,7 @@ impl NodeLogic for GetSharePointSiteNode {
         node.add_output_pin("error", "Error", "", VariableType::Execution);
         node.add_output_pin("site", "Site", "SharePoint site", VariableType::Struct)
             .set_schema::<SharePointSite>();
-        node.add_output_pin("site_id", "Site ID", "The site ID", VariableType::String);
+        node.add_output_pin("resolved_site_id", "Site ID", "The site ID", VariableType::String);
         node.add_output_pin("error_message", "Error Message", "", VariableType::String);
 
         node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["Sites.Read.All"]);
@@ -370,7 +370,7 @@ impl NodeLogic for GetSharePointSiteNode {
                 if let Some(site) = parse_site(&body) {
                     let id = site.id.clone();
                     context.set_pin_value("site", json!(site)).await?;
-                    context.set_pin_value("site_id", json!(id)).await?;
+                    context.set_pin_value("resolved_site_id", json!(id)).await?;
                     context.activate_exec_pin("exec_out").await?;
                 } else {
                     context

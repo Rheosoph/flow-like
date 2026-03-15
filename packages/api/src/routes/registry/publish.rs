@@ -5,6 +5,7 @@
 //! 3. Server fetches WASM from tmp, hashes, moves to final path, compiles in parallel
 
 use super::types::PublishResponse;
+use crate::audit_branch;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
@@ -94,6 +95,16 @@ pub async fn publish(
     let response = registry
         .finalize_publish(request.manifest.clone(), &sub, email)
         .await?;
+
+    audit_branch!(
+        state,
+        user,
+        request.manifest.id,
+        "registry.publish",
+        "WasmPackage",
+        request.manifest.id,
+        format!("Package {} v{} published", request.manifest.name, request.manifest.version)
+    );
 
     Ok(Json(response))
 }

@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{app, invitation, membership, meta, sea_orm_active_enums::Visibility},
     error::ApiError,
@@ -159,7 +160,7 @@ pub async fn invite_user(
         updated_at: Set(chrono::Utc::now().naive_utc()),
         by_member_id: Set(member.id.clone()),
         message: Set(params.message),
-        user_id: Set(params.sub),
+        user_id: Set(params.sub.clone()),
         name: Set(meta
             .as_ref()
             .map_or("Unknown App".to_string(), |m| m.name.clone())),
@@ -169,5 +170,6 @@ pub async fn invite_user(
     invitation.insert(&txn).await?;
     txn.commit().await?;
 
+    audit_branch!(state, user, app_id, "membership.invite", "Invitation", params.sub, "User invited");
     Ok(Json(()))
 }

@@ -5,8 +5,8 @@
 //! extractors backed by models running on the host.
 
 use crate::interop::{
-    AudioData, Bit, ChatContent, ChatMessage, ContentPart, DocumentData, ImageData, ReasoningData,
-    ToolCallData, ToolResultData, VideoData,
+    AudioData, Bit, ChatContent, ChatMessage, ContentPart, DocumentData, FlowPath, ImageData,
+    ReasoningData, ToolCallData, ToolResultData, VideoData,
 };
 use crate::Context;
 use futures::stream;
@@ -19,6 +19,7 @@ use rig::message::{
     ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent, Video,
 };
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse, StreamingResult};
+use rig::tool::Tool;
 use rig::OneOrMany;
 
 // =============================================================================
@@ -186,6 +187,83 @@ fn completion_request_to_messages(request: &CompletionRequest) -> Vec<ChatMessag
     }
 
     messages
+}
+
+/// Serialize a CompletionRequest as the JSON payload for the host llm-prompt call.
+/// If tools are present, wraps messages+tools in an object; otherwise sends a plain array.
+fn serialize_llm_request(request: &CompletionRequest) -> Option<String> {
+    use serde_json::json;
+
+    let messages = completion_request_to_messages(request);
+
+    if request.tools.is_empty() {
+        serde_json::to_string(&messages).ok()
+    } else {
+        let tools: Vec<serde_json::Value> = request
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                })
+            })
+            .collect();
+        serde_json::to_string(&json!({
+            "messages": messages,
+            "tools": tools,
+        }))
+        .ok()
+    }
+}
+
+/// Parse the host response JSON into rig AssistantContent items.
+/// The host may return a JSON ChatMessage (with optional tool_calls) or plain text.
+fn parse_llm_response(text: &str) -> OneOrMany<AssistantContent> {
+    #[derive(serde::Deserialize)]
+    struct HostResponse {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        tool_calls: Option<Vec<HostToolCall>>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct HostToolCall {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    }
+
+    if let Ok(resp) = serde_json::from_str::<HostResponse>(text) {
+        let mut items: Vec<AssistantContent> = Vec::new();
+
+        if let Some(content) = resp.content {
+            if !content.is_empty() {
+                items.push(AssistantContent::Text(Text { text: content }));
+            }
+        }
+
+        if let Some(tool_calls) = resp.tool_calls {
+            for tc in tool_calls {
+                items.push(AssistantContent::ToolCall(ToolCall::new(
+                    tc.id,
+                    ToolFunction::new(tc.name, tc.arguments),
+                )));
+            }
+        }
+
+        if !items.is_empty() {
+            return OneOrMany::many(items)
+                .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text { text: String::new() })));
+        }
+    }
+
+    // Fallback: treat the entire string as plain text
+    OneOrMany::one(AssistantContent::Text(Text {
+        text: text.to_string(),
+    }))
 }
 
 // =============================================================================
@@ -407,16 +485,34 @@ impl CompletionModel for FlowLikeCompletionModel {
     ) -> impl std::future::Future<
         Output = Result<CompletionResponse<Self::Response>, CompletionError>,
     > + Send {
-        let messages = completion_request_to_messages(&request);
-        let result = self.bit.prompt(self.ctx(), &messages);
+        crate::host::info(&format!(
+            "FlowLikeCompletionModel::completion: tools={}, history={}",
+            request.tools.len(),
+            request.chat_history.len()
+        ));
+
+        let request_json = serialize_llm_request(&request);
+        let result = request_json.and_then(|json| {
+            crate::host::debug(&format!("llm_prompt request len={}", json.len()));
+            let bit_json = serde_json::to_string(&self.bit).ok()?;
+            let resp = crate::host::llm_prompt(&bit_json, &json, false);
+            if let Some(ref r) = resp {
+                crate::host::debug(&format!("llm_prompt response len={}", r.len()));
+            } else {
+                crate::host::warn("llm_prompt returned None");
+            }
+            resp
+        });
 
         async move {
             let text = result.ok_or_else(|| {
                 CompletionError::ProviderError("FlowLike host LLM prompt returned None".into())
             })?;
 
+            let choice = parse_llm_response(&text);
+
             Ok(CompletionResponse {
-                choice: OneOrMany::one(AssistantContent::Text(Text { text })),
+                choice,
                 usage: Usage::new(),
                 raw_response: FlowLikeResponse,
             })
@@ -429,8 +525,11 @@ impl CompletionModel for FlowLikeCompletionModel {
     ) -> impl std::future::Future<
         Output = Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>,
     > + Send {
-        let messages = completion_request_to_messages(&request);
-        let result = self.bit.prompt_stream(self.ctx(), &messages);
+        let request_json = serialize_llm_request(&request);
+        let result = request_json.and_then(|json| {
+            let bit_json = serde_json::to_string(&self.bit).ok()?;
+            crate::host::llm_prompt(&bit_json, &json, true)
+        });
 
         async move {
             let text = result.ok_or_else(|| {
@@ -451,6 +550,218 @@ impl CompletionModel for FlowLikeCompletionModel {
 
             Ok(StreamingCompletionResponse::stream(raw_stream))
         }
+    }
+}
+
+// =============================================================================
+// FlowPath rig tools — let rig agents interact with storage
+// =============================================================================
+
+/// Rig tool that reads a file from a FlowPath base directory.
+/// The agent supplies a relative `path` argument and gets back the file contents as a string.
+pub struct FlowPathReadTool {
+    base: FlowPath,
+    ctx: *const Context,
+}
+
+unsafe impl Send for FlowPathReadTool {}
+unsafe impl Sync for FlowPathReadTool {}
+
+impl FlowPathReadTool {
+    pub fn new(base: FlowPath, ctx: &Context) -> Self {
+        Self {
+            base,
+            ctx: ctx as *const Context,
+        }
+    }
+
+    fn ctx(&self) -> &Context {
+        unsafe { &*self.ctx }
+    }
+}
+
+#[derive(Debug)]
+pub struct FlowPathToolError(String);
+
+impl std::fmt::Display for FlowPathToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for FlowPathToolError {}
+
+impl Tool for FlowPathReadTool {
+    const NAME: &'static str = "read_file";
+    type Error = FlowPathToolError;
+    type Args = serde_json::Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read the contents of a file at the given relative path.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to the file" }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| FlowPathToolError("Missing 'path' argument".into()))?;
+
+        let target = self.base.child(path);
+        target
+            .get_string(self.ctx())
+            .ok_or_else(|| FlowPathToolError(format!("File not found: {path}")))
+    }
+
+    fn name(&self) -> String {
+        Self::NAME.to_string()
+    }
+}
+
+/// Rig tool that writes text content to a file at a relative path.
+pub struct FlowPathWriteTool {
+    base: FlowPath,
+    ctx: *const Context,
+}
+
+unsafe impl Send for FlowPathWriteTool {}
+unsafe impl Sync for FlowPathWriteTool {}
+
+impl FlowPathWriteTool {
+    pub fn new(base: FlowPath, ctx: &Context) -> Self {
+        Self {
+            base,
+            ctx: ctx as *const Context,
+        }
+    }
+
+    fn ctx(&self) -> &Context {
+        unsafe { &*self.ctx }
+    }
+}
+
+impl Tool for FlowPathWriteTool {
+    const NAME: &'static str = "write_file";
+    type Error = FlowPathToolError;
+    type Args = serde_json::Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Write text content to a file at the given relative path.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to the file" },
+                    "content": { "type": "string", "description": "Text content to write" }
+                },
+                "required": ["path", "content"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| FlowPathToolError("Missing 'path' argument".into()))?;
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| FlowPathToolError("Missing 'content' argument".into()))?;
+
+        let target = self.base.child(path);
+        if target.put_string(self.ctx(), content) {
+            Ok(format!("Written to {path}"))
+        } else {
+            Err(FlowPathToolError(format!("Failed to write to {path}")))
+        }
+    }
+
+    fn name(&self) -> String {
+        Self::NAME.to_string()
+    }
+}
+
+/// Rig tool that lists files under a FlowPath prefix.
+pub struct FlowPathListTool {
+    base: FlowPath,
+    ctx: *const Context,
+}
+
+unsafe impl Send for FlowPathListTool {}
+unsafe impl Sync for FlowPathListTool {}
+
+impl FlowPathListTool {
+    pub fn new(base: FlowPath, ctx: &Context) -> Self {
+        Self {
+            base,
+            ctx: ctx as *const Context,
+        }
+    }
+
+    fn ctx(&self) -> &Context {
+        unsafe { &*self.ctx }
+    }
+}
+
+impl Tool for FlowPathListTool {
+    const NAME: &'static str = "list_files";
+    type Error = FlowPathToolError;
+    type Args = serde_json::Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+        rig::completion::ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List files under the given relative directory path.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative directory path (empty string for root)",
+                        "default": ""
+                    }
+                },
+                "required": []
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let target = if path.is_empty() {
+            self.base.clone()
+        } else {
+            self.base.child(path)
+        };
+
+        let entries = target
+            .list(self.ctx())
+            .ok_or_else(|| FlowPathToolError("Failed to list directory".into()))?;
+
+        let names: Vec<String> = entries.iter().filter_map(|e| e.file_name()).collect();
+        Ok(serde_json::to_string(&names).unwrap_or_default())
+    }
+
+    fn name(&self) -> String {
+        Self::NAME.to_string()
     }
 }
 

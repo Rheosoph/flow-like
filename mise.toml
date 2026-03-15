@@ -248,8 +248,24 @@ sleep 30
 cargo publish
 """
 
+[tasks."test:wasm:rust:lint"]
+description = "Run lint/quality tests for the Rust WASM template nodes"
+run = """
+echo "==> Running template lint tests..."
+HOST=$(rustc -vV | awk '/^host:/ { print $2 }')
+cd templates/wasm-node-rust && cargo test --target "$HOST" --test lint -- --nocapture
+"""
+
+[tasks."test:catalog:lint"]
+description = "Run lint/quality tests for the native catalog node definitions"
+run = """
+echo "==> Running catalog lint tests..."
+cargo test --package flow-like-catalog --test lint_catalog -- --nocapture
+"""
+
 [tasks."test:wasm:rust:e2e"]
 description = "Build Rust template + run e2e integration tests via host runtime"
+depends = ["test:wasm:rust:lint"]
 run = """
 echo "==> Building Rust WASM template..."
 cd templates/wasm-node-rust && cargo build --release

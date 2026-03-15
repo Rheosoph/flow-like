@@ -1,5 +1,7 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch,
+    ensure_permission,
+    error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -78,6 +80,7 @@ pub async fn upsert_board(
         .unwrap_or(board.execution_mode.clone());
     board.save(None).await?;
 
+    audit_branch!(state, user, app_id, "board.update", "Board", board.id, "Board created or updated");
     Ok(Json(UpsertBoardResponse {
         id: board.id.clone(),
     }))

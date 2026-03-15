@@ -51,9 +51,25 @@ wasm_main!(); // exactly once — auto-discovers all #[register_node] structs
 
 ## CRITICAL Rules
 
+### 0. Input and Output Pins Must Have Different Names
+
+**When a value passes through a node (input → processed → output), the input pin and output pin MUST have different `name` values (first argument).** The friendly name (second argument) CAN be the same. Pin names are used by `ctx.get_*()` and `ctx.set_output()` to identify which pin to read/write — if an input and output share the same name, get/set operations will collide.
+
+```rust
+// WRONG — input and output share the name "log", get/set will conflict
+node.add_input_pin("log", "Log", "Log message", DataType::STRING);
+node.add_output_pin("log", "Log", "Log message", DataType::STRING);
+
+// CORRECT — different names, friendly names can match
+node.add_input_pin("input_log", "Log", "Log message input", DataType::STRING);
+node.add_output_pin("output_log", "Log", "Log message output", DataType::STRING);
+```
+
+Common prefixing conventions: `input_` / `output_`, or use semantically distinct names like `source_text` / `result_text`.
+
 ### 1. Prefer Struct over Generic
 
-**Never use `DataType::GENERIC` for structured data.** Define a struct with `#[derive(Serialize, Deserialize, JsonSchema)]` and use `DataType::STRUCT` + `.with_schema_type::<T>()`.
+**Never use `DataType::GENERIC` for structured data.** Define a struct with `#[derive(Serialize, Deserialize, JsonSchema)]` and use `DataType::STRUCT` + `.with_schema_type::<T>()`. The Generic pin type should only be used as a last resort when the data shape is truly unknown at design time.
 
 ```rust
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -63,7 +79,40 @@ PinDefinition::input("config", "Config", "Settings", DataType::STRUCT)
     .with_schema_type::<Config>()
 ```
 
-### 2. Use FlowPath for Files
+### 2. Use `with_value_type` for Collections (Arrays, Sets, Maps)
+
+When a pin represents a collection, use `.with_value_type()` to declare the collection kind. The **schema describes the single element type**, not the collection itself.
+
+```rust
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct Item { name: String, score: f64 }
+
+// WRONG — using Generic, no schema, no per-element validation
+PinDefinition::input("items", "Items", "List of items", DataType::GENERIC)
+
+// CORRECT — schema is for a single Item, ValueType::ARRAY wraps it as a list
+PinDefinition::input("items", "Items", "List of items", DataType::STRUCT)
+    .with_schema_type::<Item>()
+    .with_value_type(ValueType::ARRAY)
+
+// HashMap<String, Item>
+PinDefinition::input("item_map", "Item Map", "Map of items", DataType::STRUCT)
+    .with_schema_type::<Item>()
+    .with_value_type(ValueType::HASH_MAP)
+
+// HashSet<Item>
+PinDefinition::input("item_set", "Item Set", "Unique items", DataType::STRUCT)
+    .with_schema_type::<Item>()
+    .with_value_type(ValueType::HASH_SET)
+
+// Array of strings (no struct needed for primitives)
+PinDefinition::input("tags", "Tags", "List of tags", DataType::STRING)
+    .with_value_type(ValueType::ARRAY)
+```
+
+**Key rule:** The schema (`with_schema_type::<T>()`) always describes **one element**. The `ValueType` declares how many of those elements the pin holds.
+
+### 3. Use FlowPath for Files
 
 **Never use raw `String` for file paths.** Use `FlowPath` + `DataType::PATH_BUF`. The runtime resolves it to the actual storage backend.
 
@@ -73,7 +122,7 @@ let bytes = file.read(&ctx);
 file.write(&ctx, b"data");
 ```
 
-### 3. Use Typed Handles
+### 4. Use Typed Handles
 
 - `FlowPath` for files
 - `NodeImage` for images
@@ -81,16 +130,16 @@ file.write(&ctx, b"data");
 - `CachedEmbeddingModel` for embedding models
 - `NodeDBConnection` for vector databases
 
-### 4. Pure vs Impure Nodes
+### 5. Pure vs Impure Nodes
 
 - **Pure**: no exec pins, deterministic, no side effects
 - **Impure**: has exec input/output pins, may do I/O
 
-### 5. Set Default Values
+### 6. Set Default Values
 
 Every non-exec input pin should have `.with_default(json!(...))`.
 
-### 6. Rate Every Node
+### 7. Rate Every Node
 
 ```rust
 node.set_scores(NodeScores {
@@ -99,7 +148,7 @@ node.set_scores(NodeScores {
 });
 ```
 
-### 7. Minimal Permissions in flow-like.toml
+### 8. Minimal Permissions in flow-like.toml
 
 Only declare what the node needs. Principle of least privilege.
 

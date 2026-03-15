@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{
         app, membership, publication_log, publication_request, sea_orm_active_enums::Visibility,
@@ -98,6 +99,7 @@ pub async fn change_visibility(
         }
 
         txn.commit().await?;
+        audit_branch!(state, user, app_id, "app.visibility", "App", app_id, format!("Visibility changed to {:?}", body.visibility));
         return Ok(Json(()));
     }
 
@@ -114,7 +116,7 @@ pub async fn change_visibility(
 
         app.update(&txn).await?;
         txn.commit().await?;
-
+        audit_branch!(state, user, app_id, "app.visibility", "App", app_id, format!("Visibility changed to {:?}", body.visibility));
         return Ok(Json(()));
     }
 
@@ -153,7 +155,7 @@ pub async fn change_visibility(
         log_entry.insert(&txn).await?;
         updated_app.update(&txn).await?;
         txn.commit().await?;
-
+        audit_branch!(state, user, app_id, "app.visibility.request", "App", app_id, format!("Publication review requested for {:?}", body.visibility));
         return Ok(Json(()));
     }
 

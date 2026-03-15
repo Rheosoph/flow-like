@@ -8,7 +8,8 @@ export type CompileStatus =
 	| "downloading"
 	| "compiling"
 	| "ready"
-	| "error";
+	| "error"
+	| "stale";
 
 interface PackageStatusEvent {
 	packageId: string;

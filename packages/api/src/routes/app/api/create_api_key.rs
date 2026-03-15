@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission,
     entity::{role, technical_user},
     error::ApiError,
@@ -127,6 +128,7 @@ pub async fn create_api_key(
     // Format: flk_{app_id}.{id}.{secret}
     let api_key = format!("flk_{}.{}.{}", app_id, id, secret_b64);
 
+    audit_branch!(state, user, app_id, "apikey.create", "ApiKey", id, format!("API key '{}' created", input.name));
     Ok(Json(ApiKeyOut {
         id,
         api_key,

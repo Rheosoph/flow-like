@@ -1,5 +1,5 @@
 use crate::context::Context;
-use crate::types::{ExecutionInput, LogLevel, NodeDefinition};
+use crate::types::{ExecutionInput, LogLevel, NodeDefinition, PinType, VariableType};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -112,7 +112,7 @@ impl MockContext {
         let mut inputs = HashMap::new();
 
         for pin in &def.pins {
-            if pin.pin_type == "Input" && pin.data_type != "Exec" {
+            if pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution {
                 if let Some(default) = &pin.default_value {
                     inputs.insert(pin.name.clone(), default.clone());
                 }
@@ -143,7 +143,7 @@ impl std::ops::DerefMut for MockContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::PinDefinition;
+    use crate::types::{PinDefinition, VariableType};
     use serde_json::json;
 
     #[test]
@@ -173,13 +173,19 @@ mod tests {
     fn test_mock_context_from_definition() {
         let mut def = NodeDefinition::new("test", "Test", "A test node", "Test");
         def.add_pin(
-            PinDefinition::input("value", "Value", "Input value", "I64").with_default(json!(10)),
+            PinDefinition::input("value", "Value", "Input value", VariableType::Integer)
+                .with_default(json!(10)),
         );
         def.add_pin(
-            PinDefinition::input("label", "Label", "A label", "String")
+            PinDefinition::input("label", "Label", "A label", VariableType::String)
                 .with_default(json!("default")),
         );
-        def.add_pin(PinDefinition::output("result", "Result", "Output", "I64"));
+        def.add_pin(PinDefinition::output(
+            "result",
+            "Result",
+            "Output",
+            VariableType::Integer,
+        ));
 
         let mut overrides = HashMap::new();
         overrides.insert("value".to_string(), json!(99));

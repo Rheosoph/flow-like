@@ -1,7 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -58,7 +58,8 @@ impl NodeLogic for OsrmTripNode {
             "Ordered coordinates for the trip",
             VariableType::Struct,
         )
-        .set_schema::<Vec<GeoCoordinate>>()
+        .set_schema::<GeoCoordinate>()
+        .set_value_type(ValueType::Array)
         .set_options(PinOptions::new().set_enforce_schema(true).build())
         .set_default_value(Some(json!([])));
 
@@ -143,7 +144,8 @@ impl NodeLogic for OsrmTripNode {
             "All trip results returned by OSRM",
             VariableType::Struct,
         )
-        .set_schema::<Vec<RouteResult>>();
+        .set_schema::<RouteResult>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "waypoints",
@@ -151,7 +153,8 @@ impl NodeLogic for OsrmTripNode {
             "Optimized trip waypoints",
             VariableType::Struct,
         )
-        .set_schema::<Vec<TripWaypoint>>();
+        .set_schema::<TripWaypoint>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "distance",
@@ -173,7 +176,8 @@ impl NodeLogic for OsrmTripNode {
             "Trip geometry as array of coordinates",
             VariableType::Struct,
         )
-        .set_schema::<Vec<GeoCoordinate>>();
+        .set_schema::<GeoCoordinate>()
+        .set_value_type(ValueType::Array);
 
         node.set_scores(
             NodeScores::new()

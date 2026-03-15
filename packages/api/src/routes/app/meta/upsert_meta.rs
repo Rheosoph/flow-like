@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     entity::meta,
     error::ApiError,
     middleware::jwt::AppUser,
@@ -82,6 +83,7 @@ pub async fn upsert_meta(
         active_model = active_model.reset_all();
         active_model.update(&txn).await?;
         txn.commit().await?;
+        audit_branch!(state, user, app_id, "meta.upsert", "meta", app_id, format!("Metadata updated (lang={})", language));
         return Ok(Json(()));
     }
 
@@ -90,6 +92,6 @@ pub async fn upsert_meta(
     let active_model: meta::ActiveModel = model.into();
     active_model.insert(&txn).await?;
     txn.commit().await?;
-
+    audit_branch!(state, user, app_id, "meta.upsert", "meta", app_id, format!("Metadata created (lang={})", language));
     Ok(Json(()))
 }

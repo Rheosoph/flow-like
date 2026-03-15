@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     ensure_permission, entity::technical_user, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
@@ -48,5 +49,6 @@ pub async fn delete_api_key(
     // Invalidate any cached auth for this key
     state.auth_cache.invalidate_all();
 
+    audit_branch!(state, user, app_id, "apikey.delete", "ApiKey", key_id, "API key deleted");
     Ok(Json(()))
 }

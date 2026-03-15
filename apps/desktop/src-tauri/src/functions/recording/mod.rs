@@ -135,6 +135,7 @@ pub async fn start_recording(
         tracing::debug!("[Recording] EventCapture stored in state");
     }
 
+    #[cfg(desktop)]
     crate::tray::set_recording_tray_icon(&handler).await;
 
     Ok(session_id)
@@ -256,6 +257,7 @@ pub async fn stop_recording(handler: AppHandle) -> Result<Vec<RecordedAction>, T
     }
     tracing::debug!(" ========== STOP RECORDING COMPLETE ==========");
 
+    #[cfg(desktop)]
     crate::tray::restore_tray_icon(&handler).await;
 
     Ok(actions)

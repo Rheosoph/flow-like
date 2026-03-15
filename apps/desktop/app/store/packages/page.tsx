@@ -58,6 +58,7 @@ import {
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
 	AlertCircle,
+	AlertTriangle,
 	Bug,
 	CheckCircle,
 	CloudUpload,
@@ -95,6 +96,7 @@ import {
 	usePackageStatusMap,
 } from "../../../hooks/use-package-status";
 import { fetcher } from "../../../lib/api";
+import { countBySeverity, lintNodes } from "../../../lib/validate-nodes";
 
 // ─── Shared Helpers ──────────────────────────────────────────────────────────
 
@@ -208,6 +210,10 @@ function ProjectCard({
 	};
 
 	const nodeCount = inspection?.nodes?.length ?? 0;
+	const lintCounts = useMemo(
+		() => (inspection?.nodes ? countBySeverity(lintNodes(inspection.nodes)) : null),
+		[inspection?.nodes],
+	);
 
 	return (
 		<div
@@ -248,6 +254,28 @@ function ProjectCard({
 					{compileStatus && compileStatus !== "idle" && (
 						<PackageStatusBadge status={compileStatus} />
 					)}
+					{lintCounts && lintCounts.errors > 0 && (
+						<Tooltip>
+							<TooltipTrigger>
+								<Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 gap-1">
+									<AlertCircle className="h-2.5 w-2.5" />
+									{lintCounts.errors}
+								</Badge>
+							</TooltipTrigger>
+							<TooltipContent>{lintCounts.errors} lint error{lintCounts.errors !== 1 ? "s" : ""}</TooltipContent>
+						</Tooltip>
+					)}
+					{lintCounts && lintCounts.errors === 0 && lintCounts.warnings > 0 && (
+						<Tooltip>
+							<TooltipTrigger>
+								<Badge className="text-[10px] px-1.5 py-0 h-4 gap-1 bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20">
+									<AlertTriangle className="h-2.5 w-2.5" />
+									{lintCounts.warnings}
+								</Badge>
+							</TooltipTrigger>
+							<TooltipContent>{lintCounts.warnings} lint warning{lintCounts.warnings !== 1 ? "s" : ""}</TooltipContent>
+						</Tooltip>
+					)}
 					<div className="flex items-center gap-1 ml-auto shrink-0">
 						<span className="inline-flex items-center gap-1 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
 							<Lock className="h-2.5 w-2.5" /> local
@@ -287,18 +315,28 @@ function ProjectCard({
 							<Button
 								size="icon"
 								variant="ghost"
-								className="h-6 w-6 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+								className={`h-6 w-6 rounded-full ${
+									compileStatus === "stale"
+										? "text-orange-600 hover:text-orange-700 hover:bg-orange-500/10 animate-pulse"
+										: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+								}`}
 								onClick={loadIntoCatalog}
 								disabled={loading}
 							>
 								{loading ? (
 									<Loader2 className="h-3 w-3 animate-spin" />
+								) : compileStatus === "stale" ? (
+									<RefreshCw className="h-3 w-3" />
 								) : (
 									<Upload className="h-3 w-3" />
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Load into Catalog</TooltipContent>
+						<TooltipContent>
+							{compileStatus === "stale"
+								? "WASM changed — Reload into Catalog"
+								: "Load into Catalog"}
+						</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -452,6 +490,15 @@ function MyProjectsContent() {
 	useEffect(() => {
 		fetchProjects();
 	}, [fetchProjects]);
+
+	useEffect(() => {
+		const checkStaleness = () => {
+			invoke("developer_check_staleness").catch(() => {});
+		};
+		checkStaleness();
+		const interval = setInterval(checkStaleness, 5000);
+		return () => clearInterval(interval);
+	}, []);
 
 	const filtered = useMemo(() => {
 		if (!search.trim()) return projects;
@@ -692,7 +739,7 @@ function InstalledPackageCard({
 	onUpdate: () => void;
 	isUpdating: boolean;
 	isUninstalling: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
@@ -992,7 +1039,7 @@ function InstalledContent() {
 				</div>
 			)}
 
-			{installedPackages.isLoading ? (
+			{(registryReady.isLoading || installedPackages.isLoading || (!registryReady.isSuccess && !registryReady.isError)) ? (
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 					{Array.from({ length: 6 }).map((_, i) => (
 						<div

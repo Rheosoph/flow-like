@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod admin;
 pub mod ai;
 pub mod app;
+pub mod audit;
 pub mod auth;
 pub mod bit;
 pub mod chat;

@@ -246,6 +246,7 @@ export interface InstalledPackage {
 	wasmPath: string;
 	manifest: PackageManifest;
 	metadata?: MetaSummary;
+	wasmHash?: string;
 }
 
 export interface SearchFilters {

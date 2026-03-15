@@ -20,8 +20,8 @@ use syn::{Item, parse_macro_input};
 /// impl WasmNode for MyNode {
 ///     fn get_node(&self) -> NodeDefinition {
 ///         let mut node = NodeDefinition::new("my_node", "My Node", "Desc", "Cat");
-///         node.add_pin(PinDefinition::input("exec", "Exec", "Trigger", "Exec"));
-///         node.add_pin(PinDefinition::output("exec_out", "Done", "Done", "Exec"));
+///         node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+///         node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
 ///         node
 ///     }
 ///

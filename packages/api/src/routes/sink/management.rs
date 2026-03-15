@@ -4,7 +4,7 @@
 //! Users can only activate/deactivate sinks and update sink-specific fields (path, authToken).
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{event_sink, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -276,6 +276,7 @@ pub async fn update_sink(
         .ok_or_else(|| ApiError::not_found("Sink not found for this event"))?;
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let sink_app_id = sink.app_id.clone();
 
     let mut active_model: event_sink::ActiveModel = sink.into();
 
@@ -305,6 +306,7 @@ pub async fn update_sink(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to update sink: {}", e)))?;
 
+    audit_branch!(state, user, sink_app_id, "sink.update", "sink", event_id, "Sink settings updated");
     Ok(Json(SinkResponse::from(updated)))
 }
 
@@ -342,11 +344,13 @@ pub async fn toggle_sink(
         .ok_or_else(|| ApiError::not_found("Sink not found for this event"))?;
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let sink_app_id = sink.app_id.clone();
 
     // Use service module to toggle (handles external scheduler sync)
     let updated = super::service::toggle_sink_active(&state.db, &state, &event_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to toggle sink: {}", e)))?;
 
+    audit_branch!(state, user, sink_app_id, "sink.toggle", "sink", event_id, format!("Sink toggled to {}", if updated.active { "active" } else { "inactive" }));
     Ok(Json(SinkResponse::from(updated)))
 }

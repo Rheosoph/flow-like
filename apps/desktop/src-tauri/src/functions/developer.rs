@@ -1213,6 +1213,72 @@ pub async fn developer_load_into_catalog(
     Ok(count)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StalePackageInfo {
+    pub package_id: String,
+    pub project_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn developer_check_staleness(
+    app_handle: AppHandle,
+) -> Result<Vec<StalePackageInfo>, TauriFunctionError> {
+    let client = TauriRegistryState::get_client(&app_handle).await?;
+    let stale_entries = client.check_local_staleness().await;
+
+    let user_dir = match TauriSettingsState::construct(&app_handle).await {
+        Ok(settings) => {
+            let guard = settings.lock().await;
+            guard.user_dir.clone()
+        }
+        Err(_) => return Ok(stale_entries.iter().map(|(id, _, _)| StalePackageInfo {
+            package_id: id.clone(),
+            project_path: None,
+        }).collect()),
+    };
+
+    let store = load_store(&user_dir);
+    let result: Vec<StalePackageInfo> = stale_entries
+        .iter()
+        .map(|(id, _, _)| {
+            let project_path = store.projects.iter().find_map(|p| {
+                let project_path = PathBuf::from(&p.path);
+                if let Ok(wasm_path) = find_wasm_file(&project_path) {
+                    let manifest = load_manifest_for_registration(&project_path, &wasm_path);
+                    if manifest.as_ref().map(|m| m.id.as_str()) == Some(id.as_str()) {
+                        return Some(p.path.clone());
+                    }
+                }
+                None
+            });
+            StalePackageInfo {
+                package_id: id.clone(),
+                project_path,
+            }
+        })
+        .collect();
+
+    if !stale_entries.is_empty() {
+        for (id, _, _) in &stale_entries {
+            let _ = app_handle.emit(
+                "package-status",
+                serde_json::json!({ "packageId": id, "status": "stale" }),
+            );
+        }
+    }
+
+    for info in &result {
+        if let Some(ref path) = info.project_path {
+            let _ = app_handle.emit(
+                "package-status",
+                serde_json::json!({ "packageId": format!("dev:{}", path), "status": "stale" }),
+            );
+        }
+    }
+
+    Ok(result)
+}
+
 pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
     let engine = match TauriWasmEngineState::construct(app_handle) {
         Ok(e) => e,

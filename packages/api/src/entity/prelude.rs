@@ -2,6 +2,7 @@
 
 pub use super::app::Entity as App;
 pub use super::app_discount::Entity as AppDiscount;
+pub use super::audit_entry::Entity as AuditEntry;
 pub use super::app_package::Entity as AppPackage;
 pub use super::app_purchase::Entity as AppPurchase;
 pub use super::app_sales_daily::Entity as AppSalesDaily;

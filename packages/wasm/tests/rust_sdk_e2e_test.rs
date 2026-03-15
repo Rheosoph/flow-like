@@ -103,7 +103,10 @@ async fn test_rust_sdk_get_nodes_returns_two() {
             .await
             .unwrap();
 
-    let nodes = instance.call_get_nodes().await.expect("call_get_nodes failed");
+    let nodes = instance
+        .call_get_nodes()
+        .await
+        .expect("call_get_nodes failed");
     assert_eq!(nodes.len(), 2, "Template should expose exactly 2 nodes");
 
     let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
@@ -269,7 +272,10 @@ async fn test_rust_sdk_repeat_text_defaults() {
             .unwrap();
 
     let result = instance
-        .call_run(&create_execution_input("repeat_text", serde_json::Map::new()))
+        .call_run(&create_execution_input(
+            "repeat_text",
+            serde_json::Map::new(),
+        ))
         .await
         .unwrap();
 

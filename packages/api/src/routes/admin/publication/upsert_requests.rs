@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     entity::{
         app, membership, meta, publication_log, publication_request,
         sea_orm_active_enums::PublicationRequestStatus, user,
@@ -188,6 +189,7 @@ pub async fn upsert_request(
         }
     }
 
+    audit!(state, user, "admin.publication.review", "publication_request", request_id, format!("Publication request {}: app {}", body.action, request.app_id));
     Ok(Json(ReviewPublicationResponse {
         id: updated.id,
         status: format!("{:?}", updated.status).to_uppercase(),

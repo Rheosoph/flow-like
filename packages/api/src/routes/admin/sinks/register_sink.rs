@@ -6,6 +6,7 @@
 //! The token is scoped to a specific sink type and tracked in the database for revocation.
 
 use crate::{
+    audit,
     entity::sink_token, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
@@ -142,6 +143,7 @@ pub async fn register_sink(
 
     tracing::info!(jti = %jti, sink_type = %sink_type, "Registered new sink token");
 
+    audit!(state, user, "admin.sink.register", "sink_token", jti, format!("Sink token registered for type: {}", sink_type));
     Ok(Json(RegisterSinkResponse {
         token,
         jti,

@@ -128,7 +128,7 @@ regex = "1.11.3"
 rig-core = {version="0.29.0", default-features = false, features = ["rmcp", "reqwest-rustls"]}
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 rumqttc = "0.24"
-copilot-sdk = { git = "https://github.com/copilot-community-sdk/copilot-sdk-rust.git" }
+copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
 async-trait = "0.1.89"
 jsonschema = "0.33.0"
 rmcp = {version="0.13.0", features = ["auth", "client", "client-side-sse","macros","transport-streamable-http-client-reqwest","transport-streamable-http-server"]}
