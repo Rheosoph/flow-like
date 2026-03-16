@@ -37,6 +37,7 @@ import {
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
 import { PlanSteps } from "./plan-steps";
+import { UsageStats } from "./usage-stats";
 
 interface MessageProps {
 	message: IMessage;
@@ -700,6 +701,11 @@ export function MessageComponent({
 						onFileClick={handleFileClick}
 						onFullscreen={setFullscreenFile}
 					/>
+					{!isUser &&
+						message.usage_stats &&
+						message.usage_stats.length > 0 && (
+							<UsageStats stats={message.usage_stats} className="mt-1" />
+						)}
 					{!loading && (
 						<MessageActions
 							isUser={isUser}

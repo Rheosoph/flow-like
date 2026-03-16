@@ -8,6 +8,7 @@ pub mod add_datafusion;
 pub mod from_model;
 pub mod helpers;
 pub mod invoke;
+pub mod memory;
 pub mod register_mcp_tools;
 pub mod register_thinking;
 pub mod register_tools;

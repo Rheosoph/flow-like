@@ -12,7 +12,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_model_provider::{history::History, response::Response};
+use flow_like_model_provider::{history::History, response::{LLMUsageStats, Response}};
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ impl NodeLogic for InvokeAgentNode {
             "Executes an Agent with history and returns the complete response",
             "AI/Agents",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(
@@ -100,6 +100,15 @@ impl NodeLogic for InvokeAgentNode {
         .set_schema::<History>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -141,6 +150,9 @@ impl NodeLogic for InvokeAgentNode {
             .await?;
         context
             .set_pin_value("history_out", json::json!(result.history))
+            .await?;
+        context
+            .set_pin_value("stats", json::json!(result.stats))
             .await?;
 
         context.activate_exec_pin("exec_out").await?;

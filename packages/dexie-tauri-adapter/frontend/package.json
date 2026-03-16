@@ -1,0 +1,52 @@
+{
+	"name": "@flow-like/dexie-tauri-blob-offload",
+	"version": "0.1.0",
+	"description": "Dexie DBCore middleware that offloads large values to Tauri's native filesystem via tauri-plugin-flow-like-dexie-blob-offload",
+	"license": "MIT",
+	"author": "TM9657 GmbH",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/TM9657/flow-like.git",
+		"directory": "packages/dexie-tauri-adapter/frontend"
+	},
+	"homepage": "https://flow-like.com",
+	"keywords": [
+		"tauri",
+		"dexie",
+		"indexeddb",
+		"blob",
+		"offload",
+		"middleware"
+	],
+	"type": "module",
+	"main": "src/index.ts",
+	"types": "src/index.ts",
+	"publishConfig": {
+		"main": "dist/index.js",
+		"types": "dist/index.d.ts",
+		"exports": {
+			".": {
+				"types": "./dist/index.d.ts",
+				"import": "./dist/index.js"
+			}
+		}
+	},
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc",
+		"prepublishOnly": "npm run build"
+	},
+	"peerDependencies": {
+		"@tauri-apps/api": "^2.0.0",
+		"dexie": "^4.0.0"
+	},
+	"devDependencies": {
+		"@tauri-apps/api": "^2.9.1",
+		"dexie": "^4.0.11",
+		"typescript": "^5.7.3"
+	}
+}

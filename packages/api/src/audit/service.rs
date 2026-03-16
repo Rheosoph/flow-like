@@ -122,7 +122,24 @@ impl AuditService {
                 entry.signature.clone(),
                 entry.sequence + 1,
             ),
-            None => (GENESIS_HASH.to_string(), None, 1),
+            None => {
+                // First entry in this chain. For branch chains, anchor to the
+                // current tail of the root chain so branches are cryptographically
+                // linked to the global timeline. Root chain uses genesis.
+                if input.chain_id.is_some() {
+                    let root_tail = audit_entry::Entity::find()
+                        .filter(Expr::col(audit_entry::Column::ChainId).is_null())
+                        .order_by(audit_entry::Column::Sequence, Order::Desc)
+                        .one(&txn)
+                        .await?;
+                    match root_tail {
+                        Some(entry) => (entry.entry_hash.clone(), entry.signature.clone(), 1),
+                        None => (GENESIS_HASH.to_string(), None, 1),
+                    }
+                } else {
+                    (GENESIS_HASH.to_string(), None, 1)
+                }
+            }
         };
 
         let entry_hash = compute_entry_hash(
@@ -206,10 +223,14 @@ impl AuditService {
             });
         }
 
-        // To verify, we also need the signature of the entry BEFORE the range
+        // To verify, we need the hash + signature of the entry BEFORE the range
         // to compute the first entry's hash (which includes prev_signature).
+        // For seq 1, branch chains are anchored to the root chain (not genesis),
+        // so we trust the stored prev_hash of the first entry as the anchor point.
         let (initial_prev, initial_prev_sig) = if from_seq.unwrap_or(1) <= 1 {
-            (GENESIS_HASH.to_string(), None)
+            // The first entry stores its own prev_hash (genesis for root, root-tail for branches).
+            // We use it directly — the anchor is verified by cross-referencing the root chain.
+            (entries[0].prev_hash.clone(), None)
         } else {
             let before = audit_entry::Entity::find()
                 .filter(match chain_id {

@@ -81,6 +81,8 @@ chrono-tz.workspace = true
 mimalloc.workspace = true
 sysinfo = "0.37.2"
 
+blake3.workspace = true
+tauri-plugin-flow-like-dexie-blob-offload.workspace = true
 copilot-sdk.workspace = true
 once_cell = "1.21.3"
 tokio.workspace = true

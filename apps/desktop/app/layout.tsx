@@ -59,6 +59,9 @@ import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
+import { initBlobOffload } from "../lib/init-blob-offload";
+
+initBlobOffload();
 
 const persister = createIDBPersister();
 const queryClient = new QueryClient({

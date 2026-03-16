@@ -13,7 +13,7 @@ use flow_like::flow::{
 };
 use flow_like_model_provider::{
     history::{Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool},
-    response::{Response, Usage as ResponseUsage},
+    response::{LLMUsageStats, Response, Usage as ResponseUsage},
     response_chunk::ResponseChunk,
 };
 use flow_like_types::{
@@ -39,7 +39,7 @@ use rmcp::{
         CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParam,
     },
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
@@ -162,22 +162,22 @@ fn truncate_history_to_budget(
 }
 
 /// Summarize old messages using LLM to compress context while preserving key information.
-/// Returns (updated_history, summarized_count) where summarized_count is messages compressed.
+/// Returns (updated_history, summarized_count, optional_usage) where usage captures the summarization LLM call tokens.
 #[cfg(feature = "execute")]
 async fn summarize_history_to_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize)> {
+) -> flow_like_types::Result<(Vec<rig::message::Message>, usize, Option<ResponseUsage>)> {
     if history.is_empty() {
-        return Ok((history, 0));
+        return Ok((history, 0, None));
     }
 
     let total_tokens: usize = history.iter().map(estimate_message_tokens).sum();
 
     if total_tokens <= max_tokens as usize {
-        return Ok((history, 0));
+        return Ok((history, 0, None));
     }
 
     // Find the split point: keep recent messages, summarize older ones
@@ -197,13 +197,14 @@ async fn summarize_history_to_budget(
 
     // If split would leave nothing to summarize, fall back to truncation
     if split_idx <= 1 {
-        return Ok(truncate_history_to_budget(history, max_tokens));
+        let (h, c) = truncate_history_to_budget(history, max_tokens);
+        return Ok((h, c, None));
     }
 
     let (old_messages, recent_messages) = history.split_at(split_idx);
 
     if old_messages.is_empty() {
-        return Ok((recent_messages.to_vec(), 0));
+        return Ok((recent_messages.to_vec(), 0, None));
     }
 
     // Convert old messages to text for summarization
@@ -261,7 +262,7 @@ async fn summarize_history_to_budget(
             match summary_agent.completion(summary_prompt, vec![]).await {
                 Ok(request) => match request.send().await {
                     Ok(response) => {
-                        // Extract text from response.choice
+                        let usage = ResponseUsage::from_rig(response.usage);
                         let mut text = String::new();
                         for content in response.choice {
                             if let AssistantContent::Text(t) = content {
@@ -273,17 +274,18 @@ async fn summarize_history_to_budget(
                                 "Summary response was empty, falling back to truncation",
                                 LogLevel::Warn,
                             );
-                            return Ok(truncate_history_to_budget(history, max_tokens));
+                            let (h, c) = truncate_history_to_budget(history, max_tokens);
+                            return Ok((h, c, Some(usage)));
                         }
-                        text
+                        (text, Some(usage))
                     }
                     Err(e) => {
                         context.log_message(
                             &format!("Failed to get summary response: {}", e),
                             LogLevel::Warn,
                         );
-                        // Fall back to truncation
-                        return Ok(truncate_history_to_budget(history, max_tokens));
+                        let (h, c) = truncate_history_to_budget(history, max_tokens);
+                        return Ok((h, c, None));
                     }
                 },
                 Err(e) => {
@@ -291,7 +293,8 @@ async fn summarize_history_to_budget(
                         &format!("Failed to create summary completion: {}", e),
                         LogLevel::Warn,
                     );
-                    return Ok(truncate_history_to_budget(history, max_tokens));
+                    let (h, c) = truncate_history_to_budget(history, max_tokens);
+                    return Ok((h, c, None));
                 }
             }
         }
@@ -300,14 +303,17 @@ async fn summarize_history_to_budget(
                 &format!("Failed to create summary agent: {}", e),
                 LogLevel::Warn,
             );
-            return Ok(truncate_history_to_budget(history, max_tokens));
+            let (h, c) = truncate_history_to_budget(history, max_tokens);
+            return Ok((h, c, None));
         }
     };
+
+    let (summary_text, summary_usage) = summary;
 
     // Create a summary message to prepend
     let summary_msg = rig::message::Message::User {
         content: OneOrMany::one(rig::message::UserContent::Text(rig::message::Text {
-            text: format!("[Previous conversation summary: {}]", summary),
+            text: format!("[Previous conversation summary: {}]", summary_text),
         })),
     };
 
@@ -316,23 +322,26 @@ async fn summarize_history_to_budget(
     result.extend(recent_messages.iter().cloned());
 
     let summarized_count = old_messages.len();
-    Ok((result, summarized_count))
+    Ok((result, summarized_count, summary_usage))
 }
 
 /// Manage context budget using the appropriate strategy (truncate or summarize).
-/// Returns (managed_history, affected_count).
+/// Returns (managed_history, affected_count, optional_usage).
 #[cfg(feature = "execute")]
 async fn manage_context_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize)> {
+) -> flow_like_types::Result<(Vec<rig::message::Message>, usize, Option<ResponseUsage>)> {
     match agent.context_management_mode {
         ContextManagementMode::Summarize => {
             summarize_history_to_budget(context, agent, history, max_tokens).await
         }
-        ContextManagementMode::Truncate => Ok(truncate_history_to_budget(history, max_tokens)),
+        ContextManagementMode::Truncate => {
+            let (h, c) = truncate_history_to_budget(history, max_tokens);
+            Ok((h, c, None))
+        }
     }
 }
 
@@ -601,6 +610,7 @@ pub async fn execute_tool_call(
 pub struct AgentExecutionResult {
     pub response: Response,
     pub history: History,
+    pub stats: LLMUsageStats,
 }
 
 /// Trait for handling stream emissions during agent execution
@@ -1095,10 +1105,25 @@ pub async fn execute_agent_streaming(
     let max_context_tokens = agent
         .max_context_tokens
         .unwrap_or(DEFAULT_MAX_CONTEXT_TOKENS);
+
+    let mut full_history = history.clone();
+    let mut iteration = 0;
+    let agent_start = Instant::now();
+    let mut accumulated_stats = LLMUsageStats {
+        usage: ResponseUsage::default(),
+        model: Some(model_display_name.clone()),
+        duration_ms: None,
+        iterations: None,
+        calls: vec![],
+    };
+
     if agent.infinite_context {
-        let (managed, count) =
+        let (managed, count, summarize_usage) =
             manage_context_budget(context, agent, current_history, max_context_tokens).await?;
         current_history = managed;
+        if let Some(usage) = summarize_usage {
+            accumulated_stats.accumulate(&usage, Some(&model_display_name));
+        }
         if count > 0 {
             let mode_name = match agent.context_management_mode {
                 ContextManagementMode::Summarize => "summarized",
@@ -1113,9 +1138,6 @@ pub async fn execute_agent_streaming(
             );
         }
     }
-
-    let mut full_history = history.clone();
-    let mut iteration = 0;
 
     // Track repeated identical tool calls: (name::result) → invocation count
     let mut repeated_call_tracker: HashMap<String, usize> = HashMap::new();
@@ -1276,7 +1298,9 @@ pub async fn execute_agent_streaming(
         stream_state.emit_chunk(context, &finish_chunk).await?;
 
         if let Some(usage) = final_usage {
-            response_obj.usage = ResponseUsage::from_rig(usage);
+            let response_usage = ResponseUsage::from_rig(usage);
+            accumulated_stats.accumulate(&response_usage, Some(&model_display_name));
+            response_obj.usage = response_usage;
         }
 
         // Convert accumulated tool call deltas into complete ToolCall entries
@@ -1486,9 +1510,13 @@ pub async fn execute_agent_streaming(
             };
             full_history.push_message(final_assistant_msg);
 
+            accumulated_stats.set_duration_ms(agent_start.elapsed().as_millis() as u64);
+            accumulated_stats.set_iterations(iteration as u32 + 1);
+
             return Ok(AgentExecutionResult {
                 response: response_obj,
                 history: full_history,
+                stats: accumulated_stats,
             });
         }
 
@@ -1653,17 +1681,25 @@ pub async fn execute_agent_streaming(
                 annotations: None,
             };
             full_history.push_message(stop_msg);
+
+            accumulated_stats.set_duration_ms(agent_start.elapsed().as_millis() as u64);
+            accumulated_stats.set_iterations(iteration as u32 + 1);
+
             return Ok(AgentExecutionResult {
                 response: response_obj,
                 history: full_history,
+                stats: accumulated_stats,
             });
         }
 
         // Apply context management after adding tool results if infinite context is enabled
         if agent.infinite_context {
-            let (managed, count) =
+            let (managed, count, summarize_usage) =
                 manage_context_budget(context, agent, current_history, max_context_tokens).await?;
             current_history = managed;
+            if let Some(usage) = summarize_usage {
+                accumulated_stats.accumulate(&usage, Some(&model_display_name));
+            }
             if count > 0 {
                 let mode_name = match agent.context_management_mode {
                     ContextManagementMode::Summarize => "summarized",

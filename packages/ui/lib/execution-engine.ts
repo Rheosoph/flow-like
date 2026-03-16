@@ -12,6 +12,7 @@ interface IEventStream {
 	subscribers: Map<string, ISubscriber>;
 	accumulatedEvents: IIntercomEvent[];
 	lastSentIndex: Map<string, number>;
+	seenEventIds: Set<string>;
 	executionPromise?: Promise<any>;
 	isComplete: boolean;
 	path?: string;
@@ -101,6 +102,7 @@ export class ExecutionEngineProvider {
 				subscribers: new Map(),
 				accumulatedEvents: [],
 				lastSentIndex: new Map(),
+				seenEventIds: new Set(),
 				isComplete: false,
 			});
 		}
@@ -154,6 +156,7 @@ export class ExecutionEngineProvider {
 				subscribers: new Map(),
 				accumulatedEvents: [],
 				lastSentIndex: new Map(),
+				seenEventIds: new Set(),
 				isComplete: false,
 				path: options.path,
 				title: options.title,
@@ -166,6 +169,7 @@ export class ExecutionEngineProvider {
 				stream.isComplete = false;
 				stream.accumulatedEvents = [];
 				stream.lastSentIndex.clear();
+				stream.seenEventIds.clear();
 				stream.executionPromise = undefined; // Clear old promise to allow new execution
 				// We keep existing subscribers, but reset their sent index
 				for (const subscriberId of stream.subscribers.keys()) {
@@ -207,9 +211,15 @@ export class ExecutionEngineProvider {
 				options.onExecutionStart?.(executionId);
 			},
 			(events: IIntercomEvent[]) => {
-				// Handle new events
-				if (events.length > 0) {
-					stream!.accumulatedEvents.push(...events);
+				// Deduplicate by event_id
+				const unique = events.filter((e) => {
+					if (stream!.seenEventIds.has(e.event_id)) return false;
+					stream!.seenEventIds.add(e.event_id);
+					return true;
+				});
+
+				if (unique.length > 0) {
+					stream!.accumulatedEvents.push(...unique);
 
 					// Publish to all subscribers
 					for (const [
@@ -230,7 +240,7 @@ export class ExecutionEngineProvider {
 
 					// Incremental save logic
 					if (options.onIncrementalSave) {
-						eventsSinceLastSave += events.length;
+						eventsSinceLastSave += unique.length;
 						if (eventsSinceLastSave >= saveInterval) {
 							eventsSinceLastSave = 0;
 							// Fire and forget - don't block event processing

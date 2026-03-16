@@ -663,7 +663,7 @@ pub async fn build_compilation_job(
     let job_id = create_id();
 
     let callback_url = format!(
-        "{}/registry/compilation-callback",
+        "{}/api/v1/registry/compilation-callback",
         config.api_base_url.trim_end_matches('/')
     );
 

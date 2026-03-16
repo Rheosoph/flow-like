@@ -82,3 +82,5 @@ component-model = ["wasmtime/component-model"]
 model = ["flow-like/model"]
 # Enable OpenAPI schema generation
 openapi = ["utoipa"]
+# Enable all cranelift backends for cross-compilation
+all-arch = ["wasmtime/all-arch"]

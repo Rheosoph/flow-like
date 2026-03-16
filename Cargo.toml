@@ -45,6 +45,7 @@ members = [
     "packages/compiler",
     "packages/wasm",
     "apps/utils/board-decoder",
+    "packages/dexie-tauri-adapter/backend",
 ]
 
 [workspace.dependencies]
@@ -71,6 +72,7 @@ flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor" }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
+tauri-plugin-flow-like-dexie-blob-offload = { path = "packages/dexie-tauri-adapter/backend" }
 lambda_http = "0.15.1"
 futures = "0.3.31"
 bytes = "1.10.1"

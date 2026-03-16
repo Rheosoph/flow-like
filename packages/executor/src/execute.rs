@@ -369,8 +369,8 @@ pub async fn execute(
     };
 
     let progress_url = format!(
-        "{}/progress",
-        claims.callback_url.trim_end_matches("/events")
+        "{}/api/v1/execution/progress",
+        claims.callback_url.trim_end_matches('/')
     );
     let _ = send_progress(&progress_url, &executor_jwt, &progress_update, &config).await;
 
@@ -421,6 +421,10 @@ async fn run_callback_batcher(
     executor_jwt: String,
     config: ExecutorConfig,
 ) {
+    let events_url = format!(
+        "{}/api/v1/execution/events",
+        claims.callback_url.trim_end_matches('/')
+    );
     let mut batch = Vec::new();
     let mut interval = tokio::time::interval(config.batch_interval());
 
@@ -430,7 +434,7 @@ async fn run_callback_batcher(
                 if !batch.is_empty() {
                     let events = std::mem::take(&mut batch);
                     if let Err(e) = send_events_to_api(
-                        &claims.callback_url,
+                        &events_url,
                         &executor_jwt,
                         events,
                         &config,
@@ -446,7 +450,7 @@ async fn run_callback_batcher(
                         if batch.len() >= config.max_batch_size {
                             let events = std::mem::take(&mut batch);
                             if let Err(e) = send_events_to_api(
-                                &claims.callback_url,
+                                &events_url,
                                 &executor_jwt,
                                 events,
                                 &config,
@@ -459,7 +463,7 @@ async fn run_callback_batcher(
                         if !batch.is_empty() {
                             let events = std::mem::take(&mut batch);
                             let _ = send_events_to_api(
-                                &claims.callback_url,
+                                &events_url,
                                 &executor_jwt,
                                 events,
                                 &config,

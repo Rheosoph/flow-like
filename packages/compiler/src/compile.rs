@@ -2,7 +2,7 @@ use crate::config::CompilerConfig;
 use crate::error::CompilerError;
 use crate::jwt::verify_jwt_async;
 use flow_like_types::dispatch::{CompilationJob, CompilationResult, CompilationStatus};
-use flow_like_wasm::{WasmConfig, WasmEngine};
+use flow_like_wasm::{WasmConfig, WasmEngine, WasmSecurityConfig};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -24,14 +24,14 @@ pub async fn compile(
         tokio::time::timeout(config.compilation_timeout(), compile_inner(&job, config)).await;
 
     let compilation_result = match result {
-        Ok(Ok(platforms)) => CompilationResult {
+        Ok(Ok((platforms, nodes))) => CompilationResult {
             job_id: job.job_id.clone(),
             package_id: job.package_id.clone(),
             version: job.version.clone(),
             status: CompilationStatus::Compiled,
             compiled_platforms: platforms,
             error: None,
-            nodes: None,
+            nodes,
         },
         Ok(Err(e)) => CompilationResult {
             job_id: job.job_id.clone(),
@@ -114,7 +114,7 @@ async fn upload_artifact(url: &str, data: Vec<u8>) -> Result<(), CompilerError> 
 async fn compile_inner(
     job: &CompilationJob,
     config: &CompilerConfig,
-) -> Result<Vec<String>, CompilerError> {
+) -> Result<(Vec<String>, Option<serde_json::Value>), CompilerError> {
     let wasm_bytes = download_wasm(&job.wasm_download_url).await?;
 
     let actual_hash = blake3::hash(&wasm_bytes).to_hex().to_string();
@@ -125,10 +125,23 @@ async fn compile_inner(
         )));
     }
 
+    // Extract node definitions by instantiating the WASM with the host engine
+    let nodes = match extract_nodes(&wasm_bytes).await {
+        Ok(defs) => {
+            info!(count = defs.len(), "Extracted node definitions from WASM");
+            serde_json::to_value(&defs).ok()
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to extract node definitions (non-fatal)");
+            None
+        }
+    };
+
     info!(target_count = job.targets.len(), "Compiling for targets");
 
     let wasm_bytes = Arc::new(wasm_bytes.to_vec());
     let mut set = tokio::task::JoinSet::new();
+    let mut compiled_platforms = Vec::new();
 
     let max_parallel = config
         .max_parallel_targets
@@ -144,7 +157,9 @@ async fn compile_inner(
         // Wait if we've saturated the parallelism limit
         while set.len() >= max_parallel {
             if let Some(done) = set.join_next().await {
-                done.map_err(|e| CompilerError::Compilation(format!("Task panicked: {e}")))??;
+                let platform = done
+                    .map_err(|e| CompilerError::Compilation(format!("Task panicked: {e}")))??;
+                compiled_platforms.push(platform);
             }
         }
 
@@ -182,7 +197,6 @@ async fn compile_inner(
         });
     }
 
-    let mut compiled_platforms = Vec::new();
     while let Some(result) = set.join_next().await {
         let platform =
             result.map_err(|e| CompilerError::Compilation(format!("Task panicked: {e}")))??;
@@ -190,7 +204,27 @@ async fn compile_inner(
     }
 
     info!(count = compiled_platforms.len(), "All targets compiled");
-    Ok(compiled_platforms)
+    Ok((compiled_platforms, nodes))
+}
+
+/// Instantiate the WASM module with the host engine to extract node definitions.
+async fn extract_nodes(
+    wasm_bytes: &[u8],
+) -> Result<Vec<flow_like_wasm::abi::WasmNodeDefinition>, CompilerError> {
+    let engine = WasmEngine::new(WasmConfig::default().without_cache()).map_err(|e| {
+        CompilerError::Compilation(format!("Host engine creation failed: {e}"))
+    })?;
+    let loaded = engine.load_auto(wasm_bytes).await.map_err(|e| {
+        CompilerError::Compilation(format!("Failed to load WASM for node extraction: {e}"))
+    })?;
+    let security = WasmSecurityConfig::restrictive();
+    let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
+        CompilerError::Compilation(format!("Failed to instantiate WASM for node extraction: {e}"))
+    })?;
+    let defs = instance.call_get_nodes().await.map_err(|e| {
+        CompilerError::Compilation(format!("Failed to call get_nodes: {e}"))
+    })?;
+    Ok(defs)
 }
 
 async fn send_callback(

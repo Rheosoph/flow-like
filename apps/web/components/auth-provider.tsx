@@ -212,14 +212,35 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			return;
 		}
 
-		(async () => {
-			try {
-				// Ensure the user record exists in DB before any profile operations
-				await backend.userState.getInfo();
+		let cancelled = false;
 
-				console.log("Fetching profile...");
+		(async () => {
+			const MAX_RETRIES = 5;
+			const BASE_DELAY = 500;
+
+			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+				if (cancelled) return;
+
+				try {
+					await backend.userState.getInfo();
+					break;
+				} catch (error) {
+					if (attempt === MAX_RETRIES) {
+						console.error(
+							"Failed to ensure user exists after retries:",
+							error,
+						);
+					} else {
+						const delay = BASE_DELAY * 2 ** attempt;
+						await new Promise((r) => setTimeout(r, delay));
+					}
+				}
+			}
+
+			if (cancelled) return;
+
+			try {
 				const profile = await backend.userState.getProfile();
-				console.log("Profile fetched:", profile);
 				if (profile && backend instanceof WebBackend) {
 					backend.pushProfile(profile);
 					setProfileLoaded(true);
@@ -232,6 +253,10 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 				}
 			}
 		})();
+
+		return () => {
+			cancelled = true;
+		};
 	}, [authPushed, auth?.isAuthenticated, auth?.user?.access_token, backend]);
 
 	useEffect(() => {

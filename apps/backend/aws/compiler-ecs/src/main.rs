@@ -3,6 +3,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_compiler::{process_job, CompilationJob, CompilerConfig};
 use flow_like_types::dispatch::CompilationJobRef;
+use flow_like_types::reqwest;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
 

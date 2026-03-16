@@ -96,6 +96,14 @@ function toSnakeCaseKeys(value: unknown): unknown {
 	return value;
 }
 
+function bumpPatch(version: string): string {
+	const parts = version.split(".");
+	if (parts.length !== 3) return version;
+	const patch = Number.parseInt(parts[2], 10);
+	if (Number.isNaN(patch)) return version;
+	return `${parts[0]}.${parts[1]}.${patch + 1}`;
+}
+
 function StepIndicator({
 	step,
 	currentStep,
@@ -180,6 +188,9 @@ function DeveloperPublishPageContent() {
 	const [idCheckState, setIdCheckState] = useState<
 		"idle" | "checking" | "available" | "owned" | "taken"
 	>("idle");
+	const [versionCheckState, setVersionCheckState] = useState<
+		"idle" | "checking" | "available" | "taken" | "bumped"
+	>("idle");
 	const [formData, setFormData] = useState<PublishFormData>({
 		id: "",
 		name: "",
@@ -260,7 +271,8 @@ function DeveloperPublishPageContent() {
 					formData.name &&
 					formData.version &&
 					formData.description &&
-					(idCheckState === "available" || idCheckState === "owned")
+					(idCheckState === "available" || idCheckState === "owned") &&
+					(versionCheckState === "available" || versionCheckState === "bumped")
 				);
 			case "permissions":
 				return true;
@@ -269,7 +281,7 @@ function DeveloperPublishPageContent() {
 			default:
 				return false;
 		}
-	}, [step, formData, idCheckState]);
+	}, [step, formData, idCheckState, versionCheckState]);
 
 	const nextStep = useCallback(() => {
 		const steps: PublishStep[] = ["manifest", "permissions", "review"];
@@ -303,6 +315,30 @@ function DeveloperPublishPageContent() {
 			toast.error("Failed to check ID availability");
 		}
 	}, [profile.data, formData.id, auth]);
+
+	const handleCheckVersion = useCallback(async () => {
+		if (!profile.data || !formData.id || !formData.version) return;
+		setVersionCheckState("checking");
+		try {
+			const result = await post<{ available: boolean }>(
+				profile.data.hub_profile,
+				"registry/check-version",
+				{ id: formData.id, version: formData.version },
+				auth,
+			);
+			if (result.available) {
+				setVersionCheckState("available");
+			} else {
+				const bumped = bumpPatch(formData.version);
+				setFormData((prev) => ({ ...prev, version: bumped }));
+				setVersionCheckState("bumped");
+				toast.info(`Version ${formData.version} already exists — bumped to ${bumped}`);
+			}
+		} catch {
+			setVersionCheckState("idle");
+			toast.error("Failed to check version availability");
+		}
+	}, [profile.data, formData.id, formData.version, auth]);
 
 	const handlePublish = async () => {
 		if (!profile.data || !inspection) return;
@@ -592,12 +628,40 @@ function DeveloperPublishPageContent() {
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="version">Version *</Label>
-										<Input
-											id="version"
-											placeholder="1.0.0"
-											value={formData.version}
-											onChange={(e) => updateField("version", e.target.value)}
-										/>
+										<div className="flex gap-2">
+											<Input
+												id="version"
+												placeholder="1.0.0"
+												value={formData.version}
+												onChange={(e) => {
+													updateField("version", e.target.value);
+													setVersionCheckState("idle");
+												}}
+												className="flex-1"
+											/>
+											<Button
+												type="button"
+												variant={versionCheckState === "available" || versionCheckState === "bumped" ? "outline" : "secondary"}
+												size="sm"
+												disabled={!formData.version || !formData.id || versionCheckState === "checking"}
+												onClick={handleCheckVersion}
+												className="shrink-0"
+											>
+												{versionCheckState === "checking" ? (
+													<Loader2 className="h-4 w-4 animate-spin" />
+												) : versionCheckState === "available" || versionCheckState === "bumped" ? (
+													<Check className="h-4 w-4 text-green-500" />
+												) : (
+													"Check"
+												)}
+											</Button>
+										</div>
+										{versionCheckState === "available" && (
+											<p className="text-xs text-green-500">Version is available</p>
+										)}
+										{versionCheckState === "bumped" && (
+											<p className="text-xs text-yellow-500">Auto-bumped to available version</p>
+										)}
 									</div>
 								</div>
 								<div className="space-y-2">

@@ -30,6 +30,8 @@ pub mod push_global_session;
 pub mod push_local_session;
 pub mod push_reasoning;
 pub mod push_response;
+pub mod push_stat;
+pub mod push_stats;
 pub mod push_step;
 pub mod push_text_to_step;
 pub mod remove_step;
@@ -638,6 +640,12 @@ pub struct ChatStreamingResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub plan: Option<Reasoning>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct ChatUsageStat {
+    pub step_name: String,
+    pub stats: flow_like_model_provider::response::LLMUsageStats,
 }
 
 #[cfg(test)]

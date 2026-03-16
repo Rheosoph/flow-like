@@ -2,13 +2,14 @@
 import process from "node:process";
 /** @type {import('next').NextConfig} */
 import { withSentryConfig } from "@sentry/nextjs";
+
 const nextConfig = {
 	output: "export",
 	pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
 	images: {
 		unoptimized: true,
 	},
-	transpilePackages: ["@tm9657/flow-like-ui"],
+	transpilePackages: ["@tm9657/flow-like-ui", "@flow-like/dexie-tauri-blob-offload"],
 	staticPageGenerationTimeout: 120,
 	reactCompiler: true,
 	missingSuspenseWithCSRBailout: false,

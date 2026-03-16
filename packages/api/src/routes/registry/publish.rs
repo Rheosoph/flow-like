@@ -6,11 +6,13 @@
 
 use super::types::PublishResponse;
 use crate::audit_branch;
+use crate::entity::wasm_package_version;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -78,6 +80,23 @@ pub async fn publish(
                 &request.manifest.id,
                 crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer
             );
+        }
+    }
+
+    // Check if this exact version already exists
+    {
+        let existing_version = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(&request.manifest.id))
+            .filter(wasm_package_version::Column::Version.eq(&request.manifest.version))
+            .one(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+
+        if existing_version.is_some() {
+            return Err(ApiError::conflict(format!(
+                "Version {} already exists for package '{}'. Please bump the version and try again.",
+                request.manifest.version, request.manifest.id
+            )));
         }
     }
 

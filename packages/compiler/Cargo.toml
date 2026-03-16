@@ -6,7 +6,7 @@ description = "WASM compilation worker for Flow-Like"
 
 [dependencies]
 flow-like-types.workspace = true
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["all-arch"] }
 
 blake3.workspace = true
 bytes.workspace = true

@@ -401,29 +401,34 @@ async fn copilot_sdk_chat_internal(
         ));
     }
 
-    // For Frontend mode, restrict to ONLY emit_ui + get_component_schema and exclude file editing tools
-    let (available_tools, excluded_tools) = match scope {
-        CopilotScope::Frontend => (
-            Some(vec!["emit_ui".to_string(), "get_component_schema".to_string()]),
-            Some(vec![
-                "Read".to_string(),
-                "Edit".to_string(),
-                "Write".to_string(),
-                "shell".to_string(),
-                "powershell".to_string(),
-                "bash".to_string(),
-                "Grep".to_string(),
-            ]),
-        ),
-        _ => (None, None),
+    // Exclude built-in Copilot tools that shouldn't be used (file editing, shell commands).
+    // Do NOT set available_tools — it can conflict with custom tool visibility in the CLI.
+    // Custom tools (emit_ui, get_component_schema, emit_commands, etc.) are always available
+    // via the `tools` array in the session config.
+    let excluded_tools = match scope {
+        CopilotScope::Frontend => Some(vec![
+            "Read".to_string(),
+            "Edit".to_string(),
+            "Write".to_string(),
+            "shell".to_string(),
+            "powershell".to_string(),
+            "bash".to_string(),
+            "Grep".to_string(),
+            "listDir".to_string(),
+            "Search".to_string(),
+            "Insert".to_string(),
+            "Replace".to_string(),
+            "CreateFile".to_string(),
+        ]),
+        _ => None,
     };
 
     let config = copilot_sdk::SessionConfig {
         model: Some(model_id.to_string()),
         streaming: true,
         tools: tool_defs,
-        available_tools,
         excluded_tools,
+        request_permission: Some(false),
         system_message: Some(copilot_sdk::SystemMessageConfig {
             content: Some(system_content),
             mode: Some(copilot_sdk::SystemMessageMode::Replace),
@@ -443,6 +448,11 @@ async fn copilot_sdk_chat_internal(
             .register_tool_with_handler(tool, Some(handler))
             .await;
     }
+
+    // Approve all permission requests so the CLI never blocks tool execution
+    session
+        .register_permission_handler(|_req| copilot_sdk::PermissionRequestResult::approved())
+        .await;
 
     let mut events = session.subscribe();
     session
@@ -554,6 +564,42 @@ async fn copilot_sdk_chat_internal(
             Err(e) => {
                 println!("[copilot_sdk_chat] Event receive error: {}", e);
                 break;
+            }
+        }
+    }
+
+    // ── Fallback: if the model didn't call emit_ui but dumped JSON in the
+    // response text, extract components from there so they still show up.
+    if extracted_components.is_empty()
+        && matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
+    {
+        let surface =
+            flow_like::a2ui::copilot::extract_surface_from_response(&full_response);
+        if !surface.components.is_empty() {
+            println!(
+                "[copilot_sdk_chat] Fallback: extracted {} components from text response",
+                surface.components.len()
+            );
+            // Forward to frontend via channel so streaming UI picks them up
+            let comp_event = format!(
+                "<components>{}</components>",
+                serde_json::to_string(&surface.components).unwrap_or_default()
+            );
+            let _ = channel.send(comp_event);
+            if let Some(ref canvas) = surface.canvas_settings {
+                let canvas_event = format!(
+                    "<canvas_settings>{}</canvas_settings>",
+                    serde_json::to_string(canvas).unwrap_or_default()
+                );
+                let _ = channel.send(canvas_event);
+            }
+
+            extracted_components = surface.components;
+            if extracted_canvas_settings.is_none() {
+                extracted_canvas_settings = surface.canvas_settings;
+            }
+            if extracted_root_component_id.is_none() {
+                extracted_root_component_id = surface.root_component_id;
             }
         }
     }

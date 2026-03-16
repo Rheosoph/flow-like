@@ -8,9 +8,11 @@
 //! the complete component tree, which is parsed from the response text.
 
 pub mod component_docs;
+mod extract;
 mod tools;
 mod types;
 
+pub use extract::{extract_surface_from_response, ExtractedSurface};
 pub use component_docs::{
     CHART_DOCUMENTATION, COMPONENT_CATALOG, GAME_COMPONENT_DOCUMENTATION, ML_VISION_DOCUMENTATION,
     STYLE_GUIDE, get_documentation_section, get_full_documentation,
@@ -274,7 +276,9 @@ impl A2UICopilot {
             // If iteration text already contains extractable components,
             // stop early — no need to burn more iterations.
             if !iteration_text.is_empty()
-                && !Self::extract_components_from_response(&full_response).is_empty()
+                && !extract_surface_from_response(&full_response)
+                    .components
+                    .is_empty()
             {
                 break;
             }
@@ -332,7 +336,8 @@ impl A2UICopilot {
         }
 
         // Parse the components from the response JSON block
-        let generated_components = Self::extract_components_from_response(&full_response);
+        let surface = extract_surface_from_response(&full_response);
+        let generated_components = surface.components;
 
         let component_count = generated_components.len();
 
@@ -359,153 +364,6 @@ impl A2UICopilot {
             components: generated_components,
             suggestions: vec![],
         })
-    }
-
-    /// Extract SurfaceComponent array from the LLM response text.
-    ///
-    /// The model is instructed to output a JSON block like:
-    /// ```json
-    /// {
-    ///   "rootComponentId": "...",
-    ///   "components": [...]
-    /// }
-    /// ```
-    ///
-    /// We look for JSON inside markdown code fences first, then try the
-    /// largest `{...}` block in the response.
-    fn extract_components_from_response(response: &str) -> Vec<SurfaceComponent> {
-        // Strategy 1: Look for ```json ... ``` fenced block
-        if let Some(components) = Self::extract_from_fenced_json(response) {
-            return components;
-        }
-
-        // Strategy 2: Look for the largest top-level JSON object in the text
-        if let Some(components) = Self::extract_from_raw_json(response) {
-            return components;
-        }
-
-        vec![]
-    }
-
-    /// Extract components from a markdown-fenced JSON block
-    fn extract_from_fenced_json(response: &str) -> Option<Vec<SurfaceComponent>> {
-        let response_lower = response.to_lowercase();
-
-        // Find all ```json blocks (case-insensitive) and try each one
-        let mut search_from = 0;
-        while let Some(start) = response_lower[search_from..].find("```json") {
-            let json_start = search_from + start + 7; // skip "```json"
-            // Skip optional trailing whitespace/newline after the fence marker
-            let json_start = response[json_start..]
-                .find(|c: char| !c.is_whitespace() || c == '\n')
-                .map(|i| json_start + i)
-                .unwrap_or(json_start);
-            if let Some(end) = response[json_start..].find("```") {
-                let json_str = response[json_start..json_start + end].trim();
-                if let Some(components) = Self::parse_surface_json(json_str) {
-                    return Some(components);
-                }
-            }
-            search_from = json_start;
-        }
-
-        // Also try bare ``` blocks
-        let mut search_from = 0;
-        while let Some(start) = response[search_from..].find("```\n") {
-            let json_start = search_from + start + 4;
-            if let Some(end) = response[json_start..].find("```") {
-                let json_str = response[json_start..json_start + end].trim();
-                if json_str.starts_with('{') || json_str.starts_with('[') {
-                    if let Some(components) = Self::parse_surface_json(json_str) {
-                        return Some(components);
-                    }
-                }
-            }
-            search_from = json_start;
-        }
-
-        None
-    }
-
-    /// Extract components from raw JSON in the response text
-    fn extract_from_raw_json(response: &str) -> Option<Vec<SurfaceComponent>> {
-        // Find the largest balanced { ... } block
-        let mut best_json: Option<&str> = None;
-        let mut best_len = 0;
-
-        let chars: Vec<char> = response.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i] == '{' {
-                let start = i;
-                let mut depth = 1;
-                i += 1;
-                while i < chars.len() && depth > 0 {
-                    match chars[i] {
-                        '{' => depth += 1,
-                        '}' => depth -= 1,
-                        '"' => {
-                            // Skip string contents
-                            i += 1;
-                            while i < chars.len() && chars[i] != '"' {
-                                if chars[i] == '\\' {
-                                    i += 1; // skip escaped char
-                                }
-                                i += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                if depth == 0 {
-                    let byte_start = chars[..start]
-                        .iter()
-                        .map(|c| c.len_utf8())
-                        .sum::<usize>();
-                    let byte_end = chars[..i].iter().map(|c| c.len_utf8()).sum::<usize>();
-                    let candidate = &response[byte_start..byte_end];
-                    if candidate.len() > best_len {
-                        best_len = candidate.len();
-                        best_json = Some(candidate);
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        best_json.and_then(Self::parse_surface_json)
-    }
-
-    /// Parse a JSON string into SurfaceComponents.
-    /// Handles both `{"components": [...]}` wrapper and direct array `[...]`.
-    fn parse_surface_json(json_str: &str) -> Option<Vec<SurfaceComponent>> {
-        // Try as { "components": [...], ... } wrapper
-        match serde_json::from_str::<serde_json::Value>(json_str) {
-            Ok(wrapper) => {
-                if let Some(components_val) = wrapper.get("components") {
-                    match serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone()) {
-                        Ok(components) if !components.is_empty() => return Some(components),
-                        Err(e) => {
-                            println!("[A2UICopilot] Components array found but failed to deserialize: {}", e);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Err(e) => {
-                println!("[A2UICopilot] JSON parse error (will try other strategies): {}", e);
-            }
-        }
-
-        // Try as direct array of components
-        match serde_json::from_str::<Vec<SurfaceComponent>>(json_str) {
-            Ok(components) if !components.is_empty() => return Some(components),
-            _ => {}
-        }
-
-        None
     }
 
     fn prepare_context(

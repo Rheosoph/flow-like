@@ -1,3 +1,4 @@
+use super::elements::element_utils::extract_element_id;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -33,34 +34,18 @@ impl NodeLogic for PushToContainer {
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);
 
         node.add_input_pin(
-            "container_id",
-            "Container ID",
-            "ID of the container element to add to (e.g., 'my-row', 'main-column')",
-            VariableType::String,
+            "container_ref",
+            "Container",
+            "Reference to the container element (ID or element object)",
+            VariableType::Struct,
         );
 
         node.add_input_pin(
-            "element_id",
-            "Element ID",
-            "Unique ID for the new element being added",
-            VariableType::String,
+            "element_ref",
+            "Element",
+            "Reference to the element to add (e.g. from Instantiate Widget)",
+            VariableType::Struct,
         );
-
-        node.add_input_pin(
-            "element_type",
-            "Element Type",
-            "Type of element to add (e.g., 'text', 'button', 'image', or 'widget')",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("text")));
-
-        node.add_input_pin(
-            "element_props",
-            "Element Props",
-            "Properties for the new element (JSON object)",
-            VariableType::Generic,
-        )
-        .set_default_value(Some(json!({})));
 
         node.add_input_pin(
             "position",
@@ -80,6 +65,7 @@ impl NodeLogic for PushToContainer {
         );
 
         node.set_long_running(true);
+        node.set_version(2);
 
         node
     }
@@ -87,28 +73,30 @@ impl NodeLogic for PushToContainer {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let container_id: String = context.evaluate_pin("container_id").await?;
-        let element_id: String = context.evaluate_pin("element_id").await?;
-        let element_type: String = context.evaluate_pin("element_type").await?;
-        let element_props: Value = context.evaluate_pin("element_props").await?;
+        let container_value: Value = context.evaluate_pin("container_ref").await?;
+        let container_id = extract_element_id(&container_value)
+            .ok_or_else(|| flow_like_types::anyhow!("Invalid container reference"))?;
+
+        let element_value: Value = context.evaluate_pin("element_ref").await?;
+        let child_id = extract_element_id(&element_value)
+            .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
+
         let position: i64 = context.evaluate_pin("position").await?;
 
-        // Build the command payload for the frontend
-        let command = json!({
-            "type": "push_to_container",
-            "container_id": container_id,
-            "element": {
-                "id": element_id,
-                "type": element_type,
-                "props": element_props
-            },
-            "position": position
-        });
+        let update_value = if position < 0 {
+            json!({
+                "type": "pushChild",
+                "childId": child_id
+            })
+        } else {
+            json!({
+                "type": "insertChildAt",
+                "childId": child_id,
+                "index": position
+            })
+        };
 
-        // Use upsert_element to send command to frontend (special command element)
-        context
-            .upsert_element(&format!("_cmd/{}", container_id), command)
-            .await?;
+        context.upsert_element(&container_id, update_value).await?;
 
         context
             .get_pin_by_name("success")

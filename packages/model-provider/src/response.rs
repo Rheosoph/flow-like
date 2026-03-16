@@ -474,6 +474,74 @@ impl Response {
     }
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+pub struct ModelCallEntry {
+    pub model: String,
+    pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+pub struct LLMUsageStats {
+    pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<ModelCallEntry>,
+}
+
+impl LLMUsageStats {
+    pub fn from_response(response: &Response) -> Self {
+        let call = ModelCallEntry {
+            model: response.model.clone().unwrap_or_default(),
+            usage: response.usage.clone(),
+            duration_ms: None,
+        };
+        Self {
+            usage: response.usage.clone(),
+            model: response.model.clone(),
+            duration_ms: None,
+            iterations: None,
+            calls: vec![call],
+        }
+    }
+
+    pub fn set_duration_ms(&mut self, duration_ms: u64) {
+        self.duration_ms = Some(duration_ms);
+        if let Some(last) = self.calls.last_mut() {
+            if last.duration_ms.is_none() {
+                last.duration_ms = Some(duration_ms);
+            }
+        }
+    }
+
+    pub fn set_iterations(&mut self, iterations: u32) {
+        self.iterations = Some(iterations);
+    }
+
+    pub fn accumulate(&mut self, other: &Usage, model: Option<&str>) {
+        self.usage.prompt_tokens = self.usage.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.usage.completion_tokens = self
+            .usage
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+        self.usage.total_tokens = self.usage.total_tokens.saturating_add(other.total_tokens);
+        if let Some(other_cost) = other.cost {
+            self.usage.cost = Some(self.usage.cost.unwrap_or(0.0) + other_cost);
+        }
+        self.calls.push(ModelCallEntry {
+            model: model.unwrap_or_default().to_string(),
+            usage: other.clone(),
+            duration_ms: None,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
