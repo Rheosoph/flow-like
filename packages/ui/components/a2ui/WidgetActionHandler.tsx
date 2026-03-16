@@ -113,7 +113,7 @@ export function WidgetActionProvider({
 					_surface_id: surfaceId,
 				};
 
-				for (const field of action.contextFields) {
+				for (const field of action.contextSchema) {
 					const mapping = inputMappings?.[field.name];
 					if (mapping) {
 						payload[field.name] = resolveBoundValue(

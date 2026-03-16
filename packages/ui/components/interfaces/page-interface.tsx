@@ -92,6 +92,71 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 				return;
 			}
 
+			if (message.type === "surfaceUpdate") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = { ...prevSurface.components };
+					for (const comp of message.components) {
+						updatedComponents[comp.id] = comp;
+					}
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "createElement") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = {
+						...prevSurface.components,
+						[message.component.id]: message.component,
+					};
+					const parent = prevSurface.components[message.parentId];
+					if (parent) {
+						const parentComp = parent.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const childrenData = parentComp.children as
+							| { explicitList?: string[] }
+							| undefined;
+						const existingChildren = childrenData?.explicitList || [];
+						const newChildren = [...existingChildren];
+						if (
+							message.index !== undefined &&
+							message.index >= 0 &&
+							message.index <= newChildren.length
+						) {
+							newChildren.splice(message.index, 0, message.component.id);
+						} else {
+							newChildren.push(message.component.id);
+						}
+						updatedComponents[message.parentId] = {
+							...parent,
+							component: {
+								...parentComp,
+								children: { explicitList: newChildren },
+							} as SurfaceComponent["component"],
+						};
+					}
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "removeElement") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = { ...prevSurface.components };
+					delete updatedComponents[message.elementId];
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
 			if (message.type !== "upsertElement") return;
 
 			setSurface((prevSurface) => {
@@ -107,7 +172,26 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 				if (surfaceId !== prevSurface.id) return prevSurface;
 
 				const component = prevSurface.components[componentId];
-				if (!component) return prevSurface;
+
+				// Create new component if it doesn't exist and value has createComponent type
+				if (!component) {
+					const updateValue = value as Record<string, unknown>;
+					if (updateValue?.type === "createComponent") {
+						const newComponent: SurfaceComponent = {
+							id: componentId,
+							component: updateValue.component as SurfaceComponent["component"],
+							style: updateValue.style as SurfaceComponent["style"],
+						};
+						return {
+							...prevSurface,
+							components: {
+								...prevSurface.components,
+								[componentId]: newComponent,
+							},
+						};
+					}
+					return prevSurface;
+				}
 
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;

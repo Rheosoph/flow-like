@@ -126,7 +126,26 @@ export function useSurfaceManager() {
 					if (!surface) break;
 
 					const component = surface.components[componentId];
-					if (!component) break;
+
+					// Create new component if it doesn't exist and value has createComponent type
+					if (!component) {
+						const updateValue = value as Record<string, unknown>;
+						if (updateValue?.type === "createComponent") {
+							const newComponent: SurfaceComponent = {
+								id: componentId,
+								component: updateValue.component as SurfaceComponent["component"],
+								style: updateValue.style as SurfaceComponent["style"],
+							};
+							next.set(surfaceId, {
+								...surface,
+								components: {
+									...surface.components,
+									[componentId]: newComponent,
+								},
+							});
+						}
+						break;
+					}
 
 					const updateValue = value as Record<string, unknown>;
 					const updateType = updateValue?.type as string;

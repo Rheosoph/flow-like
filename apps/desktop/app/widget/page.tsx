@@ -22,15 +22,20 @@ import {
 	useInvoke,
 } from "@tm9657/flow-like-ui";
 import type { IWidget, Version, VersionType } from "@tm9657/flow-like-ui";
-import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/types";
+import type {
+	SurfaceComponent,
+	WidgetAction,
+} from "@tm9657/flow-like-ui/components/a2ui/types";
 import {
 	ArrowLeft,
 	Check,
 	GitBranchIcon,
 	Loader2,
+	Plus,
 	Save,
 	Settings,
 	TagIcon,
+	Trash2,
 	X,
 } from "lucide-react";
 import Link from "next/link";
@@ -436,6 +441,7 @@ function WidgetSettingsPanel({
 		<Tabs defaultValue="general" className="w-full">
 			<TabsList className="w-full justify-start px-4 pt-2">
 				<TabsTrigger value="general">General</TabsTrigger>
+				<TabsTrigger value="events">Events</TabsTrigger>
 				<TabsTrigger value="versions">Versions</TabsTrigger>
 				<TabsTrigger value="advanced">Advanced</TabsTrigger>
 			</TabsList>
@@ -607,6 +613,21 @@ function WidgetSettingsPanel({
 					)}
 				</div>
 			</TabsContent>
+			<TabsContent value="events" className="p-4 space-y-4">
+				<WidgetEventsEditor
+					actions={widget.actions ?? []}
+					onChange={(actions) => onUpdateWidget("actions", actions)}
+				/>
+				<Separator />
+				<Button onClick={onSave} disabled={isSaving} className="w-full">
+					{isSaving ? (
+						<Loader2 className="h-4 w-4 mr-2 animate-spin" />
+					) : (
+						<Save className="h-4 w-4 mr-2" />
+					)}
+					Save Events
+				</Button>
+			</TabsContent>
 			<TabsContent value="advanced" className="p-4 space-y-4">
 				<div className="space-y-2">
 					<Label>Widget ID</Label>
@@ -652,5 +673,93 @@ function WidgetSettingsPanel({
 				</div>
 			</TabsContent>
 		</Tabs>
+	);
+}
+
+function WidgetEventsEditor({
+	actions,
+	onChange,
+}: Readonly<{
+	actions: WidgetAction[];
+	onChange: (actions: WidgetAction[]) => void;
+}>) {
+	const addAction = () => {
+		const id = `action_${Date.now()}`;
+		onChange([
+			...actions,
+			{ id, label: "New Event", contextSchema: [] },
+		]);
+	};
+
+	const updateAction = (index: number, updates: Partial<WidgetAction>) => {
+		const updated = actions.map((a, i) =>
+			i === index ? { ...a, ...updates } : a,
+		);
+		onChange(updated);
+	};
+
+	const removeAction = (index: number) => {
+		onChange(actions.filter((_, i) => i !== index));
+	};
+
+	return (
+		<div className="space-y-3">
+			<div className="flex items-center justify-between">
+				<Label>Widget Events</Label>
+				<Button variant="outline" size="sm" onClick={addAction}>
+					<Plus className="h-3 w-3 mr-1" />
+					Add Event
+				</Button>
+			</div>
+			<p className="text-xs text-muted-foreground">
+				Define named events that this widget can trigger (e.g. on button press).
+				These can be bound to workflows when the widget is instantiated.
+			</p>
+			{actions.length === 0 && (
+				<p className="text-sm text-muted-foreground text-center py-4">
+					No events defined
+				</p>
+			)}
+			{actions.map((action, index) => (
+				<div
+					key={action.id}
+					className="border rounded-md p-3 space-y-2"
+				>
+					<div className="flex items-start justify-between gap-2">
+						<div className="flex-1 space-y-2">
+							<Input
+								placeholder="Event label (e.g. On Button Press)"
+								value={action.label}
+								onChange={(e) =>
+									updateAction(index, { label: e.target.value })
+								}
+								className="h-8 text-sm"
+							/>
+							<Input
+								placeholder="Description (optional)"
+								value={action.description ?? ""}
+								onChange={(e) =>
+									updateAction(index, {
+										description: e.target.value || undefined,
+									})
+								}
+								className="h-8 text-sm"
+							/>
+						</div>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+							onClick={() => removeAction(index)}
+						>
+							<Trash2 className="h-4 w-4" />
+						</Button>
+					</div>
+					<div className="text-xs text-muted-foreground font-mono">
+						ID: {action.id}
+					</div>
+				</div>
+			))}
+		</div>
 	);
 }

@@ -1574,13 +1574,16 @@ export interface WidgetAction {
 	id: string;
 	label: string;
 	description?: string;
-	contextFields: WidgetActionContextField[];
+	icon?: string;
+	contextSchema: WidgetActionContextField[];
 }
 
 export interface WidgetActionContextField {
 	name: string;
-	dataType: string;
+	label: string;
+	fieldType: string;
 	description?: string;
+	defaultPath?: string;
 }
 
 export type ActionBinding =

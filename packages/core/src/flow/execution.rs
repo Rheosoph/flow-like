@@ -518,11 +518,12 @@ impl PreparedFlush {
             }
             Err(_open_err) => {
                 // Try to drop any corrupted/partial table first
-                if let Err(e) = db.drop_table(&self.run_id, &[]).await {
-                    eprintln!(
-                        "[DBG-v3] drop_table failed (expected if not exists): {:?}",
-                        e
-                    );
+                match db.drop_table(&self.run_id, &[]).await {
+                    Ok(_) => {}
+                    Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => {}
+                    Err(e) => {
+                        eprintln!("[DBG-v3] drop_table failed unexpectedly: {:?}", e);
+                    }
                 }
 
                 // Create the table WITH data in one step (avoids create_empty + add issue)

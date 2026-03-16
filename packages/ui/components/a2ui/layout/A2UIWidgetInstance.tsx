@@ -8,6 +8,12 @@ import {
 import { useWidgetRefs } from "../WidgetRefsContext";
 import type { ActionBinding, Style } from "../types";
 
+export interface InlineWidgetDef {
+	name: string;
+	rootComponentId: string;
+	components: { id: string; component: Record<string, unknown>; style?: Style }[];
+}
+
 export interface WidgetInstanceComponentProps {
 	widgetId: string;
 	instanceId: string;
@@ -16,6 +22,7 @@ export interface WidgetInstanceComponentProps {
 	styleOverride?: Record<string, unknown>;
 	actionBindings?: Record<string, ActionBinding>;
 	style?: Style;
+	inlineWidgetDef?: InlineWidgetDef;
 }
 
 /**
@@ -29,11 +36,12 @@ export function A2UIWidgetInstance({
 	onAction,
 }: ComponentProps) {
 	const props = component as unknown as WidgetInstanceComponentProps;
-	const { instanceId, widgetId } = props;
+	const { instanceId, widgetId, inlineWidgetDef } = props;
 	const widgetRefsContext = useWidgetRefs();
 
-	// Get widget definition from refs
-	const widgetDef = widgetRefsContext?.getWidgetRef(instanceId);
+	// Get widget definition from refs, fall back to inline definition
+	const fromRefs = widgetRefsContext?.getWidgetRef(instanceId);
+	const widgetDef = fromRefs ?? inlineWidgetDef;
 
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(

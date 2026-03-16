@@ -1,11 +1,55 @@
+use flow_like::app::App;
+use flow_like::a2ui::widget::{ExposedPropType, WidgetActionContextField};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
 use std::sync::Arc;
+
+fn exposed_prop_type_to_json_schema_type(prop_type: &ExposedPropType) -> &'static str {
+    match prop_type {
+        ExposedPropType::String
+        | ExposedPropType::Color
+        | ExposedPropType::ImageUrl
+        | ExposedPropType::Icon
+        | ExposedPropType::TailwindClass
+        | ExposedPropType::Enum { .. } => "string",
+        ExposedPropType::Number => "number",
+        ExposedPropType::Boolean => "boolean",
+        ExposedPropType::Json | ExposedPropType::StyleObject | ExposedPropType::BoundValue => {
+            "object"
+        }
+    }
+}
+
+fn build_context_schema(fields: &[WidgetActionContextField]) -> String {
+    let mut properties = flow_like_types::json::Map::new();
+    for field in fields {
+        let mut prop = flow_like_types::json::Map::new();
+        prop.insert(
+            "type".to_string(),
+            json!(exposed_prop_type_to_json_schema_type(&field.field_type)),
+        );
+        if let Some(desc) = &field.description {
+            prop.insert("description".to_string(), json!(desc));
+        }
+        if let ExposedPropType::Enum { choices } = &field.field_type {
+            prop.insert("enum".to_string(), json!(choices));
+        }
+        properties.insert(field.name.clone(), flow_like_types::Value::Object(prop));
+    }
+
+    let schema = json!({
+        "type": "object",
+        "properties": properties,
+    });
+
+    flow_like_types::json::to_string(&schema).unwrap_or_default()
+}
 
 /// Widget Action Event - Entry point for widget action triggers.
 ///
@@ -108,10 +152,101 @@ impl NodeLogic for WidgetActionEvent {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
         node.error = None;
 
-        // Validate action_id is not empty when provided
+        // Find the InstantiateWidget that references this event via fn_refs
+        let referencing_node = board.nodes.values().find(|n| {
+            n.name == "a2ui_instantiate_widget"
+                && n.fn_refs
+                    .as_ref()
+                    .is_some_and(|refs| refs.fn_refs.contains(&node.id))
+        });
+
+        if let Some(inst_node) = referencing_node {
+            // Read the selected widget name from the InstantiateWidget
+            let selected_widget = inst_node
+                .get_pin_by_name("widget_selector")
+                .and_then(|p| p.default_value.as_ref())
+                .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok());
+
+            if let Some(widget_name) = selected_widget {
+                // Load the app's widgets to get available actions
+                if let Some(app_state) = &board.app_state {
+                    let app_id = board
+                        .board_dir
+                        .filename()
+                        .unwrap_or_default()
+                        .to_string();
+                    if !app_id.is_empty() {
+                        if let Ok(app) = App::load(app_id, app_state.clone()).await {
+                            let widgets = app.get_widgets().await.unwrap_or_default();
+                            if let Some(widget) = widgets.iter().find(|w| w.name == widget_name) {
+                                let action_ids: Vec<String> =
+                                    widget.actions.iter().map(|a| a.id.clone()).collect();
+
+                                if let Some(pin) = node.get_pin_mut_by_name("action_id") {
+                                    pin.set_options(
+                                        PinOptions::new()
+                                            .set_valid_values(action_ids.clone())
+                                            .build(),
+                                    );
+                                }
+
+                                // Validate current action_id against available actions
+                                let action_id = node
+                                    .get_pin_by_name("action_id")
+                                    .and_then(|p| p.default_value.as_ref())
+                                    .and_then(|v| {
+                                        flow_like_types::json::from_slice::<String>(v).ok()
+                                    })
+                                    .unwrap_or_default();
+
+                                if !action_id.is_empty()
+                                    && !action_ids.is_empty()
+                                    && !action_ids.contains(&action_id)
+                                {
+                                    node.error = Some(format!(
+                                        "Action '{}' is not defined on widget '{}'",
+                                        action_id, widget_name
+                                    ));
+                                }
+
+                                // Type the action_context output pin from the action's context_schema
+                                if let Some(action) =
+                                    widget.actions.iter().find(|a| a.id == action_id)
+                                {
+                                    if !action.context_schema.is_empty() {
+                                        let schema =
+                                            build_context_schema(&action.context_schema);
+                                        if let Some(pin) =
+                                            node.get_pin_mut_by_name("action_context")
+                                        {
+                                            pin.data_type = VariableType::Struct;
+                                            pin.schema = Some(schema);
+                                        }
+                                    } else if let Some(pin) =
+                                        node.get_pin_mut_by_name("action_context")
+                                    {
+                                        pin.data_type = VariableType::Generic;
+                                        pin.schema = None;
+                                    }
+                                } else if let Some(pin) =
+                                    node.get_pin_mut_by_name("action_context")
+                                {
+                                    pin.data_type = VariableType::Generic;
+                                    pin.schema = None;
+                                }
+
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: no referencing InstantiateWidget found, just validate action_id is set
         let action_id = node
             .get_pin_by_name("action_id")
             .and_then(|pin| pin.default_value.as_ref())
