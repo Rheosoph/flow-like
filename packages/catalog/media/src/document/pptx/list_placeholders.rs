@@ -78,8 +78,8 @@ impl NodeLogic for PptxListPlaceholdersNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use std::collections::BTreeSet;
         use flow_like_types::regex::Regex;
+        use std::collections::BTreeSet;
 
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -102,7 +102,9 @@ impl NodeLogic for PptxListPlaceholdersNode {
         }
 
         let placeholders: Vec<String> = found.into_iter().collect();
-        context.set_pin_value("placeholders", json!(placeholders)).await?;
+        context
+            .set_pin_value("placeholders", json!(placeholders))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

@@ -573,8 +573,7 @@ async fn copilot_sdk_chat_internal(
     if extracted_components.is_empty()
         && matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
     {
-        let surface =
-            flow_like::a2ui::copilot::extract_surface_from_response(&full_response);
+        let surface = flow_like::a2ui::copilot::extract_surface_from_response(&full_response);
         if !surface.components.is_empty() {
             println!(
                 "[copilot_sdk_chat] Fallback: extracted {} components from text response",

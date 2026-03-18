@@ -14,9 +14,8 @@ use flow_like::flow::execution::{InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
-use flow_like::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
+use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
-use flow_like_catalog::get_catalog;
 use flow_like_storage::Path;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use futures_util::Stream;
@@ -157,7 +156,6 @@ async fn execute_inner(
         .await
         .map_err(|e| ExecutorError::Storage(e.to_string()))?;
 
-    let catalog = get_catalog();
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
     flow_config.register_app_meta_store(meta_store.clone());
     flow_config.register_log_store(log_store);
@@ -179,21 +177,58 @@ async fn execute_inner(
     let state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
 
-    let catalog_arc = Arc::new(catalog);
-    let registry = FlowNodeRegistryInner::prepare(&catalog_arc);
+    let mut registry = crate::execute::PREPARED_REGISTRY.clone();
+
+    // Load WASM packages from presigned URLs if any are specified
+    if let Some(ref wasm_packages) = request.wasm_packages {
+        if !wasm_packages.is_empty() {
+            match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
+                Ok(wasm_nodes) => {
+                    tracing::info!(count = wasm_nodes.len(), "Loaded WASM nodes for streaming execution");
+                    for logic in wasm_nodes {
+                        let node = logic.get_node();
+                        registry.insert(node, logic);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to load WASM packages for streaming");
+                }
+            }
+        }
+    }
+
     state.node_registry.write().await.node_registry = Arc::new(registry);
 
     let state = Arc::new(state);
 
-    // Load board using pre-resolved board_id and version
+    // Load board using pre-resolved board_id and version (cached)
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Board::load(storage_root, board_id, state.clone(), request.board_version)
+    let cache_key = (
+        request.app_id.clone(),
+        board_id.clone(),
+        request.board_version,
+    );
+    let state_clone = state.clone();
+    let storage_root_clone = storage_root.clone();
+    let board_id_clone = board_id.clone();
+    let board_version = request.board_version;
+    let board = crate::execute::BOARD_CACHE
+        .try_get_with(cache_key, async move {
+            let b = Board::load(storage_root_clone, &board_id_clone, state_clone, board_version)
+                .await
+                .map_err(|e| {
+                    ExecutorError::BoardLoad(format!(
+                        "Failed to load board {}: {}",
+                        board_id_clone, e
+                    ))
+                })?;
+            Ok::<Arc<Board>, ExecutorError>(Arc::new(b))
+        })
         .await
-        .map_err(|e| {
-            ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
+        .map_err(|e: Arc<ExecutorError>| {
+            ExecutorError::BoardLoad(format!("Board cache error: {}", e))
         })?;
-    let board = Arc::new(board);
 
     emit_event(
         tx,

@@ -96,16 +96,8 @@ impl NodeLogic for PdfMergeNode {
 }
 
 #[cfg(feature = "execute")]
-fn merge_documents(
-    target: &mut Document,
-    mut source: Document,
-) -> flow_like_types::Result<()> {
-    let max_id = target
-        .objects
-        .keys()
-        .map(|&(id, _)| id)
-        .max()
-        .unwrap_or(0);
+fn merge_documents(target: &mut Document, mut source: Document) -> flow_like_types::Result<()> {
+    let max_id = target.objects.keys().map(|&(id, _)| id).max().unwrap_or(0);
     source.renumber_objects_with(max_id + 1);
 
     let page_ids: Vec<ObjectId> = source.page_iter().collect();
@@ -113,10 +105,7 @@ fn merge_documents(
         target.objects.insert(id, object);
     }
 
-    let pages_id = target
-        .catalog()?
-        .get(b"Pages")?
-        .as_reference()?;
+    let pages_id = target.catalog()?.get(b"Pages")?.as_reference()?;
 
     if let Ok(Object::Dictionary(pages_dict)) = target.get_object_mut(pages_id) {
         if let Ok(Object::Array(kids)) = pages_dict.get_mut(b"Kids") {

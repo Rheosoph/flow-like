@@ -81,6 +81,14 @@ import { FlowPin } from "./flow-pin";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
+const selectSelectedCount = (s: any) => {
+	let count = 0;
+	for (const n of s.nodeLookup.values()) {
+		if (n.selected) count++;
+	}
+	return count;
+};
+
 export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
@@ -112,6 +120,8 @@ export type FlowNode = Node<
 		onExplain?: (nodeIds: string[]) => void;
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
+		functionLayerId?: string;
+		currentLayerId?: string;
 	},
 	"node"
 >;
@@ -478,6 +488,7 @@ const FlowNodeInner = memo(
 								onPinRemove={pinRemoveCallback}
 								skipOffset={isReroute}
 								version={props.data.version}
+								currentLayerId={props.data.currentLayerId}
 							/>
 						);
 					}),
@@ -511,6 +522,7 @@ const FlowNodeInner = memo(
 							onPinRemove={pinRemoveCallback}
 							skipOffset={isReroute}
 							version={props.data.version}
+							currentLayerId={props.data.currentLayerId}
 						/>
 					);
 				}),
@@ -865,7 +877,7 @@ const FlowNodeInner = memo(
 				{renderFnRefOutputs}
 				{!isReroute && (
 					<div
-						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-primary/50 to-primary"} ${isReroute && "w-6"}`}
+						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-primary/50 to-primary"} ${isReroute && "w-6"}`}
 					>
 						<div className={"flex flex-row items-center gap-1 min-w-0"}>
 							{useMemo(
@@ -1212,9 +1224,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		[props.data.node, invalidate, pushCommands, flow],
 	);
 
-	const selectedCount = useStore(
-		(s) => Array.from(s.nodeLookup.values()).filter((n) => n.selected).length,
-	);
+	const selectedCount = useStore(selectSelectedCount);
 
 	const isReadOnly = typeof props.data.version !== "undefined";
 

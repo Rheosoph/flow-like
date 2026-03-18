@@ -7,12 +7,12 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
     ndarray::{Array1, Array2},
     ort::{inputs, value::Value},
 };
-use flow_like_catalog_core::FlowPath;
 use flow_like_types::{Result, anyhow, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -478,8 +478,13 @@ impl NodeLogic for ResampleAudioNode {
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
 
-        node.add_output_pin("audio_out", "Audio Out", "Resampled audio", VariableType::Struct)
-            .set_schema::<AudioData>();
+        node.add_output_pin(
+            "audio_out",
+            "Audio Out",
+            "Resampled audio",
+            VariableType::Struct,
+        )
+        .set_schema::<AudioData>();
 
         node
     }

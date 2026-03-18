@@ -5,8 +5,8 @@
 //! `RegistryClient` used by the desktop app; JSON compatibility is all
 //! that matters at the HTTP boundary.
 
-use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::Path as FlowPath;
+use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -47,9 +47,7 @@ impl MetaSummary {
     }
 
     pub async fn presign_media(&mut self, package_id: &str, store: &FlowLikeStore) {
-        let prefix = FlowPath::from("media")
-            .child("packages")
-            .child(package_id);
+        let prefix = FlowPath::from("media").child("packages").child(package_id);
         if let Some(icon) = &self.icon {
             if !icon.starts_with("http://") && !icon.starts_with("https://") {
                 let path = prefix.child(format!("{icon}.webp"));

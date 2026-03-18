@@ -1,6 +1,5 @@
 use crate::{
-    audit,
-    entity::template_profile, error::ApiError, middleware::jwt::AppUser,
+    audit, entity::template_profile, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{
@@ -40,6 +39,13 @@ pub async fn delete_profile_template(
 
     let profiles: Vec<Profile> = profiles.into_iter().map(Profile::from).collect();
 
-    audit!(state, user, "admin.profile.delete", "profile_template", audit_profile_id, "Profile template deleted");
+    audit!(
+        state,
+        user,
+        "admin.profile.delete",
+        "profile_template",
+        audit_profile_id,
+        "Profile template deleted"
+    );
     Ok(Json(profiles))
 }

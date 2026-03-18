@@ -17,10 +17,12 @@ import {
 	type IComment,
 	ICommentType,
 	type ILayer,
+	ILayerType,
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
 import type { IFnRefs, INode } from "./schema/flow/node";
 import { type IPin, IPinType } from "./schema/flow/pin";
+import { parseUint8ArrayToJson } from "./uint8";
 
 export function hexToRgba(hex: string, alpha = 0.3): string {
 	let c = hex.replace("#", "");
@@ -176,6 +178,28 @@ export function isValidConnection(
 
 function invertPinType(type: IPinType): IPinType {
 	return type === IPinType.Input ? IPinType.Output : IPinType.Input;
+}
+
+function stripCallFunctionRef(node: INode): { node: INode; functionLayerId: string | undefined } {
+	const layerPin = Object.values(node.pins).find(
+		(p) => p.name === "function_layer_id",
+	);
+	const functionLayerId = layerPin?.default_value
+		? parseUint8ArrayToJson(layerPin.default_value)
+		: undefined;
+	const filteredPins: Record<string, IPin> = {};
+	let inputIdx = 0;
+	for (const pin of Object.values(node.pins)
+		.filter((p) => p.name !== "function_layer_id")
+		.sort((a, b) => a.index - b.index)) {
+		if (pin.pin_type === IPinType.Input) {
+			inputIdx++;
+			filteredPins[pin.id] = { ...pin, index: inputIdx };
+		} else {
+			filteredPins[pin.id] = pin;
+		}
+	}
+	return { node: { ...node, pins: filteredPins }, functionLayerId };
 }
 
 /** Prefix for break struct field pins */
@@ -390,15 +414,23 @@ export function parseBoard(
 			nodes.push(oldNode);
 		} else if (oldNode) {
 			// Hash matches but some derived state changed — shallow update
+			const nodeForData = node.name === "control_call_function"
+				? stripCallFunctionRef(node).node
+				: node;
 			nodes.push({
 				...oldNode,
-				data: { ...oldNode.data, isUnavailable, fnRefsHash, node, boardRef },
+				data: { ...oldNode.data, isUnavailable, fnRefsHash, node: nodeForData, boardRef },
 				selected: sel,
 			});
 		} else {
+			const isCallFunction = node.name === "control_call_function";
+			const { node: nodeForData, functionLayerId } = isCallFunction
+				? stripCallFunctionRef(node)
+				: { node, functionLayerId: undefined };
+
 			nodes.push({
 				id: node.id,
-				type: "node",
+				type: isCallFunction ? "callFunctionNode" : "node",
 				zIndex: 20,
 				position: {
 					x: node.coordinates?.[0] ?? 0,
@@ -408,12 +440,14 @@ export function parseBoard(
 					label: node.name,
 					boardRef: boardRef,
 					fnRefsHash: fnRefsHash,
-					node: node,
+					node: nodeForData,
 					hash: hash,
 					boardId: board.id,
 					appId: appId,
 					version: version,
 					isUnavailable,
+					functionLayerId,
+					currentLayerId: currentLayer,
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
 					},
@@ -438,6 +472,7 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
+			if (layer.type === ILayerType.Function && layer.id !== currentLayer) continue;
 			const parentLayer =
 				(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
 			if (parentLayer !== currentLayer) {
@@ -647,20 +682,6 @@ export function parseBoard(
 				}
 			}
 
-			const edge = oldEdgesMap.get(`${pin.id}-${connectedTo}`);
-
-			if (
-				edge &&
-				visible === connectedVisible &&
-				edge.data.fromLayer === (node as any).layer &&
-				edge.data.toLayer === (connectedNode as any).layer &&
-				currentLayer !== (connectedNode as any).layer &&
-				currentLayer !== (node as any).layer
-			) {
-				edges.push(edge);
-				continue;
-			}
-
 			// Map endpoints:
 			// - If the owner is the current layer, route to the inner nodes (-input / -return)
 			// - Else, if the owner lives in an active child layer, route to that layer node
@@ -678,6 +699,22 @@ export function parseBoard(
 					: activeLayer.has((connectedNode as any)?.layer ?? "")
 						? (connectedNode as any).layer
 						: (connectedNode as any)?.id;
+
+			const edgeId = `${pin.id}-${connectedTo}`;
+			const sel = selected.has(edgeId);
+			const oldEdge = oldEdgesMap.get(edgeId);
+
+			if (
+				oldEdge &&
+				visible === connectedVisible &&
+				oldEdge.source === sourceNodeId &&
+				oldEdge.target === targetNodeId &&
+				oldEdge.selected === sel &&
+				oldEdge.data?.pathType === connectionMode
+			) {
+				edges.push(oldEdge);
+				continue;
+			}
 
 			if (pin.id && conntectedPin.id)
 				edges.push({
@@ -698,7 +735,7 @@ export function parseBoard(
 					style: { stroke: typeToColor(pin.data_type) },
 					type: pin.data_type === "Execution" ? "execution" : "data",
 					data_type: pin.data_type,
-					selected: selected.has(`${pin.id}-${connectedTo}`),
+					selected: sel,
 				});
 			else {
 				console.log(`${pin.id}-${connectedTo} edge not created`);

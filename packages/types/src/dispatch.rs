@@ -69,9 +69,7 @@ pub enum CompilationJobRef {
     /// Full job embedded in the message body.
     Inline(CompilationJob),
     /// Job stored at a remote URL (presigned S3 GET URL).
-    Remote {
-        remote_url: String,
-    },
+    Remote { remote_url: String },
 }
 
 /// Result reported back to the API from a compilation worker.

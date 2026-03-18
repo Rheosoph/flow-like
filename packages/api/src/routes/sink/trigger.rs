@@ -131,7 +131,7 @@ pub async fn trigger_event(
         .ok_or_else(|| anyhow!("No active sink found for event {}", input.event_id))?;
 
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id).await?;
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id).await?;
 
     // Check JWT is configured
     if !is_jwt_configured() {
@@ -374,7 +374,7 @@ pub async fn trigger_http(
     };
 
     // Get the event from database (config lives in Event)
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -715,7 +715,7 @@ pub async fn trigger_telegram(
     };
 
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -1031,7 +1031,7 @@ pub async fn trigger_discord(
 
     // For other interaction types (commands, components, etc.), dispatch async
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -1372,7 +1372,7 @@ pub async fn trigger_service(
     }
 
     // Get the event to access its config for additional payload
-    let event = get_event_from_db(&state.db, &request.event_id)
+    let event = get_event_from_db(&state.db, &request.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 

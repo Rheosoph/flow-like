@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::{Document, Object, Stream, dictionary};
 
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -52,10 +52,20 @@ impl NodeLogic for PdfAddPageNumbersNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("bottom-center")));
-        node.add_input_pin("font_size", "Font Size", "Font size in points", VariableType::Float)
-            .set_default_value(Some(json!(10.0)));
-        node.add_input_pin("margin", "Margin", "Margin from edge in points", VariableType::Float)
-            .set_default_value(Some(json!(30.0)));
+        node.add_input_pin(
+            "font_size",
+            "Font Size",
+            "Font size in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(10.0)));
+        node.add_input_pin(
+            "margin",
+            "Margin",
+            "Margin from edge in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(30.0)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -93,7 +103,10 @@ impl NodeLogic for PdfAddPageNumbersNode {
         for (idx, page_id) in page_ids.iter().enumerate() {
             let page_num = idx + 1;
             let label = format!("Page {} of {}", page_num, total_pages);
-            let escaped = label.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+            let escaped = label
+                .replace('\\', "\\\\")
+                .replace('(', "\\(")
+                .replace(')', "\\)");
 
             let (width, _height) = get_page_size(&doc, *page_id);
 
@@ -121,10 +134,8 @@ impl NodeLogic for PdfAddPageNumbersNode {
                         if let Ok(Object::Dictionary(fonts)) = resources.get_mut(b"Font") {
                             fonts.set("F1", Object::Reference(font_id));
                         } else {
-                            resources.set(
-                                "Font",
-                                dictionary! { "F1" => Object::Reference(font_id) },
-                            );
+                            resources
+                                .set("Font", dictionary! { "F1" => Object::Reference(font_id) });
                         }
                     } else {
                         dict.set(

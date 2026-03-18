@@ -122,6 +122,7 @@ impl State {
         opt.max_connections(10)
             .min_connections(1)
             .connect_timeout(Duration::from_secs(8))
+            .connect_lazy(true)
             .sqlx_logging(platform_config.environment == Environment::Development);
 
         let db = Database::connect(opt)

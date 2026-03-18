@@ -1,4 +1,4 @@
-import type { DBCore, DBCoreMutateRequest } from "dexie";
+import Dexie, { type DBCore, type DBCoreMutateRequest } from "dexie";
 import { invoke } from "@tauri-apps/api/core";
 
 const BLOB_MARKER = "__fl_blob__";
@@ -47,6 +47,36 @@ function isLargeNumberArray(
 
 function encoder(): TextEncoder {
 	return new TextEncoder();
+}
+
+/** Collect all blob marker hashes from a deep object (including arrays). */
+function collectAllBlobHashes(obj: unknown, result: Set<string>): void {
+	if (obj === null || obj === undefined) return;
+	if (isBlobMarker(obj)) {
+		result.add(obj[BLOB_MARKER].hash);
+		return;
+	}
+	if (Array.isArray(obj)) {
+		for (const item of obj) collectAllBlobHashes(item, result);
+		return;
+	}
+	if (typeof obj === "object") {
+		for (const value of Object.values(obj as Record<string, unknown>)) {
+			collectAllBlobHashes(value, result);
+		}
+	}
+}
+
+/** Increment reference counts for the given hashes (fire-and-forget). */
+function incRefs(hashes: string[]): void {
+	if (hashes.length === 0) return;
+	invoke(`${PLUGIN_PREFIX}blob_inc_refs`, { hashes }).catch(() => {});
+}
+
+/** Decrement reference counts. Blobs reaching 0 are deleted by the backend (fire-and-forget). */
+function decRefs(hashes: string[]): void {
+	if (hashes.length === 0) return;
+	invoke(`${PLUGIN_PREFIX}blob_dec_refs`, { hashes }).catch(() => {});
 }
 
 async function extractBlobsDeep(
@@ -186,11 +216,7 @@ function collectBlobRefs(
 	for (const [key, value] of Object.entries(obj)) {
 		if (isBlobMarker(value)) {
 			result.push({ path: [...path, key], ref_: value[BLOB_MARKER] });
-		} else if (
-			typeof value === "object" &&
-			value !== null &&
-			!Array.isArray(value)
-		) {
+		} else if (typeof value === "object" && value !== null) {
 			collectBlobRefs(
 				value as Record<string, unknown>,
 				[...path, key],
@@ -219,11 +245,16 @@ async function rehydrateBlobsDeep(obj: unknown): Promise<unknown> {
 
 	if (isBlobMarker(obj)) {
 		const ref_ = obj[BLOB_MARKER];
-		const data = await invoke<number[]>(`${PLUGIN_PREFIX}blob_get`, {
-			hash: ref_.hash,
-			mac: ref_.mac,
-		});
-		return tryDecodeUtf8(data);
+		try {
+			const data = await invoke<number[]>(`${PLUGIN_PREFIX}blob_get`, {
+				hash: ref_.hash,
+				mac: ref_.mac,
+			});
+			return tryDecodeUtf8(data);
+		} catch (e) {
+			console.warn("[blob-offload] blob_get failed, returning marker as-is:", e);
+			return obj;
+		}
 	}
 
 	if (Array.isArray(obj)) {
@@ -246,31 +277,40 @@ async function rehydrateBlobsDeep(obj: unknown): Promise<unknown> {
 
 		if (blobKeys.length === 1) {
 			const entry = blobKeys[0];
-			const data = await invoke<number[]>(`${PLUGIN_PREFIX}blob_get`, {
-				hash: entry.ref_.hash,
-				mac: entry.ref_.mac,
-			});
-			return setNestedValue(
-				obj as Record<string, unknown>,
-				entry.path,
-				tryDecodeUtf8(data),
-			);
+			try {
+				const data = await invoke<number[]>(`${PLUGIN_PREFIX}blob_get`, {
+					hash: entry.ref_.hash,
+					mac: entry.ref_.mac,
+				});
+				return setNestedValue(
+					obj as Record<string, unknown>,
+					entry.path,
+					tryDecodeUtf8(data),
+				);
+			} catch (e) {
+				console.warn("[blob-offload] blob_get failed for path", entry.path, ":", e);
+				return obj;
+			}
 		}
 
 		const refs: BlobRefEntry[] = blobKeys.map((entry, i) => ({
 			key: String(i),
 			blob_ref: entry.ref_,
 		}));
-		const results = await invoke<BlobEntry[]>(
-			`${PLUGIN_PREFIX}blob_get_batch`,
-			{ refs },
-		);
-
-		let clone = structuredClone(obj) as Record<string, unknown>;
-		for (let i = 0; i < results.length; i++) {
-			clone = setNestedValue(clone, blobKeys[i].path, tryDecodeUtf8(results[i].data));
+		try {
+			const results = await invoke<BlobEntry[]>(
+				`${PLUGIN_PREFIX}blob_get_batch`,
+				{ refs },
+			);
+			let clone = structuredClone(obj) as Record<string, unknown>;
+			for (let i = 0; i < results.length; i++) {
+				clone = setNestedValue(clone, blobKeys[i].path, tryDecodeUtf8(results[i].data));
+			}
+			return clone;
+		} catch (e) {
+			console.warn("[blob-offload] blob_get_batch failed:", e);
+			return obj;
 		}
-		return clone;
 	}
 
 	return obj;
@@ -296,39 +336,137 @@ export function dexieTauriBlobOffload(threshold = 200) {
 				...downcore,
 				table(name: string) {
 					const table = downcore.table(name);
+					const keyPath = table.schema?.primaryKey?.keyPath as string | undefined;
+
 					return {
 						...table,
 
 						async mutate(req: DBCoreMutateRequest) {
 							if (req.type === "add" || req.type === "put") {
-								const processed = await Promise.all(
-									req.values.map((val: unknown) =>
-										extractBlobs(val, threshold),
-									),
-								);
-								req = { ...req, values: processed };
+								try {
+									// Wrap old-hash collection + blob extraction in a single
+									// Dexie.waitFor to prevent the IDB transaction from
+									// auto-committing during the gap between steps.
+									const { processed, oldHashes } = await Dexie.waitFor(
+										(async () => {
+											let oldHashes: Set<string> | undefined;
+											if (req.type === "put" && keyPath) {
+												oldHashes = new Set();
+												try {
+													for (const val of req.values) {
+														const key = (val as Record<string, unknown>)[keyPath];
+														if (key != null) {
+															const existing = await table.get({ key, trans: req.trans });
+															if (existing) collectAllBlobHashes(existing, oldHashes);
+														}
+													}
+												} catch {
+													/* ignore read errors for cleanup */
+												}
+											}
+
+											const processed = await Promise.all(
+												req.values.map((val: unknown) =>
+													extractBlobs(val, threshold),
+												),
+											);
+
+											return { processed, oldHashes };
+										})(),
+									);
+
+									const result = await table.mutate({ ...req, values: processed });
+
+									// Collect new blob hashes and adjust ref counts
+									const newHashes = new Set<string>();
+									for (const val of processed) {
+										collectAllBlobHashes(val, newHashes);
+									}
+
+									const trulyNew = [...newHashes].filter((h) => !oldHashes?.has(h));
+									incRefs(trulyNew);
+
+									const stale = oldHashes
+										? [...oldHashes].filter((h) => !newHashes.has(h))
+										: [];
+									decRefs(stale);
+
+									return result;
+								} catch (e) {
+									// If the transaction died during blob extraction (common
+									// during rapid streaming saves), return a synthetic result.
+									// The final save will properly persist and offload blobs.
+									const msg = e instanceof Error ? e.message : String(e);
+									if (msg.includes("transaction") || msg.includes("InvalidState")) {
+										console.debug("[blob-offload] Transaction expired during extraction, deferring to next write");
+										return { numFailures: 0, failures: {}, lastResult: undefined };
+									}
+									throw e;
+								}
 							}
+
+							// For delete: decrement refs for all blobs in deleted records
+							if (req.type === "delete" && req.keys && req.keys.length > 0) {
+								const deadHashes = new Set<string>();
+								try {
+									const records = await table.getMany({
+										keys: req.keys,
+										trans: req.trans,
+									});
+									for (const rec of records) {
+										if (rec) collectAllBlobHashes(rec, deadHashes);
+									}
+								} catch {
+									/* ignore */
+								}
+
+								const result = await table.mutate(req);
+
+								decRefs([...deadHashes]);
+
+								return result;
+							}
+
 							return table.mutate(req);
 						},
 
 						async get(req) {
 							const result = await table.get(req);
-							return result ? rehydrateBlobsDeep(result) : result;
+							if (!result) return result;
+							try {
+								return await rehydrateBlobsDeep(result);
+							} catch (e) {
+								console.warn("[blob-offload] rehydration failed in get:", e);
+								return result;
+							}
 						},
 
 						async getMany(req) {
 							const results = await table.getMany(req);
 							return Promise.all(
-								results.map((r: unknown) =>
-									r ? rehydrateBlobsDeep(r) : r,
-								),
+								results.map(async (r: unknown) => {
+									if (!r) return r;
+									try {
+										return await rehydrateBlobsDeep(r);
+									} catch (e) {
+										console.warn("[blob-offload] rehydration failed in getMany:", e);
+										return r;
+									}
+								}),
 							);
 						},
 
 						async query(req) {
 							const result = await table.query(req);
 							result.result = await Promise.all(
-								result.result.map((r: unknown) => rehydrateBlobsDeep(r)),
+								result.result.map(async (r: unknown) => {
+									try {
+										return await rehydrateBlobsDeep(r);
+									} catch (e) {
+										console.warn("[blob-offload] rehydration failed in query:", e);
+										return r;
+									}
+								}),
 							);
 							return result;
 						},

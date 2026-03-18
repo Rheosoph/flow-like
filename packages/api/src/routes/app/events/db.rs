@@ -454,12 +454,15 @@ pub async fn delete_event_with_sink(
     Ok(())
 }
 
-/// Get an event from the database by ID
+/// Get an event from the database by ID, validating it belongs to the given app.
+/// This prevents cross-app event access.
 pub async fn get_event_from_db(
     db: &DatabaseConnection,
     event_id: &str,
+    app_id: &str,
 ) -> flow_like_types::Result<CoreEvent> {
     let model = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
         .one(db)
         .await?
         .ok_or_else(|| anyhow!("Event not found: {}", event_id))?;
@@ -467,12 +470,17 @@ pub async fn get_event_from_db(
     db_model_to_event(model)
 }
 
-/// Get an event from the database by ID, returning None if not found
+/// Get an event from the database by ID, validating it belongs to the given app.
+/// Returns None if not found.
 pub async fn get_event_from_db_opt(
     db: &DatabaseConnection,
     event_id: &str,
+    app_id: &str,
 ) -> flow_like_types::Result<Option<CoreEvent>> {
-    let model = event::Entity::find_by_id(event_id).one(db).await?;
+    let model = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .one(db)
+        .await?;
 
     match model {
         Some(m) => Ok(Some(db_model_to_event(m)?)),
@@ -611,7 +619,7 @@ pub async fn get_event_with_fallback(
     event_id: &str,
 ) -> flow_like_types::Result<CoreEvent> {
     // Try DB first
-    if let Some(event) = get_event_from_db_opt(db, event_id).await? {
+    if let Some(event) = get_event_from_db_opt(db, event_id, &app.id).await? {
         return Ok(event);
     }
 
@@ -633,7 +641,7 @@ pub async fn get_event_with_fallback_opt(
     event_id: &str,
 ) -> flow_like_types::Result<Option<CoreEvent>> {
     // Try DB first
-    if let Some(event) = get_event_from_db_opt(db, event_id).await? {
+    if let Some(event) = get_event_from_db_opt(db, event_id, &app.id).await? {
         return Ok(Some(event));
     }
 

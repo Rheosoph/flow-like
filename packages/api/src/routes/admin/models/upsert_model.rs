@@ -1,6 +1,5 @@
 use crate::{
-    audit,
-    entity::llm_model, error::ApiError, middleware::jwt::AppUser,
+    audit, entity::llm_model, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{
@@ -90,6 +89,13 @@ pub async fn upsert_model(
     .exec(&state.db)
     .await?;
 
-    audit!(state, user, "admin.model.upsert", "llm_model", audit_slug, format!("LLM model upserted: {}", audit_name));
+    audit!(
+        state,
+        user,
+        "admin.model.upsert",
+        "llm_model",
+        audit_slug,
+        format!("LLM model upserted: {}", audit_name)
+    );
     Ok(Json(()))
 }

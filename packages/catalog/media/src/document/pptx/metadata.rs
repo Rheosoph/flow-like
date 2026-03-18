@@ -203,12 +203,8 @@ impl NodeLogic for PptxGetMetadataNode {
         let bytes = template.get(context, false).await?;
         let files = read_zip(&bytes)?;
 
-        let (mut title, mut author, mut subject, mut keywords) = (
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-        );
+        let (mut title, mut author, mut subject, mut keywords) =
+            (String::new(), String::new(), String::new(), String::new());
 
         if let Some(core_bytes) = files.get("docProps/core.xml") {
             let xml = String::from_utf8_lossy(core_bytes);

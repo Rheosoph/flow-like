@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::sync::RwLock;
 
 const HMAC_KEY_FILE: &str = ".hmac_key";
 const HMAC_KEY_LEN: usize = 32;
+const REFCOUNTS_FILE: &str = "_refcounts.json";
 
 pub struct BlobStore {
     base_dir: RwLock<PathBuf>,
+    ref_counts: RwLock<HashMap<String, u64>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -31,11 +34,94 @@ impl BlobStore {
     pub fn new(base_dir: PathBuf) -> Self {
         Self {
             base_dir: RwLock::new(base_dir),
+            ref_counts: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn load_ref_counts_sync(&self, base_dir: &std::path::Path) {
+        let path = base_dir.join(REFCOUNTS_FILE);
+        if path.exists() {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok(counts) = serde_json::from_slice::<HashMap<String, u64>>(&data) {
+                    *self.ref_counts.blocking_write() = counts;
+                }
+            }
+        }
+    }
+
+    pub async fn load_ref_counts(&self) -> Result<(), String> {
+        let base = self.base_dir.read().await;
+        let path = base.join(REFCOUNTS_FILE);
+        if path.exists() {
+            let data = fs::read(&path)
+                .await
+                .map_err(|e| format!("Failed to read refcounts: {e}"))?;
+            let counts: HashMap<String, u64> = serde_json::from_slice(&data)
+                .map_err(|e| format!("Failed to parse refcounts: {e}"))?;
+            *self.ref_counts.write().await = counts;
+        }
+        Ok(())
+    }
+
+    async fn persist_ref_counts(&self) -> Result<(), String> {
+        let base = self.base_dir.read().await;
+        fs::create_dir_all(&*base)
+            .await
+            .map_err(|e| format!("Failed to create blob dir: {e}"))?;
+        let counts = self.ref_counts.read().await;
+        let data = serde_json::to_vec(&*counts)
+            .map_err(|e| format!("Failed to serialize refcounts: {e}"))?;
+        fs::write(base.join(REFCOUNTS_FILE), &data)
+            .await
+            .map_err(|e| format!("Failed to write refcounts: {e}"))?;
+        Ok(())
+    }
+
+    pub async fn inc_refs(&self, hashes: &[String]) -> Result<(), String> {
+        if hashes.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut counts = self.ref_counts.write().await;
+            for hash in hashes {
+                *counts.entry(hash.clone()).or_insert(0) += 1;
+            }
+        }
+        self.persist_ref_counts().await
+    }
+
+    pub async fn dec_refs(&self, hashes: &[String]) -> Result<Vec<String>, String> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut to_delete = Vec::new();
+        {
+            let mut counts = self.ref_counts.write().await;
+            for hash in hashes {
+                if let Some(count) = counts.get_mut(hash) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        counts.remove(hash);
+                        to_delete.push(hash.clone());
+                    }
+                }
+            }
+        }
+        // Delete blob files for zero-ref hashes
+        for hash in &to_delete {
+            let path = self.blob_path(hash).await;
+            if path.exists() {
+                let _ = fs::remove_file(&path).await;
+            }
+        }
+        self.persist_ref_counts().await?;
+        Ok(to_delete)
     }
 
     pub async fn set_base_dir(&self, new_dir: PathBuf) {
         *self.base_dir.write().await = new_dir;
+        // Load ref counts from new directory
+        let _ = self.load_ref_counts().await;
     }
 
     pub async fn get_base_dir(&self) -> PathBuf {

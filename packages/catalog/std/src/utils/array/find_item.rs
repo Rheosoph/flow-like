@@ -62,16 +62,12 @@ impl NodeLogic for FindItemInArrayNode {
 
         let mut index = -1;
 
-        {
-            let array_in = array_in.as_ref().lock().await;
-
-            if let Some(array) = array_in.as_array() {
-                for (i, value) in array.iter().enumerate() {
-                    if value == &item {
-                        found = true;
-                        index = i as i32;
-                        break;
-                    }
+        if let Some(array) = array_in.as_array() {
+            for (i, value) in array.iter().enumerate() {
+                if value == &item {
+                    found = true;
+                    index = i as i32;
+                    break;
                 }
             }
         }

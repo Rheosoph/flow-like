@@ -114,12 +114,7 @@ impl NodeLogic for PptxAddNotesNode {
         )
         .set_default_value(Some(json!(1)));
 
-        node.add_input_pin(
-            "notes",
-            "Notes",
-            "Speaker notes text",
-            VariableType::String,
-        );
+        node.add_input_pin("notes", "Notes", "Speaker notes text", VariableType::String);
 
         node.add_input_pin(
             "output",
@@ -200,10 +195,7 @@ impl NodeLogic for PptxAddNotesNode {
                 notes_key.clone(),
                 minimal_notes_slide_xml(&notes_text).into_bytes(),
             );
-            files.insert(
-                notes_rels_key,
-                notes_slide_rels_xml(slide_num).into_bytes(),
-            );
+            files.insert(notes_rels_key, notes_slide_rels_xml(slide_num).into_bytes());
 
             let ct_key = "[Content_Types].xml";
             if let Some(ct_bytes) = files.get(ct_key) {
@@ -231,7 +223,8 @@ impl NodeLogic for PptxAddNotesNode {
                     let rel_entry = format!(
                         r#"<Relationship Id="rId{new_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide{slide_num}.xml"/>"#
                     );
-                    rels = rels.replace("</Relationships>", &format!("{rel_entry}</Relationships>"));
+                    rels =
+                        rels.replace("</Relationships>", &format!("{rel_entry}</Relationships>"));
                     files.insert(slide_rels_key, rels.into_bytes());
                 }
             }

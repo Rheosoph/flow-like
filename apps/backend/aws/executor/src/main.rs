@@ -19,7 +19,7 @@ use flow_like_types::tokio;
 use lambda_http::{Error, run_with_streaming_response, tracing};
 use tracing_subscriber::{EnvFilter, prelude::*};
 
-#[flow_like_types::tokio::main]
+#[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
     // Initialize Sentry if configured
     let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();

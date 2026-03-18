@@ -324,10 +324,36 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     pub async fn new(config: DispatchConfig, staging_bucket: Option<Arc<FlowLikeStore>>) -> Self {
+        // Determine if any AWS SDK clients are needed
+        #[allow(unused_variables)]
+        let needs_aws = {
+            let mut needed = false;
+            #[cfg(feature = "lambda")]
+            {
+                needed = needed || config.backend.is_lambda() || config.async_backend.is_lambda();
+            }
+            #[cfg(feature = "sqs")]
+            {
+                needed = needed
+                    || config.backend == ExecutionBackend::Sqs
+                    || config.async_backend == ExecutionBackend::Sqs
+                    || config.backend == ExecutionBackend::SqsEventBridge
+                    || config.async_backend == ExecutionBackend::SqsEventBridge;
+            }
+            needed
+        };
+
+        // Load AWS config once if any AWS client is needed
+        #[cfg(any(feature = "lambda", feature = "sqs"))]
+        let aws_config = if needs_aws {
+            Some(aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await)
+        } else {
+            None
+        };
+
         #[cfg(feature = "lambda")]
         let lambda_client = if config.backend.is_lambda() || config.async_backend.is_lambda() {
-            let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-            Some(aws_sdk_lambda::Client::new(&aws_config))
+            aws_config.as_ref().map(|cfg| aws_sdk_lambda::Client::new(cfg))
         } else {
             None
         };
@@ -338,8 +364,7 @@ impl Dispatcher {
             || config.backend == ExecutionBackend::SqsEventBridge
             || config.async_backend == ExecutionBackend::SqsEventBridge
         {
-            let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-            Some(aws_sdk_sqs::Client::new(&aws_config))
+            aws_config.as_ref().map(|cfg| aws_sdk_sqs::Client::new(cfg))
         } else {
             None
         };

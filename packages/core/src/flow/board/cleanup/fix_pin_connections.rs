@@ -108,6 +108,19 @@ impl BoardCleanupLogic for FixPinsCleanup {
                         }
                     }
                 }
+            } else {
+                for layer in board.layers.values_mut() {
+                    if let Some(node) = layer.nodes.get_mut(&node_id) {
+                        for (pin_id, to_remove) in &pins {
+                            if let Some(pin) = node.pins.get_mut(pin_id) {
+                                for connected_pin in to_remove {
+                                    pin.connected_to.remove(connected_pin);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
             }
         }
 
@@ -126,6 +139,19 @@ impl BoardCleanupLogic for FixPinsCleanup {
                         for dep_pin in to_remove {
                             pin.depends_on.remove(dep_pin);
                         }
+                    }
+                }
+            } else {
+                for layer in board.layers.values_mut() {
+                    if let Some(node) = layer.nodes.get_mut(&node_id) {
+                        for (pin_id, to_remove) in &pins {
+                            if let Some(pin) = node.pins.get_mut(pin_id) {
+                                for dep_pin in to_remove {
+                                    pin.depends_on.remove(dep_pin);
+                                }
+                            }
+                        }
+                        break;
                     }
                 }
             }

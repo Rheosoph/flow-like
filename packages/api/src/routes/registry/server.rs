@@ -16,7 +16,7 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_wasm::manifest::PackageManifest;
+use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -853,13 +853,27 @@ impl ServerRegistry {
             })
             .collect();
 
+        // Prefer nodes from the latest version; fall back to the parent package.
+        let mut nodes: Vec<PackageNodeEntry> =
+            serde_json::from_value(pkg.nodes.clone()).unwrap_or_default();
+        if nodes.is_empty() {
+            if let Some(latest_v) = wasm_package_version::Entity::find()
+                .filter(wasm_package_version::Column::PackageId.eq(&pkg.id))
+                .order_by_desc(wasm_package_version::Column::PublishedAt)
+                .one(&self.db)
+                .await?
+            {
+                nodes = serde_json::from_value(latest_v.nodes).unwrap_or_default();
+            }
+        }
+
         let vis = visibility_to_string(&pkg.visibility);
         let price = pkg.price;
 
         Ok(RegistryEntry {
             id: pkg.id.clone(),
             manifest,
-            nodes: serde_json::from_value(pkg.nodes.clone()).unwrap_or_default(),
+            nodes,
             versions: package_versions,
             status: match pkg.status {
                 WasmPackageStatus::Active => PackageStatus::Active,
@@ -1809,6 +1823,7 @@ impl ServerRegistry {
                     update_model.wasm_path = Set(latest.wasm_path.clone());
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
+                    update_model.nodes = Set(latest.nodes.clone());
                 }
             }
 

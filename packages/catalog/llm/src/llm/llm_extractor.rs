@@ -9,10 +9,10 @@ use flow_like::{
         variable::VariableType,
     },
 };
-use flow_like_types::json::{self, Deserialize, Serialize};
-use flow_like_types::{Value, anyhow};
 #[cfg(feature = "execute")]
 use flow_like_model_provider::response::{LLMUsageStats, Usage};
+use flow_like_types::json::{self, Deserialize, Serialize};
+use flow_like_types::{Value, anyhow};
 #[cfg(feature = "execute")]
 use rig::completion::{Completion, ToolDefinition};
 #[cfg(feature = "execute")]

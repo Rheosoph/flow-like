@@ -74,6 +74,7 @@ export function A2UIButton({
 
 	const handleClick = () => {
 		const action = component.actions?.[0];
+		console.log("[A2UI Button] handleClick:", { componentId, action, hasActions: !!component.actions, actionsLength: component.actions?.length });
 		if (action) {
 			executeAction(action);
 		} else if (onAction) {

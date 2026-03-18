@@ -47,8 +47,13 @@ impl NodeLogic for DocxAddTocNode {
             .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin("title", "Title", "TOC title", VariableType::String)
             .set_default_value(Some(json!("Table of Contents")));
-        node.add_input_pin("max_level", "Max Level", "Maximum heading level to include (1-6)", VariableType::Integer)
-            .set_default_value(Some(json!(3)));
+        node.add_input_pin(
+            "max_level",
+            "Max Level",
+            "Maximum heading level to include (1-6)",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(3)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());

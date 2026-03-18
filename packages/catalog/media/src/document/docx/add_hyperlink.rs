@@ -46,10 +46,20 @@ impl NodeLogic for DocxAddHyperlinkNode {
         node.add_input_pin("template", "Template", "DOCX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("display_text", "Display Text", "Visible link text", VariableType::String);
+        node.add_input_pin(
+            "display_text",
+            "Display Text",
+            "Visible link text",
+            VariableType::String,
+        );
         node.add_input_pin("url", "URL", "Hyperlink URL", VariableType::String);
-        node.add_input_pin("font_color", "Font Color", "Link color (hex)", VariableType::String)
-            .set_default_value(Some(json!(defaults::LINK_COLOR)));
+        node.add_input_pin(
+            "font_color",
+            "Font Color",
+            "Link color (hex)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!(defaults::LINK_COLOR)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -97,7 +107,10 @@ impl NodeLogic for DocxAddHyperlinkNode {
             r_id,
             quick_xml::escape::escape(&url)
         );
-        rels_xml = rels_xml.replace("</Relationships>", &format!("{}\n</Relationships>", new_rel));
+        rels_xml = rels_xml.replace(
+            "</Relationships>",
+            &format!("{}\n</Relationships>", new_rel),
+        );
         files.insert(rels_key, rels_xml.into_bytes());
 
         let color = hex_to_ooxml(&font_color);

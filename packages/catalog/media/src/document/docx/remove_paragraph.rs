@@ -120,7 +120,9 @@ fn remove_paragraphs_containing(xml: &str, placeholder: &str) -> String {
     let mut search_pos = 0;
 
     while search_pos < xml.len() {
-        let p_start = xml[search_pos..].find("<w:p ").or_else(|| xml[search_pos..].find("<w:p>"));
+        let p_start = xml[search_pos..]
+            .find("<w:p ")
+            .or_else(|| xml[search_pos..].find("<w:p>"));
         let p_start = match p_start {
             Some(offset) => search_pos + offset,
             None => {

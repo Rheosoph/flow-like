@@ -152,6 +152,7 @@ export interface WidgetBuilderProps {
 		boardVersion?: [number, number, number];
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
+		widgetActions?: { id: string; label: string; description?: string }[];
 	};
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
@@ -686,8 +687,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			id: surfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(presignedComponents ?? components),
+			canvasSettings: presignedCanvasSettings.customCss
+				? { customCss: presignedCanvasSettings.customCss }
+				: undefined,
 		}),
-		[surfaceId, presignedComponents, components],
+		[surfaceId, presignedComponents, components, presignedCanvasSettings.customCss],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1024,8 +1028,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			id: surfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(activeComponents),
+			canvasSettings: presignedCanvasSettings.customCss
+				? { customCss: presignedCanvasSettings.customCss }
+				: undefined,
 		}),
-		[surfaceId, activeComponents],
+		[surfaceId, activeComponents, presignedCanvasSettings.customCss],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1415,7 +1422,17 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	]);
 
 	return (
-		<>
+		<div
+			data-canvas-id={previewCanvasId}
+			className="h-full w-full overflow-auto"
+			style={{
+				backgroundColor: presignedCanvasSettings.backgroundColor,
+				backgroundImage: presignedCanvasSettings.backgroundImage
+					? `url(${presignedCanvasSettings.backgroundImage})`
+					: undefined,
+				padding: presignedCanvasSettings.padding,
+			}}
+		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			{presignedCanvasSettings.customCss && (
 				<style
@@ -1427,28 +1444,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					)}
 				/>
 			)}
-			<div
-				data-canvas-id={previewCanvasId}
-				className="h-full w-full overflow-auto"
-				style={{
-					backgroundColor: presignedCanvasSettings.backgroundColor,
-					backgroundImage: presignedCanvasSettings.backgroundImage
-						? `url(${presignedCanvasSettings.backgroundImage})`
-						: undefined,
-					padding: presignedCanvasSettings.padding,
-				}}
-			>
-				<A2UIRenderer
-					surface={surface}
-					widgetRefs={Object.fromEntries(widgetRefs)}
-					onMessage={handleMessage}
-					onA2UIMessage={handleA2UIMessage}
-					className="min-h-full w-full"
-					appId={actionContext?.appId}
-					boardId={actionContext?.boardId}
-					isPreviewMode={true}
-				/>
-			</div>
-		</>
+			<A2UIRenderer
+				surface={surface}
+				widgetRefs={Object.fromEntries(widgetRefs)}
+				onMessage={handleMessage}
+				onA2UIMessage={handleA2UIMessage}
+				className="min-h-full w-full"
+				appId={actionContext?.appId}
+				boardId={actionContext?.boardId}
+				isPreviewMode={true}
+			/>
+		</div>
 	);
 }

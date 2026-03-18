@@ -115,8 +115,8 @@ pub async fn invoke_event_async(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let sub = permission.sub()?;
 
-    // Get the event from database
-    let event = get_event_from_db(&state.db, &event_id).await?;
+    // Get the event from database (validates event belongs to this app)
+    let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;

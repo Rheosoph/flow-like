@@ -32,7 +32,7 @@ enum ExecutionMode {
 }
 
 enum LayerType {
-  FUNCTION = 0 [deprecated = true];
+  FUNCTION = 0;
   MACRO = 1 [deprecated = true];
   COLLAPSED = 2;
 }

@@ -8,6 +8,7 @@ edition = "2024"
 homepage = "https://flow-like.com"
 license = "MIT"
 readme = "README.md"
+links = "tauri-plugin-flow-like-dexie-blob-offload"
 keywords = ["tauri", "dexie", "indexeddb", "blob", "offload"]
 categories = ["database", "web-programming"]
 
@@ -19,6 +20,9 @@ blake3 = "1.8"
 rand = "0.9"
 tokio = { version = "1", features = ["fs"] }
 tracing = "0.1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.2", features = ["build"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["fs", "rt", "macros"] }

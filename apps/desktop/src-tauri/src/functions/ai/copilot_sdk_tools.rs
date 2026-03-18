@@ -523,10 +523,7 @@ WORKFLOW:
 
 /// Create all Copilot SDK tools for frontend/A2UI context
 pub fn create_frontend_tools() -> Vec<(Tool, ToolHandler)> {
-    vec![
-        create_emit_ui_tool(),
-        create_get_component_schema_tool(),
-    ]
+    vec![create_emit_ui_tool(), create_get_component_schema_tool()]
 }
 
 /// Emit UI tool - output A2UI JSON components
@@ -708,7 +705,9 @@ Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, ch
             .unwrap_or_default();
 
         if types.is_empty() {
-            return ToolResultObject::text("Please provide at least one component type to look up.");
+            return ToolResultObject::text(
+                "Please provide at least one component type to look up.",
+            );
         }
 
         let mut docs = Vec::new();
@@ -745,10 +744,24 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "spacer" => Some(&["size", "flex", "direction", "flexible"]),
         "overlay" => Some(&["baseComponentId", "overlays"]),
         "widgetInstance" => Some(&["widgetId", "widgetInputs", "bindOutputs"]),
-        "text" => Some(&["content", "variant", "size", "weight", "color", "align", "truncate", "maxLines"]),
-        "image" => Some(&["src", "alt", "fit", "fallback", "fallbackSrc", "loading", "aspectRatio", "width", "height"]),
+        "text" => Some(&[
+            "content", "variant", "size", "weight", "color", "align", "truncate", "maxLines",
+        ]),
+        "image" => Some(&[
+            "src",
+            "alt",
+            "fit",
+            "fallback",
+            "fallbackSrc",
+            "loading",
+            "aspectRatio",
+            "width",
+            "height",
+        ]),
         "icon" => Some(&["name", "size", "color", "strokeWidth"]),
-        "video" => Some(&["src", "poster", "autoplay", "autoPlay", "loop", "muted", "controls", "width", "height"]),
+        "video" => Some(&[
+            "src", "poster", "autoplay", "autoPlay", "loop", "muted", "controls", "width", "height",
+        ]),
         "lottie" => Some(&["src", "autoplay", "loop", "speed", "width", "height"]),
         "markdown" => Some(&["content", "allowHtml"]),
         "divider" => Some(&["orientation", "thickness", "color"]),
@@ -757,43 +770,303 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "progress" => Some(&["value", "max", "showLabel", "variant", "color"]),
         "spinner" => Some(&["size", "color"]),
         "skeleton" => Some(&["width", "height", "rounded", "variant"]),
-        "iframe" => Some(&["src", "srcdoc", "width", "height", "sandbox", "allow", "title", "referrerPolicy", "border", "loading"]),
-        "table" => Some(&["columns", "data", "caption", "striped", "bordered", "hoverable", "compact", "stickyHeader", "sortable", "searchable", "paginated", "pageSize", "selectable", "showPagination"]),
-        "plotlyChart" => Some(&["chartType", "data", "title", "layout", "config", "height", "width"]),
-        "nivoChart" => Some(&["chartType", "data", "height", "width", "colors", "colorScheme", "showLegend", "legendPosition", "margin", "axisBottom", "axisLeft", "animate", "motionConfig", "style"]),
+        "iframe" => Some(&[
+            "src",
+            "srcdoc",
+            "width",
+            "height",
+            "sandbox",
+            "allow",
+            "title",
+            "referrerPolicy",
+            "border",
+            "loading",
+        ]),
+        "table" => Some(&[
+            "columns",
+            "data",
+            "caption",
+            "striped",
+            "bordered",
+            "hoverable",
+            "compact",
+            "stickyHeader",
+            "sortable",
+            "searchable",
+            "paginated",
+            "pageSize",
+            "selectable",
+            "showPagination",
+        ]),
+        "plotlyChart" => Some(&[
+            "chartType",
+            "data",
+            "title",
+            "layout",
+            "config",
+            "height",
+            "width",
+        ]),
+        "nivoChart" => Some(&[
+            "chartType",
+            "data",
+            "height",
+            "width",
+            "colors",
+            "colorScheme",
+            "showLegend",
+            "legendPosition",
+            "margin",
+            "axisBottom",
+            "axisLeft",
+            "animate",
+            "motionConfig",
+            "style",
+        ]),
         "filePreview" => Some(&["url", "mimeType", "width", "height"]),
-        "boundingBoxOverlay" => Some(&["src", "boxes", "showLabels", "showConfidence", "normalized", "width", "height"]),
-        "button" => Some(&["label", "variant", "size", "disabled", "loading", "icon", "iconPosition", "tooltip"]),
-        "textField" => Some(&["value", "placeholder", "label", "helperText", "error", "disabled", "inputType", "type", "multiline", "rows", "maxLength", "required"]),
-        "select" => Some(&["value", "options", "placeholder", "label", "disabled", "multiple", "searchable"]),
-        "slider" => Some(&["value", "min", "max", "step", "disabled", "showValue", "label"]),
+        "boundingBoxOverlay" => Some(&[
+            "src",
+            "boxes",
+            "showLabels",
+            "showConfidence",
+            "normalized",
+            "width",
+            "height",
+        ]),
+        "button" => Some(&[
+            "label",
+            "variant",
+            "size",
+            "disabled",
+            "loading",
+            "icon",
+            "iconPosition",
+            "tooltip",
+        ]),
+        "textField" => Some(&[
+            "value",
+            "placeholder",
+            "label",
+            "helperText",
+            "error",
+            "disabled",
+            "inputType",
+            "type",
+            "multiline",
+            "rows",
+            "maxLength",
+            "required",
+        ]),
+        "select" => Some(&[
+            "value",
+            "options",
+            "placeholder",
+            "label",
+            "disabled",
+            "multiple",
+            "searchable",
+        ]),
+        "slider" => Some(&[
+            "value",
+            "min",
+            "max",
+            "step",
+            "disabled",
+            "showValue",
+            "label",
+        ]),
         "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
         "switch" => Some(&["checked", "label", "disabled"]),
         "radioGroup" => Some(&["value", "options", "disabled", "orientation", "label"]),
         "dateTimeInput" => Some(&["value", "mode", "min", "max", "disabled", "label"]),
-        "fileInput" => Some(&["value", "label", "helperText", "accept", "multiple", "maxSize", "maxFiles", "disabled", "error"]),
-        "imageInput" => Some(&["value", "label", "helperText", "accept", "multiple", "maxSize", "maxFiles", "disabled", "error", "aspectRatio", "showPreview"]),
+        "fileInput" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "accept",
+            "multiple",
+            "maxSize",
+            "maxFiles",
+            "disabled",
+            "error",
+        ]),
+        "imageInput" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "accept",
+            "multiple",
+            "maxSize",
+            "maxFiles",
+            "disabled",
+            "error",
+            "aspectRatio",
+            "showPreview",
+        ]),
         "imageLabeler" => Some(&["src", "labels", "boxes", "disabled", "width", "height"]),
         "imageHotspot" => Some(&["src", "hotspots", "markerStyle", "width", "height"]),
-        "link" => Some(&["href", "label", "text", "route", "queryParams", "external", "target", "variant", "underline", "disabled", "openInNewTab"]),
-        "card" => Some(&["title", "description", "footer", "hoverable", "clickable", "variant", "padding", "headerImage", "headerIcon"]),
-        "modal" => Some(&["open", "title", "description", "closeOnOverlay", "closeOnEscape", "showCloseButton", "size", "centered"]),
+        "link" => Some(&[
+            "href",
+            "label",
+            "text",
+            "route",
+            "queryParams",
+            "external",
+            "target",
+            "variant",
+            "underline",
+            "disabled",
+            "openInNewTab",
+        ]),
+        "card" => Some(&[
+            "title",
+            "description",
+            "footer",
+            "hoverable",
+            "clickable",
+            "variant",
+            "padding",
+            "headerImage",
+            "headerIcon",
+        ]),
+        "modal" => Some(&[
+            "open",
+            "title",
+            "description",
+            "closeOnOverlay",
+            "closeOnEscape",
+            "showCloseButton",
+            "size",
+            "centered",
+        ]),
         "tabs" => Some(&["value", "tabs", "orientation", "variant", "defaultValue"]),
-        "accordion" => Some(&["items", "multiple", "defaultExpanded", "collapsible", "type"]),
-        "drawer" => Some(&["open", "side", "title", "size", "overlay", "closable", "description"]),
+        "accordion" => Some(&[
+            "items",
+            "multiple",
+            "defaultExpanded",
+            "collapsible",
+            "type",
+        ]),
+        "drawer" => Some(&[
+            "open",
+            "side",
+            "title",
+            "size",
+            "overlay",
+            "closable",
+            "description",
+        ]),
         "tooltip" => Some(&["content", "side", "delayMs", "maxWidth"]),
-        "popover" => Some(&["open", "contentComponentId", "side", "trigger", "closeOnClickOutside", "content"]),
+        "popover" => Some(&[
+            "open",
+            "contentComponentId",
+            "side",
+            "trigger",
+            "closeOnClickOutside",
+            "content",
+        ]),
         "canvas2d" => Some(&["width", "height", "backgroundColor", "pixelPerfect"]),
-        "sprite" => Some(&["src", "x", "y", "width", "height", "rotation", "scale", "opacity", "flipX", "flipY", "zIndex"]),
-        "shape" => Some(&["shapeType", "x", "y", "width", "height", "radius", "points", "fill", "stroke", "strokeWidth"]),
-        "scene3d" => Some(&["width", "height", "cameraType", "cameraPosition", "backgroundColor", "controlMode", "fixedView", "autoRotateSpeed", "enableControls", "enableZoom", "enablePan", "fov", "near", "far", "target", "ambientLight", "directionalLight", "showGrid", "showAxes"]),
-        "model3d" => Some(&["src", "position", "rotation", "scale", "castShadow", "receiveShadow", "animation", "autoRotate", "rotateSpeed", "viewerHeight", "backgroundColor", "cameraDistance", "fov", "cameraAngle", "cameraPosition", "cameraTarget", "enableControls", "enableZoom", "enablePan", "autoRotateCamera", "cameraRotateSpeed", "ambientLight", "directionalLight", "fillLight", "rimLight", "lightColor", "lightingPreset", "showGround", "groundColor", "enableReflections", "environment", "environmentSource", "useHdrBackground", "polyhavenHdri", "polyhavenResolution"]),
+        "sprite" => Some(&[
+            "src", "x", "y", "width", "height", "rotation", "scale", "opacity", "flipX", "flipY",
+            "zIndex",
+        ]),
+        "shape" => Some(&[
+            "shapeType",
+            "x",
+            "y",
+            "width",
+            "height",
+            "radius",
+            "points",
+            "fill",
+            "stroke",
+            "strokeWidth",
+        ]),
+        "scene3d" => Some(&[
+            "width",
+            "height",
+            "cameraType",
+            "cameraPosition",
+            "backgroundColor",
+            "controlMode",
+            "fixedView",
+            "autoRotateSpeed",
+            "enableControls",
+            "enableZoom",
+            "enablePan",
+            "fov",
+            "near",
+            "far",
+            "target",
+            "ambientLight",
+            "directionalLight",
+            "showGrid",
+            "showAxes",
+        ]),
+        "model3d" => Some(&[
+            "src",
+            "position",
+            "rotation",
+            "scale",
+            "castShadow",
+            "receiveShadow",
+            "animation",
+            "autoRotate",
+            "rotateSpeed",
+            "viewerHeight",
+            "backgroundColor",
+            "cameraDistance",
+            "fov",
+            "cameraAngle",
+            "cameraPosition",
+            "cameraTarget",
+            "enableControls",
+            "enableZoom",
+            "enablePan",
+            "autoRotateCamera",
+            "cameraRotateSpeed",
+            "ambientLight",
+            "directionalLight",
+            "fillLight",
+            "rimLight",
+            "lightColor",
+            "lightingPreset",
+            "showGround",
+            "groundColor",
+            "enableReflections",
+            "environment",
+            "environmentSource",
+            "useHdrBackground",
+            "polyhavenHdri",
+            "polyhavenResolution",
+        ]),
         "dialogue" => Some(&["text", "speakerName", "typewriter", "speed", "portrait"]),
-        "characterPortrait" => Some(&["image", "expression", "position", "width", "height", "flip"]),
+        "characterPortrait" => {
+            Some(&["image", "expression", "position", "width", "height", "flip"])
+        }
         "choiceMenu" => Some(&["choices", "title", "layout", "columns"]),
         "inventoryGrid" => Some(&["items", "columns", "rows", "cellSize", "showTooltips"]),
-        "healthBar" => Some(&["value", "maxValue", "label", "fillColor", "variant", "showLabel", "size", "animated"]),
-        "miniMap" => Some(&["mapImage", "width", "height", "markers", "playerX", "playerY", "viewportWidth", "viewportHeight", "zoom"]),
+        "healthBar" => Some(&[
+            "value",
+            "maxValue",
+            "label",
+            "fillColor",
+            "variant",
+            "showLabel",
+            "size",
+            "animated",
+        ]),
+        "miniMap" => Some(&[
+            "mapImage",
+            "width",
+            "height",
+            "markers",
+            "playerX",
+            "playerY",
+            "viewportWidth",
+            "viewportHeight",
+            "zoom",
+        ]),
         _ => None,
     }
 }
@@ -858,7 +1131,9 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
         let id = match comp.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
-                errors.push("Component missing 'id' field - every component needs a unique id".to_string());
+                errors.push(
+                    "Component missing 'id' field - every component needs a unique id".to_string(),
+                );
                 continue;
             }
         };
@@ -923,8 +1198,15 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
                 // Structural props (arrays/objects holding non-BoundValue data) - skip
                 if matches!(
                     k,
-                    "tabs" | "items" | "overlays" | "columns" | "data" | "boxes"
-                        | "hotspots" | "markers" | "choices"
+                    "tabs"
+                        | "items"
+                        | "overlays"
+                        | "columns"
+                        | "data"
+                        | "boxes"
+                        | "hotspots"
+                        | "markers"
+                        | "choices"
                 ) {
                     continue;
                 }
@@ -974,13 +1256,16 @@ fn get_component_schema_doc(component_type: &str) -> String {
     // Add BoundValue reminder and known props list
     if let Some(props) = known_props_for_type(component_type) {
         let required = required_props_for_type(component_type);
-        let prop_list: Vec<String> = props.iter().map(|p| {
-            if required.contains(p) {
-                format!("- {} (REQUIRED)", p)
-            } else {
-                format!("- {}", p)
-            }
-        }).collect();
+        let prop_list: Vec<String> = props
+            .iter()
+            .map(|p| {
+                if required.contains(p) {
+                    format!("- {} (REQUIRED)", p)
+                } else {
+                    format!("- {}", p)
+                }
+            })
+            .collect();
 
         format!(
             "{}\n\n### Valid Props\n{}\n\n### BoundValue Reminder\nAll props must use BoundValue format:\n- String: {{\"literalString\": \"text\"}}\n- Number: {{\"literalNumber\": 42}}\n- Boolean: {{\"literalBool\": true}}\n- Options: {{\"literalOptions\": [{{\"value\": \"v\", \"label\": \"L\"}}]}}\n- Children: {{\"explicitList\": [\"child-id-1\"]}}",

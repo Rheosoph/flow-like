@@ -11,8 +11,14 @@ mock.module("@tauri-apps/api/core", () => ({
 	},
 }));
 
-// Mock dexie types (we only need the type guard behavior)
-mock.module("dexie", () => ({}));
+// Mock dexie — provide Dexie.waitFor to keep tests working
+const DexieMock = {
+	waitFor: async <T>(promise: Promise<T>): Promise<T> => promise,
+};
+mock.module("dexie", () => ({
+	default: DexieMock,
+	__esModule: true,
+}));
 
 const {
 	dexieTauriBlobOffload,
@@ -25,10 +31,14 @@ const BLOB_MARKER = "__fl_blob__";
 // Helpers
 let storedBlobs: Map<string, { data: number[]; mac: string }>;
 let nextMac: number;
+let refCounts: Map<string, number>;
+let decRefCalls: string[][];
 
 function setupMockBackend() {
 	storedBlobs = new Map();
 	nextMac = 1;
+	refCounts = new Map();
+	decRefCalls = [];
 
 	invokeResults.set(
 		`${PLUGIN_PREFIX}blob_store`,
@@ -78,6 +88,34 @@ function setupMockBackend() {
 		`${PLUGIN_PREFIX}blob_configure`,
 		(_args: { basePath: string }) => undefined,
 	);
+
+	invokeResults.set(
+		`${PLUGIN_PREFIX}blob_inc_refs`,
+		(args: { hashes: string[] }) => {
+			for (const h of args.hashes) {
+				refCounts.set(h, (refCounts.get(h) ?? 0) + 1);
+			}
+		},
+	);
+
+	invokeResults.set(
+		`${PLUGIN_PREFIX}blob_dec_refs`,
+		(args: { hashes: string[] }) => {
+			decRefCalls.push(args.hashes);
+			const deleted: string[] = [];
+			for (const h of args.hashes) {
+				const cur = (refCounts.get(h) ?? 1) - 1;
+				if (cur <= 0) {
+					refCounts.delete(h);
+					storedBlobs.delete(h);
+					deleted.push(h);
+				} else {
+					refCounts.set(h, cur);
+				}
+			}
+			return deleted;
+		},
+	);
 }
 
 // Create a minimal DBCore mock
@@ -89,7 +127,7 @@ function createMockDBCore() {
 		name: "test",
 		schema: {
 			name: "test",
-			primKey: { keyPath: "id", name: "id" },
+			primaryKey: { keyPath: "id", name: "id" },
 			indexes: [],
 			mappedClass: null,
 		},
@@ -272,6 +310,120 @@ describe("dexieTauriBlobOffload", () => {
 		const result = (await table.get({ key: 1 } as any)) as any;
 		expect(result.a).toBeNull();
 		expect(result.c).toBe(42);
+	});
+
+	it("increments refs after add", async () => {
+		const mw = dexieTauriBlobOffload(10);
+		const core = createMockDBCore();
+		const wrapped = mw.create(core as any);
+		const table = wrapped.table("test");
+
+		await table.mutate({
+			type: "add",
+			values: [{ content: "A".repeat(50) }],
+		} as any);
+
+		// Fire-and-forget: flush microtasks
+		await new Promise((r) => setTimeout(r, 10));
+		expect(refCounts.size).toBeGreaterThan(0);
+		for (const count of refCounts.values()) {
+			expect(count).toBe(1);
+		}
+	});
+
+	it("decrements stale refs on put overwrite", async () => {
+		const mw = dexieTauriBlobOffload(10);
+		const core = createMockDBCore();
+		const wrapped = mw.create(core as any);
+		const table = wrapped.table("test");
+
+		await table.mutate({
+			type: "add",
+			values: [{ content: "A".repeat(50) }],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		const oldHashes = [...refCounts.keys()];
+		expect(oldHashes.length).toBe(1);
+
+		// Overwrite with different content
+		const raw = core._rows.get(1) as Record<string, unknown>;
+		await table.mutate({
+			type: "put",
+			values: [{ ...raw, content: "B".repeat(50) }],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		// Old hash should have been dec-ref'd
+		expect(decRefCalls.length).toBeGreaterThan(0);
+		expect(decRefCalls.flat()).toContain(oldHashes[0]);
+	});
+
+	it("does not double-count refs on put with unchanged content", async () => {
+		const mw = dexieTauriBlobOffload(10);
+		const core = createMockDBCore();
+		const wrapped = mw.create(core as any);
+		const table = wrapped.table("test");
+
+		await table.mutate({
+			type: "add",
+			values: [{ content: "A".repeat(50) }],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		const hashes = [...refCounts.keys()];
+		expect(refCounts.get(hashes[0])).toBe(1);
+
+		// Put with identical content — ref count should NOT increase
+		const raw = core._rows.get(1) as Record<string, unknown>;
+		await table.mutate({
+			type: "put",
+			values: [raw],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		expect(refCounts.get(hashes[0])).toBe(1);
+		expect(decRefCalls.length).toBe(0);
+	});
+
+	it("decrements refs on delete", async () => {
+		const mw = dexieTauriBlobOffload(10);
+		const core = createMockDBCore();
+		const wrapped = mw.create(core as any);
+		const table = wrapped.table("test");
+
+		await table.mutate({
+			type: "add",
+			values: [{ content: "D".repeat(50) }],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		const hashes = [...refCounts.keys()];
+		expect(hashes.length).toBe(1);
+
+		await table.mutate({
+			type: "delete",
+			keys: [1],
+		} as any);
+
+		await new Promise((r) => setTimeout(r, 10));
+		expect(decRefCalls.flat()).toContain(hashes[0]);
+	});
+
+	it("rehydrates blobs nested inside arrays", async () => {
+		const mw = dexieTauriBlobOffload(10);
+		const core = createMockDBCore();
+		const wrapped = mw.create(core as any);
+		const table = wrapped.table("test");
+
+		const largeStr = "X".repeat(50);
+		await table.mutate({
+			type: "add",
+			values: [{ items: [{ text: largeStr }] }],
+		} as any);
+
+		const result = (await table.get({ key: 1 } as any)) as any;
+		expect(result.items[0].text).toBe(largeStr);
 	});
 });
 

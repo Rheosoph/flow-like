@@ -12,11 +12,11 @@ mod extract;
 mod tools;
 mod types;
 
-pub use extract::{extract_surface_from_response, ExtractedSurface};
 pub use component_docs::{
     CHART_DOCUMENTATION, COMPONENT_CATALOG, GAME_COMPONENT_DOCUMENTATION, ML_VISION_DOCUMENTATION,
     STYLE_GUIDE, get_documentation_section, get_full_documentation,
 };
+pub use extract::{ExtractedSurface, extract_surface_from_response};
 pub use tools::*;
 pub use types::*;
 
@@ -284,11 +284,12 @@ impl A2UICopilot {
             }
 
             // Add assistant response to history for next iteration
-            let assistant_content = OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
-                OneOrMany::one(AssistantContent::Text(rig::message::Text {
-                    text: iteration_text.clone(),
-                }))
-            });
+            let assistant_content =
+                OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
+                    OneOrMany::one(AssistantContent::Text(rig::message::Text {
+                        text: iteration_text.clone(),
+                    }))
+                });
 
             current_history.push(rig::message::Message::Assistant {
                 id: None,

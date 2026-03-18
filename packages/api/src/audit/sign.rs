@@ -1,6 +1,6 @@
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::STANDARD;
-use p256::ecdsa::{SigningKey, VerifyingKey, signature::Signer, signature::Verifier, Signature};
+use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer, signature::Verifier};
 use p256::pkcs8::DecodePrivateKey;
 use std::sync::LazyLock;
 
@@ -11,9 +11,8 @@ static SIGNING_KEY: LazyLock<Option<SigningKey>> = LazyLock::new(|| {
     SigningKey::from_pkcs8_pem(&pem_str).ok()
 });
 
-static VERIFYING_KEY: LazyLock<Option<VerifyingKey>> = LazyLock::new(|| {
-    SIGNING_KEY.as_ref().map(|sk| *sk.verifying_key())
-});
+static VERIFYING_KEY: LazyLock<Option<VerifyingKey>> =
+    LazyLock::new(|| SIGNING_KEY.as_ref().map(|sk| *sk.verifying_key()));
 
 static KEY_ID: LazyLock<String> = LazyLock::new(|| {
     std::env::var("BACKEND_KID").unwrap_or_else(|_| "backend-es256-v1".to_string())

@@ -175,9 +175,7 @@ impl NodeLogic for PptxMergeNode {
             let mut add_slide_keys: Vec<String> = add_files
                 .keys()
                 .filter(|k| {
-                    k.starts_with("ppt/slides/slide")
-                        && k.ends_with(".xml")
-                        && !k.contains("_rels")
+                    k.starts_with("ppt/slides/slide") && k.ends_with(".xml") && !k.contains("_rels")
                 })
                 .cloned()
                 .collect();
@@ -199,10 +197,7 @@ impl NodeLogic for PptxMergeNode {
                 if let Some(slide_data) = add_files.get(src_key) {
                     let slide_xml = String::from_utf8_lossy(slide_data);
                     let cleaned = slide_xml
-                        .replace(
-                            "ppt/slideLayouts/",
-                            "../slideLayouts/",
-                        )
+                        .replace("ppt/slideLayouts/", "../slideLayouts/")
                         .to_string();
                     base_files.insert(new_slide_key.clone(), cleaned.into_bytes());
                 }
@@ -231,13 +226,17 @@ impl NodeLogic for PptxMergeNode {
                     r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{}.xml"/>"#,
                     rid_counter, base_max_num
                 );
-                rels_xml = rels_xml.replace("</Relationships>", &format!("{}\n</Relationships>", new_rel));
+                rels_xml = rels_xml.replace(
+                    "</Relationships>",
+                    &format!("{}\n</Relationships>", new_rel),
+                );
 
                 let new_sld_id = format!(
                     r#"<p:sldId id="{}" r:id="rId{}"/>"#,
                     sld_id_counter, rid_counter
                 );
-                pres_xml = pres_xml.replace("</p:sldIdLst>", &format!("{}\n</p:sldIdLst>", new_sld_id));
+                pres_xml =
+                    pres_xml.replace("</p:sldIdLst>", &format!("{}\n</p:sldIdLst>", new_sld_id));
 
                 if !ct_xml.contains(&format!("/ppt/slides/slide{}.xml", base_max_num)) {
                     let ct_entry = format!(

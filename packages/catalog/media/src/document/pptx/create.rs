@@ -94,10 +94,7 @@ impl NodeLogic for PptxCreateNode {
             "ppt/theme/theme1.xml".to_string(),
             THEME.as_bytes().to_vec(),
         );
-        files.insert(
-            "docProps/app.xml".to_string(),
-            APP_XML.as_bytes().to_vec(),
-        );
+        files.insert("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec());
         files.insert(
             "docProps/core.xml".to_string(),
             CORE_XML.as_bytes().to_vec(),

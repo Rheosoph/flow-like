@@ -1,7 +1,5 @@
 use crate::{
-    audit_branch,
-    ensure_permission, entity::app,
-    error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::app, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -76,6 +74,14 @@ pub async fn delete_app(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to delete metadata: {}", e)))?;
 
     txn.commit().await?;
-    audit_branch!(state, user, app_id, "app.delete", "App", app_id, "Application deleted");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "app.delete",
+        "App",
+        app_id,
+        "Application deleted"
+    );
     Ok(Json(()))
 }

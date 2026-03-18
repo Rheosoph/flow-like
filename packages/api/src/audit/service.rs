@@ -2,8 +2,7 @@ use chrono::Utc;
 use flow_like_types::{Value, create_id};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, Order,
-    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
-    sea_query::Expr,
+    QueryFilter, QueryOrder, QuerySelect, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -248,7 +247,18 @@ impl AuditService {
 
         // Build chain data with prev_signature for each entry.
         // The first entry's prev_signature comes from the entry before the range.
-        let mut chain_data: Vec<(i64, chrono::NaiveDateTime, String, String, String, String, Option<Value>, String, String, Option<String>)> = Vec::with_capacity(entries.len());
+        let mut chain_data: Vec<(
+            i64,
+            chrono::NaiveDateTime,
+            String,
+            String,
+            String,
+            String,
+            Option<Value>,
+            String,
+            String,
+            Option<String>,
+        )> = Vec::with_capacity(entries.len());
         for (i, e) in entries.iter().enumerate() {
             let prev_sig = if i == 0 {
                 initial_prev_sig.clone()

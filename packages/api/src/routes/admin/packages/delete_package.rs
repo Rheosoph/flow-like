@@ -36,6 +36,13 @@ pub async fn delete_package(
 
     registry.delete_package(&package_id).await?;
 
-    audit!(state, user, "admin.package.delete", "WasmPackage", package_id, "Package deleted");
+    audit!(
+        state,
+        user,
+        "admin.package.delete",
+        "WasmPackage",
+        package_id,
+        "Package deleted"
+    );
     Ok(Json(()))
 }

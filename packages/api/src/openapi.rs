@@ -85,6 +85,7 @@ impl Modify for SecurityAddon {
         (name = "apps", description = "Application management"),
         (name = "boards", description = "Board/workflow management"),
         (name = "pages", description = "Page management"),
+        (name = "routes", description = "Route mapping management"),
         (name = "execution", description = "Workflow execution"),
         (name = "events", description = "Event management"),
         (name = "widgets", description = "Widget management"),
@@ -177,6 +178,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::page::get_page_by_route::get_page_by_route,
         crate::routes::app::page::upsert_page::upsert_page,
         crate::routes::app::page::delete_page::delete_page,
+        // Route mapping routes
+        crate::routes::app::route::get_routes::get_routes,
+        crate::routes::app::route::get_route_by_path::get_route_by_path,
+        crate::routes::app::route::get_default_route::get_default_route,
+        crate::routes::app::route::upsert_route::create_route,
+        crate::routes::app::route::upsert_route::update_route,
+        crate::routes::app::route::delete_route::delete_route,
         // Widget routes
         crate::routes::app::widget::get_widgets::get_widgets,
         crate::routes::app::widget::get_widget::get_widget,

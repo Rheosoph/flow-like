@@ -953,10 +953,8 @@ fn pick_better(
         }
         WasmLookupMode::Release => {
             // For release, prefer release/production paths
-            let cur_is_release =
-                cur_str.contains("release") || cur_str.contains("production");
-            let cand_is_release =
-                cand_str.contains("release") || cand_str.contains("production");
+            let cur_is_release = cur_str.contains("release") || cur_str.contains("production");
+            let cand_is_release = cand_str.contains("release") || cand_str.contains("production");
             if cand_is_release && !cur_is_release {
                 return Some(candidate);
             }
@@ -1086,7 +1084,10 @@ async fn load_wasm_nodes_from_path(
         .collect())
 }
 
-fn load_manifest_for_registration(project_path: &Path, wasm_path: &Path) -> Option<PackageManifest> {
+fn load_manifest_for_registration(
+    project_path: &Path,
+    wasm_path: &Path,
+) -> Option<PackageManifest> {
     if let Ok(manifest) = load_manifest_typed(project_path) {
         return Some(manifest);
     }
@@ -1108,10 +1109,7 @@ async fn register_developer_package(
     manifest: PackageManifest,
 ) {
     if let Ok(client) = TauriRegistryState::get_client(app_handle).await {
-        if let Err(e) = client
-            .register_local_package(wasm_path, manifest)
-            .await
-        {
+        if let Err(e) = client.register_local_package(wasm_path, manifest).await {
             tracing::debug!("Failed to register developer package in registry: {}", e);
         }
     }
@@ -1127,7 +1125,10 @@ pub async fn register_all_developer_packages(app_handle: &AppHandle) {
             guard.user_dir.clone()
         }
         Err(e) => {
-            tracing::debug!("Failed to get settings for developer package registration: {}", e);
+            tracing::debug!(
+                "Failed to get settings for developer package registration: {}",
+                e
+            );
             return;
         }
     };
@@ -1146,7 +1147,10 @@ pub async fn register_all_developer_packages(app_handle: &AppHandle) {
         }
     }
 
-    tracing::info!("Registered {} developer project(s) in registry", store.projects.len());
+    tracing::info!(
+        "Registered {} developer project(s) in registry",
+        store.projects.len()
+    );
 }
 
 #[tauri::command]
@@ -1231,10 +1235,15 @@ pub async fn developer_check_staleness(
             let guard = settings.lock().await;
             guard.user_dir.clone()
         }
-        Err(_) => return Ok(stale_entries.iter().map(|(id, _, _)| StalePackageInfo {
-            package_id: id.clone(),
-            project_path: None,
-        }).collect()),
+        Err(_) => {
+            return Ok(stale_entries
+                .iter()
+                .map(|(id, _, _)| StalePackageInfo {
+                    package_id: id.clone(),
+                    project_path: None,
+                })
+                .collect());
+        }
     };
 
     let store = load_store(&user_dir);

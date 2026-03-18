@@ -361,6 +361,13 @@ export default function WidgetEditorPage() {
 						onSave={handleSave}
 						onChange={handleChange}
 						className="h-full"
+						actionContext={{
+							widgetActions: (widget.actions ?? []).map((a) => ({
+								id: a.id,
+								label: a.label,
+								description: a.description,
+							})),
+						}}
 					/>
 				</div>
 

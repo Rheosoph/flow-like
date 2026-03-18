@@ -162,6 +162,7 @@ import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
+import { CallFunctionNode } from "./call-function-node";
 import { LayerNode } from "./layer-node";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
@@ -208,6 +209,7 @@ export function FlowBoard({
 	const flowPanelRef = useRef<ImperativePanelHandle>(null);
 	const logPanelRef = useRef<ImperativePanelHandle>(null);
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
+
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
@@ -300,6 +302,7 @@ export function FlowBoard({
 				>
 					<VariableIcon />
 				</Button>,
+
 				<Button
 					variant={"outline"}
 					size={"icon"}
@@ -547,6 +550,7 @@ export function FlowBoard({
 	);
 
 	const [varsOpen, setVarsOpen] = useState(false);
+
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [pagesOpen, setPagesOpen] = useState(false);
@@ -1280,7 +1284,7 @@ export function FlowBoard({
 				y: screenPosition.y,
 			});
 		},
-		[catalog.data, clickPosition, boardId, droppedPin],
+		[catalog.data, clickPosition, boardId, droppedPin, placeNode],
 	);
 
 	const handleCopyRef = useRef(handleCopyCB);
@@ -1367,33 +1371,49 @@ export function FlowBoard({
 		return { nodeNames, wasmNodeKeys };
 	}, [catalog.data]);
 
+	// Refs for callbacks used in parseBoard to avoid re-running on every callback identity change
+	const executeBoardRef = useRef(executeBoard);
+	executeBoardRef.current = executeBoard;
+	const executeBoardRemoteRef = useRef(executeBoardRemote);
+	executeBoardRemoteRef.current = executeBoardRemote;
+	const executeCommandRef = useRef(executeCommand);
+	executeCommandRef.current = executeCommand;
+	const pushLayerRef = useRef(pushLayer);
+	pushLayerRef.current = pushLayer;
+	const openNodeInfoRef = useRef(openNodeInfo);
+	openNodeInfoRef.current = openNodeInfo;
+	const handleExplainNodesRef = useRef(handleExplainNodes);
+	handleExplainNodesRef.current = handleExplainNodes;
+
+	// Extract stable primitives from complex objects to avoid re-parsing on unrelated changes
+	const connectionMode = currentProfile.data?.settings?.connection_mode ?? "default";
+	const isOffline = app.data?.visibility === IAppVisibility.Offline;
+	const hasRemoteExecution = !!backend.boardState.executeBoardRemote;
+
 	useEffect(() => {
 		if (!board.data) return;
 		boardRef.current = board.data;
-
-		// Determine if app is offline (Offline visibility)
-		const isOffline = app.data?.visibility === IAppVisibility.Offline;
 
 		const parsed = parseBoard(
 			board.data,
 			appId,
 			handleCopyCB,
-			pushLayer,
-			executeBoard,
-			executeCommand,
+			(...args: Parameters<typeof pushLayer>) => pushLayerRef.current(...args),
+			(...args: Parameters<typeof executeBoard>) => executeBoardRef.current(...args),
+			(...args: Parameters<typeof executeCommand>) => executeCommandRef.current(...args),
 			selected.current,
-			currentProfile.data?.settings?.connection_mode ?? "default",
+			connectionMode,
 			nodes,
 			edges,
 			currentLayer,
 			boardRef,
 			version,
-			openNodeInfo,
-			handleExplainNodes,
-			backend.boardState.executeBoardRemote
+			(node: INode) => openNodeInfoRef.current(node),
+			(nodeIds: string[]) => handleExplainNodesRef.current(nodeIds),
+			hasRemoteExecution
 				? {
 						isOffline,
-						onRemoteExecute: executeBoardRemote,
+						onRemoteExecute: (node: INode, payload?: object) => executeBoardRemoteRef.current(node, payload),
 					}
 				: undefined,
 			catalogLookup,
@@ -1405,13 +1425,10 @@ export function FlowBoard({
 	}, [
 		board.data,
 		currentLayer,
-		currentProfile.data,
+		connectionMode,
 		version,
-		openNodeInfo,
-		handleExplainNodes,
-		app.data,
-		executeBoardRemote,
-		backend.boardState.executeBoardRemote,
+		isOffline,
+		hasRemoteExecution,
 		catalogLookup,
 	]);
 
@@ -1423,6 +1440,7 @@ export function FlowBoard({
 			uploadPlaceholderNode: UploadPlaceholderNode,
 			layerNode: LayerNode,
 			layerInnerNode: LayerInnerNode,
+			callFunctionNode: CallFunctionNode,
 			node: FlowNode,
 		}),
 		[],
@@ -1436,6 +1454,39 @@ export function FlowBoard({
 		}),
 		[],
 	);
+
+	const miniMapNodeColor = useCallback((node: Node) => {
+		if (node.type === "layerNode")
+			return "color-mix(in oklch, var(--foreground) 50%, transparent)";
+
+		if (node.type === "node") {
+			const nodeData: INode = node.data.node as INode;
+			if (nodeData.event_callback)
+				return "color-mix(in oklch, var(--primary) 80%, transparent)";
+			if (nodeData.start)
+				return "color-mix(in oklch, var(--primary) 80%, transparent)";
+			if (
+				!Object.values(nodeData.pins).find(
+					(pin) => pin.data_type === IVariableType.Execution,
+				)
+			) {
+				return "color-mix(in oklch, var(--tertiary) 80%, transparent)";
+			}
+			return "color-mix(in oklch, var(--muted) 80%, transparent)";
+		}
+		if (node.type === "commentNode") {
+			const commentData: IComment = node.data.comment as IComment;
+			let color =
+				commentData.color ??
+				"color-mix(in oklch, var(--muted) 80%, transparent)";
+
+			if (color.startsWith("#")) {
+				color = hexToRgba(color, 0.3);
+			}
+			return color;
+		}
+		return "color-mix(in oklch, var(--primary) 60%, transparent)";
+	}, []);
 
 	const onConnect = useCallback(
 		(params: any) =>
@@ -1898,8 +1949,15 @@ export function FlowBoard({
 				pushLayer(layer);
 				return;
 			}
+			if (type === "callFunctionNode") {
+				const layerId = node?.data?.functionLayerId as string | undefined;
+				if (layerId && board.data?.layers?.[layerId]) {
+					pushLayer(board.data.layers[layerId]);
+				}
+				return;
+			}
 		},
-		[pushLayer],
+		[pushLayer, board.data?.layers],
 	);
 
 	const onCommentPlace = useCallback(async () => {
@@ -2128,6 +2186,7 @@ export function FlowBoard({
 								toggleVars();
 							},
 						},
+
 						{
 							icon: <LayoutTemplateIcon />,
 							title: "Templates",
@@ -2232,7 +2291,7 @@ export function FlowBoard({
 					ref={varPanelRef}
 				>
 					{board.data && (
-						<VariablesMenu board={board.data} executeCommand={executeCommand} />
+						<VariablesMenu board={board.data} executeCommand={executeCommand} currentLayerId={currentLayer} pushLayer={pushLayer} boardRef={boardRef} />
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
@@ -2245,6 +2304,7 @@ export function FlowBoard({
 							<FlowContextMenu
 								board={board.data}
 								droppedPin={droppedPin}
+								currentLayerId={currentLayer}
 								onCommentPlace={onCommentPlace}
 								refs={board.data?.refs || {}}
 								onClose={() => setDroppedPin(undefined)}
@@ -2376,40 +2436,7 @@ export function FlowBoard({
 											zoomable
 											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
 											maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
-											nodeColor={(node) => {
-												if (node.type === "layerNode")
-													return "color-mix(in oklch, var(--foreground) 50%, transparent)";
-
-												if (node.type === "node") {
-													const nodeData: INode = node.data.node as INode;
-													if (nodeData.event_callback)
-														return "color-mix(in oklch, var(--primary) 80%, transparent)";
-													if (nodeData.start)
-														return "color-mix(in oklch, var(--primary) 80%, transparent)";
-													if (
-														!Object.values(nodeData.pins).find(
-															(pin) =>
-																pin.data_type === IVariableType.Execution,
-														)
-													) {
-														return "color-mix(in oklch, var(--tertiary) 80%, transparent)";
-													}
-													return "color-mix(in oklch, var(--muted) 80%, transparent)";
-												}
-												if (node.type === "commentNode") {
-													const commentData: IComment = node.data
-														.comment as IComment;
-													let color =
-														commentData.color ??
-														"color-mix(in oklch, var(--muted) 80%, transparent)";
-
-													if (color.startsWith("#")) {
-														color = hexToRgba(color, 0.3);
-													}
-													return color;
-												}
-												return "color-mix(in oklch, var(--primary) 60%, transparent)";
-											}}
+											nodeColor={miniMapNodeColor}
 										/>
 										<Background
 											variant={
@@ -2525,13 +2552,16 @@ export function FlowBoard({
 				<Sheet open={varsOpen} onOpenChange={setVarsOpen}>
 					<SheetContent side="bottom" className="h-[60dvh] w-full">
 						<SheetHeader>
-							<SheetTitle>Variables</SheetTitle>
+							<SheetTitle>Variables & Functions</SheetTitle>
 						</SheetHeader>
 						{board.data && (
 							<div className="h-[calc(60dvh-3.5rem)] overflow-y-auto overscroll-contain">
 								<VariablesMenu
 									board={board.data}
 									executeCommand={executeCommand}
+									currentLayerId={currentLayer}
+									pushLayer={pushLayer}
+									boardRef={boardRef}
 								/>
 							</div>
 						)}

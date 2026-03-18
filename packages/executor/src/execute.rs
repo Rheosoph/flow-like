@@ -22,9 +22,27 @@ use flow_like_types::intercom::BufferedInterComHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// Cached prepared registry - initialized once on first access.
+/// Contains the static catalog nodes only; WASM nodes are overlaid per-request.
+pub(crate) static PREPARED_REGISTRY: LazyLock<FlowNodeRegistryInner> = LazyLock::new(|| {
+    let catalog = get_catalog();
+    let catalog_arc = Arc::new(catalog);
+    FlowNodeRegistryInner::prepare(&catalog_arc)
+});
+
+/// Board cache keyed by (app_id, board_id, version).
+/// Max 128 entries, 60s TTL — boards can be large so we limit entry count.
+pub(crate) static BOARD_CACHE: LazyLock<moka::future::Cache<(String, String, Option<(u32, u32, u32)>), Arc<Board>>> =
+    LazyLock::new(|| {
+        moka::future::Cache::builder()
+            .max_capacity(128)
+            .time_to_live(Duration::from_secs(60))
+            .build()
+    });
 
 /// API-compatible event input format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,7 +115,6 @@ pub async fn execute(
     ));
 
     // Build FlowLike state
-    let catalog = get_catalog();
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
     flow_config.register_app_meta_store(meta_store.clone());
     flow_config.register_log_store(log_store);
@@ -120,8 +137,7 @@ pub async fn execute(
     let state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
 
-    let catalog_arc = Arc::new(catalog);
-    let mut registry = FlowNodeRegistryInner::prepare(&catalog_arc);
+    let mut registry = PREPARED_REGISTRY.clone();
 
     // Load WASM packages from presigned URLs if any are specified
     if let Some(ref wasm_packages) = request.wasm_packages {
@@ -145,15 +161,34 @@ pub async fn execute(
 
     let state = Arc::new(state);
 
-    // Load board using pre-resolved board_id and version
+    // Load board using pre-resolved board_id and version (cached)
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Board::load(storage_root, board_id, state.clone(), request.board_version)
+    let cache_key = (
+        request.app_id.clone(),
+        board_id.clone(),
+        request.board_version,
+    );
+    let state_clone = state.clone();
+    let storage_root_clone = storage_root.clone();
+    let board_id_clone = board_id.clone();
+    let board_version = request.board_version;
+    let board = BOARD_CACHE
+        .try_get_with(cache_key, async move {
+            let b = Board::load(storage_root_clone, &board_id_clone, state_clone, board_version)
+                .await
+                .map_err(|e| {
+                    ExecutorError::BoardLoad(format!(
+                        "Failed to load board {}: {}",
+                        board_id_clone, e
+                    ))
+                })?;
+            Ok::<Arc<Board>, ExecutorError>(Arc::new(b))
+        })
         .await
-        .map_err(|e| {
-            ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
+        .map_err(|e: Arc<ExecutorError>| {
+            ExecutorError::BoardLoad(format!("Board cache error: {}", e))
         })?;
-    let board = Arc::new(board);
 
     // Send start event to API
     send_event(
@@ -372,7 +407,8 @@ pub async fn execute(
         "{}/api/v1/execution/progress",
         claims.callback_url.trim_end_matches('/')
     );
-    let _ = send_progress(&progress_url, &executor_jwt, &progress_update, &config).await;
+    let http_client = reqwest::Client::new();
+    let _ = send_progress(&progress_url, &executor_jwt, &progress_update, &config, &http_client).await;
 
     Ok(ExecutionResult {
         run_id: claims.run_id,
@@ -425,6 +461,7 @@ async fn run_callback_batcher(
         "{}/api/v1/execution/events",
         claims.callback_url.trim_end_matches('/')
     );
+    let client = reqwest::Client::new();
     let mut batch = Vec::new();
     let mut interval = tokio::time::interval(config.batch_interval());
 
@@ -438,6 +475,7 @@ async fn run_callback_batcher(
                         &executor_jwt,
                         events,
                         &config,
+                        &client,
                     ).await {
                         tracing::warn!(error = %e, "Failed to send events batch");
                     }
@@ -454,6 +492,7 @@ async fn run_callback_batcher(
                                 &executor_jwt,
                                 events,
                                 &config,
+                                &client,
                             ).await {
                                 tracing::warn!(error = %e, "Failed to send events batch");
                             }
@@ -467,6 +506,7 @@ async fn run_callback_batcher(
                                 &executor_jwt,
                                 events,
                                 &config,
+                                &client,
                             ).await;
                         }
                         break;
@@ -495,6 +535,7 @@ async fn send_events_to_api(
     jwt: &str,
     events: Vec<ExecutionEvent>,
     config: &ExecutorConfig,
+    client: &reqwest::Client,
 ) -> Result<(), ExecutorError> {
     let api_events: Vec<ApiEventInput> = events
         .into_iter()
@@ -505,7 +546,6 @@ async fn send_events_to_api(
         .collect();
 
     let request = PushEventsRequest { events: api_events };
-    let client = reqwest::Client::new();
 
     for attempt in 0..=config.callback_retries {
         let result = client
@@ -545,8 +585,8 @@ async fn send_progress(
     jwt: &str,
     progress: &ProgressUpdateRequest,
     config: &ExecutorConfig,
+    client: &reqwest::Client,
 ) -> Result<(), ExecutorError> {
-    let client = reqwest::Client::new();
 
     for attempt in 0..=config.callback_retries {
         let result = client

@@ -1,6 +1,5 @@
 use crate::{
-    audit_branch,
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{app, invitation, membership, meta, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -170,6 +169,14 @@ pub async fn invite_user(
     invitation.insert(&txn).await?;
     txn.commit().await?;
 
-    audit_branch!(state, user, app_id, "membership.invite", "Invitation", params.sub, "User invited");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.invite",
+        "Invitation",
+        params.sub,
+        "User invited"
+    );
     Ok(Json(()))
 }

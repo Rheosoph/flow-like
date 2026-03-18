@@ -7,9 +7,8 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::NodeDBConnection;
 use flow_like_types::{
-    JsonSchema,
-    async_trait,
-    json::{self, json, Deserialize, Serialize},
+    JsonSchema, async_trait,
+    json::{self, Deserialize, Serialize, json},
 };
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
@@ -163,8 +162,7 @@ impl NodeLogic for CreateMemoryConfigNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let embedding_model: CachedEmbeddingModel =
-            context.evaluate_pin("embedding_model").await?;
+        let embedding_model: CachedEmbeddingModel = context.evaluate_pin("embedding_model").await?;
         let max_context_tokens: i64 = context
             .evaluate_pin("max_context_tokens")
             .await
@@ -174,10 +172,7 @@ impl NodeLogic for CreateMemoryConfigNode {
             .await
             .unwrap_or_else(|_| "hybrid".to_string());
         let recall_top_k: i64 = context.evaluate_pin("recall_top_k").await.unwrap_or(20);
-        let auto_compress: bool = context
-            .evaluate_pin("auto_compress")
-            .await
-            .unwrap_or(true);
+        let auto_compress: bool = context.evaluate_pin("auto_compress").await.unwrap_or(true);
         let compress_threshold: i64 = context
             .evaluate_pin("compress_threshold")
             .await

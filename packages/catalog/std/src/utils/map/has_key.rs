@@ -49,13 +49,10 @@ impl NodeLogic for HasKeyMapNode {
         let map_in = context.evaluate_pin_to_ref("map_in").await?;
         let key: String = context.evaluate_pin("key").await?;
 
-        let has_key = {
-            let map_guard = map_in.as_ref().lock().await;
-            map_guard
-                .as_object()
-                .map(|obj| obj.contains_key(&key))
-                .unwrap_or(false)
-        };
+        let has_key = map_in
+            .as_object()
+            .map(|obj| obj.contains_key(&key))
+            .unwrap_or(false);
 
         context.set_pin_value("has_key", json!(has_key)).await?;
         Ok(())

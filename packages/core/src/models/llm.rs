@@ -5,8 +5,9 @@ use flow_like_model_provider::llm::{
     ModelLogic, anthropic::AnthropicModel, cohere::CohereModel, deepseek::DeepseekModel,
     galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel, huggingface::HuggingfaceModel,
     hyperbolic::HyperbolicModel, lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel,
-    moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
-    perplexity::PerplexityModel, together::TogetherModel, voyageai::VoyageAIModel, xai::XAIModel,
+    moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel,
+    openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
+    voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_types::{Result, sync::Mutex, tokio::time::interval};
 use local::LocalModel;

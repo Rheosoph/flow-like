@@ -147,9 +147,7 @@ fn replace_table_rows(
 fn find_row_containing(xml: &str, placeholder: &str) -> flow_like_types::Result<String> {
     let mut search_pos = 0;
     loop {
-        let tr_start = xml[search_pos..]
-            .find("<w:tr")
-            .map(|p| p + search_pos);
+        let tr_start = xml[search_pos..].find("<w:tr").map(|p| p + search_pos);
         let tr_start = match tr_start {
             Some(p) => p,
             None => break,

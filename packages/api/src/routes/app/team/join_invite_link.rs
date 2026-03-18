@@ -150,6 +150,14 @@ pub async fn join_invite_link(
 
     txn.commit().await?;
 
-    audit_branch!(state, user, app_id, "membership.join", "InviteLink", token, "User joined via invite link");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.join",
+        "InviteLink",
+        token,
+        "User joined via invite link"
+    );
     Ok(Json(()))
 }

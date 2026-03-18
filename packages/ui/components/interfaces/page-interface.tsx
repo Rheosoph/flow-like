@@ -1114,7 +1114,7 @@ function PageInterfaceInner({
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
-						boardId={routeEvent?.board_id}
+						boardId={page?.boardId || routeEvent?.board_id}
 						onA2UIMessage={handleA2UIMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}

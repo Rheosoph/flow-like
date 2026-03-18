@@ -59,15 +59,11 @@ impl NodeLogic for GetMapNode {
         let mut found = false;
         let mut value = Value::Null;
 
+        if let Some(obj) = map_in.as_object()
+            && let Some(v) = obj.get(&key)
         {
-            let map_guard = map_in.as_ref().lock().await;
-
-            if let Some(obj) = map_guard.as_object()
-                && let Some(v) = obj.get(&key)
-            {
-                value = v.clone();
-                found = true;
-            }
+            value = v.clone();
+            found = true;
         }
 
         context.set_pin_value("value", json!(value)).await?;

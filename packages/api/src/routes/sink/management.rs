@@ -133,7 +133,7 @@ pub async fn list_sinks(
         let mut response = SinkResponse::from(sink.clone());
 
         // Use database lookup instead of bucket
-        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id).await {
+        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await {
             response.event_name = Some(event.name.clone());
             response.event_type = Some(event.event_type.clone());
             response.board_id = Some(event.board_id.clone());
@@ -183,7 +183,7 @@ pub async fn list_app_sinks(
     for sink in sinks {
         let mut response = SinkResponse::from(sink.clone());
 
-        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id).await {
+        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await {
             response.event_name = Some(event.name.clone());
             response.event_type = Some(event.event_type.clone());
             response.board_id = Some(event.board_id.clone());
@@ -232,7 +232,7 @@ pub async fn get_sink(
     let mut response = SinkResponse::from(sink.clone());
 
     // Enrich with event info from database
-    if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id).await {
+    if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await {
         response.event_name = Some(event.name.clone());
         response.event_type = Some(event.event_type.clone());
         response.board_id = Some(event.board_id.clone());
@@ -306,7 +306,15 @@ pub async fn update_sink(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to update sink: {}", e)))?;
 
-    audit_branch!(state, user, sink_app_id, "sink.update", "sink", event_id, "Sink settings updated");
+    audit_branch!(
+        state,
+        user,
+        sink_app_id,
+        "sink.update",
+        "sink",
+        event_id,
+        "Sink settings updated"
+    );
     Ok(Json(SinkResponse::from(updated)))
 }
 
@@ -351,6 +359,17 @@ pub async fn toggle_sink(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to toggle sink: {}", e)))?;
 
-    audit_branch!(state, user, sink_app_id, "sink.toggle", "sink", event_id, format!("Sink toggled to {}", if updated.active { "active" } else { "inactive" }));
+    audit_branch!(
+        state,
+        user,
+        sink_app_id,
+        "sink.toggle",
+        "sink",
+        event_id,
+        format!(
+            "Sink toggled to {}",
+            if updated.active { "active" } else { "inactive" }
+        )
+    );
     Ok(Json(SinkResponse::from(updated)))
 }

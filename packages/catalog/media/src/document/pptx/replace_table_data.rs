@@ -218,12 +218,7 @@ impl NodeLogic for PptxReplaceTableDataNode {
             }
 
             let new_tbl = format!("<a:tbl>{tbl_pr}{tbl_grid}{rows_xml}</a:tbl>");
-            slide_xml = format!(
-                "{}{}{}",
-                &slide_xml[..*start],
-                new_tbl,
-                &slide_xml[*end..]
-            );
+            slide_xml = format!("{}{}{}", &slide_xml[..*start], new_tbl, &slide_xml[*end..]);
             break;
         }
 

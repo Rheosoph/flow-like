@@ -159,6 +159,7 @@ export async function createRealtimeSession(args: {
 
 	// Monitor connection status
 	let connectedPeers = 0;
+	let lastStatus: "connected" | "disconnected" | undefined;
 	let statusCheckInterval: NodeJS.Timeout | undefined;
 
 	const checkConnectionStatus = () => {
@@ -167,7 +168,8 @@ export async function createRealtimeSession(args: {
 
 		if (currentPeers !== connectedPeers) {
 			connectedPeers = currentPeers;
-			if (connectedPeers > 0 && onStatusChange) {
+			if (connectedPeers > 0 && onStatusChange && lastStatus !== "connected") {
+				lastStatus = "connected";
 				onStatusChange("connected");
 			}
 		}
@@ -175,8 +177,8 @@ export async function createRealtimeSession(args: {
 		// Check for signaling server connection
 		if (provider.room?.webrtcConns) {
 			const hasConnections = Object.keys(provider.room.webrtcConns).length > 0;
-			if (!hasConnections && connectedPeers === 0 && onStatusChange) {
-				console.warn("[WebRTC] No active connections detected");
+			if (!hasConnections && connectedPeers === 0 && onStatusChange && lastStatus !== "disconnected") {
+				lastStatus = "disconnected";
 				onStatusChange("disconnected");
 			}
 		}
@@ -184,10 +186,6 @@ export async function createRealtimeSession(args: {
 
 	// Check status periodically
 	statusCheckInterval = setInterval(checkConnectionStatus, 5000);
-
-	awareness.on("change", () => {
-		checkConnectionStatus();
-	});
 
 	// Register in the global registry
 	roomRegistry.set(room, { doc, provider, refCount: 1 });

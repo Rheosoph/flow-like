@@ -26,6 +26,7 @@ pub mod packages;
 pub mod page;
 pub mod publication;
 pub mod roles;
+pub mod route;
 pub mod sales;
 pub mod team;
 pub mod template;
@@ -66,6 +67,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())
         .nest("/{app_id}/api", api::routes())
+        .nest("/{app_id}/routes", route::routes())
 }
 
 #[macro_export]

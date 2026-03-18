@@ -15,6 +15,7 @@ import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
+import { useWidgetInstance } from "./layout/A2UIWidgetInstance";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -408,6 +409,7 @@ export function useExecuteAction() {
 	const pathname = usePathname();
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
+	const widgetInstance = useWidgetInstance();
 	const {
 		onAction,
 		onA2UIMessage,
@@ -827,6 +829,116 @@ export function useExecuteAction() {
 					}
 					break;
 				}
+			case "widget_event": {
+					console.log("[A2UI] widget_event triggered:", { context, widgetInstance, appId, boardId });
+					const actionId = context.actionId as string | undefined;
+					if (!actionId) {
+						console.warn("[A2UI] widget_event missing actionId");
+						break;
+					}
+
+					// Look up the binding from the widget instance's action bindings
+					const binding = widgetInstance?.actionBindings[actionId];
+					if (!binding) {
+						console.warn("[A2UI] widget_event: no binding found for actionId:", actionId, "available bindings:", widgetInstance?.actionBindings);
+						break;
+					}
+
+					if (!("workflow" in binding)) {
+						console.warn("[A2UI] widget_event: only workflow bindings are supported for execution, got:", binding);
+						break;
+					}
+
+					const nodeId = binding.workflow.flowId;
+
+					const effectiveAppId = appId;
+					const effectiveBoardId = boardId;
+
+					if (effectiveBoardId && effectiveAppId) {
+						try {
+							const cacheKey = `${effectiveBoardId}:${surfaceId}`;
+							let elementsMap = executionElementsCache.current.get(cacheKey);
+
+							if (!elementsMap) {
+								try {
+									elementsMap = await backend.boardState.getExecutionElements(
+										effectiveAppId,
+										effectiveBoardId,
+										surfaceId || "",
+										false,
+									);
+
+									if (!elementsMap || Object.keys(elementsMap).length === 0) {
+										elementsMap = {};
+										if (components && surfaceId) {
+											for (const [id, comp] of Object.entries(components)) {
+												elementsMap[`${surfaceId}/${id}`] = comp;
+											}
+										}
+									}
+
+									executionElementsCache.current.set(cacheKey, elementsMap);
+								} catch (err) {
+									console.warn("[A2UI] Failed to fetch execution elements for widget_event:", err);
+									elementsMap = {};
+									if (components && surfaceId) {
+										for (const [id, comp] of Object.entries(components)) {
+											elementsMap[`${surfaceId}/${id}`] = comp;
+										}
+									}
+								}
+							}
+
+							const storedValues = getElementValues?.() ?? {};
+							const mergedElements: Record<string, unknown> = {};
+							for (const [elementId, element] of Object.entries(elementsMap)) {
+								const storedValue = storedValues[elementId];
+								if (storedValue !== undefined) {
+									const comp = element as Record<string, unknown>;
+									const componentData = comp.component as Record<string, unknown> | undefined;
+									if (componentData) {
+										mergedElements[elementId] = {
+											...comp,
+											component: {
+												...componentData,
+												value: { literalString: storedValue },
+											},
+										};
+									} else {
+										mergedElements[elementId] = element;
+									}
+								} else {
+									mergedElements[elementId] = element;
+								}
+							}
+
+							const payload = {
+								id: nodeId,
+								payload: {
+									_elements: mergedElements,
+									_widget_instance_id: widgetInstance?.instanceId ?? "",
+									_action_id: actionId,
+									_action_context: context,
+								},
+							};
+
+							const execFn = executionService?.executeBoard ?? backend.boardState.executeBoard;
+							await execFn(
+								effectiveAppId,
+								effectiveBoardId,
+								payload,
+								false,
+								undefined,
+								handleA2UIEvents,
+							);
+						} catch (error) {
+							console.error("[A2UI] Failed to execute widget event:", error);
+						}
+					} else {
+						console.warn("[A2UI] Missing appId or boardId for widget_event:", { appId: effectiveAppId, boardId: effectiveBoardId });
+					}
+					break;
+				}
 				default:
 					if (onAction) {
 						onAction({
@@ -848,11 +960,13 @@ export function useExecuteAction() {
 			onAction,
 			surfaceId,
 			appId,
+			boardId,
 			components,
 			globalState,
 			pageState,
 			handleA2UIEvents,
 			isPreviewMode,
+			widgetInstance,
 		],
 	);
 

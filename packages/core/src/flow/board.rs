@@ -400,6 +400,19 @@ impl Board {
         self.variables.get(variable_id)
     }
 
+    /// Search for a variable in board globals AND all layer-scoped variables.
+    pub fn get_any_variable(&self, variable_id: &str) -> Option<Variable> {
+        if let Some(var) = self.variables.get(variable_id) {
+            return Some(var.clone());
+        }
+        for layer in self.layers.values() {
+            if let Some(var) = layer.variables.get(variable_id) {
+                return Some(var.clone());
+            }
+        }
+        None
+    }
+
     pub async fn create_version(
         &mut self,
         version_type: VersionType,

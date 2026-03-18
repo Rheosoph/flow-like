@@ -23,6 +23,9 @@ fn normalize_schema(schema: &str) -> Option<String> {
 pub struct UpsertVariableCommand {
     pub variable: Variable,
     pub old_variable: Option<Variable>,
+    /// When set, operate on a layer's variables instead of board-level variables
+    #[serde(default)]
+    pub layer_id: Option<String>,
 }
 
 impl UpsertVariableCommand {
@@ -30,6 +33,7 @@ impl UpsertVariableCommand {
         UpsertVariableCommand {
             variable,
             old_variable: None,
+            layer_id: None,
         }
     }
 }
@@ -60,14 +64,20 @@ impl Command for UpsertVariableCommand {
             self.variable.schema = Some(normalized);
         }
 
-        if let Some(old_variable) = board
-            .variables
-            .insert(self.variable.id.clone(), self.variable.clone())
+        let variables = if let Some(ref layer_id) = self.layer_id {
+            &mut board
+                .layers
+                .get_mut(layer_id)
+                .ok_or_else(|| flow_like_types::anyhow!("Layer not found"))?
+                .variables
+        } else {
+            &mut board.variables
+        };
+
+        if let Some(old_variable) = variables.insert(self.variable.id.clone(), self.variable.clone())
         {
             if !old_variable.editable {
-                board
-                    .variables
-                    .insert(old_variable.id.clone(), old_variable);
+                variables.insert(old_variable.id.clone(), old_variable);
                 return Err(flow_like_types::anyhow!("Variable is not editable"));
             }
 
@@ -81,11 +91,19 @@ impl Command for UpsertVariableCommand {
         board: &mut Board,
         _: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        board.variables.remove(&self.variable.id);
-        if let Some(old_variable) = self.old_variable.take() {
-            board
+        let variables = if let Some(ref layer_id) = self.layer_id {
+            &mut board
+                .layers
+                .get_mut(layer_id)
+                .ok_or_else(|| flow_like_types::anyhow!("Layer not found"))?
                 .variables
-                .insert(old_variable.id.clone(), old_variable);
+        } else {
+            &mut board.variables
+        };
+
+        variables.remove(&self.variable.id);
+        if let Some(old_variable) = self.old_variable.take() {
+            variables.insert(old_variable.id.clone(), old_variable);
         }
         Ok(())
     }

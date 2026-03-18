@@ -1,6 +1,5 @@
 use crate::{
-    audit_branch,
-    ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -56,6 +55,14 @@ pub async fn delete_page(
         .exec(&state.db)
         .await?;
 
-    audit_branch!(state, user, app_id, "page.delete", "Page", page_id, "Page deleted");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "page.delete",
+        "Page",
+        page_id,
+        "Page deleted"
+    );
     Ok(Json(()))
 }

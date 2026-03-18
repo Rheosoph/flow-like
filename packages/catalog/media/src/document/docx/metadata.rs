@@ -21,25 +21,46 @@ impl DocxSetMetadataNode {
 }
 
 #[cfg(feature = "execute")]
-fn build_core_xml(title: &str, author: &str, subject: &str, keywords: &str, description: &str) -> Vec<u8> {
+fn build_core_xml(
+    title: &str,
+    author: &str,
+    subject: &str,
+    keywords: &str,
+    description: &str,
+) -> Vec<u8> {
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">"#,
     );
     if !title.is_empty() {
-        xml.push_str(&format!("<dc:title>{}</dc:title>", quick_xml::escape::escape(title)));
+        xml.push_str(&format!(
+            "<dc:title>{}</dc:title>",
+            quick_xml::escape::escape(title)
+        ));
     }
     if !author.is_empty() {
-        xml.push_str(&format!("<dc:creator>{}</dc:creator>", quick_xml::escape::escape(author)));
+        xml.push_str(&format!(
+            "<dc:creator>{}</dc:creator>",
+            quick_xml::escape::escape(author)
+        ));
     }
     if !subject.is_empty() {
-        xml.push_str(&format!("<dc:subject>{}</dc:subject>", quick_xml::escape::escape(subject)));
+        xml.push_str(&format!(
+            "<dc:subject>{}</dc:subject>",
+            quick_xml::escape::escape(subject)
+        ));
     }
     if !keywords.is_empty() {
-        xml.push_str(&format!("<cp:keywords>{}</cp:keywords>", quick_xml::escape::escape(keywords)));
+        xml.push_str(&format!(
+            "<cp:keywords>{}</cp:keywords>",
+            quick_xml::escape::escape(keywords)
+        ));
     }
     if !description.is_empty() {
-        xml.push_str(&format!("<dc:description>{}</dc:description>", quick_xml::escape::escape(description)));
+        xml.push_str(&format!(
+            "<dc:description>{}</dc:description>",
+            quick_xml::escape::escape(description)
+        ));
     }
     xml.push_str("</cp:coreProperties>");
     xml.into_bytes()
@@ -74,12 +95,22 @@ impl NodeLogic for DocxSetMetadataNode {
             .set_default_value(Some(json!("")));
         node.add_input_pin("author", "Author", "Document author", VariableType::String)
             .set_default_value(Some(json!("")));
-        node.add_input_pin("subject", "Subject", "Document subject", VariableType::String)
-            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "subject",
+            "Subject",
+            "Document subject",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin("keywords", "Keywords", "Keywords", VariableType::String)
             .set_default_value(Some(json!("")));
-        node.add_input_pin("description", "Description", "Document description", VariableType::String)
-            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "description",
+            "Description",
+            "Document description",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -163,9 +194,24 @@ impl NodeLogic for DocxGetMetadataNode {
         node.add_output_pin("exec_out", "Done", "Continues", VariableType::Execution);
         node.add_output_pin("title", "Title", "Document title", VariableType::String);
         node.add_output_pin("author", "Author", "Document author", VariableType::String);
-        node.add_output_pin("subject", "Subject", "Document subject", VariableType::String);
-        node.add_output_pin("keywords", "Keywords", "Document keywords", VariableType::String);
-        node.add_output_pin("description", "Description", "Document description", VariableType::String);
+        node.add_output_pin(
+            "subject",
+            "Subject",
+            "Document subject",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "keywords",
+            "Keywords",
+            "Document keywords",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "description",
+            "Description",
+            "Document description",
+            VariableType::String,
+        );
 
         node
     }
@@ -179,7 +225,11 @@ impl NodeLogic for DocxGetMetadataNode {
         let files = read_zip(&bytes)?;
 
         let (mut title, mut author, mut subject, mut keywords, mut description) = (
-            String::new(), String::new(), String::new(), String::new(), String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
         );
 
         if let Some(core_bytes) = files.get("docProps/core.xml") {
@@ -195,7 +245,9 @@ impl NodeLogic for DocxGetMetadataNode {
         context.set_pin_value("author", json!(author)).await?;
         context.set_pin_value("subject", json!(subject)).await?;
         context.set_pin_value("keywords", json!(keywords)).await?;
-        context.set_pin_value("description", json!(description)).await?;
+        context
+            .set_pin_value("description", json!(description))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

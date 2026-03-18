@@ -52,7 +52,12 @@ impl NodeLogic for PptxAddSlideNode {
         node.add_output_pin("exec_out", "Done", "Continues", VariableType::Execution);
         node.add_output_pin("result", "Result", "Output file path", VariableType::Struct)
             .set_schema::<FlowPath>();
-        node.add_output_pin("slide_number", "Slide Number", "New slide's index (1-based)", VariableType::Integer);
+        node.add_output_pin(
+            "slide_number",
+            "Slide Number",
+            "New slide's index (1-based)",
+            VariableType::Integer,
+        );
 
         node
     }
@@ -74,10 +79,7 @@ impl NodeLogic for PptxAddSlideNode {
         files.insert(slide_path.clone(), build_blank_slide().into_bytes());
 
         let layout_rel = find_slide_layout_target(&files);
-        files.insert(
-            slide_rels_path,
-            build_slide_rels(&layout_rel).into_bytes(),
-        );
+        files.insert(slide_rels_path, build_slide_rels(&layout_rel).into_bytes());
 
         update_presentation_xml(&mut files, slide_num);
         update_content_types(&mut files, slide_num);
@@ -178,10 +180,7 @@ fn update_presentation_xml(files: &mut std::collections::HashMap<String, Vec<u8>
         let new_rid = next_rid(&pres_rels_data);
         let new_sld_id = next_sld_id(&content);
 
-        let sld_entry = format!(
-            r#"<p:sldId id="{}" r:id="{}"/>"#,
-            new_sld_id, new_rid
-        );
+        let sld_entry = format!(r#"<p:sldId id="{}" r:id="{}"/>"#, new_sld_id, new_rid);
 
         if let Some(pos) = content.find("</p:sldIdLst>") {
             content.insert_str(pos, &sld_entry);

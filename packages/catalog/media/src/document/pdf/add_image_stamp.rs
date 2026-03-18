@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::{Document, Object, Stream, dictionary};
 
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -45,20 +45,40 @@ impl NodeLogic for PdfAddImageStampNode {
         node.add_input_pin("template", "Template", "PDF file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("image", "Image", "Image file (PNG/JPEG)", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "image",
+            "Image",
+            "Image file (PNG/JPEG)",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin("x", "X", "X position in points", VariableType::Float)
             .set_default_value(Some(json!(50.0)));
         node.add_input_pin("y", "Y", "Y position in points", VariableType::Float)
             .set_default_value(Some(json!(50.0)));
-        node.add_input_pin("width", "Width", "Image width in points", VariableType::Float)
-            .set_default_value(Some(json!(100.0)));
-        node.add_input_pin("height", "Height", "Image height in points", VariableType::Float)
-            .set_default_value(Some(json!(100.0)));
-        node.add_input_pin("pages", "Pages", "Page numbers (empty = all)", VariableType::Integer)
-            .set_value_type(flow_like::flow::pin::ValueType::Array)
-            .set_default_value(Some(json!([])));
+        node.add_input_pin(
+            "width",
+            "Width",
+            "Image width in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(100.0)));
+        node.add_input_pin(
+            "height",
+            "Height",
+            "Image height in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(100.0)));
+        node.add_input_pin(
+            "pages",
+            "Pages",
+            "Page numbers (empty = all)",
+            VariableType::Integer,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_default_value(Some(json!([])));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());

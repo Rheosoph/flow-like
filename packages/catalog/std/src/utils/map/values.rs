@@ -47,13 +47,10 @@ impl NodeLogic for ValuesMapNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let map_in = context.evaluate_pin_to_ref("map_in").await?;
 
-        let values: Vec<Value> = {
-            let map_guard = map_in.as_ref().lock().await;
-            map_guard
-                .as_object()
-                .map(|obj| obj.values().cloned().collect())
-                .unwrap_or_default()
-        };
+        let values: Vec<Value> = map_in
+            .as_object()
+            .map(|obj| obj.values().cloned().collect())
+            .unwrap_or_default();
 
         context.set_pin_value("values", json!(values)).await?;
         Ok(())

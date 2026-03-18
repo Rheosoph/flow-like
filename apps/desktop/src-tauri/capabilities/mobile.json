@@ -114,6 +114,7 @@
     "fs:write-all",
     "fs:read-all",
     "opener:default",
+    "flow-like-dexie-blob-offload:default",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "*" }, { "path": "**/*"} ]

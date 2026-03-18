@@ -4,10 +4,10 @@ pub mod prelude;
 
 pub mod app;
 pub mod app_discount;
-pub mod audit_entry;
 pub mod app_package;
 pub mod app_purchase;
 pub mod app_sales_daily;
+pub mod audit_entry;
 pub mod bit;
 pub mod bit_cache;
 pub mod bit_tree_cache;

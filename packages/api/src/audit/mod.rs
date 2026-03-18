@@ -2,7 +2,7 @@ pub mod chain;
 pub mod service;
 pub mod sign;
 
-pub use chain::{compute_entry_hash, GENESIS_HASH};
+pub use chain::{GENESIS_HASH, compute_entry_hash};
 pub use service::AuditService;
 pub use sign::{sign_entry, verify_entry_signature};
 
@@ -53,7 +53,8 @@ macro_rules! audit {
                     details: None,
                 };
                 $crate::audit::AuditService::record(&db, input).await
-            }.await;
+            }
+            .await;
             if let Err(e) = &audit_result {
                 tracing::error!("AUDIT FAILURE (root chain): {}", e);
             }
@@ -86,7 +87,8 @@ macro_rules! audit {
                     details: Some(details),
                 };
                 $crate::audit::AuditService::record(&db, input).await
-            }.await;
+            }
+            .await;
             if let Err(e) = &audit_result {
                 tracing::error!("AUDIT FAILURE (root chain): {}", e);
             }
@@ -129,7 +131,8 @@ macro_rules! audit_branch {
                     details: None,
                 };
                 $crate::audit::AuditService::record(&db, input).await
-            }.await;
+            }
+            .await;
             if let Err(e) = &audit_result {
                 tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
             }
@@ -163,12 +166,11 @@ macro_rules! audit_branch {
                     details: Some(details),
                 };
                 $crate::audit::AuditService::record(&db, input).await
-            }.await;
+            }
+            .await;
             if let Err(e) = &audit_result {
                 tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
             }
         }
     }};
 }
-
-

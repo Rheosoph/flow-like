@@ -221,6 +221,49 @@ fn map_wasm_data_type(wasm_type: &str) -> VariableType {
     }
 }
 
+/// Convert a `WasmNodeDefinition` into a `PackageNodeEntry` suitable for storage
+/// in the `WasmPackageVersion.nodes` JSON column.
+pub fn definition_to_package_entry(
+    definition: &WasmNodeDefinition,
+) -> crate::manifest::PackageNodeEntry {
+    let mut pins = HashMap::new();
+    for (i, wasm_pin) in definition.pins.iter().enumerate() {
+        let pin = WasmNodeLogic::to_flow_pin(wasm_pin, i as u16);
+        pins.insert(pin.name.clone(), pin);
+    }
+
+    let scores = definition.scores.as_ref().map(|s| NodeScores {
+        privacy: s.privacy,
+        security: s.security,
+        performance: s.performance,
+        governance: s.governance,
+        reliability: s.reliability,
+        cost: s.cost,
+    });
+
+    crate::manifest::PackageNodeEntry {
+        id: definition.name.clone(),
+        name: definition.name.clone(),
+        friendly_name: Some(definition.friendly_name.clone()),
+        description: definition.description.clone(),
+        category: definition.category.clone(),
+        icon: definition.icon.clone(),
+        scores,
+        pins,
+        start: None,
+        long_running: definition.long_running,
+        docs: definition.docs.clone(),
+        event_callback: None,
+        fn_refs: None,
+        oauth_providers: vec![],
+        required_oauth_scopes: None,
+        only_offline: false,
+        version: definition.abi_version,
+        permissions: definition.permissions.clone(),
+        metadata: HashMap::new(),
+    }
+}
+
 /// Build a `Node` from a `WasmNodeDefinition` without requiring async or `block_on`.
 pub fn build_node_from_definition(definition: &WasmNodeDefinition) -> Node {
     let mut node = Node::new(

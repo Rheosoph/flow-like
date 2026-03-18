@@ -77,3 +77,6 @@ next-env.d.ts
 # Build artifacts
 *.cwasm
 nohup.out
+
+# Tauri generated schemas
+apps/desktop/src-tauri/gen/schemas/

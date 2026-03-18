@@ -11,7 +11,7 @@ use flow_like_types::{async_trait, json::json};
 use crate::document::openxml::{read_zip, write_zip};
 use crate::document::styles::defaults;
 #[cfg(feature = "execute")]
-use crate::document::styles::{hex_to_ooxml, pt_to_half_points, cm_to_twips};
+use crate::document::styles::{cm_to_twips, hex_to_ooxml, pt_to_half_points};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -45,21 +45,56 @@ impl NodeLogic for DocxAddTableNode {
         );
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
-        node.add_input_pin("template", "Template", "DOCX file to add table to", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("data", "Data", "JSON array of arrays (first row = headers if header_row=true)", VariableType::String);
-        node.add_input_pin("header_row", "Header Row", "Style first row as header", VariableType::Boolean)
-            .set_default_value(Some(json!(true)));
-        node.add_input_pin("alternate_rows", "Alternate Rows", "Zebra striping", VariableType::Boolean)
-            .set_default_value(Some(json!(true)));
-        node.add_input_pin("border_color", "Border Color", "Table border color (hex)", VariableType::String)
-            .set_default_value(Some(json!(defaults::BORDER)));
-        node.add_input_pin("font_size", "Font Size", "Font size in points", VariableType::Float)
-            .set_default_value(Some(json!(10.0)));
-        node.add_input_pin("output", "Output Path", "Where to save", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "template",
+            "Template",
+            "DOCX file to add table to",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "data",
+            "Data",
+            "JSON array of arrays (first row = headers if header_row=true)",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "header_row",
+            "Header Row",
+            "Style first row as header",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+        node.add_input_pin(
+            "alternate_rows",
+            "Alternate Rows",
+            "Zebra striping",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+        node.add_input_pin(
+            "border_color",
+            "Border Color",
+            "Table border color (hex)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!(defaults::BORDER)));
+        node.add_input_pin(
+            "font_size",
+            "Font Size",
+            "Font size in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(10.0)));
+        node.add_input_pin(
+            "output",
+            "Output Path",
+            "Where to save",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin("exec_out", "Done", "Continues", VariableType::Execution);
         node.add_output_pin("result", "Result", "Output file path", VariableType::Struct)

@@ -1,4 +1,7 @@
-use axum::{Extension, Json, extract::{Query, State}};
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+};
 use serde::Deserialize;
 use utoipa::IntoParams;
 

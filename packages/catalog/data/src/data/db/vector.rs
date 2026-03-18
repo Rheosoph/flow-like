@@ -4,14 +4,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::{
-    VectorStore,
-    buffered::BufferedVectorStore,
-    lancedb::LanceDBVectorStore,
+    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
-use flow_like_types::{
-    Cacheable, Value, async_trait,
-    sync::RwLock,
-};
+use flow_like_types::{Cacheable, Value, async_trait, sync::RwLock};
 use std::sync::Arc;
 
 pub use flow_like_catalog_core::{CachedDB, NodeDBConnection};
@@ -100,10 +95,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
 
         let table: String = context.evaluate_pin("name").await?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
-        let batch_size: i64 = context
-            .evaluate_pin("batch_size")
-            .await
-            .unwrap_or(1000);
+        let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(1000);
         let batch_size = batch_size.max(0) as usize;
         let cache_key = if user_scoped {
             format!("db_user_{}", table)

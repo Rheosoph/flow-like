@@ -34,7 +34,11 @@ pub mod vision;
 
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    { flow_like_catalog_core::get_catalog() }
+    {
+        flow_like_catalog_core::get_catalog()
+    }
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    { Vec::new() }
+    {
+        Vec::new()
+    }
 }

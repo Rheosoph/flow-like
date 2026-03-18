@@ -5,9 +5,9 @@ import {
 	getSmoothStepPath,
 	getStraightPath,
 } from "@xyflow/react";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
-export function FlowVeilEdge(props: EdgeProps) {
+export const FlowVeilEdge = memo(function FlowVeilEdge(props: EdgeProps) {
 	const {
 		id,
 		sourceX,
@@ -120,4 +120,4 @@ export function FlowVeilEdge(props: EdgeProps) {
 			/>
 		</>
 	);
-}
+});

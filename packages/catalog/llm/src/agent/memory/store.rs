@@ -112,9 +112,7 @@ impl NodeLogic for StoreMemoryNode {
 
         if content.trim().is_empty() {
             context.activate_exec_pin("exec_out").await?;
-            context
-                .set_pin_value("observation_count", json!(0))
-                .await?;
+            context.set_pin_value("observation_count", json!(0)).await?;
             return Ok(());
         }
 

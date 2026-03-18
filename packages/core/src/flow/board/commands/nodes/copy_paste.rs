@@ -279,6 +279,19 @@ impl Command for CopyPasteCommand {
                         }
                     }
 
+                    // Translate function_layer_id when pasting CallFunction nodes
+                    if pin.name == "function_layer_id"
+                        && let Some(ref_bytes) = pin.default_value.as_ref()
+                    {
+                        if let Ok(layer_ref) = from_slice::<String>(ref_bytes) {
+                            if let Some(new_layer_id) = layer_translation.get(&layer_ref) {
+                                if let Ok(bytes) = flow_like_types::json::to_vec(new_layer_id) {
+                                    pin.default_value = Some(bytes);
+                                }
+                            }
+                        }
+                    }
+
                     pin.schema = blueprint_pin.schema.clone();
                     pin.options = blueprint_pin.options.clone();
 

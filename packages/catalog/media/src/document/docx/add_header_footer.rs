@@ -45,12 +45,27 @@ impl NodeLogic for DocxAddHeaderFooterNode {
         node.add_input_pin("template", "Template", "DOCX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("header_text", "Header Text", "Text for the header", VariableType::String)
-            .set_default_value(Some(json!("")));
-        node.add_input_pin("footer_text", "Footer Text", "Text for the footer", VariableType::String)
-            .set_default_value(Some(json!("")));
-        node.add_input_pin("include_page_number", "Include Page Number", "Add page number to footer", VariableType::Boolean)
-            .set_default_value(Some(json!(false)));
+        node.add_input_pin(
+            "header_text",
+            "Header Text",
+            "Text for the header",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "footer_text",
+            "Footer Text",
+            "Text for the footer",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "include_page_number",
+            "Include Page Number",
+            "Add page number to footer",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());

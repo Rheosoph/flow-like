@@ -8,7 +8,7 @@ use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 mod execution;
 
-#[flow_like_types::tokio::main]
+#[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
     let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();
 

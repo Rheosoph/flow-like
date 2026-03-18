@@ -45,10 +45,20 @@ impl NodeLogic for PptxAddShapeNode {
         node.add_input_pin("template", "Template", "PPTX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("slide_number", "Slide Number", "1-based slide index", VariableType::Integer)
-            .set_default_value(Some(json!(1)));
-        node.add_input_pin("shape", "Shape", "Shape preset: rect, ellipse, roundRect, rightArrow, diamond, triangle", VariableType::String)
-            .set_default_value(Some(json!("rect")));
+        node.add_input_pin(
+            "slide_number",
+            "Slide Number",
+            "1-based slide index",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(1)));
+        node.add_input_pin(
+            "shape",
+            "Shape",
+            "Shape preset: rect, ellipse, roundRect, rightArrow, diamond, triangle",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("rect")));
         node.add_input_pin("x", "X", "X position in cm", VariableType::Float)
             .set_default_value(Some(json!(5.0)));
         node.add_input_pin("y", "Y", "Y position in cm", VariableType::Float)
@@ -57,12 +67,27 @@ impl NodeLogic for PptxAddShapeNode {
             .set_default_value(Some(json!(6.0)));
         node.add_input_pin("height", "Height", "Height in cm", VariableType::Float)
             .set_default_value(Some(json!(4.0)));
-        node.add_input_pin("fill_color", "Fill Color", "Fill hex color", VariableType::String)
-            .set_default_value(Some(json!("#FF4343")));
-        node.add_input_pin("line_color", "Line Color", "Outline hex color (empty = no outline)", VariableType::String)
-            .set_default_value(Some(json!("")));
-        node.add_input_pin("text", "Text", "Optional text inside shape", VariableType::String)
-            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "fill_color",
+            "Fill Color",
+            "Fill hex color",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("#FF4343")));
+        node.add_input_pin(
+            "line_color",
+            "Line Color",
+            "Outline hex color (empty = no outline)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "text",
+            "Text",
+            "Optional text inside shape",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -109,11 +134,15 @@ impl NodeLogic for PptxAddShapeNode {
             "<a:ln><a:noFill/></a:ln>".to_string()
         } else {
             let lc = hex_to_ooxml(&line_color);
-            format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{}"/></a:solidFill></a:ln>"#, lc)
+            format!(
+                r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{}"/></a:solidFill></a:ln>"#,
+                lc
+            )
         };
 
         let text_body = if text.is_empty() {
-            "<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody>".to_string()
+            "<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody>"
+                .to_string()
         } else {
             let escaped = xml_escape(&text);
             format!(

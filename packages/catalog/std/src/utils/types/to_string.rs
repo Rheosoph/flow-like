@@ -49,8 +49,7 @@ impl NodeLogic for ToStringNode {
         let pretty = context.evaluate_pin::<bool>("pretty").await?;
 
         let value: String = {
-            let guard = string.as_ref().lock().await;
-            let v: &flow_like_types::Value = &guard;
+            let v: &flow_like_types::Value = &string;
 
             let s: String = match v {
                 Value::String(inner) => inner.clone(),

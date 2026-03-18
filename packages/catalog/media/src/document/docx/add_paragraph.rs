@@ -10,7 +10,9 @@ use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use crate::document::openxml::{read_zip, write_zip};
 #[cfg(feature = "execute")]
-use crate::document::styles::{defaults, hex_to_ooxml, pt_to_half_points, ParagraphStyle, TextAlignment};
+use crate::document::styles::{
+    ParagraphStyle, TextAlignment, defaults, hex_to_ooxml, pt_to_half_points,
+};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -44,27 +46,67 @@ impl NodeLogic for DocxAddParagraphNode {
         );
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
-        node.add_input_pin("template", "Template", "DOCX file to append to", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("text", "Text", "Paragraph text (supports markdown bold/italic)", VariableType::String);
-        node.add_input_pin("style", "Style", "Paragraph style: Normal, Heading1-6, Title, Subtitle, Quote", VariableType::String)
-            .set_default_value(Some(json!("Normal")));
-        node.add_input_pin("font_family", "Font Family", "Override font", VariableType::String)
-            .set_default_value(Some(json!("")));
-        node.add_input_pin("font_size", "Font Size", "Override size in points (0 = use style default)", VariableType::Float)
-            .set_default_value(Some(json!(0.0)));
-        node.add_input_pin("font_color", "Font Color", "Override text color (hex)", VariableType::String)
-            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "template",
+            "Template",
+            "DOCX file to append to",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "text",
+            "Text",
+            "Paragraph text (supports markdown bold/italic)",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "style",
+            "Style",
+            "Paragraph style: Normal, Heading1-6, Title, Subtitle, Quote",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("Normal")));
+        node.add_input_pin(
+            "font_family",
+            "Font Family",
+            "Override font",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "font_size",
+            "Font Size",
+            "Override size in points (0 = use style default)",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(0.0)));
+        node.add_input_pin(
+            "font_color",
+            "Font Color",
+            "Override text color (hex)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin("bold", "Bold", "Force bold", VariableType::Boolean)
             .set_default_value(Some(json!(false)));
         node.add_input_pin("italic", "Italic", "Force italic", VariableType::Boolean)
             .set_default_value(Some(json!(false)));
-        node.add_input_pin("alignment", "Alignment", "Text alignment: Left, Center, Right, Justify", VariableType::String)
-            .set_default_value(Some(json!("Left")));
-        node.add_input_pin("output", "Output Path", "Where to save", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "alignment",
+            "Alignment",
+            "Text alignment: Left, Center, Right, Justify",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("Left")));
+        node.add_input_pin(
+            "output",
+            "Output Path",
+            "Where to save",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin("exec_out", "Done", "Continues", VariableType::Execution);
         node.add_output_pin("result", "Result", "Output file path", VariableType::Struct)
@@ -115,9 +157,21 @@ impl NodeLogic for DocxAddParagraphNode {
             &text,
             &style,
             &alignment,
-            if font_family.is_empty() { None } else { Some(&font_family) },
-            if font_size > 0.0 { Some(font_size as f32) } else { None },
-            if font_color.is_empty() { None } else { Some(&font_color) },
+            if font_family.is_empty() {
+                None
+            } else {
+                Some(&font_family)
+            },
+            if font_size > 0.0 {
+                Some(font_size as f32)
+            } else {
+                None
+            },
+            if font_color.is_empty() {
+                None
+            } else {
+                Some(&font_color)
+            },
             bold,
             italic,
         );
@@ -166,10 +220,7 @@ fn build_paragraph(
     if style_id != "Normal" {
         p_pr.push_str(&format!(r#"<w:pStyle w:val="{}"/>"#, style_id));
     }
-    p_pr.push_str(&format!(
-        r#"<w:jc w:val="{}"/>"#,
-        alignment.to_ooxml_docx()
-    ));
+    p_pr.push_str(&format!(r#"<w:jc w:val="{}"/>"#, alignment.to_ooxml_docx()));
     p_pr.push_str("</w:pPr>");
 
     let mut r_pr = String::new();

@@ -764,7 +764,9 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_flow_like_dexie_blob_offload::init(Some(blob_dir)))
+        .plugin(tauri_plugin_flow_like_dexie_blob_offload::init(Some(
+            blob_dir,
+        )))
         .invoke_handler(tauri::generate_handler![
             update,
             functions::file::get_path_meta,

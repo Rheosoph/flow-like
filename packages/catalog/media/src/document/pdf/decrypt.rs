@@ -42,10 +42,20 @@ impl NodeLogic for PdfDecryptNode {
         );
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
-        node.add_input_pin("template", "Template", "Encrypted PDF file", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("password", "Password", "Owner or user password", VariableType::String);
+        node.add_input_pin(
+            "template",
+            "Template",
+            "Encrypted PDF file",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "password",
+            "Password",
+            "Owner or user password",
+            VariableType::String,
+        );
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());

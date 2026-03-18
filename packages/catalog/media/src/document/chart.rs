@@ -197,12 +197,7 @@ fn parse_config(block: &str) -> ChartConfig {
                     config.colors = Some(
                         inner
                             .split(',')
-                            .map(|v| {
-                                v.trim()
-                                    .trim_matches('"')
-                                    .trim_matches('\'')
-                                    .to_string()
-                            })
+                            .map(|v| v.trim().trim_matches('"').trim_matches('\'').to_string())
                             .collect(),
                     );
                 } else {
@@ -224,10 +219,10 @@ fn auto_detect_chart_type(data: &CsvData) -> ChartType {
     let num_rows = data.rows.len();
 
     if num_cols == 2 {
-        let second_col_numeric = data
-            .rows
-            .iter()
-            .all(|row| row.get(1).is_some_and(|v| matches!(v, CellValue::Number(_))));
+        let second_col_numeric = data.rows.iter().all(|row| {
+            row.get(1)
+                .is_some_and(|v| matches!(v, CellValue::Number(_)))
+        });
         if second_col_numeric && num_rows <= 6 {
             return ChartType::Pie;
         }
@@ -235,7 +230,10 @@ fn auto_detect_chart_type(data: &CsvData) -> ChartType {
 
     if num_cols >= 3 {
         let has_time_like = data.rows.iter().any(|row| {
-            let val = row.first().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            let val = row
+                .first()
+                .map(|v| v.to_string().to_lowercase())
+                .unwrap_or_default();
             val.contains("jan")
                 || val.contains("feb")
                 || val.contains("mar")
@@ -331,7 +329,11 @@ pub fn chart_input_to_office_data(input: &ChartInput) -> Option<OfficeChartData>
             title: input.config.title.clone(),
             categories,
             series: vec![ChartSeries {
-                name: csv.headers.get(1).cloned().unwrap_or_else(|| "Value".into()),
+                name: csv
+                    .headers
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| "Value".into()),
                 values,
             }],
             colors,

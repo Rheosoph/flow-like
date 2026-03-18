@@ -45,20 +45,35 @@ impl NodeLogic for PptxAddTableToSlideNode {
         node.add_input_pin("template", "Template", "PPTX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("slide_number", "Slide Number", "1-based slide index", VariableType::Integer)
-            .set_default_value(Some(json!(1)));
+        node.add_input_pin(
+            "slide_number",
+            "Slide Number",
+            "1-based slide index",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(1)));
         node.add_input_pin("headers", "Headers", "Column headers", VariableType::String)
             .set_value_type(flow_like::flow::pin::ValueType::Array);
-        node.add_input_pin("rows", "Rows", "Table data as JSON array of arrays", VariableType::String)
-            .set_value_type(flow_like::flow::pin::ValueType::Array);
+        node.add_input_pin(
+            "rows",
+            "Rows",
+            "Table data as JSON array of arrays",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
         node.add_input_pin("x", "X", "X position in cm", VariableType::Float)
             .set_default_value(Some(json!(2.0)));
         node.add_input_pin("y", "Y", "Y position in cm", VariableType::Float)
             .set_default_value(Some(json!(2.0)));
         node.add_input_pin("width", "Width", "Table width in cm", VariableType::Float)
             .set_default_value(Some(json!(28.0)));
-        node.add_input_pin("row_height", "Row Height", "Row height in cm", VariableType::Float)
-            .set_default_value(Some(json!(1.0)));
+        node.add_input_pin(
+            "row_height",
+            "Row Height",
+            "Row height in cm",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(1.0)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());

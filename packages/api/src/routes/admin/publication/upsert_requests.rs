@@ -189,7 +189,17 @@ pub async fn upsert_request(
         }
     }
 
-    audit!(state, user, "admin.publication.review", "publication_request", request_id, format!("Publication request {}: app {}", body.action, request.app_id));
+    audit!(
+        state,
+        user,
+        "admin.publication.review",
+        "publication_request",
+        request_id,
+        format!(
+            "Publication request {}: app {}",
+            body.action, request.app_id
+        )
+    );
     Ok(Json(ReviewPublicationResponse {
         id: updated.id,
         status: format!("{:?}", updated.status).to_uppercase(),

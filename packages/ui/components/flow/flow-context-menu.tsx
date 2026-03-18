@@ -15,6 +15,7 @@ import {
 } from "../../components/ui/context-menu";
 import { type IBoard, doPinsMatch } from "../../lib";
 import type { INode } from "../../lib/schema/flow/node";
+import { ILayerType } from "../../lib/schema/flow/board";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { IVariable } from "../../lib/schema/flow/variable";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -39,6 +40,7 @@ export function FlowContextMenu({
 	refs,
 	children,
 	droppedPin,
+	currentLayerId,
 	onPlaceholder,
 	onNodePlace,
 	onCommentPlace,
@@ -50,6 +52,7 @@ export function FlowContextMenu({
 	refs: { [key: string]: string };
 	children: React.ReactNode;
 	droppedPin?: IPin;
+	currentLayerId?: string;
 	onPlaceholder: (name: string) => void;
 	onNodePlace: (node: INode) => void;
 	onCommentPlace: () => void;
@@ -130,6 +133,18 @@ export function FlowContextMenu({
 		setPlaceholderName("Placeholder");
 	};
 
+	const allVariables = useMemo(() => {
+		if (!board) return [];
+		const vars = Object.values(board.variables);
+		if (currentLayerId) {
+			const layer = board.layers[currentLayerId];
+			if (layer?.type === ILayerType.Function) {
+				vars.push(...Object.values(layer.variables));
+			}
+		}
+		return vars;
+	}, [board, currentLayerId]);
+
 	const handleNodePlace = useCallback(
 		async (node: INode) => {
 			await onNodePlace(node);
@@ -143,6 +158,7 @@ export function FlowContextMenu({
 		let callRefNode: INode | undefined = undefined;
 		let variableGetNode: INode | undefined = undefined;
 		let variableSetNode: INode | undefined = undefined;
+		let callFunctionNode: INode | undefined = undefined;
 
 		const normalNodes =
 			nodes
@@ -161,6 +177,10 @@ export function FlowContextMenu({
 
 					if (a.name === "variable_set") {
 						variableSetNode = a;
+					}
+
+					if (a.name === "control_call_function") {
+						callFunctionNode = a;
 					}
 
 					if (a.friendly_name === b.friendly_name) {
@@ -195,7 +215,7 @@ export function FlowContextMenu({
 		}
 
 		if (board && variableGetNode && variableSetNode) {
-			Object.values(board.variables).forEach((variable) => {
+			allVariables.forEach((variable) => {
 				const getPins = Object.values(variableGetNode?.pins ?? {}).map(
 					(pin) => {
 						if (pin.name === "var_ref") {
@@ -271,8 +291,34 @@ export function FlowContextMenu({
 			});
 		}
 
-		return normalNodes;
-	}, [nodes, board]);
+		if (board && callFunctionNode) {
+			Object.values(board.layers).forEach((layer) => {
+				if (layer.type !== ILayerType.Function) return;
+				const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
+					pin.name === "function_layer_id"
+						? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
+						: pin,
+				);
+				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+
+				normalNodes.push({
+					...(callFunctionNode as INode),
+					id: `fn-call-${layer.id}`,
+					pin_in_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Input")
+						.map((pin) => pin.friendly_name),
+					pin_out_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Output")
+						.map((pin) => pin.friendly_name),
+					friendly_name: `Call ${layer.name}`,
+					category: "Functions/Call",
+					pins: newPins,
+				});
+			});
+		}
+
+			return normalNodes;
+	}, [nodes, board, allVariables]);
 	const { search, searchResults, addAllAsync, removeAll } =
 		useMiniSearch<INode>([], {
 			fields: [
@@ -310,6 +356,7 @@ export function FlowContextMenu({
 			let callRefNode: INode | undefined = undefined;
 			let variableGetNode: INode | undefined = undefined;
 			let variableSetNode: INode | undefined = undefined;
+			let callFunctionNode: INode | undefined = undefined;
 
 			nodes.forEach((node) => {
 				if (node.name === "control_call_reference") {
@@ -320,6 +367,9 @@ export function FlowContextMenu({
 				}
 				if (node.name === "variable_set") {
 					variableSetNode = node;
+				}
+				if (node.name === "control_call_function") {
+					callFunctionNode = node;
 				}
 				dedupedNodes.set(node.name, {
 					...node,
@@ -359,7 +409,7 @@ export function FlowContextMenu({
 			}
 
 			if (board && variableGetNode && variableSetNode) {
-				Object.values(board.variables).forEach((variable) => {
+				allVariables.forEach((variable) => {
 					const getPins = Object.values(variableGetNode?.pins ?? {}).map(
 						(pin) => {
 							if (pin.name === "var_ref") {
@@ -433,9 +483,35 @@ export function FlowContextMenu({
 				});
 			}
 
+			if (board && callFunctionNode) {
+				Object.values(board.layers).forEach((layer) => {
+					if (layer.type !== ILayerType.Function) return;
+					const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
+						pin.name === "function_layer_id"
+							? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
+							: pin,
+					);
+					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+
+					dedupedNodes.set(`fn-call-${layer.id}`, {
+						...(callFunctionNode as INode),
+						id: `fn-call-${layer.id}`,
+						pin_in_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Input")
+							.map((pin) => pin.friendly_name),
+						pin_out_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Output")
+							.map((pin) => pin.friendly_name),
+						friendly_name: `Call ${layer.name}`,
+						category: "Functions/Call",
+						pins: newPins,
+					});
+				});
+			}
+
 			await addAllAsync(Array.from(dedupedNodes.values()));
 		})();
-	}, [sortedNodes, board]);
+	}, [sortedNodes, board, allVariables]);
 
 	return (
 		<>

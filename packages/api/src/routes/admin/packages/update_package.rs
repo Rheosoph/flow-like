@@ -54,6 +54,13 @@ pub async fn update_package(
             .await?;
     }
 
-    audit!(state, user, "admin.package.update", "WasmPackage", package_id, "Package status updated");
+    audit!(
+        state,
+        user,
+        "admin.package.update",
+        "WasmPackage",
+        package_id,
+        "Package status updated"
+    );
     Ok(Json(()))
 }

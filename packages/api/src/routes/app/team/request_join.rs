@@ -86,7 +86,15 @@ pub async fn request_join(
 
         membership.insert(&txn).await?;
         txn.commit().await?;
-        audit_branch!(state, user, app_id, "membership.join", "membership", sub, "Auto-joined public app");
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "membership.join",
+            "membership",
+            sub,
+            "Auto-joined public app"
+        );
         return Ok(Json(()));
     }
 
@@ -120,7 +128,15 @@ pub async fn request_join(
         existing_request.updated_at = Set(chrono::Utc::now().naive_utc());
         existing_request.update(&txn).await?;
         txn.commit().await?;
-        audit_branch!(state, user, app_id, "membership.request", "join_queue", sub, "Join request updated");
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "membership.request",
+            "join_queue",
+            sub,
+            "Join request updated"
+        );
         return Ok(Json(()));
     }
 
@@ -135,6 +151,14 @@ pub async fn request_join(
 
     new_request.insert(&txn).await?;
     txn.commit().await?;
-    audit_branch!(state, user, app_id, "membership.request", "join_queue", sub, "Join request submitted");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.request",
+        "join_queue",
+        sub,
+        "Join request submitted"
+    );
     Ok(Json(()))
 }

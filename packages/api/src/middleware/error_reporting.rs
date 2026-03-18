@@ -209,10 +209,7 @@ fn forward_to_sentry(
     let mut extra: BTreeMap<String, Value> = BTreeMap::new();
     extra.insert("error_id".into(), Value::String(error_id.to_string()));
     extra.insert("status_code".into(), Value::Number(status_code.into()));
-    extra.insert(
-        "public_code".into(),
-        Value::String(public_code.to_string()),
-    );
+    extra.insert("public_code".into(), Value::String(public_code.to_string()));
     if !details.is_empty() {
         extra.insert("details".into(), Value::String(details.to_string()));
     }

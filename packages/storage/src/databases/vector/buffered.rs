@@ -90,8 +90,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                             break;
                         }
                     }
-                    total_skipped +=
-                        Self::upsert_smart(&mut self.inner, merged, current_id).await;
+                    total_skipped += Self::upsert_smart(&mut self.inner, merged, current_id).await;
                 }
             }
         }
@@ -118,10 +117,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
     /// Uses the existing table schema if available, otherwise derives the
     /// reference key-set from the first element. Items whose JSON keys match
     /// the reference go into `compatible`; the rest into `outliers`.
-    async fn partition_by_schema(
-        inner: &T,
-        items: Vec<Value>,
-    ) -> (Vec<Value>, Vec<Value>) {
+    async fn partition_by_schema(inner: &T, items: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
         if items.is_empty() {
             return (items, Vec::new());
         }
@@ -186,7 +182,8 @@ impl<T: VectorStore> BufferedVectorStore<T> {
 
         if !compatible.is_empty() {
             if let Err(_) = inner.upsert(compatible.clone(), id_field.clone()).await {
-                skipped += Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await;
+                skipped +=
+                    Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await;
             }
         }
 
@@ -246,7 +243,8 @@ impl<T: VectorStore> BufferedVectorStore<T> {
             }
             let mid = items.len() / 2;
             let (left, right) = items.split_at(mid);
-            let skipped = Self::upsert_divide_and_conquer(inner, left.to_vec(), id_field.clone()).await;
+            let skipped =
+                Self::upsert_divide_and_conquer(inner, left.to_vec(), id_field.clone()).await;
             skipped + Self::upsert_divide_and_conquer(inner, right.to_vec(), id_field).await
         })
     }

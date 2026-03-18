@@ -86,6 +86,7 @@ function FlowPinInnerComponent({
 	skipOffset,
 	onPinRemove,
 	version,
+	currentLayerId,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -94,6 +95,7 @@ function FlowPinInnerComponent({
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
+	currentLayerId?: string;
 }>) {
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
@@ -300,6 +302,7 @@ function FlowPinInnerComponent({
 						saveDefaultValue={async (value) => {
 							await updateNode(value);
 						}}
+						currentLayerId={currentLayerId}
 					/>
 					{pin.dynamic && onPinRemove && (
 						<button
@@ -374,6 +377,7 @@ function FlowPin({
 	onPinRemove,
 	skipOffset,
 	version,
+	currentLayerId,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -382,6 +386,7 @@ function FlowPin({
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
+	currentLayerId?: string;
 }>) {
 	if (pin.dynamic) {
 		return (
@@ -394,6 +399,7 @@ function FlowPin({
 				skipOffset={skipOffset}
 				onPinRemove={onPinRemove}
 				version={version}
+				currentLayerId={currentLayerId}
 			/>
 		);
 	}
@@ -407,6 +413,7 @@ function FlowPin({
 			node={node}
 			skipOffset={skipOffset}
 			version={version}
+			currentLayerId={currentLayerId}
 		/>
 	);
 }

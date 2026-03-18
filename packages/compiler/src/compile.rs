@@ -53,6 +53,12 @@ pub async fn compile(
         },
     };
 
+    info!(
+        has_nodes = compilation_result.nodes.is_some(),
+        platforms = compilation_result.compiled_platforms.len(),
+        "Sending compilation callback"
+    );
+
     send_callback(
         &claims.callback_url,
         &job.compiler_jwt,
@@ -129,7 +135,16 @@ async fn compile_inner(
     let nodes = match extract_nodes(&wasm_bytes).await {
         Ok(defs) => {
             info!(count = defs.len(), "Extracted node definitions from WASM");
-            serde_json::to_value(&defs).ok()
+            match serde_json::to_value(&defs) {
+                Ok(v) => {
+                    info!("Node definitions serialized successfully");
+                    Some(v)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to serialize node definitions");
+                    None
+                }
+            }
         }
         Err(e) => {
             warn!(error = %e, "Failed to extract node definitions (non-fatal)");
@@ -207,10 +222,11 @@ async fn compile_inner(
     Ok((compiled_platforms, nodes))
 }
 
-/// Instantiate the WASM module with the host engine to extract node definitions.
+/// Instantiate the WASM module with the host engine to extract node definitions,
+/// returning them as `PackageNodeEntry` values ready for storage.
 async fn extract_nodes(
     wasm_bytes: &[u8],
-) -> Result<Vec<flow_like_wasm::abi::WasmNodeDefinition>, CompilerError> {
+) -> Result<Vec<flow_like_wasm::manifest::PackageNodeEntry>, CompilerError> {
     let engine = WasmEngine::new(WasmConfig::default().without_cache()).map_err(|e| {
         CompilerError::Compilation(format!("Host engine creation failed: {e}"))
     })?;
@@ -224,7 +240,10 @@ async fn extract_nodes(
     let defs = instance.call_get_nodes().await.map_err(|e| {
         CompilerError::Compilation(format!("Failed to call get_nodes: {e}"))
     })?;
-    Ok(defs)
+    Ok(defs
+        .iter()
+        .map(flow_like_wasm::definition_to_package_entry)
+        .collect())
 }
 
 async fn send_callback(

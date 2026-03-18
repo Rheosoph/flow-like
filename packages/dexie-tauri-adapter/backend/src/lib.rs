@@ -20,6 +20,8 @@ pub fn init<R: Runtime>(blob_dir: Option<PathBuf>) -> TauriPlugin<R> {
             commands::blob_get_batch,
             commands::blob_delete,
             commands::blob_configure,
+            commands::blob_inc_refs,
+            commands::blob_dec_refs,
         ])
         .setup(move |app, _api| {
             let dir = blob_dir.unwrap_or_else(|| {
@@ -28,7 +30,9 @@ pub fn init<R: Runtime>(blob_dir: Option<PathBuf>) -> TauriPlugin<R> {
                     .unwrap_or_else(|_| PathBuf::from("."))
                     .join("blob_store")
             });
-            app.manage(BlobStore::new(dir));
+            let store = BlobStore::new(dir.clone());
+            store.load_ref_counts_sync(&dir);
+            app.manage(store);
             Ok(())
         })
         .on_event(|_app, event| {

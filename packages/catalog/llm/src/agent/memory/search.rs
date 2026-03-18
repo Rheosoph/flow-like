@@ -118,7 +118,12 @@ impl NodeLogic for SearchMemoryNode {
             RecallStrategy::RecentFirst => {
                 db.filter(
                     filter_opt.unwrap_or("1=1"),
-                    Some(vec!["id".to_string(), "content".to_string(), "role".to_string(), "timestamp".to_string()]),
+                    Some(vec![
+                        "id".to_string(),
+                        "content".to_string(),
+                        "role".to_string(),
+                        "timestamp".to_string(),
+                    ]),
                     top_k,
                     0,
                 )
@@ -126,8 +131,7 @@ impl NodeLogic for SearchMemoryNode {
             }
             RecallStrategy::Relevance => {
                 let vector = embed_query(context, &config, &query).await?;
-                db.vector_search(vector, filter_opt, None, top_k, 0)
-                    .await?
+                db.vector_search(vector, filter_opt, None, top_k, 0).await?
             }
             RecallStrategy::Hybrid => {
                 let vector = embed_query(context, &config, &query).await?;

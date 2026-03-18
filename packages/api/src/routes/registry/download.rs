@@ -83,9 +83,7 @@ pub async fn download(
         .all(&state.db)
         .await
         .ok()
-        .and_then(|metas| {
-            MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model)
-        });
+        .and_then(|metas| MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model));
 
     if let Some(meta) = &mut metadata {
         if let Ok(master_creds) = state.master_credentials().await {

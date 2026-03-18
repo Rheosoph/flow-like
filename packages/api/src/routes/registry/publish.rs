@@ -122,7 +122,10 @@ pub async fn publish(
         "registry.publish",
         "WasmPackage",
         request.manifest.id,
-        format!("Package {} v{} published", request.manifest.name, request.manifest.version)
+        format!(
+            "Package {} v{} published",
+            request.manifest.name, request.manifest.version
+        )
     );
 
     Ok(Json(response))

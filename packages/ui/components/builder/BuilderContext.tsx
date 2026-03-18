@@ -62,6 +62,8 @@ export interface ActionContext {
 	boardVersion?: [number, number, number];
 	pages?: PageInfo[];
 	workflowEvents?: WorkflowEventInfo[];
+	/** Widget-level actions that can be triggered by components inside the widget */
+	widgetActions?: { id: string; label: string; description?: string }[];
 	/** Page behavior hooks for preview mode */
 	pageId?: string;
 	onLoadEventId?: string;

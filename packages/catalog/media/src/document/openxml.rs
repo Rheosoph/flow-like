@@ -110,8 +110,13 @@ pub enum BlockType {
     TableHeader,
     TableCell,
     TableRowEnd,
-    Image { url: String, alt: String },
-    CodeBlock { language: Option<String> },
+    Image {
+        url: String,
+        alt: String,
+    },
+    CodeBlock {
+        language: Option<String>,
+    },
 }
 
 /// A single run of formatted text for OpenXML insertion.
@@ -203,7 +208,9 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                 Tag::TableCell => {
                     in_table_cell = true;
                 }
-                Tag::Image { dest_url, title, .. } => {
+                Tag::Image {
+                    dest_url, title, ..
+                } => {
                     let url = dest_url.to_string();
                     let alt = title.to_string();
                     runs.push(FormattedRun {
@@ -271,7 +278,9 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                 } else if in_table_cell {
                     BlockType::TableCell
                 } else if code {
-                    BlockType::CodeBlock { language: code_language.clone() }
+                    BlockType::CodeBlock {
+                        language: code_language.clone(),
+                    }
                 } else {
                     BlockType::Normal
                 };
@@ -384,7 +393,7 @@ fn build_formatted_run_xml(
                 }
                 if let Some(base) = base_rpr {
                     // base_rpr may contain child elements, so use full open/close
-                    xml.push_str(&format!("<{}{}>{}"  , run_props_element, attrs, base));
+                    xml.push_str(&format!("<{}{}>{}", run_props_element, attrs, base));
                     xml.push_str(&format!("</{}>", run_props_element));
                 } else if attrs.is_empty() {
                     xml.push_str(&format!("<{}/>", run_props_element));

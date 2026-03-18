@@ -1,5 +1,5 @@
-use flow_like::app::App;
 use flow_like::a2ui::widget::{CustomizationType, ExposedPropType, Widget};
+use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -33,9 +33,9 @@ fn exposed_prop_type_to_variable_type(prop_type: &ExposedPropType) -> VariableTy
         ExposedPropType::Number => VariableType::Float,
         ExposedPropType::Boolean => VariableType::Boolean,
         ExposedPropType::Enum { .. } => VariableType::String,
-        ExposedPropType::Json
-        | ExposedPropType::StyleObject
-        | ExposedPropType::BoundValue => VariableType::Generic,
+        ExposedPropType::Json | ExposedPropType::StyleObject | ExposedPropType::BoundValue => {
+            VariableType::Generic
+        }
     }
 }
 
@@ -142,8 +142,13 @@ fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
         }
 
         let label = label_from_path(path);
-        let data_entry = widget.data_model.iter().find(|e| &e.key == path || format!("/{}", e.key) == *path);
-        let var_type = data_entry.map(|e| infer_variable_type(&e.value)).unwrap_or(VariableType::String);
+        let data_entry = widget
+            .data_model
+            .iter()
+            .find(|e| &e.key == path || format!("/{}", e.key) == *path);
+        let var_type = data_entry
+            .map(|e| infer_variable_type(&e.value))
+            .unwrap_or(VariableType::String);
 
         let pin = node.add_input_pin(&pin_name, &label, &format!("Bound: {path}"), var_type);
         if let Some(entry) = data_entry {
@@ -167,11 +172,7 @@ fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
             var_type,
         );
         if let ExposedPropType::Enum { choices } = &prop.prop_type {
-            pin.set_options(
-                PinOptions::new()
-                    .set_valid_values(choices.clone())
-                    .build(),
-            );
+            pin.set_options(PinOptions::new().set_valid_values(choices.clone()).build());
         }
         if let Some(default) = &prop.default_value {
             pin.default_value = Some(default.clone());
@@ -309,11 +310,7 @@ impl NodeLogic for InstantiateWidget {
         let widget_names: Vec<String> = widgets.iter().map(|w| w.name.clone()).collect();
 
         if let Some(selector_pin) = node.get_pin_mut_by_name("widget_selector") {
-            selector_pin.set_options(
-                PinOptions::new()
-                    .set_valid_values(widget_names)
-                    .build(),
-            );
+            selector_pin.set_options(PinOptions::new().set_valid_values(widget_names).build());
         }
 
         let selected = node
@@ -366,7 +363,7 @@ impl NodeLogic for InstantiateWidget {
                     .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok())
                     .unwrap_or_default();
 
-                // Skip events that haven't been configured yet
+                // Empty action_id = catch-all handler, skip validation
                 if action_id.is_empty() {
                     continue;
                 }
@@ -452,6 +449,7 @@ impl NodeLogic for InstantiateWidget {
         // Collect action bindings from referenced event functions
         let mut action_bindings = flow_like_types::json::Map::new();
         if let Ok(referenced_fns) = context.get_referenced_functions().await {
+            let mut catch_all_nodes = Vec::new();
             for referenced_node in &referenced_fns {
                 let node_guard = referenced_node.node.lock().await;
                 let node_id = node_guard.id.clone();
@@ -463,6 +461,16 @@ impl NodeLogic for InstantiateWidget {
                 drop(node_guard);
                 if !action_id.is_empty() {
                     action_bindings.insert(action_id, json!(node_id));
+                } else {
+                    catch_all_nodes.push(node_id);
+                }
+            }
+            // Catch-all: nodes without action_id bind to all unbound widget actions
+            for node_id in catch_all_nodes {
+                for action in &widget.actions {
+                    if !action_bindings.contains_key(&action.id) {
+                        action_bindings.insert(action.id.clone(), json!(&node_id));
+                    }
                 }
             }
         }
@@ -510,11 +518,16 @@ impl NodeLogic for InstantiateWidget {
         for prop in &widget.exposed_props {
             if let Some(val) = exposed_prop_values.get(&prop.id) {
                 let target_id = strip_widget_prefix(&prop.target_component_id);
-                if let Some(comp) = inline_components.iter_mut().find(|c| {
-                    c.get("id").and_then(|id| id.as_str()) == Some(target_id.as_str())
-                }) {
+                if let Some(comp) = inline_components
+                    .iter_mut()
+                    .find(|c| c.get("id").and_then(|id| id.as_str()) == Some(target_id.as_str()))
+                {
                     if let Some(comp_data) = comp.get_mut("component") {
-                        set_nested_property(comp_data, &prop.property_path, value_to_bound_value(val));
+                        set_nested_property(
+                            comp_data,
+                            &prop.property_path,
+                            value_to_bound_value(val),
+                        );
                     }
                 }
             }

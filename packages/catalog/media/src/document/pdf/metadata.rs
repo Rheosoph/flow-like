@@ -116,7 +116,10 @@ impl NodeLogic for PdfSetMetadataNode {
 #[cfg(feature = "execute")]
 fn set_if_not_empty(dict: &mut lopdf::Dictionary, key: &[u8], value: &str) {
     if !value.is_empty() {
-        dict.set(key, Object::String(value.as_bytes().to_vec(), lopdf::StringFormat::Literal));
+        dict.set(
+            key,
+            Object::String(value.as_bytes().to_vec(), lopdf::StringFormat::Literal),
+        );
     }
 }
 
@@ -163,7 +166,12 @@ impl NodeLogic for PdfGetMetadataNode {
         node.add_output_pin("author", "Author", "Author", VariableType::String);
         node.add_output_pin("subject", "Subject", "Subject", VariableType::String);
         node.add_output_pin("keywords", "Keywords", "Keywords", VariableType::String);
-        node.add_output_pin("page_count", "Page Count", "Number of pages", VariableType::Integer);
+        node.add_output_pin(
+            "page_count",
+            "Page Count",
+            "Number of pages",
+            VariableType::Integer,
+        );
 
         node
     }
@@ -196,7 +204,9 @@ impl NodeLogic for PdfGetMetadataNode {
         context.set_pin_value("author", json!(author)).await?;
         context.set_pin_value("subject", json!(subject)).await?;
         context.set_pin_value("keywords", json!(keywords)).await?;
-        context.set_pin_value("page_count", json!(page_count)).await?;
+        context
+            .set_pin_value("page_count", json!(page_count))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

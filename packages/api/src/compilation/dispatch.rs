@@ -59,11 +59,15 @@ impl CompilationBackend {
         // never desired (limited memory/time).
         if std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok() {
             if std::env::var("SQS_COMPILATION_QUEUE_URL").is_ok() {
-                tracing::info!("Lambda detected with SQS_COMPILATION_QUEUE_URL — using Sqs compilation backend");
+                tracing::info!(
+                    "Lambda detected with SQS_COMPILATION_QUEUE_URL — using Sqs compilation backend"
+                );
                 return Self::Sqs;
             }
             if std::env::var("LAMBDA_COMPILER_FUNCTION").is_ok() {
-                tracing::info!("Lambda detected with LAMBDA_COMPILER_FUNCTION — using LambdaInvoke compilation backend");
+                tracing::info!(
+                    "Lambda detected with LAMBDA_COMPILER_FUNCTION — using LambdaInvoke compilation backend"
+                );
                 return Self::LambdaInvoke;
             }
             tracing::warn!(

@@ -10,16 +10,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use flow_like_catalog_media::document::openxml::{
-    read_zip, write_zip, replace_text_in_xml, replace_text_in_xml_markdown, markdown_to_runs,
-    FormattedRun, OpenXmlFormat, BlockType,
-};
 use flow_like_catalog_media::document::chart::{
-    parse_chart_block, chart_input_to_office_data, ChartType, OfficeChartData,
+    ChartType, OfficeChartData, chart_input_to_office_data, parse_chart_block,
+};
+use flow_like_catalog_media::document::openxml::{
+    BlockType, FormattedRun, OpenXmlFormat, markdown_to_runs, read_zip, replace_text_in_xml,
+    replace_text_in_xml_markdown, write_zip,
 };
 use flow_like_catalog_media::document::styles::{
-    self, cm_to_emu, cm_to_twips, defaults, hex_to_ooxml, pt_to_half_points, pt_to_hundredths,
-    ParagraphStyle, TextAlignment,
+    self, ParagraphStyle, TextAlignment, cm_to_emu, cm_to_twips, defaults, hex_to_ooxml,
+    pt_to_half_points, pt_to_hundredths,
 };
 
 fn output_dir() -> PathBuf {
@@ -126,9 +126,15 @@ fn create_empty_docx(font: &str, font_size_pt: f32, theme_color: &str) -> Vec<u8
 </cp:coreProperties>"#;
 
     let mut files = HashMap::new();
-    files.insert("[Content_Types].xml".to_string(), content_types.as_bytes().to_vec());
+    files.insert(
+        "[Content_Types].xml".to_string(),
+        content_types.as_bytes().to_vec(),
+    );
     files.insert("_rels/.rels".to_string(), rels.as_bytes().to_vec());
-    files.insert("word/_rels/document.xml.rels".to_string(), word_rels.as_bytes().to_vec());
+    files.insert(
+        "word/_rels/document.xml.rels".to_string(),
+        word_rels.as_bytes().to_vec(),
+    );
     files.insert("word/document.xml".to_string(), document.into_bytes());
     files.insert("word/styles.xml".to_string(), styles_xml.into_bytes());
     files.insert("docProps/core.xml".to_string(), core.as_bytes().to_vec());
@@ -158,17 +164,27 @@ fn build_paragraph(
 
     let mut r_pr = String::from("<w:rPr>");
     let font = font_family.unwrap_or(defaults::FONT_SANS);
-    r_pr.push_str(&format!(r#"<w:rFonts w:ascii="{f}" w:hAnsi="{f}"/>"#, f = xml_escape(font)));
+    r_pr.push_str(&format!(
+        r#"<w:rFonts w:ascii="{f}" w:hAnsi="{f}"/>"#,
+        f = xml_escape(font)
+    ));
 
     let size = font_size_pt.unwrap_or_else(|| style.font_size_pt());
     let half_pts = pt_to_half_points(size);
-    r_pr.push_str(&format!(r#"<w:sz w:val="{}"/><w:szCs w:val="{}"/>"#, half_pts, half_pts));
+    r_pr.push_str(&format!(
+        r#"<w:sz w:val="{}"/><w:szCs w:val="{}"/>"#,
+        half_pts, half_pts
+    ));
 
     let color = font_color.unwrap_or(defaults::TEXT);
     r_pr.push_str(&format!(r#"<w:color w:val="{}"/>"#, hex_to_ooxml(color)));
 
-    if bold { r_pr.push_str("<w:b/>"); }
-    if italic { r_pr.push_str("<w:i/>"); }
+    if bold {
+        r_pr.push_str("<w:b/>");
+    }
+    if italic {
+        r_pr.push_str("<w:i/>");
+    }
     r_pr.push_str("</w:rPr>");
 
     format!(
@@ -223,7 +239,11 @@ fn build_table(
         } else {
             hex_to_ooxml(defaults::BACKGROUND)
         };
-        let text_color = if is_header { "FFFFFF".to_string() } else { hex_to_ooxml(defaults::TEXT) };
+        let text_color = if is_header {
+            "FFFFFF".to_string()
+        } else {
+            hex_to_ooxml(defaults::TEXT)
+        };
 
         xml.push_str("<w:tr>");
         for col_idx in 0..col_count {
@@ -234,11 +254,19 @@ fn build_table(
                 bg_color
             ));
             xml.push_str("<w:p><w:r><w:rPr>");
-            xml.push_str(&format!(r#"<w:sz w:val="{}"/><w:szCs w:val="{}"/>"#, half_pts, half_pts));
+            xml.push_str(&format!(
+                r#"<w:sz w:val="{}"/><w:szCs w:val="{}"/>"#,
+                half_pts, half_pts
+            ));
             xml.push_str(&format!(r#"<w:color w:val="{}"/>"#, text_color));
-            if is_header { xml.push_str("<w:b/>"); }
+            if is_header {
+                xml.push_str("<w:b/>");
+            }
             xml.push_str("</w:rPr>");
-            xml.push_str(&format!("<w:t xml:space=\"preserve\">{}</w:t>", xml_escape(cell_text)));
+            xml.push_str(&format!(
+                "<w:t xml:space=\"preserve\">{}</w:t>",
+                xml_escape(cell_text)
+            ));
             xml.push_str("</w:r></w:p>");
             xml.push_str("</w:tc>");
         }
@@ -269,17 +297,47 @@ fn insert_before_sect_pr(files: &mut HashMap<String, Vec<u8>>, xml_fragment: &st
 fn create_empty_pptx() -> Vec<u8> {
     let mut files = HashMap::new();
 
-    files.insert("[Content_Types].xml".to_string(), PPTX_CONTENT_TYPES.as_bytes().to_vec());
+    files.insert(
+        "[Content_Types].xml".to_string(),
+        PPTX_CONTENT_TYPES.as_bytes().to_vec(),
+    );
     files.insert("_rels/.rels".to_string(), PPTX_TOP_RELS.as_bytes().to_vec());
-    files.insert("ppt/presentation.xml".to_string(), PPTX_PRESENTATION.as_bytes().to_vec());
-    files.insert("ppt/_rels/presentation.xml.rels".to_string(), PPTX_PRESENTATION_RELS.as_bytes().to_vec());
-    files.insert("ppt/slideMasters/slideMaster1.xml".to_string(), PPTX_SLIDE_MASTER.as_bytes().to_vec());
-    files.insert("ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(), PPTX_SLIDE_MASTER_RELS.as_bytes().to_vec());
-    files.insert("ppt/slideLayouts/slideLayout1.xml".to_string(), PPTX_SLIDE_LAYOUT.as_bytes().to_vec());
-    files.insert("ppt/slideLayouts/_rels/slideLayout1.xml.rels".to_string(), PPTX_SLIDE_LAYOUT_RELS.as_bytes().to_vec());
-    files.insert("ppt/theme/theme1.xml".to_string(), PPTX_THEME.as_bytes().to_vec());
-    files.insert("docProps/app.xml".to_string(), PPTX_APP_XML.as_bytes().to_vec());
-    files.insert("docProps/core.xml".to_string(), PPTX_CORE_XML.as_bytes().to_vec());
+    files.insert(
+        "ppt/presentation.xml".to_string(),
+        PPTX_PRESENTATION.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/_rels/presentation.xml.rels".to_string(),
+        PPTX_PRESENTATION_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideMasters/slideMaster1.xml".to_string(),
+        PPTX_SLIDE_MASTER.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(),
+        PPTX_SLIDE_MASTER_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideLayouts/slideLayout1.xml".to_string(),
+        PPTX_SLIDE_LAYOUT.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels".to_string(),
+        PPTX_SLIDE_LAYOUT_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/theme/theme1.xml".to_string(),
+        PPTX_THEME.as_bytes().to_vec(),
+    );
+    files.insert(
+        "docProps/app.xml".to_string(),
+        PPTX_APP_XML.as_bytes().to_vec(),
+    );
+    files.insert(
+        "docProps/core.xml".to_string(),
+        PPTX_CORE_XML.as_bytes().to_vec(),
+    );
 
     write_zip(&files).expect("write_zip for PPTX")
 }
@@ -307,7 +365,10 @@ fn pptx_add_slide(files: &mut HashMap<String, Vec<u8>>) -> u32 {
 </Relationships>"#
     );
 
-    files.insert(format!("ppt/slides/slide{}.xml", slide_num), blank_slide.as_bytes().to_vec());
+    files.insert(
+        format!("ppt/slides/slide{}.xml", slide_num),
+        blank_slide.as_bytes().to_vec(),
+    );
     files.insert(
         format!("ppt/slides/_rels/slide{}.xml.rels", slide_num),
         slide_rels.into_bytes(),
@@ -366,7 +427,10 @@ fn pptx_update_presentation_xml(files: &mut HashMap<String, Vec<u8>>, slide_num:
             content.insert_str(pos, &sld_entry);
         } else if let Some(pos) = content.find("</p:sldMasterIdLst>") {
             let insert_pos = pos + "</p:sldMasterIdLst>".len();
-            content.insert_str(insert_pos, &format!("<p:sldIdLst>{}</p:sldIdLst>", sld_entry));
+            content.insert_str(
+                insert_pos,
+                &format!("<p:sldIdLst>{}</p:sldIdLst>", sld_entry),
+            );
         }
 
         files.insert("ppt/presentation.xml".to_string(), content.into_bytes());
@@ -380,7 +444,10 @@ fn pptx_update_presentation_xml(files: &mut HashMap<String, Vec<u8>>, slide_num:
             if let Some(pos) = rels.find("</Relationships>") {
                 rels.insert_str(pos, &rel_entry);
             }
-            files.insert("ppt/_rels/presentation.xml.rels".to_string(), rels.into_bytes());
+            files.insert(
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                rels.into_bytes(),
+            );
         }
     }
 }
@@ -528,8 +595,16 @@ fn pptx_add_text_box_aligned(
     let bold_attr = if bold { r#" b="1""# } else { "" };
     let color_val = hex_to_ooxml(font_color);
     let font_hundredths = pt_to_hundredths(font_size) as i64;
-    let algn_attr = if align.is_empty() { String::new() } else { format!(r#"<a:pPr algn="{}"/>"#, align) };
-    let anchor_attr = if anchor.is_empty() { String::new() } else { format!(r#" anchor="{}""#, anchor) };
+    let algn_attr = if align.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<a:pPr algn="{}"/>"#, align)
+    };
+    let anchor_attr = if anchor.is_empty() {
+        String::new()
+    } else {
+        format!(r#" anchor="{}""#, anchor)
+    };
 
     let shape_xml = format!(
         r#"<p:sp>
@@ -603,11 +678,15 @@ fn pptx_add_shape(
         "<a:ln><a:noFill/></a:ln>".to_string()
     } else {
         let lc = hex_to_ooxml(line_color);
-        format!(r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{}"/></a:solidFill></a:ln>"#, lc)
+        format!(
+            r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{}"/></a:solidFill></a:ln>"#,
+            lc
+        )
     };
 
     let text_body = if text.is_empty() {
-        r#"<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody>"#.to_string()
+        r#"<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody>"#
+            .to_string()
     } else {
         format!(
             r#"<p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="en-US" sz="1400" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Calibri"/></a:rPr><a:t>{}</a:t></a:r></a:p></p:txBody>"#,
@@ -777,7 +856,8 @@ fn pptx_add_multi_chart(
     let chart_path = format!("ppt/charts/chart{}.xml", chart_num);
     let chart_rels_path = format!("ppt/charts/_rels/chart{}.xml.rels", chart_num);
 
-    let chart_xml = build_multi_series_chart_xml(chart_type, categories, all_values, series_names, colors);
+    let chart_xml =
+        build_multi_series_chart_xml(chart_type, categories, all_values, series_names, colors);
     files.insert(chart_path, chart_xml.into_bytes());
     files.insert(
         chart_rels_path,
@@ -847,7 +927,11 @@ fn build_multi_series_chart_xml(
     let count = categories.len();
     let mut cat_xml = String::new();
     for (i, cat) in categories.iter().enumerate() {
-        cat_xml.push_str(&format!(r#"<c:pt idx="{}"><c:v>{}</c:v></c:pt>"#, i, xml_escape(cat)));
+        cat_xml.push_str(&format!(
+            r#"<c:pt idx="{}"><c:v>{}</c:v></c:pt>"#,
+            i,
+            xml_escape(cat)
+        ));
     }
 
     let mut series_xml = String::new();
@@ -873,8 +957,14 @@ fn build_multi_series_chart_xml(
             dpt_xml
         } else {
             match chart_type {
-                "line" => format!(r#"<c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="{c}"/></a:solidFill></a:ln></c:spPr>"#, c = color),
-                _ => format!(r#"<c:spPr><a:solidFill><a:srgbClr val="{c}"/></a:solidFill></c:spPr>"#, c = color),
+                "line" => format!(
+                    r#"<c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="{c}"/></a:solidFill></a:ln></c:spPr>"#,
+                    c = color
+                ),
+                _ => format!(
+                    r#"<c:spPr><a:solidFill><a:srgbClr val="{c}"/></a:solidFill></c:spPr>"#,
+                    c = color
+                ),
             }
         };
 
@@ -886,7 +976,12 @@ fn build_multi_series_chart_xml(
     <c:cat><c:strRef><c:strCache><c:ptCount val="{cnt}"/>{cats}</c:strCache></c:strRef></c:cat>
     <c:val><c:numRef><c:numCache><c:ptCount val="{cnt}"/>{vals}</c:numCache></c:numRef></c:val>
   </c:ser>"#,
-            si = si, sn = xml_escape(sn), fill = fill_section, cnt = count, cats = cat_xml, vals = val_xml,
+            si = si,
+            sn = xml_escape(sn),
+            fill = fill_section,
+            cnt = count,
+            cats = cat_xml,
+            vals = val_xml,
         ));
     }
 
@@ -901,9 +996,18 @@ fn build_multi_series_chart_xml(
     </c:valAx>"#;
 
     let chart_element = match chart_type {
-        "pie" => format!(r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#, series_xml),
-        "line" => format!(r#"<c:lineChart><c:grouping val="standard"/>{}{}</c:lineChart>{}"#, series_xml, axes_xml, axis_defs),
-        _ => format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}</c:barChart>{}"#, series_xml, axes_xml, axis_defs),
+        "pie" => format!(
+            r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#,
+            series_xml
+        ),
+        "line" => format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{}{}</c:lineChart>{}"#,
+            series_xml, axes_xml, axis_defs
+        ),
+        _ => format!(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}</c:barChart>{}"#,
+            series_xml, axes_xml, axis_defs
+        ),
     };
 
     format!(
@@ -960,7 +1064,10 @@ fn pptx_add_relationship(
     rel_type: &str,
     target: &str,
 ) {
-    let entry = format!(r#"<Relationship Id="{}" Type="{}" Target="{}"/>"#, rid, rel_type, target);
+    let entry = format!(
+        r#"<Relationship Id="{}" Type="{}" Target="{}"/>"#,
+        rid, rel_type, target
+    );
     if let Some(data) = files.get(rels_path) {
         let mut content = String::from_utf8_lossy(data).to_string();
         if let Some(pos) = content.find("</Relationships>") {
@@ -998,7 +1105,8 @@ fn pptx_update_content_types_for_chart(files: &mut HashMap<String, Vec<u8>>, cha
 // ---------------------------------------------------------------------------
 
 fn is_chart_language(lang: &Option<String>) -> bool {
-    lang.as_deref().is_some_and(|l| l == "nivo" || l == "plotly")
+    lang.as_deref()
+        .is_some_and(|l| l == "nivo" || l == "plotly")
 }
 
 /// Collect code-block text for a chart block, advancing `i` past the block.
@@ -1061,10 +1169,7 @@ fn build_office_chart_xml(data: &OfficeChartData) -> String {
 
         let mut val_xml = String::new();
         for (i, val) in series.values.iter().enumerate() {
-            val_xml.push_str(&format!(
-                r#"<c:pt idx="{}"><c:v>{}</c:v></c:pt>"#,
-                i, val
-            ));
+            val_xml.push_str(&format!(r#"<c:pt idx="{}"><c:v>{}</c:v></c:pt>"#, i, val));
         }
 
         let fill_section = if data.chart_type == ChartType::Pie {
@@ -1375,7 +1480,10 @@ fn docx_embed_charts_from_markdown(
         let placeholder = format!("[Chart: {}]", title);
         if let Some(pos) = result.find(&placeholder) {
             // Find enclosing <w:p> and </w:p>
-            if let Some(p_start) = result[..pos].rfind("<w:p>").or_else(|| result[..pos].rfind("<w:p ")) {
+            if let Some(p_start) = result[..pos]
+                .rfind("<w:p>")
+                .or_else(|| result[..pos].rfind("<w:p "))
+            {
                 if let Some(end_offset) = result[pos..].find("</w:p>") {
                     let p_end = pos + end_offset + 6;
                     result.replace_range(p_start..p_end, &drawing);
@@ -1422,9 +1530,7 @@ fn pdf_render_chart(data: &OfficeChartData, y: &mut f64, page_width: f64) -> Str
             .replace(')', "\\)");
         ops.push_str(&format!(
             "BT /F2 12 Tf 0.067 0.067 0.067 rg {} {} Td ({}) Tj ET\n",
-            left_margin,
-            *y,
-            escaped,
+            left_margin, *y, escaped,
         ));
         *y -= 20.0;
     }
@@ -1497,10 +1603,7 @@ fn pdf_render_chart(data: &OfficeChartData, y: &mut f64, page_width: f64) -> Str
 
             for (si, series) in data.series.iter().enumerate() {
                 let (r, g, b) = colors.get(si).copied().unwrap_or((0.8, 0.2, 0.2));
-                ops.push_str(&format!(
-                    "q {} {} {} RG 1.5 w\n",
-                    r, g, b,
-                ));
+                ops.push_str(&format!("q {} {} {} RG 1.5 w\n", r, g, b,));
                 for (pi, val) in series.values.iter().enumerate() {
                     let px = left_margin + pi as f64 * step;
                     let py = chart_bottom + (val / max_val) * (chart_h - 20.0);
@@ -1523,7 +1626,11 @@ fn pdf_render_chart(data: &OfficeChartData, y: &mut f64, page_width: f64) -> Str
                     // Fallback: use a small square since arc isn't a PDF operator
                     ops.push_str(&format!(
                         "q {} {} {} rg {} {} 4 4 re f Q\n",
-                        r, g, b, px - 2.0, py - 2.0,
+                        r,
+                        g,
+                        b,
+                        px - 2.0,
+                        py - 2.0,
                     ));
                 }
             }
@@ -1555,7 +1662,11 @@ fn pdf_render_chart(data: &OfficeChartData, y: &mut f64, page_width: f64) -> Str
             let radius = (chart_h / 2.0 - 10.0).min(chart_w / 4.0);
 
             // PDF doesn't have native arc operations, so draw pie segments as filled triangular fan
-            let values = data.series.first().map(|s| s.values.as_slice()).unwrap_or(&[]);
+            let values = data
+                .series
+                .first()
+                .map(|s| s.values.as_slice())
+                .unwrap_or(&[]);
             let mut start_angle: f64 = 0.0;
 
             for (vi, val) in values.iter().enumerate() {
@@ -1615,7 +1726,7 @@ fn pdf_render_chart(data: &OfficeChartData, y: &mut f64, page_width: f64) -> Str
 // ---------------------------------------------------------------------------
 
 fn create_simple_pdf() -> Vec<u8> {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     let mut doc = Document::with_version("1.7");
 
@@ -1839,7 +1950,7 @@ fn create_simple_pdf() -> Vec<u8> {
 }
 
 fn pdf_add_watermark(pdf_bytes: &[u8], text: &str, color: &str, opacity: f64) -> Vec<u8> {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     let (r, g, b) = styles::hex_to_rgb(color);
     let mut doc = Document::load_mem(pdf_bytes).expect("load PDF");
@@ -1853,7 +1964,10 @@ fn pdf_add_watermark(pdf_bytes: &[u8], text: &str, color: &str, opacity: f64) ->
         let (width, height) = pdf_get_page_size(&doc, *page_id);
         let x = width / 2.0;
         let y = height / 2.0;
-        let escaped_text = text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+        let escaped_text = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
 
         let content_str = format!(
             "q\n/GS0 gs\nBT\n{cos_a:.6} {sin_a:.6} -{sin_a:.6} {cos_a:.6} {x:.2} {y:.2} Tm\n/F1 60 Tf\n{r} {g} {b} rg\n({escaped_text}) Tj\nET\nQ\n"
@@ -1924,7 +2038,7 @@ fn pdf_add_watermark(pdf_bytes: &[u8], text: &str, color: &str, opacity: f64) ->
 }
 
 fn pdf_add_page_numbers(pdf_bytes: &[u8]) -> Vec<u8> {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     let mut doc = Document::load_mem(pdf_bytes).expect("load PDF");
     let page_ids: Vec<lopdf::ObjectId> = doc.page_iter().collect();
@@ -1933,7 +2047,10 @@ fn pdf_add_page_numbers(pdf_bytes: &[u8]) -> Vec<u8> {
     for (idx, page_id) in page_ids.iter().enumerate() {
         let page_num = idx + 1;
         let text = format!("Page {} of {}", page_num, total);
-        let escaped = text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
 
         let content_str = format!(
             "BT /F1 9 Tf 0.416 0.416 0.416 rg 280 30 Td ({}) Tj ET\n",
@@ -2196,27 +2313,67 @@ const PPTX_CORE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="
 
 #[test]
 fn generate_docx_with_content() {
-    let docx_bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let docx_bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let mut files = read_zip(&docx_bytes).expect("read_zip");
 
     // ── Title Page ───────────────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Flow Like", &ParagraphStyle::Title, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Flow Like",
+            &ParagraphStyle::Title,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Document Generation Platform", &ParagraphStyle::Subtitle, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Document Generation Platform",
+            &ParagraphStyle::Subtitle,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Capability Overview  \u{2022}  Q4 2024", &ParagraphStyle::Normal, &TextAlignment::Left, None, Some(12.0), Some(defaults::TEXT_MUTED), false, false),
+        &build_paragraph(
+            "Capability Overview  \u{2022}  Q4 2024",
+            &ParagraphStyle::Normal,
+            &TextAlignment::Left,
+            None,
+            Some(12.0),
+            Some(defaults::TEXT_MUTED),
+            false,
+            false,
+        ),
     );
 
     // ── Executive Summary ────────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Executive Summary", &ParagraphStyle::Heading1, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Executive Summary",
+            &ParagraphStyle::Heading1,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
@@ -2225,7 +2382,13 @@ fn generate_docx_with_content() {
              programmatically generate, transform, and manage documents at scale. With over 50 \
              purpose-built automation nodes spanning DOCX, PPTX, PDF, and image formats, Flow Like \
              eliminates manual document workflows and reduces production time by up to 90%.",
-            &ParagraphStyle::Normal, &TextAlignment::Justify, None, None, None, false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Justify,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
     insert_before_sect_pr(
@@ -2233,19 +2396,43 @@ fn generate_docx_with_content() {
         &build_paragraph(
             "The future of document workflows is automated, intelligent, and seamless. \
              Flow Like makes that future a reality today.",
-            &ParagraphStyle::Quote, &TextAlignment::Left, None, None, None, false, false,
+            &ParagraphStyle::Quote,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
 
     // ── Core Capabilities ────────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Core Capabilities", &ParagraphStyle::Heading1, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Core Capabilities",
+            &ParagraphStyle::Heading1,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
 
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Document Formats", &ParagraphStyle::Heading2, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Document Formats",
+            &ParagraphStyle::Heading2,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
@@ -2254,13 +2441,28 @@ fn generate_docx_with_content() {
              manipulation, and transformation nodes. Documents are generated as valid OOXML \
              (Office Open XML) packages with full support for themes, styles, charts, and \
              embedded content.",
-            &ParagraphStyle::Normal, &TextAlignment::Justify, None, None, None, false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Justify,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
 
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Node Architecture", &ParagraphStyle::Heading2, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Node Architecture",
+            &ParagraphStyle::Heading2,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
@@ -2269,81 +2471,191 @@ fn generate_docx_with_content() {
              deterministic outputs. Nodes can be composed into directed acyclic graphs (DAGs) to \
              create complex document workflows. The architecture supports parallel execution, \
              error recovery, and incremental updates.",
-            &ParagraphStyle::Normal, &TextAlignment::Justify, None, None, None, false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Justify,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
 
     // ── Performance Metrics ──────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Performance Metrics", &ParagraphStyle::Heading3, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Performance Metrics",
+            &ParagraphStyle::Heading3,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     let table_data = vec![
-        vec!["Metric".into(), "Value".into(), "Benchmark".into(), "Status".into()],
-        vec!["DOCX Generation".into(), "< 50ms".into(), "200ms".into(), "\u{2705} Exceeds".into()],
-        vec!["PPTX with Charts".into(), "< 120ms".into(), "500ms".into(), "\u{2705} Exceeds".into()],
-        vec!["PDF Merge (10 files)".into(), "< 200ms".into(), "1000ms".into(), "\u{2705} Exceeds".into()],
-        vec!["PDF Watermark".into(), "< 80ms".into(), "300ms".into(), "\u{2705} Exceeds".into()],
-        vec!["Image Conversion".into(), "< 150ms".into(), "400ms".into(), "\u{2705} Exceeds".into()],
-        vec!["Full Pipeline (6 nodes)".into(), "< 400ms".into(), "2000ms".into(), "\u{2705} Exceeds".into()],
+        vec![
+            "Metric".into(),
+            "Value".into(),
+            "Benchmark".into(),
+            "Status".into(),
+        ],
+        vec![
+            "DOCX Generation".into(),
+            "< 50ms".into(),
+            "200ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
+        vec![
+            "PPTX with Charts".into(),
+            "< 120ms".into(),
+            "500ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
+        vec![
+            "PDF Merge (10 files)".into(),
+            "< 200ms".into(),
+            "1000ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
+        vec![
+            "PDF Watermark".into(),
+            "< 80ms".into(),
+            "300ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
+        vec![
+            "Image Conversion".into(),
+            "< 150ms".into(),
+            "400ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
+        vec![
+            "Full Pipeline (6 nodes)".into(),
+            "< 400ms".into(),
+            "2000ms".into(),
+            "\u{2705} Exceeds".into(),
+        ],
     ];
     insert_before_sect_pr(
         &mut files,
-        &build_table(&table_data, true, true, defaults::BORDER, defaults::DOCX_FONT_SIZE),
+        &build_table(
+            &table_data,
+            true,
+            true,
+            defaults::BORDER,
+            defaults::DOCX_FONT_SIZE,
+        ),
     );
 
     // ── Typography & Styling ─────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Typography & Styling Showcase", &ParagraphStyle::Heading2, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Typography & Styling Showcase",
+            &ParagraphStyle::Heading2,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Bold text demonstrates emphasis for key concepts and important terms.",
-            &ParagraphStyle::Normal, &TextAlignment::Left, None, None, None, true, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            true,
+            false,
         ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Italic text is used for technical terms, citations, and subtle emphasis.",
-            &ParagraphStyle::Normal, &TextAlignment::Left, None, None, None, false, true,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            true,
         ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Combined bold and italic for maximum emphasis on critical information.",
-            &ParagraphStyle::Normal, &TextAlignment::Left, None, None, None, true, true,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            true,
+            true,
         ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Accent-colored text draws attention to brand-relevant content and calls to action.",
-            &ParagraphStyle::Normal, &TextAlignment::Left, None, Some(13.0), Some(defaults::PRIMARY), false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Left,
+            None,
+            Some(13.0),
+            Some(defaults::PRIMARY),
+            false,
+            false,
         ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Centered alignment is ideal for section dividers and key statements.",
-            &ParagraphStyle::Normal, &TextAlignment::Center, None, None, None, false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Center,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
     insert_before_sect_pr(
         &mut files,
         &build_paragraph(
             "Right-aligned text for dates, signatures, and supplementary notes.",
-            &ParagraphStyle::Normal, &TextAlignment::Right, None, Some(11.0), Some(defaults::TEXT_MUTED), false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Right,
+            None,
+            Some(11.0),
+            Some(defaults::TEXT_MUTED),
+            false,
+            false,
         ),
     );
 
     // ── Accent Heading ───────────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("What Makes Flow Like Different", &ParagraphStyle::Heading4, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "What Makes Flow Like Different",
+            &ParagraphStyle::Heading4,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     insert_before_sect_pr(
         &mut files,
@@ -2352,31 +2664,102 @@ fn generate_docx_with_content() {
              principles using a composable node architecture. Every element\u{2014}from paragraph \
              styles to chart data\u{2014}is controlled programmatically, enabling true automation \
              without manual intervention.",
-            &ParagraphStyle::Normal, &TextAlignment::Justify, None, None, None, false, false,
+            &ParagraphStyle::Normal,
+            &TextAlignment::Justify,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
 
     // ── Node Inventory Table ─────────────────────────────────────────────
     insert_before_sect_pr(
         &mut files,
-        &build_paragraph("Complete Node Inventory", &ParagraphStyle::Heading2, &TextAlignment::Left, None, None, None, false, false),
+        &build_paragraph(
+            "Complete Node Inventory",
+            &ParagraphStyle::Heading2,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
+        ),
     );
     let inventory = vec![
         vec!["Category".into(), "Node Name".into(), "Description".into()],
-        vec!["DOCX".into(), "Create Document".into(), "Generate themed DOCX from scratch".into()],
-        vec!["DOCX".into(), "Add Paragraph".into(), "Insert styled paragraph with formatting".into()],
-        vec!["DOCX".into(), "Add Table".into(), "Create branded data tables".into()],
-        vec!["DOCX".into(), "Replace Text".into(), "Template-style text substitution".into()],
-        vec!["PPTX".into(), "Create Presentation".into(), "Generate PPTX with theme and master".into()],
-        vec!["PPTX".into(), "Add Slide".into(), "Append blank or formatted slides".into()],
-        vec!["PPTX".into(), "Add Text Box".into(), "Positioned text with alignment".into()],
-        vec!["PPTX".into(), "Add Shape".into(), "Geometric shapes with fill and text".into()],
-        vec!["PPTX".into(), "Add Table".into(), "Tabular data on slides".into()],
-        vec!["PPTX".into(), "Add Chart".into(), "Bar, Line, and Pie charts".into()],
-        vec!["PDF".into(), "Add Watermark".into(), "Overlay semi-transparent text".into()],
-        vec!["PDF".into(), "Add Page Numbers".into(), "Auto-numbered page footers".into()],
-        vec!["PDF".into(), "Merge Documents".into(), "Combine multiple PDFs".into()],
-        vec!["PDF".into(), "Encrypt".into(), "Password-protect PDF files".into()],
+        vec![
+            "DOCX".into(),
+            "Create Document".into(),
+            "Generate themed DOCX from scratch".into(),
+        ],
+        vec![
+            "DOCX".into(),
+            "Add Paragraph".into(),
+            "Insert styled paragraph with formatting".into(),
+        ],
+        vec![
+            "DOCX".into(),
+            "Add Table".into(),
+            "Create branded data tables".into(),
+        ],
+        vec![
+            "DOCX".into(),
+            "Replace Text".into(),
+            "Template-style text substitution".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Create Presentation".into(),
+            "Generate PPTX with theme and master".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Add Slide".into(),
+            "Append blank or formatted slides".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Add Text Box".into(),
+            "Positioned text with alignment".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Add Shape".into(),
+            "Geometric shapes with fill and text".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Add Table".into(),
+            "Tabular data on slides".into(),
+        ],
+        vec![
+            "PPTX".into(),
+            "Add Chart".into(),
+            "Bar, Line, and Pie charts".into(),
+        ],
+        vec![
+            "PDF".into(),
+            "Add Watermark".into(),
+            "Overlay semi-transparent text".into(),
+        ],
+        vec![
+            "PDF".into(),
+            "Add Page Numbers".into(),
+            "Auto-numbered page footers".into(),
+        ],
+        vec![
+            "PDF".into(),
+            "Merge Documents".into(),
+            "Combine multiple PDFs".into(),
+        ],
+        vec![
+            "PDF".into(),
+            "Encrypt".into(),
+            "Password-protect PDF files".into(),
+        ],
     ];
     insert_before_sect_pr(
         &mut files,
@@ -2388,7 +2771,13 @@ fn generate_docx_with_content() {
         &mut files,
         &build_paragraph(
             "Build the future of documents, one node at a time.",
-            &ParagraphStyle::Quote, &TextAlignment::Left, None, None, None, false, false,
+            &ParagraphStyle::Quote,
+            &TextAlignment::Left,
+            None,
+            None,
+            None,
+            false,
+            false,
         ),
     );
 
@@ -2415,124 +2804,632 @@ fn generate_pptx_with_slides() {
     // ── Slide 1: Hero Title ──────────────────────────────────────────────
     let s1 = pptx_add_slide(&mut files);
     // Red hero band spanning top 55%
-    pptx_add_shape(&mut files, s1, "rect", 0.0, 0.0, 33.87, 10.5, defaults::PRIMARY, "", "");
+    pptx_add_shape(
+        &mut files,
+        s1,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        10.5,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
     // Thin dark accent strip below hero
-    pptx_add_shape(&mut files, s1, "rect", 0.0, 10.5, 33.87, 0.25, "#111111", "", "");
+    pptx_add_shape(
+        &mut files, s1, "rect", 0.0, 10.5, 33.87, 0.25, "#111111", "", "",
+    );
     // Title on hero
-    pptx_add_text_box_aligned(&mut files, s1, "FLOW LIKE", 2.0, 2.5, 29.87, 4.0, 54.0, "#FFFFFF", true, "ctr", "ctr");
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "FLOW LIKE",
+        2.0,
+        2.5,
+        29.87,
+        4.0,
+        54.0,
+        "#FFFFFF",
+        true,
+        "ctr",
+        "ctr",
+    );
     // Subtitle on hero
-    pptx_add_text_box_aligned(&mut files, s1, "Next-Generation Document Automation Platform", 4.0, 6.5, 25.87, 2.0, 22.0, "#FFFFFF", false, "ctr", "");
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "Next-Generation Document Automation Platform",
+        4.0,
+        6.5,
+        25.87,
+        2.0,
+        22.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "",
+    );
     // Lower section
-    pptx_add_text_box_aligned(&mut files, s1, "Q4 2024  \u{2022}  Platform Capability Overview", 2.0, 12.0, 29.87, 1.5, 14.0, defaults::TEXT_MUTED, false, "ctr", "");
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "Q4 2024  \u{2022}  Platform Capability Overview",
+        2.0,
+        12.0,
+        29.87,
+        1.5,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+        "ctr",
+        "",
+    );
     // Small decorative shapes
-    pptx_add_shape(&mut files, s1, "ellipse", 1.0, 14.5, 0.8, 0.8, "#FF4343", "", "");
-    pptx_add_shape(&mut files, s1, "ellipse", 2.2, 14.5, 0.8, 0.8, "#3B82F6", "", "");
-    pptx_add_shape(&mut files, s1, "ellipse", 3.4, 14.5, 0.8, 0.8, "#10B981", "", "");
-    pptx_add_shape(&mut files, s1, "ellipse", 4.6, 14.5, 0.8, 0.8, "#F59E0B", "", "");
+    pptx_add_shape(
+        &mut files, s1, "ellipse", 1.0, 14.5, 0.8, 0.8, "#FF4343", "", "",
+    );
+    pptx_add_shape(
+        &mut files, s1, "ellipse", 2.2, 14.5, 0.8, 0.8, "#3B82F6", "", "",
+    );
+    pptx_add_shape(
+        &mut files, s1, "ellipse", 3.4, 14.5, 0.8, 0.8, "#10B981", "", "",
+    );
+    pptx_add_shape(
+        &mut files, s1, "ellipse", 4.6, 14.5, 0.8, 0.8, "#F59E0B", "", "",
+    );
 
     // ── Slide 2: Platform at a Glance ────────────────────────────────────
     let s2 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s2, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_text_box(&mut files, s2, "Platform at a Glance", 2.0, 1.2, 29.87, 1.8, 32.0, defaults::HEADING, true);
-    pptx_add_text_box(&mut files, s2, "Four document engines \u{2022} 50+ automation nodes \u{2022} Zero dependencies", 2.0, 3.2, 29.87, 1.2, 14.0, defaults::TEXT_MUTED, false);
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box(
+        &mut files,
+        s2,
+        "Platform at a Glance",
+        2.0,
+        1.2,
+        29.87,
+        1.8,
+        32.0,
+        defaults::HEADING,
+        true,
+    );
+    pptx_add_text_box(
+        &mut files,
+        s2,
+        "Four document engines \u{2022} 50+ automation nodes \u{2022} Zero dependencies",
+        2.0,
+        3.2,
+        29.87,
+        1.2,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+    );
     // Feature cards
-    pptx_add_shape(&mut files, s2, "roundRect", 1.5, 5.5, 7.0, 7.5, "#FF4343", "", "");
-    pptx_add_text_box_aligned(&mut files, s2, "DOCX", 1.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "10 Nodes", 1.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "Create \u{2022} Style \u{2022} Table", 1.5, 10.0, 7.0, 1.2, 11.0, "#FFFFFF", false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "roundRect",
+        1.5,
+        5.5,
+        7.0,
+        7.5,
+        "#FF4343",
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "DOCX", 1.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "10 Nodes", 1.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s2,
+        "Create \u{2022} Style \u{2022} Table",
+        1.5,
+        10.0,
+        7.0,
+        1.2,
+        11.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "",
+    );
 
-    pptx_add_shape(&mut files, s2, "roundRect", 9.5, 5.5, 7.0, 7.5, "#3B82F6", "", "");
-    pptx_add_text_box_aligned(&mut files, s2, "PPTX", 9.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "12 Nodes", 9.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "Slides \u{2022} Charts \u{2022} Shapes", 9.5, 10.0, 7.0, 1.2, 11.0, "#FFFFFF", false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "roundRect",
+        9.5,
+        5.5,
+        7.0,
+        7.5,
+        "#3B82F6",
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "PPTX", 9.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "12 Nodes", 9.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s2,
+        "Slides \u{2022} Charts \u{2022} Shapes",
+        9.5,
+        10.0,
+        7.0,
+        1.2,
+        11.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "",
+    );
 
-    pptx_add_shape(&mut files, s2, "roundRect", 17.5, 5.5, 7.0, 7.5, "#10B981", "", "");
-    pptx_add_text_box_aligned(&mut files, s2, "PDF", 17.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "18 Nodes", 17.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "Merge \u{2022} Encrypt \u{2022} Sign", 17.5, 10.0, 7.0, 1.2, 11.0, "#FFFFFF", false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "roundRect",
+        17.5,
+        5.5,
+        7.0,
+        7.5,
+        "#10B981",
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "PDF", 17.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "18 Nodes", 17.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s2,
+        "Merge \u{2022} Encrypt \u{2022} Sign",
+        17.5,
+        10.0,
+        7.0,
+        1.2,
+        11.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "",
+    );
 
-    pptx_add_shape(&mut files, s2, "roundRect", 25.5, 5.5, 7.0, 7.5, "#F59E0B", "", "");
-    pptx_add_text_box_aligned(&mut files, s2, "IMAGE", 25.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "8 Nodes", 25.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s2, "Convert \u{2022} Resize \u{2022} Crop", 25.5, 10.0, 7.0, 1.2, 11.0, "#FFFFFF", false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "roundRect",
+        25.5,
+        5.5,
+        7.0,
+        7.5,
+        "#F59E0B",
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "IMAGE", 25.5, 6.5, 7.0, 2.0, 28.0, "#FFFFFF", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s2, "8 Nodes", 25.5, 8.5, 7.0, 1.2, 14.0, "#FFFFFF", false, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s2,
+        "Convert \u{2022} Resize \u{2022} Crop",
+        25.5,
+        10.0,
+        7.0,
+        1.2,
+        11.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "",
+    );
 
     // ── Slide 3: Node Capabilities Table ─────────────────────────────────
     let s3 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s3, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_text_box(&mut files, s3, "Node Capabilities", 2.0, 1.2, 29.87, 1.8, 32.0, defaults::HEADING, true);
-    pptx_add_text_box(&mut files, s3, "Complete inventory of document automation nodes", 2.0, 3.2, 29.87, 1.2, 14.0, defaults::TEXT_MUTED, false);
+    pptx_add_shape(
+        &mut files,
+        s3,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box(
+        &mut files,
+        s3,
+        "Node Capabilities",
+        2.0,
+        1.2,
+        29.87,
+        1.8,
+        32.0,
+        defaults::HEADING,
+        true,
+    );
+    pptx_add_text_box(
+        &mut files,
+        s3,
+        "Complete inventory of document automation nodes",
+        2.0,
+        3.2,
+        29.87,
+        1.2,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+    );
     pptx_add_table(
-        &mut files, s3,
+        &mut files,
+        s3,
         &["Category", "Node", "Description", "Status"],
         &[
-            vec!["DOCX", "Create Document", "Generate blank DOCX with theme", "Ready"],
-            vec!["DOCX", "Add Paragraph", "Insert styled text with formatting", "Ready"],
-            vec!["DOCX", "Add Table", "Data tables with branded headers", "Ready"],
-            vec!["PPTX", "Create Presentation", "Generate themed PPTX shell", "Ready"],
-            vec!["PPTX", "Add Slide", "Append blank or templated slides", "Ready"],
-            vec!["PPTX", "Add Chart", "Bar, Line, Pie chart insertion", "Ready"],
-            vec!["PDF", "Merge Documents", "Combine multiple PDFs into one", "Ready"],
-            vec!["PDF", "Add Watermark", "Overlay branded watermark text", "Ready"],
+            vec![
+                "DOCX",
+                "Create Document",
+                "Generate blank DOCX with theme",
+                "Ready",
+            ],
+            vec![
+                "DOCX",
+                "Add Paragraph",
+                "Insert styled text with formatting",
+                "Ready",
+            ],
+            vec![
+                "DOCX",
+                "Add Table",
+                "Data tables with branded headers",
+                "Ready",
+            ],
+            vec![
+                "PPTX",
+                "Create Presentation",
+                "Generate themed PPTX shell",
+                "Ready",
+            ],
+            vec![
+                "PPTX",
+                "Add Slide",
+                "Append blank or templated slides",
+                "Ready",
+            ],
+            vec![
+                "PPTX",
+                "Add Chart",
+                "Bar, Line, Pie chart insertion",
+                "Ready",
+            ],
+            vec![
+                "PDF",
+                "Merge Documents",
+                "Combine multiple PDFs into one",
+                "Ready",
+            ],
+            vec![
+                "PDF",
+                "Add Watermark",
+                "Overlay branded watermark text",
+                "Ready",
+            ],
         ],
-        1.5, 5.0, 30.87, 0.9,
+        1.5,
+        5.0,
+        30.87,
+        0.9,
     );
 
     // ── Slide 4: Revenue Bar Chart (multi-series) ────────────────────────
     let s4 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s4, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_text_box(&mut files, s4, "Quarterly Revenue", 2.0, 1.2, 20.0, 1.8, 32.0, defaults::HEADING, true);
-    pptx_add_text_box(&mut files, s4, "Year-over-year growth across product lines", 2.0, 3.2, 29.87, 1.2, 14.0, defaults::TEXT_MUTED, false);
+    pptx_add_shape(
+        &mut files,
+        s4,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box(
+        &mut files,
+        s4,
+        "Quarterly Revenue",
+        2.0,
+        1.2,
+        20.0,
+        1.8,
+        32.0,
+        defaults::HEADING,
+        true,
+    );
+    pptx_add_text_box(
+        &mut files,
+        s4,
+        "Year-over-year growth across product lines",
+        2.0,
+        3.2,
+        29.87,
+        1.2,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+    );
     pptx_add_multi_chart(
-        &mut files, s4, "bar",
+        &mut files,
+        s4,
+        "bar",
         &["Q1", "Q2", "Q3", "Q4"],
         &[&[85.0, 130.0, 195.0, 260.0], &[120.0, 180.0, 250.0, 310.0]],
         &["2023 Revenue ($K)", "2024 Revenue ($K)"],
         &["3B82F6", "FF4343"],
-        2.5, 5.0, 28.87, 12.5,
+        2.5,
+        5.0,
+        28.87,
+        12.5,
     );
 
     // ── Slide 5: Growth Line Chart (multi-series) ────────────────────────
     let s5 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s5, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_text_box(&mut files, s5, "User Adoption Trends", 2.0, 1.2, 20.0, 1.8, 32.0, defaults::HEADING, true);
-    pptx_add_text_box(&mut files, s5, "Monthly active users across regions (thousands)", 2.0, 3.2, 29.87, 1.2, 14.0, defaults::TEXT_MUTED, false);
+    pptx_add_shape(
+        &mut files,
+        s5,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box(
+        &mut files,
+        s5,
+        "User Adoption Trends",
+        2.0,
+        1.2,
+        20.0,
+        1.8,
+        32.0,
+        defaults::HEADING,
+        true,
+    );
+    pptx_add_text_box(
+        &mut files,
+        s5,
+        "Monthly active users across regions (thousands)",
+        2.0,
+        3.2,
+        29.87,
+        1.2,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+    );
     pptx_add_multi_chart(
-        &mut files, s5, "line",
+        &mut files,
+        s5,
+        "line",
         &["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
-        &[&[12.0, 19.0, 28.0, 35.0, 48.0, 62.0], &[8.0, 14.0, 18.0, 24.0, 31.0, 40.0], &[5.0, 8.0, 12.0, 18.0, 25.0, 34.0]],
+        &[
+            &[12.0, 19.0, 28.0, 35.0, 48.0, 62.0],
+            &[8.0, 14.0, 18.0, 24.0, 31.0, 40.0],
+            &[5.0, 8.0, 12.0, 18.0, 25.0, 34.0],
+        ],
         &["North America", "Europe", "Asia Pacific"],
         &["FF4343", "3B82F6", "10B981"],
-        2.5, 5.0, 28.87, 12.5,
+        2.5,
+        5.0,
+        28.87,
+        12.5,
     );
 
     // ── Slide 6: Distribution Pie Chart ──────────────────────────────────
     let s6 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s6, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_text_box(&mut files, s6, "Node Distribution by Format", 2.0, 1.2, 20.0, 1.8, 32.0, defaults::HEADING, true);
-    pptx_add_text_box(&mut files, s6, "Breakdown of 50+ automation nodes across document formats", 2.0, 3.2, 29.87, 1.2, 14.0, defaults::TEXT_MUTED, false);
+    pptx_add_shape(
+        &mut files,
+        s6,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box(
+        &mut files,
+        s6,
+        "Node Distribution by Format",
+        2.0,
+        1.2,
+        20.0,
+        1.8,
+        32.0,
+        defaults::HEADING,
+        true,
+    );
+    pptx_add_text_box(
+        &mut files,
+        s6,
+        "Breakdown of 50+ automation nodes across document formats",
+        2.0,
+        3.2,
+        29.87,
+        1.2,
+        14.0,
+        defaults::TEXT_MUTED,
+        false,
+    );
     // Stats on the left
-    pptx_add_shape(&mut files, s6, "roundRect", 2.0, 5.5, 8.0, 3.0, "#FEF2F2", "#FF4343", "");
-    pptx_add_text_box_aligned(&mut files, s6, "50+", 2.0, 5.8, 8.0, 1.8, 36.0, "#FF4343", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s6, "Total Nodes", 2.0, 7.6, 8.0, 1.0, 12.0, defaults::TEXT_MUTED, false, "ctr", "");
-    pptx_add_shape(&mut files, s6, "roundRect", 2.0, 9.5, 8.0, 3.0, "#EFF6FF", "#3B82F6", "");
-    pptx_add_text_box_aligned(&mut files, s6, "4", 2.0, 9.8, 8.0, 1.8, 36.0, "#3B82F6", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s6, "Formats", 2.0, 11.6, 8.0, 1.0, 12.0, defaults::TEXT_MUTED, false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s6,
+        "roundRect",
+        2.0,
+        5.5,
+        8.0,
+        3.0,
+        "#FEF2F2",
+        "#FF4343",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s6, "50+", 2.0, 5.8, 8.0, 1.8, 36.0, "#FF4343", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s6,
+        "Total Nodes",
+        2.0,
+        7.6,
+        8.0,
+        1.0,
+        12.0,
+        defaults::TEXT_MUTED,
+        false,
+        "ctr",
+        "",
+    );
+    pptx_add_shape(
+        &mut files,
+        s6,
+        "roundRect",
+        2.0,
+        9.5,
+        8.0,
+        3.0,
+        "#EFF6FF",
+        "#3B82F6",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files, s6, "4", 2.0, 9.8, 8.0, 1.8, 36.0, "#3B82F6", true, "ctr", "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s6,
+        "Formats",
+        2.0,
+        11.6,
+        8.0,
+        1.0,
+        12.0,
+        defaults::TEXT_MUTED,
+        false,
+        "ctr",
+        "",
+    );
     // Pie chart on the right
     pptx_add_multi_chart(
-        &mut files, s6, "pie",
-        &["DOCX (10)", "PPTX (12)", "PDF (18)", "Image (8)", "Utility (4)"],
+        &mut files,
+        s6,
+        "pie",
+        &[
+            "DOCX (10)",
+            "PPTX (12)",
+            "PDF (18)",
+            "Image (8)",
+            "Utility (4)",
+        ],
         &[&[10.0, 12.0, 18.0, 8.0, 4.0]],
         &["Nodes by Format"],
         &["FF4343", "3B82F6", "10B981", "F59E0B", "8B5CF6"],
-        11.0, 5.0, 21.0, 12.5,
+        11.0,
+        5.0,
+        21.0,
+        12.5,
     );
 
     // ── Slide 7: Thank You / Closing ─────────────────────────────────────
     let s7 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s7, "rect", 0.0, 13.0, 33.87, 6.05, defaults::PRIMARY, "", "");
-    pptx_add_text_box_aligned(&mut files, s7, "Thank You", 2.0, 3.0, 29.87, 4.0, 48.0, defaults::HEADING, true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s7, "Powering the next generation of document workflows", 2.0, 7.0, 29.87, 2.0, 18.0, defaults::TEXT_MUTED, false, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s7, "flow-like.com  \u{2022}  github.com/TM9657/flow-like", 2.0, 14.5, 29.87, 1.5, 14.0, "#FFFFFF", false, "ctr", "ctr");
+    pptx_add_shape(
+        &mut files,
+        s7,
+        "rect",
+        0.0,
+        13.0,
+        33.87,
+        6.05,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s7,
+        "Thank You",
+        2.0,
+        3.0,
+        29.87,
+        4.0,
+        48.0,
+        defaults::HEADING,
+        true,
+        "ctr",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s7,
+        "Powering the next generation of document workflows",
+        2.0,
+        7.0,
+        29.87,
+        2.0,
+        18.0,
+        defaults::TEXT_MUTED,
+        false,
+        "ctr",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s7,
+        "flow-like.com  \u{2022}  github.com/TM9657/flow-like",
+        2.0,
+        14.5,
+        29.87,
+        1.5,
+        14.0,
+        "#FFFFFF",
+        false,
+        "ctr",
+        "ctr",
+    );
 
     let result = write_zip(&files).expect("final write_zip");
 
@@ -2544,7 +3441,10 @@ fn generate_pptx_with_slides() {
     assert!(re_read.contains_key("ppt/theme/theme1.xml"));
 
     let pres = String::from_utf8_lossy(re_read.get("ppt/presentation.xml").unwrap());
-    assert!(!pres.contains("id=\"2147483649\""), "sldId must not exceed ST_SlideId max");
+    assert!(
+        !pres.contains("id=\"2147483649\""),
+        "sldId must not exceed ST_SlideId max"
+    );
 
     let theme = String::from_utf8_lossy(re_read.get("ppt/theme/theme1.xml").unwrap());
     assert!(theme.contains("FF4343"));
@@ -2587,7 +3487,11 @@ fn generate_plain_pdf() {
 
 #[test]
 fn generate_empty_docx() {
-    let bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let files = read_zip(&bytes).expect("read_zip");
 
     assert!(files.contains_key("[Content_Types].xml"));
@@ -2628,17 +3532,27 @@ fn generate_empty_pptx() {
 #[test]
 fn markdown_to_runs_basic_formatting() {
     let runs = markdown_to_runs("Hello **bold** and *italic* world", OpenXmlFormat::Docx);
-    assert!(runs.len() >= 4, "expected multiple runs, got {}", runs.len());
+    assert!(
+        runs.len() >= 4,
+        "expected multiple runs, got {}",
+        runs.len()
+    );
 
     let bold_run = runs.iter().find(|r| r.text == "bold").expect("bold run");
     assert!(bold_run.bold);
     assert!(!bold_run.italic);
 
-    let italic_run = runs.iter().find(|r| r.text == "italic").expect("italic run");
+    let italic_run = runs
+        .iter()
+        .find(|r| r.text == "italic")
+        .expect("italic run");
     assert!(italic_run.italic);
     assert!(!italic_run.bold);
 
-    let plain = runs.iter().find(|r| r.text.contains("Hello")).expect("plain run");
+    let plain = runs
+        .iter()
+        .find(|r| r.text.contains("Hello"))
+        .expect("plain run");
     assert!(!plain.bold);
     assert!(!plain.italic);
 }
@@ -2650,14 +3564,20 @@ fn markdown_to_runs_code_and_strikethrough() {
     let code_run = runs.iter().find(|r| r.text == "code").expect("code run");
     assert!(code_run.code);
 
-    let strike_run = runs.iter().find(|r| r.text == "deleted").expect("strikethrough run");
+    let strike_run = runs
+        .iter()
+        .find(|r| r.text == "deleted")
+        .expect("strikethrough run");
     assert!(strike_run.strikethrough);
 }
 
 #[test]
 fn markdown_to_runs_nested_formatting() {
     let runs = markdown_to_runs("***bold italic***", OpenXmlFormat::Docx);
-    let run = runs.iter().find(|r| r.text == "bold italic").expect("nested run");
+    let run = runs
+        .iter()
+        .find(|r| r.text == "bold italic")
+        .expect("nested run");
     assert!(run.bold);
     assert!(run.italic);
 }
@@ -2672,7 +3592,11 @@ fn markdown_to_runs_list_items() {
 
 #[test]
 fn replace_text_plain_in_docx() {
-    let docx_bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let docx_bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let mut files = read_zip(&docx_bytes).expect("read_zip");
 
     let template_body = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -2684,12 +3608,17 @@ fn replace_text_plain_in_docx() {
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
 </w:body>
 </w:document>"#;
-    files.insert("word/document.xml".to_string(), template_body.as_bytes().to_vec());
+    files.insert(
+        "word/document.xml".to_string(),
+        template_body.as_bytes().to_vec(),
+    );
 
     let doc = files.get("word/document.xml").unwrap().clone();
     let replaced = replace_text_in_xml(&doc, "{{NAME}}", "Alice", "w:t", "w:r", "w:p").unwrap();
-    let replaced = replace_text_in_xml(&replaced, "{{COMPANY}}", "Flow Like", "w:t", "w:r", "w:p").unwrap();
-    let replaced = replace_text_in_xml(&replaced, "{{ROLE}}", "Developer", "w:t", "w:r", "w:p").unwrap();
+    let replaced =
+        replace_text_in_xml(&replaced, "{{COMPANY}}", "Flow Like", "w:t", "w:r", "w:p").unwrap();
+    let replaced =
+        replace_text_in_xml(&replaced, "{{ROLE}}", "Developer", "w:t", "w:r", "w:p").unwrap();
     files.insert("word/document.xml".to_string(), replaced);
 
     let result = write_zip(&files).expect("write_zip");
@@ -2709,7 +3638,11 @@ fn replace_text_plain_in_docx() {
 
 #[test]
 fn replace_text_markdown_in_docx() {
-    let docx_bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let docx_bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let mut files = read_zip(&docx_bytes).expect("read_zip");
 
     let template_body = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -2720,15 +3653,25 @@ fn replace_text_markdown_in_docx() {
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
 </w:body>
 </w:document>"#;
-    files.insert("word/document.xml".to_string(), template_body.as_bytes().to_vec());
+    files.insert(
+        "word/document.xml".to_string(),
+        template_body.as_bytes().to_vec(),
+    );
 
-    let markdown = "**Flow Like** is a *powerful* platform for `automation` with ~~legacy~~ modern workflows.";
+    let markdown =
+        "**Flow Like** is a *powerful* platform for `automation` with ~~legacy~~ modern workflows.";
     let doc = files.get("word/document.xml").unwrap().clone();
     let replaced = replace_text_in_xml_markdown(
-        &doc, "{{CONTENT}}", markdown,
-        "w:t", "w:r", "w:rPr", "w:p",
+        &doc,
+        "{{CONTENT}}",
+        markdown,
+        "w:t",
+        "w:r",
+        "w:rPr",
+        "w:p",
         OpenXmlFormat::Docx,
-    ).unwrap();
+    )
+    .unwrap();
     files.insert("word/document.xml".to_string(), replaced);
 
     let result = write_zip(&files).expect("write_zip");
@@ -2752,11 +3695,23 @@ fn replace_text_plain_in_pptx() {
     let mut files = read_zip(&pptx_bytes).expect("read_zip");
 
     let slide_num = pptx_add_slide(&mut files);
-    pptx_add_text_box(&mut files, slide_num, "Hello {{NAME}}, your title is {{TITLE}}.", 2.0, 3.0, 28.0, 3.0, 18.0, defaults::TEXT, false);
+    pptx_add_text_box(
+        &mut files,
+        slide_num,
+        "Hello {{NAME}}, your title is {{TITLE}}.",
+        2.0,
+        3.0,
+        28.0,
+        3.0,
+        18.0,
+        defaults::TEXT,
+        false,
+    );
 
     let slide_path = format!("ppt/slides/slide{}.xml", slide_num);
     let slide_data = files.get(&slide_path).unwrap().clone();
-    let replaced = replace_text_in_xml(&slide_data, "{{NAME}}", "Bob", "a:t", "a:r", "a:p").unwrap();
+    let replaced =
+        replace_text_in_xml(&slide_data, "{{NAME}}", "Bob", "a:t", "a:r", "a:p").unwrap();
     let replaced = replace_text_in_xml(&replaced, "{{TITLE}}", "CTO", "a:t", "a:r", "a:p").unwrap();
     files.insert(slide_path.clone(), replaced);
 
@@ -2779,17 +3734,34 @@ fn replace_text_markdown_in_pptx() {
     let mut files = read_zip(&pptx_bytes).expect("read_zip");
 
     let slide_num = pptx_add_slide(&mut files);
-    pptx_add_text_box(&mut files, slide_num, "{{CONTENT}}", 2.0, 2.0, 28.0, 14.0, 16.0, defaults::TEXT, false);
+    pptx_add_text_box(
+        &mut files,
+        slide_num,
+        "{{CONTENT}}",
+        2.0,
+        2.0,
+        28.0,
+        14.0,
+        16.0,
+        defaults::TEXT,
+        false,
+    );
 
     let slide_path = format!("ppt/slides/slide{}.xml", slide_num);
     let slide_data = files.get(&slide_path).unwrap().clone();
 
     let markdown = "**Key Features:**\n\n- *Visual* workflow builder\n- `Code` execution nodes\n- ~~Deprecated~~ **modern** API design";
     let replaced = replace_text_in_xml_markdown(
-        &slide_data, "{{CONTENT}}", markdown,
-        "a:t", "a:r", "a:rPr", "a:p",
+        &slide_data,
+        "{{CONTENT}}",
+        markdown,
+        "a:t",
+        "a:r",
+        "a:rPr",
+        "a:p",
         OpenXmlFormat::Pptx,
-    ).unwrap();
+    )
+    .unwrap();
     files.insert(slide_path.clone(), replaced);
 
     let result = write_zip(&files).expect("write_zip");
@@ -2840,7 +3812,16 @@ fn heading_size_pdf(level: u8) -> f64 {
     }
 }
 
-fn docx_run_xml(text: &str, font: &str, size_half_pts: i32, color: &str, bold: bool, italic: bool, strikethrough: bool, is_code: bool) -> String {
+fn docx_run_xml(
+    text: &str,
+    font: &str,
+    size_half_pts: i32,
+    color: &str,
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+    is_code: bool,
+) -> String {
     let rpr = if is_code {
         format!(
             r#"<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="{sz}"/><w:szCs w:val="{sz}"/><w:color w:val="D63384"/><w:shd w:val="clear" w:color="auto" w:fill="F8F9FA"/>"#,
@@ -2849,23 +3830,42 @@ fn docx_run_xml(text: &str, font: &str, size_half_pts: i32, color: &str, bold: b
     } else {
         let mut rpr = format!(
             r#"<w:rFonts w:ascii="{f}" w:hAnsi="{f}"/><w:sz w:val="{sz}"/><w:szCs w:val="{sz}"/><w:color w:val="{c}"/>"#,
-            f = font, sz = size_half_pts, c = color,
+            f = font,
+            sz = size_half_pts,
+            c = color,
         );
-        if bold { rpr.push_str("<w:b/>"); }
-        if italic { rpr.push_str("<w:i/>"); }
-        if strikethrough { rpr.push_str("<w:strike/>"); }
+        if bold {
+            rpr.push_str("<w:b/>");
+        }
+        if italic {
+            rpr.push_str("<w:i/>");
+        }
+        if strikethrough {
+            rpr.push_str("<w:strike/>");
+        }
         rpr
     };
-    let preserve = if text.contains(' ') || text.contains('\t') { r#" xml:space="preserve""# } else { "" };
+    let preserve = if text.contains(' ') || text.contains('\t') {
+        r#" xml:space="preserve""#
+    } else {
+        ""
+    };
     format!(
         "<w:r><w:rPr>{rpr}</w:rPr><w:t{preserve}>{text}</w:t></w:r>",
-        rpr = rpr, preserve = preserve, text = xml_escape(text),
+        rpr = rpr,
+        preserve = preserve,
+        text = xml_escape(text),
     )
 }
 
 /// Full GFM-aware DOCX renderer: headings with sizes, bullet lists, blockquotes,
 /// tables as real `<w:tbl>`, code blocks with shading, and images as placeholders.
-fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_pts: i32, base_color: &str) -> String {
+fn markdown_runs_to_docx_xml(
+    runs: &[FormattedRun],
+    font: &str,
+    base_size_half_pts: i32,
+    base_color: &str,
+) -> String {
     let mut xml = String::new();
     let color = hex_to_ooxml(base_color);
     let heading_color = hex_to_ooxml(defaults::HEADING);
@@ -2906,7 +3906,16 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
                     break;
                 }
                 if let BlockType::Heading(_) = r.block_type {
-                    heading_runs.push_str(&docx_run_xml(&r.text, font, sz, &heading_color, true, r.italic, false, r.code));
+                    heading_runs.push_str(&docx_run_xml(
+                        &r.text,
+                        font,
+                        sz,
+                        &heading_color,
+                        true,
+                        r.italic,
+                        false,
+                        r.code,
+                    ));
                 }
                 i += 1;
             }
@@ -2932,8 +3941,20 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
                 if r.block_type != BlockType::BlockQuote && r.text != "\n" {
                     break;
                 }
-                if r.text == "\n" { i += 1; continue; }
-                quote_runs.push_str(&docx_run_xml(&r.text, font, base_size_half_pts, "666666", r.bold, true, r.strikethrough, r.code));
+                if r.text == "\n" {
+                    i += 1;
+                    continue;
+                }
+                quote_runs.push_str(&docx_run_xml(
+                    &r.text,
+                    font,
+                    base_size_half_pts,
+                    "666666",
+                    r.bold,
+                    true,
+                    r.strikethrough,
+                    r.code,
+                ));
                 i += 1;
             }
             xml.push_str(&format!(
@@ -3004,15 +4025,22 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
             let mut tbl = format!(
                 r#"<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="{bc}"/><w:left w:val="single" w:sz="6" w:space="0" w:color="{bc}"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="{bc}"/><w:right w:val="single" w:sz="6" w:space="0" w:color="{bc}"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="{bc}"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="{bc}"/></w:tblBorders></w:tblPr><w:tblGrid>{grid}</w:tblGrid>"#,
                 bc = border_color,
-                grid = (0..col_count).map(|_| format!("<w:gridCol w:w=\"{}\"/>", col_width)).collect::<String>(),
+                grid = (0..col_count)
+                    .map(|_| format!("<w:gridCol w:w=\"{}\"/>", col_width))
+                    .collect::<String>(),
             );
 
             for row in &rows {
                 tbl.push_str("<w:tr>");
                 for (cell_text_val, is_hdr) in row {
                     let cell_fill = if *is_hdr {
-                        format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>", hex_to_ooxml(defaults::PRIMARY))
-                    } else { String::new() };
+                        format!(
+                            "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>",
+                            hex_to_ooxml(defaults::PRIMARY)
+                        )
+                    } else {
+                        String::new()
+                    };
                     let text_color = if *is_hdr { "FFFFFF" } else { &color };
                     let cell_bold = *is_hdr;
                     tbl.push_str(&format!(
@@ -3027,7 +4055,9 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
             xml.push_str(&tbl);
 
             // Skip any trailing newline after table
-            if i < runs.len() && runs[i].text == "\n" { i += 1; }
+            if i < runs.len() && runs[i].text == "\n" {
+                i += 1;
+            }
             continue;
         }
 
@@ -3044,7 +4074,16 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
                 };
                 xml.push_str(&format!(
                     "<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr>{}</w:p>",
-                    docx_run_xml(&format!("[Chart: {}]", label), font, base_size_half_pts, "888888", false, true, false, false),
+                    docx_run_xml(
+                        &format!("[Chart: {}]", label),
+                        font,
+                        base_size_half_pts,
+                        "888888",
+                        false,
+                        true,
+                        false,
+                        false
+                    ),
                 ));
                 i = j;
                 continue;
@@ -3075,7 +4114,9 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
         // -- Normal paragraph / list items --
         if run.text == "\n" {
             // Paragraph break — flush
-            xml.push_str(&format!("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:p>"));
+            xml.push_str(&format!(
+                "<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:p>"
+            ));
             i += 1;
             continue;
         }
@@ -3084,13 +4125,30 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
         let mut para_runs = String::new();
         while i < runs.len() {
             let r = &runs[i];
-            if r.text == "\n" { i += 1; break; }
-            if !matches!(r.block_type, BlockType::Normal) { break; }
-            para_runs.push_str(&docx_run_xml(&r.text, font, base_size_half_pts, &color, r.bold, r.italic, r.strikethrough, r.code));
+            if r.text == "\n" {
+                i += 1;
+                break;
+            }
+            if !matches!(r.block_type, BlockType::Normal) {
+                break;
+            }
+            para_runs.push_str(&docx_run_xml(
+                &r.text,
+                font,
+                base_size_half_pts,
+                &color,
+                r.bold,
+                r.italic,
+                r.strikethrough,
+                r.code,
+            ));
             i += 1;
         }
         if !para_runs.is_empty() {
-            xml.push_str(&format!("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr>{}</w:p>", para_runs));
+            xml.push_str(&format!(
+                "<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr>{}</w:p>",
+                para_runs
+            ));
         }
     }
 
@@ -3098,22 +4156,48 @@ fn markdown_runs_to_docx_xml(runs: &[FormattedRun], font: &str, base_size_half_p
 }
 
 /// GFM-aware PPTX body renderer: headings with sizes, tables as text grids, blockquotes styled.
-fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_color: &str) -> String {
+fn markdown_runs_to_pptx_body(
+    runs: &[FormattedRun],
+    font_size_pt: f32,
+    font_color: &str,
+) -> String {
     let color = hex_to_ooxml(font_color);
     let sz = pt_to_hundredths(font_size_pt) as i64;
     let mut paragraphs: Vec<String> = Vec::new();
 
-    fn pptx_run(text: &str, sz: i64, color: &str, bold: bool, italic: bool, strikethrough: bool, code: bool) -> String {
+    fn pptx_run(
+        text: &str,
+        sz: i64,
+        color: &str,
+        bold: bool,
+        italic: bool,
+        strikethrough: bool,
+        code: bool,
+    ) -> String {
         let mut attrs = format!(r#" lang="en-US" sz="{}" dirty="0""#, sz);
-        if bold { attrs.push_str(r#" b="1""#); }
-        if italic { attrs.push_str(r#" i="1""#); }
-        if strikethrough { attrs.push_str(r#" strike="sngStrike""#); }
+        if bold {
+            attrs.push_str(r#" b="1""#);
+        }
+        if italic {
+            attrs.push_str(r#" i="1""#);
+        }
+        if strikethrough {
+            attrs.push_str(r#" strike="sngStrike""#);
+        }
         let font_face = if code { "Courier New" } else { "Calibri" };
         let fill_color = if code { "D63384" } else { color };
-        let preserve = if text.contains(' ') || text.contains('\t') { r#" xml:space="preserve""# } else { "" };
+        let preserve = if text.contains(' ') || text.contains('\t') {
+            r#" xml:space="preserve""#
+        } else {
+            ""
+        };
         format!(
             r#"<a:r><a:rPr{attrs}><a:solidFill><a:srgbClr val="{clr}"/></a:solidFill><a:latin typeface="{font}"/></a:rPr><a:t{preserve}>{text}</a:t></a:r>"#,
-            attrs = attrs, clr = fill_color, font = font_face, preserve = preserve, text = xml_escape(text),
+            attrs = attrs,
+            clr = fill_color,
+            font = font_face,
+            preserve = preserve,
+            text = xml_escape(text),
         )
     }
 
@@ -3128,13 +4212,27 @@ fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_col
             let mut heading_content = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if r.text == "\n" && !matches!(r.block_type, BlockType::Heading(_)) { i += 1; break; }
+                if r.text == "\n" && !matches!(r.block_type, BlockType::Heading(_)) {
+                    i += 1;
+                    break;
+                }
                 if let BlockType::Heading(_) = r.block_type {
-                    heading_content.push_str(&pptx_run(&r.text, hsz, &heading_clr, true, r.italic, false, r.code));
+                    heading_content.push_str(&pptx_run(
+                        &r.text,
+                        hsz,
+                        &heading_clr,
+                        true,
+                        r.italic,
+                        false,
+                        r.code,
+                    ));
                 }
                 i += 1;
             }
-            paragraphs.push(format!("<a:p><a:pPr><a:spcBef><a:spcPts val=\"800\"/></a:spcBef></a:pPr>{}</a:p>", heading_content));
+            paragraphs.push(format!(
+                "<a:p><a:pPr><a:spcBef><a:spcPts val=\"800\"/></a:spcBef></a:pPr>{}</a:p>",
+                heading_content
+            ));
             continue;
         }
 
@@ -3144,13 +4242,34 @@ fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_col
             let mut quote_content = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if r.block_type != BlockType::BlockQuote && r.text != "\n" { break; }
-                if r.text == "\n" { i += 1; continue; }
-                quote_content.push_str(&pptx_run(&r.text, sz, quote_clr, r.bold, true, r.strikethrough, r.code));
+                if r.block_type != BlockType::BlockQuote && r.text != "\n" {
+                    break;
+                }
+                if r.text == "\n" {
+                    i += 1;
+                    continue;
+                }
+                quote_content.push_str(&pptx_run(
+                    &r.text,
+                    sz,
+                    quote_clr,
+                    r.bold,
+                    true,
+                    r.strikethrough,
+                    r.code,
+                ));
                 i += 1;
             }
             // Add a bar prefix run
-            let bar = pptx_run("┃ ", sz, &hex_to_ooxml(defaults::PRIMARY), true, false, false, false);
+            let bar = pptx_run(
+                "┃ ",
+                sz,
+                &hex_to_ooxml(defaults::PRIMARY),
+                true,
+                false,
+                false,
+                false,
+            );
             paragraphs.push(format!("<a:p>{}{}</a:p>", bar, quote_content));
             continue;
         }
@@ -3164,7 +4283,18 @@ fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_col
             } else {
                 alt.clone()
             };
-            paragraphs.push(format!("<a:p>{}</a:p>", pptx_run(&format!("🖼 {}", label), sz, "888888", false, true, false, false)));
+            paragraphs.push(format!(
+                "<a:p>{}</a:p>",
+                pptx_run(
+                    &format!("🖼 {}", label),
+                    sz,
+                    "888888",
+                    false,
+                    true,
+                    false,
+                    false
+                )
+            ));
             i += 1;
             continue;
         }
@@ -3179,38 +4309,81 @@ fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_col
             while j < runs.len() {
                 let r = &runs[j];
                 match r.block_type {
-                    BlockType::TableHeader => { cell_text.push_str(&r.text); cell_is_header = true; }
-                    BlockType::TableCell => { cell_text.push_str(&r.text); }
+                    BlockType::TableHeader => {
+                        cell_text.push_str(&r.text);
+                        cell_is_header = true;
+                    }
+                    BlockType::TableCell => {
+                        cell_text.push_str(&r.text);
+                    }
                     BlockType::TableRowEnd => {
-                        if !cell_text.is_empty() { current_row.push((cell_text.clone(), cell_is_header)); cell_text.clear(); }
-                        if !current_row.is_empty() { rows.push(current_row.clone()); current_row.clear(); }
+                        if !cell_text.is_empty() {
+                            current_row.push((cell_text.clone(), cell_is_header));
+                            cell_text.clear();
+                        }
+                        if !current_row.is_empty() {
+                            rows.push(current_row.clone());
+                            current_row.clear();
+                        }
                         cell_is_header = false;
                     }
                     _ => {
-                        if !cell_text.is_empty() { current_row.push((cell_text.clone(), cell_is_header)); cell_text.clear(); }
-                        if !current_row.is_empty() { rows.push(current_row.clone()); }
+                        if !cell_text.is_empty() {
+                            current_row.push((cell_text.clone(), cell_is_header));
+                            cell_text.clear();
+                        }
+                        if !current_row.is_empty() {
+                            rows.push(current_row.clone());
+                        }
                         break;
                     }
                 }
                 j += 1;
             }
-            if !cell_text.is_empty() { current_row.push((cell_text, cell_is_header)); }
-            if !current_row.is_empty() { rows.push(current_row); }
+            if !cell_text.is_empty() {
+                current_row.push((cell_text, cell_is_header));
+            }
+            if !current_row.is_empty() {
+                rows.push(current_row);
+            }
             i = j;
 
             for row in &rows {
-                let row_text: String = row.iter().map(|(t, _)| t.trim().to_string()).collect::<Vec<_>>().join("  │  ");
+                let row_text: String = row
+                    .iter()
+                    .map(|(t, _)| t.trim().to_string())
+                    .collect::<Vec<_>>()
+                    .join("  │  ");
                 let is_header = row.first().is_some_and(|(_, h)| *h);
                 if is_header {
-                    paragraphs.push(format!("<a:p>{}</a:p>", pptx_run(&row_text, sz, &hex_to_ooxml(defaults::HEADING), true, false, false, false)));
+                    paragraphs.push(format!(
+                        "<a:p>{}</a:p>",
+                        pptx_run(
+                            &row_text,
+                            sz,
+                            &hex_to_ooxml(defaults::HEADING),
+                            true,
+                            false,
+                            false,
+                            false
+                        )
+                    ));
                     // Separator
                     let sep: String = row.iter().map(|_| "────").collect::<Vec<_>>().join("──┼──");
-                    paragraphs.push(format!("<a:p>{}</a:p>", pptx_run(&sep, sz - 200, "AAAAAA", false, false, false, true)));
+                    paragraphs.push(format!(
+                        "<a:p>{}</a:p>",
+                        pptx_run(&sep, sz - 200, "AAAAAA", false, false, false, true)
+                    ));
                 } else {
-                    paragraphs.push(format!("<a:p>{}</a:p>", pptx_run(&row_text, sz, &color, false, false, false, false)));
+                    paragraphs.push(format!(
+                        "<a:p>{}</a:p>",
+                        pptx_run(&row_text, sz, &color, false, false, false, false)
+                    ));
                 }
             }
-            if i < runs.len() && runs[i].text == "\n" { i += 1; }
+            if i < runs.len() && runs[i].text == "\n" {
+                i += 1;
+            }
             continue;
         }
 
@@ -3227,22 +4400,43 @@ fn markdown_runs_to_pptx_body(runs: &[FormattedRun], font_size_pt: f32, font_col
             let mut code_text = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if !matches!(r.block_type, BlockType::CodeBlock { .. }) && r.text != "\n" { break; }
-                if r.text == "\n" && !matches!(r.block_type, BlockType::CodeBlock { .. }) { i += 1; break; }
+                if !matches!(r.block_type, BlockType::CodeBlock { .. }) && r.text != "\n" {
+                    break;
+                }
+                if r.text == "\n" && !matches!(r.block_type, BlockType::CodeBlock { .. }) {
+                    i += 1;
+                    break;
+                }
                 code_text.push_str(&r.text);
                 i += 1;
             }
             for line in code_text.lines() {
-                paragraphs.push(format!("<a:p>{}</a:p>", pptx_run(line, sz - 200, "D63384", false, false, false, true)));
+                paragraphs.push(format!(
+                    "<a:p>{}</a:p>",
+                    pptx_run(line, sz - 200, "D63384", false, false, false, true)
+                ));
             }
             continue;
         }
         let mut current_runs = String::new();
         while i < runs.len() {
             let r = &runs[i];
-            if r.text == "\n" { i += 1; break; }
-            if !matches!(r.block_type, BlockType::Normal) { break; }
-            current_runs.push_str(&pptx_run(&r.text, sz, &color, r.bold, r.italic, r.strikethrough, r.code));
+            if r.text == "\n" {
+                i += 1;
+                break;
+            }
+            if !matches!(r.block_type, BlockType::Normal) {
+                break;
+            }
+            current_runs.push_str(&pptx_run(
+                &r.text,
+                sz,
+                &color,
+                r.bold,
+                r.italic,
+                r.strikethrough,
+                r.code,
+            ));
             i += 1;
         }
         if !current_runs.is_empty() {
@@ -3298,8 +4492,10 @@ fn pptx_add_markdown_text_box(
   </p:txBody>
 </p:sp>"#,
         id = next_id,
-        ox = cm_to_emu(x_cm), oy = cm_to_emu(y_cm),
-        cx = cm_to_emu(w_cm), cy = cm_to_emu(h_cm),
+        ox = cm_to_emu(x_cm),
+        oy = cm_to_emu(y_cm),
+        cx = cm_to_emu(w_cm),
+        cy = cm_to_emu(h_cm),
         body = body_content,
     );
 
@@ -3323,8 +4519,14 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
     let char_width = |size: f64| size * 0.52;
 
     fn pdf_text(font: &str, size: f64, color: &str, x: f64, y: f64, text: &str) -> String {
-        let escaped = text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
-        format!("BT {} {} Tf {} {} {} Td ({}) Tj ET\n", font, size, color, x, y, escaped)
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
+        format!(
+            "BT {} {} Tf {} {} {} Td ({}) Tj ET\n",
+            font, size, color, x, y, escaped
+        )
     }
 
     fn pdf_rect(x: f64, y: f64, w: f64, h: f64, color: &str, fill: bool) -> String {
@@ -3363,12 +4565,25 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                 }
 
                 let word_w = word.len() as f64 * cw;
-                let space_needed = if span_buf.is_empty() && cur_line.is_empty() { 0.0 } else if span_buf.is_empty() { cw } else { cw };
+                let space_needed = if span_buf.is_empty() && cur_line.is_empty() {
+                    0.0
+                } else if span_buf.is_empty() {
+                    cw
+                } else {
+                    cw
+                };
 
-                if cur_w + space_needed + word_w > max_width && (cur_w > 0.0 || !cur_line.is_empty()) {
+                if cur_w + space_needed + word_w > max_width
+                    && (cur_w > 0.0 || !cur_line.is_empty())
+                {
                     // Flush current span buffer into the line
                     if !span_buf.is_empty() {
-                        cur_line.push(Span { text: span_buf.clone(), bold: span.bold, italic: span.italic, code: span.code });
+                        cur_line.push(Span {
+                            text: span_buf.clone(),
+                            bold: span.bold,
+                            italic: span.italic,
+                            code: span.code,
+                        });
                         span_buf.clear();
                     }
                     if !cur_line.is_empty() {
@@ -3391,7 +4606,12 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             }
 
             if !span_buf.is_empty() {
-                cur_line.push(Span { text: span_buf, bold: span.bold, italic: span.italic, code: span.code });
+                cur_line.push(Span {
+                    text: span_buf,
+                    bold: span.bold,
+                    italic: span.italic,
+                    code: span.code,
+                });
             }
         }
         if !cur_line.is_empty() {
@@ -3414,12 +4634,19 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                 current = String::new();
                 current_w = 0.0;
             }
-            if !current.is_empty() { current.push(' '); current_w += cw; }
+            if !current.is_empty() {
+                current.push(' ');
+                current_w += cw;
+            }
             current.push_str(word);
             current_w += word_w;
         }
-        if !current.is_empty() { lines.push(current.trim().to_string()); }
-        if lines.is_empty() { lines.push(String::new()); }
+        if !current.is_empty() {
+            lines.push(current.trim().to_string());
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
         lines
     }
 
@@ -3430,7 +4657,9 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
 
     let mut i = 0;
     while i < runs.len() {
-        if y < bottom_margin { break; }
+        if y < bottom_margin {
+            break;
+        }
         let run = &runs[i];
 
         // Heading
@@ -3441,17 +4670,38 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             let mut heading_text = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if r.text == "\n" && !matches!(r.block_type, BlockType::Heading(_)) { i += 1; break; }
-                if matches!(r.block_type, BlockType::Heading(_)) { heading_text.push_str(&r.text); }
+                if r.text == "\n" && !matches!(r.block_type, BlockType::Heading(_)) {
+                    i += 1;
+                    break;
+                }
+                if matches!(r.block_type, BlockType::Heading(_)) {
+                    heading_text.push_str(&r.text);
+                }
                 i += 1;
             }
             for line in wrap_plain(&heading_text, max_text_w, cw) {
-                if y < bottom_margin { break; }
-                ops.push_str(&pdf_text("/F2", hsz, "0.067 0.067 0.067 rg", left_margin, y, &line));
+                if y < bottom_margin {
+                    break;
+                }
+                ops.push_str(&pdf_text(
+                    "/F2",
+                    hsz,
+                    "0.067 0.067 0.067 rg",
+                    left_margin,
+                    y,
+                    &line,
+                ));
                 y -= hsz * 1.3;
             }
             if level <= 2 {
-                ops.push_str(&pdf_rect(left_margin, y + 4.0, max_text_w, 0.5, "0.067 0.067 0.067 rg", true));
+                ops.push_str(&pdf_rect(
+                    left_margin,
+                    y + 4.0,
+                    max_text_w,
+                    0.5,
+                    "0.067 0.067 0.067 rg",
+                    true,
+                ));
                 y -= 6.0;
             }
             continue;
@@ -3466,19 +4716,40 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             let mut quote_text = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if r.block_type != BlockType::BlockQuote && r.text != "\n" { break; }
-                if r.text == "\n" { i += 1; continue; }
+                if r.block_type != BlockType::BlockQuote && r.text != "\n" {
+                    break;
+                }
+                if r.text == "\n" {
+                    i += 1;
+                    continue;
+                }
                 quote_text.push_str(&r.text);
                 i += 1;
             }
             for line in wrap_plain(&quote_text, max_text_w - indent, cw) {
-                if y < bottom_margin { break; }
-                ops.push_str(&pdf_text("/F1", base_size, muted_color, left_margin + indent, y, &line));
+                if y < bottom_margin {
+                    break;
+                }
+                ops.push_str(&pdf_text(
+                    "/F1",
+                    base_size,
+                    muted_color,
+                    left_margin + indent,
+                    y,
+                    &line,
+                ));
                 y -= line_height;
             }
             let bar_height = q_start_y - y;
             if bar_height > 0.0 {
-                ops.push_str(&pdf_rect(bar_x, y + base_size * 0.5, 3.0, bar_height, "1 0.263 0.263 rg", true));
+                ops.push_str(&pdf_rect(
+                    bar_x,
+                    y + base_size * 0.5,
+                    3.0,
+                    bar_height,
+                    "1 0.263 0.263 rg",
+                    true,
+                ));
             }
             y -= 4.0;
             continue;
@@ -3494,8 +4765,22 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                 alt.clone()
             };
             if y >= bottom_margin + 40.0 {
-                ops.push_str(&pdf_rect(left_margin, y - 20.0, max_text_w, 30.0, "0.941 0.941 0.941 rg", true));
-                ops.push_str(&pdf_text("/F1", 10.0, muted_color, left_margin + 10.0, y - 10.0, &format!("Image: {}", label)));
+                ops.push_str(&pdf_rect(
+                    left_margin,
+                    y - 20.0,
+                    max_text_w,
+                    30.0,
+                    "0.941 0.941 0.941 rg",
+                    true,
+                ));
+                ops.push_str(&pdf_text(
+                    "/F1",
+                    10.0,
+                    muted_color,
+                    left_margin + 10.0,
+                    y - 10.0,
+                    &format!("Image: {}", label),
+                ));
                 y -= 40.0;
             }
             i += 1;
@@ -3512,23 +4797,43 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             while j < runs.len() {
                 let r = &runs[j];
                 match r.block_type {
-                    BlockType::TableHeader => { cell_text.push_str(&r.text); cell_is_header = true; }
-                    BlockType::TableCell => { cell_text.push_str(&r.text); }
+                    BlockType::TableHeader => {
+                        cell_text.push_str(&r.text);
+                        cell_is_header = true;
+                    }
+                    BlockType::TableCell => {
+                        cell_text.push_str(&r.text);
+                    }
                     BlockType::TableRowEnd => {
-                        if !cell_text.is_empty() { current_row.push((cell_text.clone(), cell_is_header)); cell_text.clear(); }
-                        if !current_row.is_empty() { rows.push(current_row.clone()); current_row.clear(); }
+                        if !cell_text.is_empty() {
+                            current_row.push((cell_text.clone(), cell_is_header));
+                            cell_text.clear();
+                        }
+                        if !current_row.is_empty() {
+                            rows.push(current_row.clone());
+                            current_row.clear();
+                        }
                         cell_is_header = false;
                     }
                     _ => {
-                        if !cell_text.is_empty() { current_row.push((cell_text.clone(), cell_is_header)); cell_text.clear(); }
-                        if !current_row.is_empty() { rows.push(current_row.clone()); }
+                        if !cell_text.is_empty() {
+                            current_row.push((cell_text.clone(), cell_is_header));
+                            cell_text.clear();
+                        }
+                        if !current_row.is_empty() {
+                            rows.push(current_row.clone());
+                        }
                         break;
                     }
                 }
                 j += 1;
             }
-            if !cell_text.is_empty() { current_row.push((cell_text, cell_is_header)); }
-            if !current_row.is_empty() { rows.push(current_row); }
+            if !cell_text.is_empty() {
+                current_row.push((cell_text, cell_is_header));
+            }
+            if !current_row.is_empty() {
+                rows.push(current_row);
+            }
             i = j;
 
             let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(1);
@@ -3539,10 +4844,19 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             let max_cell_chars = ((col_w - cell_pad * 2.0) / cell_cw).max(1.0) as usize;
 
             for row in &rows {
-                if y < bottom_margin { break; }
+                if y < bottom_margin {
+                    break;
+                }
                 let is_header = row.first().is_some_and(|(_, h)| *h);
                 if is_header {
-                    ops.push_str(&pdf_rect(left_margin, y - row_h + 4.0, max_text_w, row_h, "1 0.263 0.263 rg", true));
+                    ops.push_str(&pdf_rect(
+                        left_margin,
+                        y - row_h + 4.0,
+                        max_text_w,
+                        row_h,
+                        "1 0.263 0.263 rg",
+                        true,
+                    ));
                 }
                 for (ci, (cell_t, is_hdr)) in row.iter().enumerate() {
                     let cx = left_margin + ci as f64 * col_w + cell_pad;
@@ -3557,12 +4871,19 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
                     ops.push_str(&pdf_text(font, 10.0, clr, cx, y, display));
                 }
                 // Row border
-                ops.push_str(&format!("q 0.8 0.8 0.8 RG 0.5 w {} {} m {} {} l S Q\n",
-                    left_margin, y - row_h + 4.0, left_margin + max_text_w, y - row_h + 4.0));
+                ops.push_str(&format!(
+                    "q 0.8 0.8 0.8 RG 0.5 w {} {} m {} {} l S Q\n",
+                    left_margin,
+                    y - row_h + 4.0,
+                    left_margin + max_text_w,
+                    y - row_h + 4.0
+                ));
                 y -= row_h;
             }
             y -= 6.0;
-            if i < runs.len() && runs[i].text == "\n" { i += 1; }
+            if i < runs.len() && runs[i].text == "\n" {
+                i += 1;
+            }
             continue;
         }
 
@@ -3584,8 +4905,13 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             let mut code_text = String::new();
             while i < runs.len() {
                 let r = &runs[i];
-                if !matches!(r.block_type, BlockType::CodeBlock { .. }) && r.text != "\n" { break; }
-                if r.text == "\n" && !matches!(r.block_type, BlockType::CodeBlock { .. }) { i += 1; break; }
+                if !matches!(r.block_type, BlockType::CodeBlock { .. }) && r.text != "\n" {
+                    break;
+                }
+                if r.text == "\n" && !matches!(r.block_type, BlockType::CodeBlock { .. }) {
+                    i += 1;
+                    break;
+                }
                 code_text.push_str(&r.text);
                 i += 1;
             }
@@ -3593,12 +4919,30 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
             let code_line_h = 13.0;
             let block_h = lines.len() as f64 * code_line_h + 8.0;
             if y >= bottom_margin + block_h {
-                ops.push_str(&pdf_rect(left_margin, y - block_h + 4.0, max_text_w, block_h, "0.973 0.976 0.98 rg", true));
+                ops.push_str(&pdf_rect(
+                    left_margin,
+                    y - block_h + 4.0,
+                    max_text_w,
+                    block_h,
+                    "0.973 0.976 0.98 rg",
+                    true,
+                ));
                 for line in &lines {
                     let code_cw = char_width(10.0);
                     let max_code_chars = ((max_text_w - 16.0) / code_cw).max(1.0) as usize;
-                    let display = if line.len() > max_code_chars { &line[..max_code_chars] } else { line };
-                    ops.push_str(&pdf_text("/F3", 10.0, code_color, left_margin + 8.0, y, display));
+                    let display = if line.len() > max_code_chars {
+                        &line[..max_code_chars]
+                    } else {
+                        line
+                    };
+                    ops.push_str(&pdf_text(
+                        "/F3",
+                        10.0,
+                        code_color,
+                        left_margin + 8.0,
+                        y,
+                        display,
+                    ));
                     y -= code_line_h;
                 }
                 y -= 8.0;
@@ -3618,19 +4962,39 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
         let mut spans: Vec<Span> = Vec::new();
         while i < runs.len() {
             let r = &runs[i];
-            if r.text == "\n" { i += 1; break; }
-            if !matches!(r.block_type, BlockType::Normal) { break; }
-            spans.push(Span { text: r.text.clone(), bold: r.bold, italic: r.italic, code: r.code });
+            if r.text == "\n" {
+                i += 1;
+                break;
+            }
+            if !matches!(r.block_type, BlockType::Normal) {
+                break;
+            }
+            spans.push(Span {
+                text: r.text.clone(),
+                bold: r.bold,
+                italic: r.italic,
+                code: r.code,
+            });
             i += 1;
         }
 
         let wrapped_lines = wrap_spans(&spans, max_text_w, cw);
         for visual_line in &wrapped_lines {
-            if y < bottom_margin { break; }
+            if y < bottom_margin {
+                break;
+            }
             let mut lx = left_margin;
             for span in visual_line {
-                if span.text.is_empty() { continue; }
-                let font = if span.code { "/F3" } else if span.bold { "/F2" } else { "/F1" };
+                if span.text.is_empty() {
+                    continue;
+                }
+                let font = if span.code {
+                    "/F3"
+                } else if span.bold {
+                    "/F2"
+                } else {
+                    "/F1"
+                };
                 let clr = if span.code { code_color } else { text_color };
                 let sz = if span.code { 10.0 } else { base_size };
                 let span_cw = char_width(sz);
@@ -3644,7 +5008,9 @@ fn markdown_to_pdf_content(markdown: &str, start_y: f64, page_width: f64) -> Str
 }
 
 fn pdf_escape_text(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
+    text.replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
 }
 
 // ---------------------------------------------------------------------------
@@ -3695,7 +5061,11 @@ This showcases **headings**, *italic*, ~~strikethrough~~, `inline code`, block q
     let runs = markdown_to_runs(md, OpenXmlFormat::Docx);
     assert!(!runs.is_empty());
 
-    let docx_bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let docx_bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let mut files = read_zip(&docx_bytes).expect("read_zip");
 
     let paragraphs_xml = markdown_runs_to_docx_xml(&runs, "Calibri", 22, defaults::TEXT);
@@ -3708,7 +5078,10 @@ This showcases **headings**, *italic*, ~~strikethrough~~, `inline code`, block q
     assert!(paragraphs_xml.contains("Courier New"), "code font");
     assert!(paragraphs_xml.contains("F8F9FA"), "code block shading");
     assert!(paragraphs_xml.contains("FFF5F5"), "blockquote shading");
-    assert!(paragraphs_xml.contains("Flow Like Logo"), "image placeholder");
+    assert!(
+        paragraphs_xml.contains("Flow Like Logo"),
+        "image placeholder"
+    );
 
     insert_before_sect_pr(&mut files, &paragraphs_xml);
     let result = write_zip(&files).expect("write_zip");
@@ -3763,14 +5136,72 @@ markdown_to_runs(md, OpenXmlFormat::Pptx);
 
     // Slide 1: Title
     let s1 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s1, "rect", 0.0, 0.0, 33.87, 4.0, defaults::PRIMARY, "", "");
-    pptx_add_text_box_aligned(&mut files, s1, "Markdown → PPTX", 2.0, 0.8, 29.87, 2.5, 36.0, "#FFFFFF", true, "ctr", "");
-    pptx_add_text_box_aligned(&mut files, s1, "GFM rendering: headings, tables, blockquotes, code, images", 2.0, 3.0, 29.87, 1.0, 14.0, "#FFB3B3", false, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s1,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        4.0,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "Markdown → PPTX",
+        2.0,
+        0.8,
+        29.87,
+        2.5,
+        36.0,
+        "#FFFFFF",
+        true,
+        "ctr",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "GFM rendering: headings, tables, blockquotes, code, images",
+        2.0,
+        3.0,
+        29.87,
+        1.0,
+        14.0,
+        "#FFB3B3",
+        false,
+        "ctr",
+        "",
+    );
 
     // Slide 2: Full markdown text box
     let s2 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s2, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
-    pptx_add_markdown_text_box(&mut files, s2, md, 2.0, 1.5, 29.87, 17.0, 12.0, defaults::TEXT);
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_markdown_text_box(
+        &mut files,
+        s2,
+        md,
+        2.0,
+        1.5,
+        29.87,
+        17.0,
+        12.0,
+        defaults::TEXT,
+    );
 
     let result = write_zip(&files).expect("write_zip");
     let re_read = read_zip(&result).expect("re-read");
@@ -3795,7 +5226,7 @@ markdown_to_runs(md, OpenXmlFormat::Pptx);
 
 #[test]
 fn convert_markdown_to_pdf() {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     let md = r#"# Flow Like Document Generation
 
@@ -3833,22 +5264,34 @@ Built with ***Rust*** for maximum performance and reliability."#;
     let font_mono_id = doc.new_object_id();
     let resources_id = doc.new_object_id();
 
-    doc.objects.insert(font_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
-    }));
-    doc.objects.insert(font_bold_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica-Bold",
-    }));
-    doc.objects.insert(font_mono_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier",
-    }));
-    doc.objects.insert(resources_id, Object::Dictionary(dictionary! {
-        "Font" => dictionary! {
-            "F1" => Object::Reference(font_id),
-            "F2" => Object::Reference(font_bold_id),
-            "F3" => Object::Reference(font_mono_id),
-        },
-    }));
+    doc.objects.insert(
+        font_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        }),
+    );
+    doc.objects.insert(
+        font_bold_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica-Bold",
+        }),
+    );
+    doc.objects.insert(
+        font_mono_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier",
+        }),
+    );
+    doc.objects.insert(
+        resources_id,
+        Object::Dictionary(dictionary! {
+            "Font" => dictionary! {
+                "F1" => Object::Reference(font_id),
+                "F2" => Object::Reference(font_bold_id),
+                "F3" => Object::Reference(font_mono_id),
+            },
+        }),
+    );
 
     // Title bar
     let mut content = String::new();
@@ -3859,7 +5302,9 @@ Built with ***Rust*** for maximum performance and reliability."#;
 
     // Footer
     content.push_str("q 1 0.263 0.263 rg 0 0 612 4 re f Q\n");
-    content.push_str("BT /F1 8 Tf 0.416 0.416 0.416 rg 200 15 Td (Generated from Markdown by Flow Like) Tj ET\n");
+    content.push_str(
+        "BT /F1 8 Tf 0.416 0.416 0.416 rg 200 15 Td (Generated from Markdown by Flow Like) Tj ET\n",
+    );
 
     let content_id = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
     let page_id = doc.add_object(dictionary! {
@@ -3870,11 +5315,14 @@ Built with ***Rust*** for maximum performance and reliability."#;
         "Resources" => Object::Reference(resources_id),
     });
 
-    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {
-        "Type" => "Pages",
-        "Kids" => vec![Object::Reference(page_id)],
-        "Count" => 1,
-    }));
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }),
+    );
     let catalog_id = doc.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => Object::Reference(pages_id),
@@ -3969,26 +5417,81 @@ fn chart_nivo_to_pptx() {
     let mut files = read_zip(&pptx_bytes).expect("read_zip");
 
     let s1 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s1, "rect", 0.0, 0.0, 33.87, 4.0, defaults::PRIMARY, "", "");
-    pptx_add_text_box_aligned(&mut files, s1, "Charts in PPTX", 2.0, 0.8, 29.87, 2.5, 36.0, "#FFFFFF", true, "ctr", "");
+    pptx_add_shape(
+        &mut files,
+        s1,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        4.0,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
+    pptx_add_text_box_aligned(
+        &mut files,
+        s1,
+        "Charts in PPTX",
+        2.0,
+        0.8,
+        29.87,
+        2.5,
+        36.0,
+        "#FFFFFF",
+        true,
+        "ctr",
+        "",
+    );
 
     let s2 = pptx_add_slide(&mut files);
-    pptx_add_shape(&mut files, s2, "rect", 0.0, 0.0, 33.87, 0.6, defaults::PRIMARY, "", "");
+    pptx_add_shape(
+        &mut files,
+        s2,
+        "rect",
+        0.0,
+        0.0,
+        33.87,
+        0.6,
+        defaults::PRIMARY,
+        "",
+        "",
+    );
 
     // Add markdown text box (chart blocks are skipped in text)
-    pptx_add_markdown_text_box(&mut files, s2, CHART_MARKDOWN, 2.0, 1.5, 29.87, 3.5, 12.0, defaults::TEXT);
+    pptx_add_markdown_text_box(
+        &mut files,
+        s2,
+        CHART_MARKDOWN,
+        2.0,
+        1.5,
+        29.87,
+        3.5,
+        12.0,
+        defaults::TEXT,
+    );
 
     // Embed native charts on the slide (more vertical space)
-    let chart_count = pptx_embed_charts_from_markdown(&mut files, s2, CHART_MARKDOWN, 2.0, 5.5, 29.87, 13.0);
+    let chart_count =
+        pptx_embed_charts_from_markdown(&mut files, s2, CHART_MARKDOWN, 2.0, 5.5, 29.87, 13.0);
     assert_eq!(chart_count, 3, "expected 3 charts embedded");
 
     let result = write_zip(&files).expect("write_zip");
     let re_read = read_zip(&result).expect("re-read");
 
     // Verify chart files exist
-    assert!(re_read.contains_key("ppt/charts/chart1.xml"), "chart1 missing");
-    assert!(re_read.contains_key("ppt/charts/chart2.xml"), "chart2 missing");
-    assert!(re_read.contains_key("ppt/charts/chart3.xml"), "chart3 missing");
+    assert!(
+        re_read.contains_key("ppt/charts/chart1.xml"),
+        "chart1 missing"
+    );
+    assert!(
+        re_read.contains_key("ppt/charts/chart2.xml"),
+        "chart2 missing"
+    );
+    assert!(
+        re_read.contains_key("ppt/charts/chart3.xml"),
+        "chart3 missing"
+    );
 
     // Verify chart XML contains correct chart types
     let chart1 = String::from_utf8_lossy(re_read.get("ppt/charts/chart1.xml").unwrap());
@@ -4004,7 +5507,10 @@ fn chart_nivo_to_pptx() {
 
     // Verify slide has chart references
     let slide2 = String::from_utf8_lossy(re_read.get("ppt/slides/slide2.xml").unwrap());
-    assert!(slide2.contains("p:graphicFrame"), "chart graphic frame on slide");
+    assert!(
+        slide2.contains("p:graphicFrame"),
+        "chart graphic frame on slide"
+    );
 
     // Verify regular code block still rendered as text
     assert!(slide2.contains("let x = 42"), "regular code block as text");
@@ -4020,7 +5526,11 @@ fn chart_nivo_to_pptx() {
 
 #[test]
 fn chart_nivo_to_docx() {
-    let docx_bytes = create_empty_docx(defaults::FONT_SANS, defaults::DOCX_FONT_SIZE, defaults::PRIMARY);
+    let docx_bytes = create_empty_docx(
+        defaults::FONT_SANS,
+        defaults::DOCX_FONT_SIZE,
+        defaults::PRIMARY,
+    );
     let mut files = read_zip(&docx_bytes).expect("read_zip");
 
     let runs = markdown_to_runs(CHART_MARKDOWN, OpenXmlFormat::Docx);
@@ -4035,9 +5545,18 @@ fn chart_nivo_to_docx() {
     let re_read = read_zip(&result).expect("re-read");
 
     // Verify chart files exist
-    assert!(re_read.contains_key("word/charts/chart1.xml"), "chart1 missing");
-    assert!(re_read.contains_key("word/charts/chart2.xml"), "chart2 missing");
-    assert!(re_read.contains_key("word/charts/chart3.xml"), "chart3 missing");
+    assert!(
+        re_read.contains_key("word/charts/chart1.xml"),
+        "chart1 missing"
+    );
+    assert!(
+        re_read.contains_key("word/charts/chart2.xml"),
+        "chart2 missing"
+    );
+    assert!(
+        re_read.contains_key("word/charts/chart3.xml"),
+        "chart3 missing"
+    );
 
     let chart1 = String::from_utf8_lossy(re_read.get("word/charts/chart1.xml").unwrap());
     assert!(chart1.contains("<c:barChart>"), "chart1 should be bar");
@@ -4049,10 +5568,16 @@ fn chart_nivo_to_docx() {
     assert!(doc.contains("wp:inline"), "chart inline drawing present");
 
     // Verify regular code block still rendered
-    assert!(paragraphs_xml.contains("let x = 42"), "regular code block kept");
+    assert!(
+        paragraphs_xml.contains("let x = 42"),
+        "regular code block kept"
+    );
 
     // Verify placeholders were replaced (not present in final document)
-    assert!(!doc.contains("[Chart:"), "placeholders should be replaced by chart drawings");
+    assert!(
+        !doc.contains("[Chart:"),
+        "placeholders should be replaced by chart drawings"
+    );
 
     let path = output_dir().join("test_chart_docx.docx");
     std::fs::write(&path, &result).expect("write");
@@ -4061,7 +5586,7 @@ fn chart_nivo_to_docx() {
 
 #[test]
 fn chart_nivo_to_pdf() {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     let mut doc = Document::with_version("1.7");
     let pages_id = doc.new_object_id();
@@ -4070,22 +5595,34 @@ fn chart_nivo_to_pdf() {
     let font_mono_id = doc.new_object_id();
     let resources_id = doc.new_object_id();
 
-    doc.objects.insert(font_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
-    }));
-    doc.objects.insert(font_bold_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica-Bold",
-    }));
-    doc.objects.insert(font_mono_id, Object::Dictionary(dictionary! {
-        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier",
-    }));
-    doc.objects.insert(resources_id, Object::Dictionary(dictionary! {
-        "Font" => dictionary! {
-            "F1" => Object::Reference(font_id),
-            "F2" => Object::Reference(font_bold_id),
-            "F3" => Object::Reference(font_mono_id),
-        },
-    }));
+    doc.objects.insert(
+        font_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        }),
+    );
+    doc.objects.insert(
+        font_bold_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica-Bold",
+        }),
+    );
+    doc.objects.insert(
+        font_mono_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier",
+        }),
+    );
+    doc.objects.insert(
+        resources_id,
+        Object::Dictionary(dictionary! {
+            "Font" => dictionary! {
+                "F1" => Object::Reference(font_id),
+                "F2" => Object::Reference(font_bold_id),
+                "F3" => Object::Reference(font_mono_id),
+            },
+        }),
+    );
 
     let mut content = String::new();
     content.push_str("q 1 0.263 0.263 rg 0 780 612 12 re f Q\n");
@@ -4107,11 +5644,14 @@ fn chart_nivo_to_pdf() {
         "Resources" => Object::Reference(resources_id),
     });
 
-    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {
-        "Type" => "Pages",
-        "Kids" => vec![Object::Reference(page_id)],
-        "Count" => 1,
-    }));
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }),
+    );
     let catalog_id = doc.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => Object::Reference(pages_id),

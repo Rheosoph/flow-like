@@ -88,6 +88,15 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
+		const pendingMessageRef = useRef<IMessage | null>(null);
+		const rafIdRef = useRef<number | null>(null);
+
+		// Cleanup RAF on unmount
+		useEffect(() => {
+			return () => {
+				if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+			};
+		}, []);
 
 		const chatItems = useMemo(() => {
 			const filtered = currentMessage
@@ -327,9 +336,24 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			ref,
 			() => ({
 				pushCurrentMessageUpdate: (message: IMessage) => {
-					setCurrentMessage(message);
+					// Throttle updates via requestAnimationFrame to avoid per-event re-renders
+					pendingMessageRef.current = message;
+					if (rafIdRef.current === null) {
+						rafIdRef.current = requestAnimationFrame(() => {
+							rafIdRef.current = null;
+							if (pendingMessageRef.current) {
+								setCurrentMessage(pendingMessageRef.current);
+							}
+						});
+					}
 				},
 				clearCurrentMessageUpdate: () => {
+					// Cancel pending RAF and clear immediately
+					if (rafIdRef.current !== null) {
+						cancelAnimationFrame(rafIdRef.current);
+						rafIdRef.current = null;
+					}
+					pendingMessageRef.current = null;
 					setCurrentMessage(null);
 				},
 				pushMessage: (message: IMessage) => {

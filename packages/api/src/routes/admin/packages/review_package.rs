@@ -100,6 +100,13 @@ pub async fn review_package(
         }
     }
 
-    audit!(state, user, "admin.package.review", "package", package_id, format!("Package reviewed: {}", review_action));
+    audit!(
+        state,
+        user,
+        "admin.package.review",
+        "package",
+        package_id,
+        format!("Package reviewed: {}", review_action)
+    );
     Ok(Json(result))
 }

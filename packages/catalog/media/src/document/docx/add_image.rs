@@ -45,15 +45,35 @@ impl NodeLogic for DocxAddImageNode {
         node.add_input_pin("template", "Template", "DOCX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("image", "Image", "Image file to insert", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("width_cm", "Width (cm)", "Image width in cm", VariableType::Float)
-            .set_default_value(Some(json!(10.0)));
-        node.add_input_pin("height_cm", "Height (cm)", "Image height in cm", VariableType::Float)
-            .set_default_value(Some(json!(7.0)));
-        node.add_input_pin("alt_text", "Alt Text", "Accessibility alt text", VariableType::String)
-            .set_default_value(Some(json!("Image")));
+        node.add_input_pin(
+            "image",
+            "Image",
+            "Image file to insert",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "width_cm",
+            "Width (cm)",
+            "Image width in cm",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(10.0)));
+        node.add_input_pin(
+            "height_cm",
+            "Height (cm)",
+            "Image height in cm",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(7.0)));
+        node.add_input_pin(
+            "alt_text",
+            "Alt Text",
+            "Accessibility alt text",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("Image")));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -110,7 +130,10 @@ impl NodeLogic for DocxAddImageNode {
             r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{}"/>"#,
             r_id, img_filename
         );
-        rels_xml = rels_xml.replace("</Relationships>", &format!("{}\n</Relationships>", new_rel));
+        rels_xml = rels_xml.replace(
+            "</Relationships>",
+            &format!("{}\n</Relationships>", new_rel),
+        );
         files.insert(rels_key, rels_xml.into_bytes());
 
         let ct_key = "[Content_Types].xml".to_string();

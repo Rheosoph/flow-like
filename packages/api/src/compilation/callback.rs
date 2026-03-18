@@ -1,6 +1,6 @@
 use crate::compilation::jwt;
-use crate::entity::sea_orm_active_enums::WasmCompilationStatus;
-use crate::entity::wasm_package_version;
+use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility};
+use crate::entity::{wasm_package, wasm_package_version};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -87,7 +87,14 @@ pub async fn handle_compilation_callback(
 
     let nodes = result.nodes;
 
-    let (status, platforms, error) = match result.status {
+    tracing::info!(
+        job_id = %result.job_id,
+        has_nodes = nodes.is_some(),
+        platforms_count = result.compiled_platforms.len(),
+        "Compilation callback received"
+    );
+
+    let (compilation_status, platforms, error) = match result.status {
         CompilationStatus::Compiled => (
             WasmCompilationStatus::Compiled,
             Some(result.compiled_platforms),
@@ -100,16 +107,43 @@ pub async fn handle_compilation_callback(
         ),
     };
 
+    let compiled_ok = compilation_status == WasmCompilationStatus::Compiled;
+
     let mut update = wasm_package_version::ActiveModel {
         id: Set(version_record.id),
-        compilation_status: Set(status),
+        compilation_status: Set(compilation_status),
         compiled_platforms: Set(platforms),
         compilation_error: Set(error),
         ..Default::default()
     };
 
-    if let Some(nodes) = nodes {
-        update.nodes = Set(nodes);
+    if let Some(ref nodes) = nodes {
+        update.nodes = Set(nodes.clone());
+    }
+
+    // Auto-approve private packages on successful compilation
+    let package = wasm_package::Entity::find_by_id(&result.package_id)
+        .one(db.as_ref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(CallbackResponse {
+                    ok: false,
+                    error: Some(format!("DB error: {e}")),
+                }),
+            )
+        })?;
+
+    let auto_approve = compiled_ok
+        && package
+            .as_ref()
+            .is_some_and(|p| p.visibility == WasmPackageVisibility::Private);
+
+    if auto_approve {
+        let now = chrono::Utc::now().naive_utc();
+        update.status = Set(WasmPackageStatus::Active);
+        update.approved_at = Set(Some(now));
     }
 
     update.update(db.as_ref()).await.map_err(|e| {
@@ -122,10 +156,37 @@ pub async fn handle_compilation_callback(
         )
     })?;
 
+    // Promote version data to parent package for private auto-approved packages
+    if auto_approve {
+        if let Some(pkg) = &package {
+            let now = chrono::Utc::now().naive_utc();
+            let mut pkg_update = wasm_package::ActiveModel {
+                id: Set(pkg.id.clone()),
+                version: Set(result.version.clone()),
+                wasm_path: Set(version_record.wasm_path.clone()),
+                wasm_hash: Set(version_record.wasm_hash.clone()),
+                wasm_size: Set(version_record.wasm_size),
+                updated_at: Set(now),
+                ..Default::default()
+            };
+            if let Some(ref nodes) = nodes {
+                pkg_update.nodes = Set(nodes.clone());
+            }
+            if let Err(e) = pkg_update.update(db.as_ref()).await {
+                tracing::warn!(
+                    package_id = %result.package_id,
+                    error = %e,
+                    "Failed to promote version to parent package"
+                );
+            }
+        }
+    }
+
     tracing::info!(
         job_id = %result.job_id,
         package_id = %result.package_id,
         version = %result.version,
+        auto_approved = auto_approve,
         "Compilation callback processed"
     );
 

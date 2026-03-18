@@ -237,12 +237,7 @@ fn warn_struct_pins_without_schema() {
             .values()
             .filter(|p| p.data_type == VariableType::Struct)
             .filter(|p| p.schema.as_ref().map_or(true, |s| s.trim().is_empty()))
-            .map(|p| {
-                format!(
-                    "Struct pin \"{}\" ({:?}) has no schema",
-                    p.name, p.pin_type
-                )
-            })
+            .map(|p| format!("Struct pin \"{}\" ({:?}) has no schema", p.name, p.pin_type))
             .collect()
     });
 

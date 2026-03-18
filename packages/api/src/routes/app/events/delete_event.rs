@@ -1,6 +1,5 @@
 use crate::{
-    audit_branch,
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -64,6 +63,14 @@ pub async fn delete_event(
             ApiError::internal_error(anyhow!(e))
         })?;
 
-    audit_branch!(state, user, app_id, "event.delete", "Event", event_id, "Event deleted");
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.delete",
+        "Event",
+        event_id,
+        "Event deleted"
+    );
     Ok(Json(()))
 }

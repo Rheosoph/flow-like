@@ -1,5 +1,5 @@
-use flow_like::app::App;
 use flow_like::a2ui::widget::{ExposedPropType, WidgetActionContextField};
+use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -104,6 +104,13 @@ impl NodeLogic for WidgetActionEvent {
         );
 
         node.add_output_pin(
+            "event_name",
+            "Event Name",
+            "The action ID / event name that was triggered",
+            VariableType::String,
+        );
+
+        node.add_output_pin(
             "action_context",
             "Action Context",
             "The context data passed from the widget action (JSON object with field values)",
@@ -125,6 +132,14 @@ impl NodeLogic for WidgetActionEvent {
             .unwrap_or("")
             .to_string();
 
+        let action_id = payload
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("_action_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         let action_context = payload
             .payload
             .as_ref()
@@ -137,6 +152,12 @@ impl NodeLogic for WidgetActionEvent {
             .get_pin_by_name("widget_instance_id")
             .await?
             .set_value(json!(widget_instance_id))
+            .await;
+
+        context
+            .get_pin_by_name("event_name")
+            .await?
+            .set_value(json!(action_id))
             .await;
 
         context
@@ -173,11 +194,7 @@ impl NodeLogic for WidgetActionEvent {
             if let Some(widget_name) = selected_widget {
                 // Load the app's widgets to get available actions
                 if let Some(app_state) = &board.app_state {
-                    let app_id = board
-                        .board_dir
-                        .filename()
-                        .unwrap_or_default()
-                        .to_string();
+                    let app_id = board.board_dir.filename().unwrap_or_default().to_string();
                     if !app_id.is_empty() {
                         if let Ok(app) = App::load(app_id, app_state.clone()).await {
                             let widgets = app.get_widgets().await.unwrap_or_default();
@@ -217,8 +234,7 @@ impl NodeLogic for WidgetActionEvent {
                                     widget.actions.iter().find(|a| a.id == action_id)
                                 {
                                     if !action.context_schema.is_empty() {
-                                        let schema =
-                                            build_context_schema(&action.context_schema);
+                                        let schema = build_context_schema(&action.context_schema);
                                         if let Some(pin) =
                                             node.get_pin_mut_by_name("action_context")
                                         {
@@ -231,8 +247,7 @@ impl NodeLogic for WidgetActionEvent {
                                         pin.data_type = VariableType::Generic;
                                         pin.schema = None;
                                     }
-                                } else if let Some(pin) =
-                                    node.get_pin_mut_by_name("action_context")
+                                } else if let Some(pin) = node.get_pin_mut_by_name("action_context")
                                 {
                                     pin.data_type = VariableType::Generic;
                                     pin.schema = None;
@@ -246,18 +261,7 @@ impl NodeLogic for WidgetActionEvent {
             }
         }
 
-        // Fallback: no referencing InstantiateWidget found, just validate action_id is set
-        let action_id = node
-            .get_pin_by_name("action_id")
-            .and_then(|pin| pin.default_value.as_ref())
-            .and_then(|v| {
-                let parsed: flow_like_types::Value = flow_like_types::json::from_slice(v).ok()?;
-                parsed.as_str().map(String::from)
-            })
-            .unwrap_or_default();
-
-        if action_id.is_empty() {
-            node.error = Some("Action ID should be specified to identify this event".to_string());
-        }
+        // Fallback: no referencing InstantiateWidget found.
+        // Empty action_id is valid — it acts as a catch-all handler for all widget actions.
     }
 }

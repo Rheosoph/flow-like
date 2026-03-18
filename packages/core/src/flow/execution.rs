@@ -1,4 +1,4 @@
-use super::board::ExecutionStage;
+use super::board::{ExecutionStage, LayerType};
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
@@ -807,6 +807,20 @@ impl InternalRun {
             }
         }
 
+        // Also create pins for nodes inside function layers
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                for (pin_id, pin) in &node.pins {
+                    let internal_pin = InternalPin::new(pin, false);
+                    pin_to_node.insert(pin_id, (node_id, node.is_pure()));
+                    pins.insert(pin.id.clone(), Arc::new(internal_pin));
+                }
+            }
+        }
+
         for layer in board.layers.values() {
             for (pin_id, pin) in &layer.pins {
                 if pins.contains_key(pin_id) {
@@ -838,6 +852,32 @@ impl InternalRun {
                         .filter_map(|id| pins.get(id).map(Arc::downgrade))
                         .collect();
                     internal_pin.init_depends_on(depends);
+                }
+            }
+        }
+
+        // Wire connections for function layer nodes
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for node in layer.nodes.values() {
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        let connected: Vec<Weak<InternalPin>> = pin
+                            .connected_to
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_connected_to(connected);
+
+                        let depends: Vec<Weak<InternalPin>> = pin
+                            .depends_on
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_depends_on(depends);
+                    }
                 }
             }
         }
@@ -917,6 +957,40 @@ impl InternalRun {
             nodes.insert(node_id.clone(), internal_node);
         }
 
+        // Instantiate nodes inside function layers so they are available during execution
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                let logic = registry.instantiate(node)?;
+                let mut node_pins = AHashMap::new();
+                let mut pin_cache = AHashMap::new();
+
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        node_pins.insert(pin.id.clone(), internal_pin.clone());
+                        let cached_array =
+                            pin_cache.entry(pin.name.clone()).or_insert(vec![]);
+                        cached_array.push(internal_pin.clone());
+                    }
+                }
+
+                let internal_node = Arc::new(InternalNode::new(
+                    node.clone(),
+                    node_pins.clone(),
+                    logic,
+                    pin_cache.clone(),
+                ));
+
+                for internal_pin in node_pins.values() {
+                    internal_pin.init_node(Arc::downgrade(&internal_node));
+                }
+
+                nodes.insert(node_id.clone(), internal_node);
+            }
+        }
+
         if USE_DEPENDENCY_GRAPH {
             let mut recursion_filter: AHashSet<String> = AHashSet::new();
             for node_id in board.nodes.keys() {
@@ -947,7 +1021,7 @@ impl InternalRun {
             cache: Arc::new(RwLock::new(AHashMap::new())),
             stack: Arc::new(stack),
             concurrency_limit: 128_000,
-            cpus: num_cpus::get(),
+            cpus: num_cpus::get().max(4) * 4,
             callback,
             credentials: credentials.map(Arc::new),
             token,
@@ -1082,19 +1156,27 @@ impl InternalRun {
             })
             .buffer_unordered(self.cpus)
             .fold(
-                RunStack::with_capacity(stack.stack.len()),
-                |mut acc: RunStack, result| async move {
-                    if let Ok(inner_iter) = result {
+                (RunStack::with_capacity(stack.stack.len()), Vec::new()),
+                |mut acc: (RunStack, Vec<Trace>), result| async move {
+                    if let Ok((inner_iter, traces)) = result {
                         for node in inner_iter {
-                            acc.push(node);
+                            acc.0.push(node);
                         }
+                        acc.1.extend(traces);
                     }
                     acc
                 },
             )
             .await;
 
-        self.stack = Arc::new(new_stack);
+        // Merge all collected traces in one lock acquisition
+        if !new_stack.1.is_empty() {
+            if let Ok(mut run_locked) = lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await {
+                run_locked.traces.extend(new_stack.1);
+            }
+        }
+
+        self.stack = Arc::new(new_stack.0);
     }
 
     async fn step_single(
@@ -1132,9 +1214,15 @@ impl InternalRun {
         .await;
 
         let mut new_stack = RunStack::with_capacity(stack.len());
-        if let Ok(nodes) = connected_nodes {
+        if let Ok((nodes, traces)) = connected_nodes {
             for node in nodes {
                 new_stack.push(node);
+            }
+            // Merge traces in one lock acquisition
+            if !traces.is_empty() {
+                if let Ok(mut run_locked) = lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await {
+                    run_locked.traces.extend(traces);
+                }
             }
         }
 
@@ -1498,7 +1586,7 @@ async fn step_core(
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     user_context: Option<UserExecutionContext>,
-) -> flow_like_types::Result<Vec<ExecutionTarget>> {
+) -> flow_like_types::Result<(Vec<ExecutionTarget>, Vec<Trace>)> {
     // Check Node State and Validate Execution Count (to stop infinite loops)
     {
         let calls_before = target.node.exec_calls.fetch_add(1, Ordering::Relaxed);
@@ -1545,10 +1633,7 @@ async fn step_core(
         eprintln!("[Error] executing node: {:?}", err);
     }
 
-    {
-        let mut run_locked = lock_with_timeout(run.as_ref(), "run_traces_merge").await?;
-        run_locked.traces.extend(context.take_traces());
-    }
+    let traces = context.take_traces();
 
     let state = context.get_state();
 
@@ -1563,7 +1648,7 @@ async fn step_core(
         for connected_node in connected {
             connected_nodes.push(connected_node);
         }
-        return Ok(connected_nodes);
+        return Ok((connected_nodes, traces));
     }
 
     Err(anyhow!("Node failed"))

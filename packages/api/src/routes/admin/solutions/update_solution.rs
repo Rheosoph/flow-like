@@ -136,7 +136,14 @@ pub async fn update_solution(
         "Solution request updated by admin"
     );
 
-    audit!(state, user, "admin.solution.update", "solution", solution_id, format!("Solution updated: {}", status_to_string(&updated.status)));
+    audit!(
+        state,
+        user,
+        "admin.solution.update",
+        "solution",
+        solution_id,
+        format!("Solution updated: {}", status_to_string(&updated.status))
+    );
     Ok(Json(UpdateSolutionResponse {
         success: true,
         id: solution_id,

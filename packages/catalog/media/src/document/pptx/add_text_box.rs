@@ -45,8 +45,13 @@ impl NodeLogic for PptxAddTextBoxNode {
         node.add_input_pin("template", "Template", "PPTX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("slide_number", "Slide Number", "1-based slide index", VariableType::Integer)
-            .set_default_value(Some(json!(1)));
+        node.add_input_pin(
+            "slide_number",
+            "Slide Number",
+            "1-based slide index",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(1)));
         node.add_input_pin("text", "Text", "Text content", VariableType::String);
         node.add_input_pin("x", "X", "X position in cm", VariableType::Float)
             .set_default_value(Some(json!(2.0)));
@@ -56,10 +61,20 @@ impl NodeLogic for PptxAddTextBoxNode {
             .set_default_value(Some(json!(20.0)));
         node.add_input_pin("height", "Height", "Height in cm", VariableType::Float)
             .set_default_value(Some(json!(3.0)));
-        node.add_input_pin("font_size", "Font Size", "Font size in points", VariableType::Float)
-            .set_default_value(Some(json!(18.0)));
-        node.add_input_pin("font_color", "Font Color", "Hex color", VariableType::String)
-            .set_default_value(Some(json!("#1A1A1A")));
+        node.add_input_pin(
+            "font_size",
+            "Font Size",
+            "Font size in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(18.0)));
+        node.add_input_pin(
+            "font_color",
+            "Font Color",
+            "Hex color",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("#1A1A1A")));
         node.add_input_pin("bold", "Bold", "Bold text", VariableType::Boolean)
             .set_default_value(Some(json!(false)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)

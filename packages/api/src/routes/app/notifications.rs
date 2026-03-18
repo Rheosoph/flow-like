@@ -83,8 +83,8 @@ pub async fn create_notification(
         return Err(ApiError::bad_request("event_id is required".to_string()));
     }
 
-    // Get event from database
-    let event = get_event_from_db(&state.db, &params.event_id).await.map_err(|e| {
+    // Get event from database (validates event belongs to this app)
+    let event = get_event_from_db(&state.db, &params.event_id, &app_id).await.map_err(|e| {
         tracing::warn!(error = %e, event_id = %params.event_id, "Failed to resolve event for notification");
         ApiError::FORBIDDEN
     })?;

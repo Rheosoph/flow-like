@@ -52,8 +52,18 @@ impl NodeLogic for PdfCompressNode {
         node.add_output_pin("exec_out", "Done", "Continues", VariableType::Execution);
         node.add_output_pin("result", "Result", "Output file path", VariableType::Struct)
             .set_schema::<FlowPath>();
-        node.add_output_pin("original_size", "Original Size", "Size in bytes before compression", VariableType::Integer);
-        node.add_output_pin("compressed_size", "Compressed Size", "Size in bytes after compression", VariableType::Integer);
+        node.add_output_pin(
+            "original_size",
+            "Original Size",
+            "Size in bytes before compression",
+            VariableType::Integer,
+        );
+        node.add_output_pin(
+            "compressed_size",
+            "Compressed Size",
+            "Size in bytes after compression",
+            VariableType::Integer,
+        );
 
         node
     }
@@ -81,8 +91,12 @@ impl NodeLogic for PdfCompressNode {
 
         output.put(context, buf, false).await?;
         context.set_pin_value("result", json!(output)).await?;
-        context.set_pin_value("original_size", json!(original_size)).await?;
-        context.set_pin_value("compressed_size", json!(compressed_size)).await?;
+        context
+            .set_pin_value("original_size", json!(original_size))
+            .await?;
+        context
+            .set_pin_value("compressed_size", json!(compressed_size))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

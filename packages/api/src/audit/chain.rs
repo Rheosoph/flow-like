@@ -14,7 +14,13 @@ fn canonical_json(value: &Value) -> String {
             let sorted: BTreeMap<_, _> = map.iter().collect();
             let entries: Vec<String> = sorted
                 .into_iter()
-                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap_or_default(), canonical_json(v)))
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonical_json(v)
+                    )
+                })
                 .collect();
             format!("{{{}}}", entries.join(","))
         }
@@ -44,7 +50,13 @@ pub fn compute_entry_hash(
 ) -> String {
     let mut hasher = Hasher::new();
     hasher.update(&sequence.to_le_bytes());
-    hasher.update(timestamp.and_utc().timestamp_millis().to_le_bytes().as_ref());
+    hasher.update(
+        timestamp
+            .and_utc()
+            .timestamp_millis()
+            .to_le_bytes()
+            .as_ref(),
+    );
     hasher.update(actor_id.as_bytes());
     hasher.update(action.as_bytes());
     hasher.update(resource_type.as_bytes());
@@ -53,7 +65,9 @@ pub fn compute_entry_hash(
         Some(v) => {
             hasher.update(canonical_json(v).as_bytes());
         }
-        None => { hasher.update(b"null"); }
+        None => {
+            hasher.update(b"null");
+        }
     }
     hasher.update(prev_hash.as_bytes());
     // Including prev_signature in the hash means a key compromise cannot forge entries
@@ -71,7 +85,18 @@ pub fn compute_entry_hash(
 /// `entries` must be sorted by sequence ascending within the same chain.
 /// Tuple fields: (seq, ts, actor, action, rtype, rid, details, prev_hash, entry_hash, prev_signature)
 pub fn verify_chain(
-    entries: &[(i64, NaiveDateTime, String, String, String, String, Option<Value>, String, String, Option<String>)],
+    entries: &[(
+        i64,
+        NaiveDateTime,
+        String,
+        String,
+        String,
+        String,
+        Option<Value>,
+        String,
+        String,
+        Option<String>,
+    )],
     initial_prev_hash: &str,
 ) -> Option<usize> {
     let mut expected_prev = initial_prev_hash.to_string();
@@ -109,13 +134,29 @@ mod tests {
     fn test_genesis_chain() {
         let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
         let hash1 = compute_entry_hash(
-            1, &ts, "user1", "app.create", "App", "app1", None, GENESIS_HASH, None,
+            1,
+            &ts,
+            "user1",
+            "app.create",
+            "App",
+            "app1",
+            None,
+            GENESIS_HASH,
+            None,
         );
         assert!(!hash1.is_empty());
         assert_ne!(hash1, GENESIS_HASH);
 
         let hash2 = compute_entry_hash(
-            2, &ts, "user1", "app.update", "App", "app1", None, &hash1, Some("sig1"),
+            2,
+            &ts,
+            "user1",
+            "app.update",
+            "App",
+            "app1",
+            None,
+            &hash1,
+            Some("sig1"),
         );
         assert_ne!(hash1, hash2);
     }
@@ -124,12 +165,54 @@ mod tests {
     fn test_chain_verification() {
         let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
-        let h1 = compute_entry_hash(1, &ts, "u1", "app.create", "App", "a1", None, GENESIS_HASH, None);
-        let h2 = compute_entry_hash(2, &ts, "u1", "app.update", "App", "a1", None, &h1, Some("sig_for_h1"));
+        let h1 = compute_entry_hash(
+            1,
+            &ts,
+            "u1",
+            "app.create",
+            "App",
+            "a1",
+            None,
+            GENESIS_HASH,
+            None,
+        );
+        let h2 = compute_entry_hash(
+            2,
+            &ts,
+            "u1",
+            "app.update",
+            "App",
+            "a1",
+            None,
+            &h1,
+            Some("sig_for_h1"),
+        );
 
         let entries = vec![
-            (1, ts, "u1".to_string(), "app.create".to_string(), "App".to_string(), "a1".to_string(), None, GENESIS_HASH.to_string(), h1.clone(), None),
-            (2, ts, "u1".to_string(), "app.update".to_string(), "App".to_string(), "a1".to_string(), None, h1, h2, Some("sig_for_h1".to_string())),
+            (
+                1,
+                ts,
+                "u1".to_string(),
+                "app.create".to_string(),
+                "App".to_string(),
+                "a1".to_string(),
+                None,
+                GENESIS_HASH.to_string(),
+                h1.clone(),
+                None,
+            ),
+            (
+                2,
+                ts,
+                "u1".to_string(),
+                "app.update".to_string(),
+                "App".to_string(),
+                "a1".to_string(),
+                None,
+                h1,
+                h2,
+                Some("sig_for_h1".to_string()),
+            ),
         ];
 
         assert_eq!(verify_chain(&entries, GENESIS_HASH), None);
@@ -139,12 +222,54 @@ mod tests {
     fn test_tampered_chain() {
         let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
-        let h1 = compute_entry_hash(1, &ts, "u1", "app.create", "App", "a1", None, GENESIS_HASH, None);
-        let _h2 = compute_entry_hash(2, &ts, "u1", "app.update", "App", "a1", None, &h1, Some("sig1"));
+        let h1 = compute_entry_hash(
+            1,
+            &ts,
+            "u1",
+            "app.create",
+            "App",
+            "a1",
+            None,
+            GENESIS_HASH,
+            None,
+        );
+        let _h2 = compute_entry_hash(
+            2,
+            &ts,
+            "u1",
+            "app.update",
+            "App",
+            "a1",
+            None,
+            &h1,
+            Some("sig1"),
+        );
 
         let entries = vec![
-            (1, ts, "u1".to_string(), "app.create".to_string(), "App".to_string(), "a1".to_string(), None, GENESIS_HASH.to_string(), h1.clone(), None),
-            (2, ts, "u1".to_string(), "app.update".to_string(), "App".to_string(), "a1".to_string(), None, h1, "tampered_hash".to_string(), Some("sig1".to_string())),
+            (
+                1,
+                ts,
+                "u1".to_string(),
+                "app.create".to_string(),
+                "App".to_string(),
+                "a1".to_string(),
+                None,
+                GENESIS_HASH.to_string(),
+                h1.clone(),
+                None,
+            ),
+            (
+                2,
+                ts,
+                "u1".to_string(),
+                "app.update".to_string(),
+                "App".to_string(),
+                "a1".to_string(),
+                None,
+                h1,
+                "tampered_hash".to_string(),
+                Some("sig1".to_string()),
+            ),
         ];
 
         assert_eq!(verify_chain(&entries, GENESIS_HASH), Some(1));

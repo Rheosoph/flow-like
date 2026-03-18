@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::{Document, Object, Stream, dictionary};
 
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -46,14 +46,29 @@ impl NodeLogic for PdfAddWatermarkNode {
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin("text", "Text", "Watermark text", VariableType::String);
-        node.add_input_pin("font_size", "Font Size", "Font size in points", VariableType::Float)
-            .set_default_value(Some(json!(60.0)));
-        node.add_input_pin("color", "Color", "Watermark color (hex)", VariableType::String)
-            .set_default_value(Some(json!("#FF4343")));
+        node.add_input_pin(
+            "font_size",
+            "Font Size",
+            "Font size in points",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(60.0)));
+        node.add_input_pin(
+            "color",
+            "Color",
+            "Watermark color (hex)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("#FF4343")));
         node.add_input_pin("opacity", "Opacity", "0.0 to 1.0", VariableType::Float)
             .set_default_value(Some(json!(0.15)));
-        node.add_input_pin("rotation_deg", "Rotation", "Rotation in degrees", VariableType::Float)
-            .set_default_value(Some(json!(45.0)));
+        node.add_input_pin(
+            "rotation_deg",
+            "Rotation",
+            "Rotation in degrees",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(45.0)));
         node.add_input_pin("output", "Output Path", "Save path", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
@@ -95,12 +110,24 @@ impl NodeLogic for PdfAddWatermarkNode {
             let x = width / 2.0;
             let y = height / 2.0;
 
-            let escaped_text = text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+            let escaped_text = text
+                .replace('\\', "\\\\")
+                .replace('(', "\\(")
+                .replace(')', "\\)");
 
             let content_str = format!(
                 "q\n/GS0 gs\nBT\n{cos} {sin} {neg_sin} {cos2} {x} {y} Tm\n/F1 {fs} Tf\n{r} {g} {b} rg\n({text}) Tj\nET\nQ\n",
-                cos = cos_a, sin = sin_a, neg_sin = -sin_a, cos2 = cos_a,
-                x = x, y = y, fs = font_size, r = r, g = g, b = b, text = escaped_text,
+                cos = cos_a,
+                sin = sin_a,
+                neg_sin = -sin_a,
+                cos2 = cos_a,
+                x = x,
+                y = y,
+                fs = font_size,
+                r = r,
+                g = g,
+                b = b,
+                text = escaped_text,
             );
 
             let gs_dict = dictionary! {
@@ -130,11 +157,16 @@ impl NodeLogic for PdfAddWatermarkNode {
                     if let Ok(existing_resources) = dict.get(b"Resources") {
                         if let Object::Dictionary(res_dict) = existing_resources {
                             let mut merged = res_dict.clone();
-                            merged.set("ExtGState", dictionary! { "GS0" => Object::Reference(gs_id) });
+                            merged.set(
+                                "ExtGState",
+                                dictionary! { "GS0" => Object::Reference(gs_id) },
+                            );
                             if !merged.has(b"Font") {
-                                merged.set("Font", dictionary! { "F1" => Object::Reference(font_id) });
-                            } else if let Ok(Object::Dictionary(font_res)) =
-                                merged.get_mut(b"Font")
+                                merged.set(
+                                    "Font",
+                                    dictionary! { "F1" => Object::Reference(font_id) },
+                                );
+                            } else if let Ok(Object::Dictionary(font_res)) = merged.get_mut(b"Font")
                             {
                                 font_res.set("F1", Object::Reference(font_id));
                             }

@@ -125,9 +125,7 @@ impl NodeLogic for CompressMemoryNode {
 
         if observations.is_empty() {
             context.set_pin_value("summary_text", json!("")).await?;
-            context
-                .set_pin_value("compressed_count", json!(0))
-                .await?;
+            context.set_pin_value("compressed_count", json!(0)).await?;
             context
                 .set_pin_value("stats", json!(LLMUsageStats::default()))
                 .await?;
@@ -208,9 +206,7 @@ impl NodeLogic for CompressMemoryNode {
             .ok_or_else(|| flow_like_types::anyhow!("Failed to downcast embedding model"))?;
 
         let embeddings = if let Some(model) = &embedding_obj.text_model {
-            model
-                .text_embed_document(&vec![summary.clone()])
-                .await?
+            model.text_embed_document(&vec![summary.clone()]).await?
         } else {
             bail!("No text embedding model available");
         };

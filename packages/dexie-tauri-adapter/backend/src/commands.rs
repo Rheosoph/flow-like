@@ -10,10 +10,7 @@ fn get_store<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::State<'_, BlobStor
 }
 
 #[tauri::command]
-pub async fn blob_store<R: Runtime>(
-    app: AppHandle<R>,
-    data: Vec<u8>,
-) -> Result<BlobRef, String> {
+pub async fn blob_store<R: Runtime>(app: AppHandle<R>, data: Vec<u8>) -> Result<BlobRef, String> {
     let store = get_store(&app)?;
     store.store(&data).await
 }
@@ -80,4 +77,22 @@ pub async fn blob_configure<R: Runtime>(
     let store = get_store(&app)?;
     store.set_base_dir(PathBuf::from(base_path)).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn blob_inc_refs<R: Runtime>(
+    app: AppHandle<R>,
+    hashes: Vec<String>,
+) -> Result<(), String> {
+    let store = get_store(&app)?;
+    store.inc_refs(&hashes).await
+}
+
+#[tauri::command]
+pub async fn blob_dec_refs<R: Runtime>(
+    app: AppHandle<R>,
+    hashes: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let store = get_store(&app)?;
+    store.dec_refs(&hashes).await
 }

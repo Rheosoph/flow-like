@@ -45,16 +45,36 @@ impl NodeLogic for PptxAddChartNode {
         node.add_input_pin("template", "Template", "PPTX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("slide_number", "Slide Number", "1-based slide index", VariableType::Integer)
-            .set_default_value(Some(json!(1)));
-        node.add_input_pin("chart_type", "Chart Type", "bar, line, or pie", VariableType::String)
-            .set_default_value(Some(json!("bar")));
-        node.add_input_pin("categories", "Categories", "Category labels", VariableType::String)
-            .set_value_type(flow_like::flow::pin::ValueType::Array);
+        node.add_input_pin(
+            "slide_number",
+            "Slide Number",
+            "1-based slide index",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(1)));
+        node.add_input_pin(
+            "chart_type",
+            "Chart Type",
+            "bar, line, or pie",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("bar")));
+        node.add_input_pin(
+            "categories",
+            "Categories",
+            "Category labels",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
         node.add_input_pin("values", "Values", "Numeric values", VariableType::Float)
             .set_value_type(flow_like::flow::pin::ValueType::Array);
-        node.add_input_pin("series_name", "Series Name", "Series label", VariableType::String)
-            .set_default_value(Some(json!("Series 1")));
+        node.add_input_pin(
+            "series_name",
+            "Series Name",
+            "Series label",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("Series 1")));
         node.add_input_pin("x", "X", "X position in cm", VariableType::Float)
             .set_default_value(Some(json!(3.0)));
         node.add_input_pin("y", "Y", "Y position in cm", VariableType::Float)

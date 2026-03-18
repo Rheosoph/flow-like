@@ -10,7 +10,14 @@ import {
 	ThumbsDownIcon,
 	ThumbsUpIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
 import {
@@ -399,6 +406,7 @@ const AttachmentSection = ({
 							file={file}
 							showFullscreenButton={true}
 							onFullscreen={onFullscreen}
+							inGrid={visibleImages.length > 1}
 						/>
 					))}
 				</div>
@@ -446,7 +454,7 @@ const AttachmentSection = ({
 	);
 };
 
-export function MessageComponent({
+export const MessageComponent = memo(function MessageComponent({
 	message,
 	loading,
 	onMessageUpdate,
@@ -770,4 +778,17 @@ export function MessageComponent({
 			)}
 		</>
 	);
-}
+}, (prev, next) => {
+	return (
+		prev.message.inner.content === next.message.inner.content &&
+		prev.message.files === next.message.files &&
+		prev.message.rating === next.message.rating &&
+		prev.message.ratingSettings === next.message.ratingSettings &&
+		prev.message.plan_steps === next.message.plan_steps &&
+		prev.message.current_step_id === next.message.current_step_id &&
+		prev.message.usage_stats === next.message.usage_stats &&
+		prev.loading === next.loading &&
+		prev.onMessageUpdate === next.onMessageUpdate
+	);
+});
+MessageComponent.displayName = "MessageComponent";

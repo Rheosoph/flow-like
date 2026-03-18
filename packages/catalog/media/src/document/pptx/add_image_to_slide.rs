@@ -45,11 +45,21 @@ impl NodeLogic for PptxAddImageToSlideNode {
         node.add_input_pin("template", "Template", "PPTX file", VariableType::Struct)
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("image", "Image", "Image file (PNG/JPEG)", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("slide_number", "Slide Number", "1-based slide index", VariableType::Integer)
-            .set_default_value(Some(json!(1)));
+        node.add_input_pin(
+            "image",
+            "Image",
+            "Image file (PNG/JPEG)",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "slide_number",
+            "Slide Number",
+            "1-based slide index",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(1)));
         node.add_input_pin("x", "X", "X position in cm", VariableType::Float)
             .set_default_value(Some(json!(2.0)));
         node.add_input_pin("y", "Y", "Y position in cm", VariableType::Float)

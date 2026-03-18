@@ -126,6 +126,7 @@
     "opener:default",
     "updater:default",
     "notification:default",
+    "flow-like-dexie-blob-offload:default",
     "notification:allow-notify",
     "notification:allow-request-permission",
     "notification:allow-is-permission-granted",

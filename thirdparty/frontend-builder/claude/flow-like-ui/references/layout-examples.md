@@ -1024,3 +1024,340 @@ Complete JSON examples for common UI patterns.
   ]
 }
 ```
+
+---
+
+## Settings Panel
+
+### Notification Settings with Toggles
+
+```json
+{
+  "rootComponentId": "settings-panel",
+  "canvasSettings": {
+    "backgroundColor": "bg-background",
+    "padding": "1.5rem"
+  },
+  "components": [
+    {
+      "id": "settings-panel",
+      "style": { "className": "max-w-lg mx-auto" },
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "1.5rem" },
+        "children": { "explicitList": ["settings-header", "toggle-list", "save-btn"] }
+      }
+    },
+    {
+      "id": "settings-header",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Notification Settings" },
+        "variant": { "literalString": "h3" }
+      }
+    },
+    {
+      "id": "toggle-list",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "0.75rem" },
+        "children": { "explicitList": ["email-toggle", "push-toggle"] }
+      }
+    },
+    {
+      "id": "email-toggle",
+      "style": { "className": "flex items-center justify-between p-3 rounded-lg border border-border" },
+      "component": {
+        "type": "row",
+        "align": { "literalString": "center" },
+        "justify": { "literalString": "between" },
+        "children": { "explicitList": ["email-info", "email-switch"] }
+      }
+    },
+    {
+      "id": "email-info",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "2px" },
+        "children": { "explicitList": ["email-title", "email-desc"] }
+      }
+    },
+    {
+      "id": "email-title",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Email Notifications" },
+        "weight": { "literalString": "medium" }
+      }
+    },
+    {
+      "id": "email-desc",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Receive updates via email" },
+        "size": { "literalString": "sm" },
+        "color": { "literalString": "text-muted-foreground" }
+      }
+    },
+    {
+      "id": "email-switch",
+      "component": {
+        "type": "switch",
+        "checked": { "path": "$.settings.emailEnabled", "defaultValue": true }
+      }
+    },
+    {
+      "id": "push-toggle",
+      "style": { "className": "flex items-center justify-between p-3 rounded-lg border border-border" },
+      "component": {
+        "type": "row",
+        "align": { "literalString": "center" },
+        "justify": { "literalString": "between" },
+        "children": { "explicitList": ["push-info", "push-switch"] }
+      }
+    },
+    {
+      "id": "push-info",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "2px" },
+        "children": { "explicitList": ["push-title", "push-desc"] }
+      }
+    },
+    {
+      "id": "push-title",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Push Notifications" },
+        "weight": { "literalString": "medium" }
+      }
+    },
+    {
+      "id": "push-desc",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Get notified on your device" },
+        "size": { "literalString": "sm" },
+        "color": { "literalString": "text-muted-foreground" }
+      }
+    },
+    {
+      "id": "push-switch",
+      "component": {
+        "type": "switch",
+        "checked": { "path": "$.settings.pushEnabled", "defaultValue": false }
+      }
+    },
+    {
+      "id": "save-btn",
+      "style": { "className": "w-full" },
+      "component": {
+        "type": "button",
+        "label": { "literalString": "Save Settings" },
+        "variant": { "literalString": "default" },
+        "actions": [{ "name": "saveSettings", "context": {} }]
+      }
+    }
+  ],
+  "dataModel": [
+    { "path": "$.settings.emailEnabled", "value": true },
+    { "path": "$.settings.pushEnabled", "value": false }
+  ]
+}
+```
+
+---
+
+## Game UI
+
+### Simple Game HUD
+
+```json
+{
+  "rootComponentId": "game-hud",
+  "canvasSettings": {
+    "backgroundColor": "transparent",
+    "padding": "0"
+  },
+  "components": [
+    {
+      "id": "game-hud",
+      "style": { "className": "relative w-full h-full" },
+      "component": {
+        "type": "column",
+        "children": { "explicitList": ["top-bar", "dialogue-area"] }
+      }
+    },
+    {
+      "id": "top-bar",
+      "style": { "className": "p-4" },
+      "component": {
+        "type": "row",
+        "justify": { "literalString": "between" },
+        "align": { "literalString": "center" },
+        "children": { "explicitList": ["hp-bar", "score-badge"] }
+      }
+    },
+    {
+      "id": "hp-bar",
+      "style": { "className": "w-48" },
+      "component": {
+        "type": "healthBar",
+        "value": { "path": "$.player.hp", "defaultValue": 75 },
+        "maxValue": { "literalNumber": 100 },
+        "label": { "literalString": "HP" },
+        "variant": { "literalString": "danger" },
+        "showLabel": { "literalBool": true },
+        "animated": { "literalBool": true }
+      }
+    },
+    {
+      "id": "score-badge",
+      "component": {
+        "type": "badge",
+        "content": { "path": "$.player.score", "defaultValue": "0 pts" },
+        "variant": { "literalString": "secondary" }
+      }
+    },
+    {
+      "id": "dialogue-area",
+      "style": { "className": "mt-auto p-4" },
+      "component": {
+        "type": "dialogue",
+        "text": { "path": "$.dialogue.text", "defaultValue": "Welcome, adventurer!" },
+        "speakerName": { "path": "$.dialogue.speaker", "defaultValue": "Narrator" },
+        "typewriter": { "literalBool": true },
+        "speed": { "literalNumber": 30 }
+      }
+    }
+  ],
+  "dataModel": [
+    { "path": "$.player.hp", "value": 75 },
+    { "path": "$.player.score", "value": "1,250 pts" },
+    { "path": "$.dialogue.text", "value": "Welcome, adventurer! Your quest begins here." },
+    { "path": "$.dialogue.speaker", "value": "Narrator" }
+  ]
+}
+```
+
+---
+
+## Tabs with Content
+
+### Tabbed Settings Page
+
+```json
+{
+  "rootComponentId": "tabbed-settings",
+  "canvasSettings": {
+    "backgroundColor": "bg-background",
+    "padding": "1.5rem"
+  },
+  "components": [
+    {
+      "id": "tabbed-settings",
+      "style": { "className": "max-w-2xl mx-auto" },
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "1.5rem" },
+        "children": { "explicitList": ["page-title", "settings-tabs"] }
+      }
+    },
+    {
+      "id": "page-title",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Account Settings" },
+        "variant": { "literalString": "h2" }
+      }
+    },
+    {
+      "id": "settings-tabs",
+      "component": {
+        "type": "tabs",
+        "value": { "literalString": "profile" },
+        "tabs": [
+          { "id": "profile", "label": "Profile", "icon": "user", "contentComponentId": "profile-tab" },
+          { "id": "security", "label": "Security", "icon": "lock", "contentComponentId": "security-tab" }
+        ]
+      }
+    },
+    {
+      "id": "profile-tab",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "1rem" },
+        "children": { "explicitList": ["name-field", "bio-field", "profile-save"] }
+      }
+    },
+    {
+      "id": "name-field",
+      "component": {
+        "type": "textField",
+        "value": { "path": "$.profile.name", "defaultValue": "" },
+        "label": { "literalString": "Display Name" },
+        "placeholder": { "literalString": "Your name" }
+      }
+    },
+    {
+      "id": "bio-field",
+      "component": {
+        "type": "textField",
+        "value": { "path": "$.profile.bio", "defaultValue": "" },
+        "label": { "literalString": "Bio" },
+        "placeholder": { "literalString": "Tell us about yourself" },
+        "multiline": { "literalBool": true },
+        "rows": { "literalNumber": 3 }
+      }
+    },
+    {
+      "id": "profile-save",
+      "component": {
+        "type": "button",
+        "label": { "literalString": "Save Profile" },
+        "variant": { "literalString": "default" },
+        "actions": [{ "name": "saveProfile", "context": {} }]
+      }
+    },
+    {
+      "id": "security-tab",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "1rem" },
+        "children": { "explicitList": ["current-password", "new-password", "security-save"] }
+      }
+    },
+    {
+      "id": "current-password",
+      "component": {
+        "type": "textField",
+        "value": { "literalString": "" },
+        "label": { "literalString": "Current Password" },
+        "inputType": { "literalString": "password" }
+      }
+    },
+    {
+      "id": "new-password",
+      "component": {
+        "type": "textField",
+        "value": { "literalString": "" },
+        "label": { "literalString": "New Password" },
+        "inputType": { "literalString": "password" }
+      }
+    },
+    {
+      "id": "security-save",
+      "component": {
+        "type": "button",
+        "label": { "literalString": "Update Password" },
+        "variant": { "literalString": "default" },
+        "actions": [{ "name": "updatePassword", "context": {} }]
+      }
+    }
+  ],
+  "dataModel": [
+    { "path": "$.profile.name", "value": "Jane Doe" },
+    { "path": "$.profile.bio", "value": "Product designer passionate about user experience." }
+  ]
+}
+```

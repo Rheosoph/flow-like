@@ -11,7 +11,7 @@ use flow_like_types::{async_trait, json::json};
 use crate::document::openxml::write_zip;
 use crate::document::styles::defaults;
 #[cfg(feature = "execute")]
-use crate::document::styles::{hex_to_ooxml, pt_to_half_points, cm_to_twips};
+use crate::document::styles::{cm_to_twips, hex_to_ooxml, pt_to_half_points};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -184,9 +184,15 @@ impl NodeLogic for DocxCreateNode {
 </cp:coreProperties>"#;
 
         let mut files = std::collections::HashMap::new();
-        files.insert("[Content_Types].xml".to_string(), content_types.as_bytes().to_vec());
+        files.insert(
+            "[Content_Types].xml".to_string(),
+            content_types.as_bytes().to_vec(),
+        );
         files.insert("_rels/.rels".to_string(), rels.as_bytes().to_vec());
-        files.insert("word/_rels/document.xml.rels".to_string(), word_rels.as_bytes().to_vec());
+        files.insert(
+            "word/_rels/document.xml.rels".to_string(),
+            word_rels.as_bytes().to_vec(),
+        );
         files.insert("word/document.xml".to_string(), document.into_bytes());
         files.insert("word/styles.xml".to_string(), styles.into_bytes());
         files.insert("docProps/core.xml".to_string(), core.as_bytes().to_vec());

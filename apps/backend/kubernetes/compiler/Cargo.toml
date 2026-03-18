@@ -23,7 +23,7 @@ tracing-opentelemetry.workspace = true
 tokio = { version = "1", features = ["full"] }
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

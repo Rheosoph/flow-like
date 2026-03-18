@@ -125,8 +125,8 @@ pub async fn prerun_event(
 
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
-    // Get the event from database
-    let event = get_event_from_db(&state.db, &event_id).await?;
+    // Get the event from database (validates event belongs to this app)
+    let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     let board_id = event.board_id.clone();
 
     // Get the board from the event
