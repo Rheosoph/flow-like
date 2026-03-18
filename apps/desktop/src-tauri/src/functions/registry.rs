@@ -320,6 +320,11 @@ pub async fn registry_load_local(
     let local_path = std::path::Path::new(&path);
     let cached = registry_client.load_local(local_path).await?;
 
+    // Register in the installed list so reload_wasm_nodes can find it
+    let _ = registry_client
+        .register_local_package(local_path, cached.entry.manifest.clone())
+        .await;
+
     emit_package_status(&app_handle, &cached.entry.id, "compiling");
 
     if let Err(e) = reload_wasm_nodes(&app_handle).await {

@@ -461,7 +461,7 @@ export function FlowTemplateSelector({
 							</div>
 
 							{/* Template Grid/List */}
-							<ScrollArea className="flex-1">
+							<ScrollArea className="flex-1 min-h-0">
 								{viewMode === "grid" ? (
 									<div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 										{filteredTemplates.map((template) => {

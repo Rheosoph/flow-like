@@ -26,6 +26,15 @@ import type {
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
 
+function toBoundValue(value: unknown): Record<string, unknown> {
+	if (typeof value === "boolean") return { literalBool: value };
+	if (typeof value === "number") return { literalNumber: value };
+	if (typeof value === "string") return { literalString: value };
+	if (Array.isArray(value)) return { literalString: JSON.stringify(value) };
+	if (value === null || value === undefined) return { literalString: "" };
+	return { literalString: JSON.stringify(value) };
+}
+
 interface ActionContextValue {
 	onAction?: ActionHandler;
 	onA2UIMessage?: A2UIMessageHandler;
@@ -112,7 +121,7 @@ export function ActionProvider({
 			// Store element values on change actions
 			if (message.name === "change" && message.sourceComponentId) {
 				const elementId = `${message.surfaceId}/${message.sourceComponentId}`;
-				const value = message.context?.value;
+				const value = message.context?.value ?? message.context?.checked;
 
 				console.log("[ActionHandler] Storing element value:", {
 					elementId,
@@ -765,7 +774,7 @@ export function useExecuteAction() {
 											...comp,
 											component: {
 												...componentData,
-												value: { literalString: storedValue },
+												value: toBoundValue(storedValue),
 											},
 										};
 									} else {
@@ -901,7 +910,7 @@ export function useExecuteAction() {
 											...comp,
 											component: {
 												...componentData,
-												value: { literalString: storedValue },
+												value: toBoundValue(storedValue),
 											},
 										};
 									} else {

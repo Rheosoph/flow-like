@@ -343,6 +343,7 @@ export function TauriProvider({
 	useEffect(() => {
 		const unlisten = listen("catalog-updated", () => {
 			queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
+			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
 		});
 		return () => {
 			unlisten.then((fn) => fn());

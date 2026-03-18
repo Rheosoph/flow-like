@@ -300,10 +300,12 @@ export default function UsePage() {
 			if (!path) return;
 
 			headerRef.current?.pushToolbarElements([]);
-			setQueryParams("route", path);
-			setQueryParams("eventId", undefined);
+			const params = new URLSearchParams(window.location.search);
+			params.set("route", path);
+			params.delete("eventId");
+			router.push(`?${params.toString()}`);
 		},
-		[appId, setQueryParams],
+		[appId, router],
 	);
 
 	const shouldRenderHeader = useMemo(() => {

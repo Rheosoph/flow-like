@@ -590,6 +590,9 @@ export interface TabsComponent extends ComponentBase {
 	tabs: TabDefinition[];
 	orientation?: BoundValue; // "horizontal" | "vertical"
 	variant?: BoundValue; // "default" | "pills" | "underline"
+	listStyle?: Style;
+	triggerStyle?: Style;
+	contentStyle?: Style;
 }
 
 export interface TabDefinition {

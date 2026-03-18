@@ -339,6 +339,25 @@ impl ServerRegistry {
         Ok(url.to_string())
     }
 
+    /// Extract node definitions from a WASM binary by instantiating it and
+    /// calling `get_nodes()`. Returns the entries serialized as JSON suitable
+    /// for storage in `wasm_package_version.nodes`.
+    pub async fn extract_node_entries(
+        wasm_bytes: &[u8],
+    ) -> flow_like_types::Result<serde_json::Value> {
+        let config = flow_like_wasm::engine::WasmConfig::default().without_cache();
+        let engine = Arc::new(flow_like_wasm::engine::WasmEngine::new(config)?);
+        let security = flow_like_wasm::limits::WasmSecurityConfig::permissive();
+        let loaded = engine.load_auto(wasm_bytes).await?;
+        let mut instance = loaded.instantiate(&engine, security).await?;
+        let definitions = instance.call_get_nodes().await?;
+        let entries: Vec<PackageNodeEntry> = definitions
+            .iter()
+            .map(flow_like_wasm::node::definition_to_package_entry)
+            .collect();
+        Ok(serde_json::to_value(entries)?)
+    }
+
     /// Compile WASM bytes to AOT .cwasm for every configured target platform
     /// and store artifacts + checksums in the bucket.
     ///
@@ -463,6 +482,15 @@ impl ServerRegistry {
                     }
                 };
 
+                // Extract node definitions (backfills nodes for older packages)
+                let extracted_nodes = match ServerRegistry::extract_node_entries(&wasm_bytes).await {
+                    Ok(nodes) => Some(nodes),
+                    Err(e) => {
+                        tracing::warn!(pkg = %pkg_id, ver = %ver, err = %e, "Failed to extract nodes during recompilation");
+                        None
+                    }
+                };
+
                 match inline_registry
                     .compile_and_store_artifact(&pkg_id, &ver, &wasm_bytes)
                     .await
@@ -478,6 +506,9 @@ impl ServerRegistry {
                             active.compilation_status = Set(WasmCompilationStatus::Compiled);
                             active.compiled_platforms = Set(Some(platforms));
                             active.compilation_error = Set(None);
+                            if let Some(ref nodes) = extracted_nodes {
+                                active.nodes = Set(nodes.clone());
+                            }
                             let _ = active.update(&db).await;
                         }
                     }
@@ -492,6 +523,9 @@ impl ServerRegistry {
                             let mut active: wasm_package_version::ActiveModel = record.into();
                             active.compilation_status = Set(WasmCompilationStatus::LocalOnly);
                             active.compilation_error = Set(Some(e.to_string()));
+                            if let Some(ref nodes) = extracted_nodes {
+                                active.nodes = Set(nodes.clone());
+                            }
                             let _ = active.update(&db).await;
                         }
                     }
@@ -1381,6 +1415,11 @@ impl ServerRegistry {
             .one(&self.db)
             .await?;
 
+        let is_private_package = existing_package
+            .as_ref()
+            .map(|p| p.visibility == WasmPackageVisibility::Private)
+            .unwrap_or(true);
+
         if let Some(_existing) = existing_package {
             // Existing package: only bump updated_at.
             // Version-specific fields (version, wasm_path, wasm_hash, nodes, etc.)
@@ -1551,6 +1590,20 @@ impl ServerRegistry {
                 }
             }
         } else {
+            // Extract node definitions from the WASM binary
+            let extracted_nodes = match Self::extract_node_entries(&compile_wasm_data).await {
+                Ok(nodes) => Some(nodes),
+                Err(e) => {
+                    tracing::warn!(
+                        pkg = %compile_pkg_id,
+                        ver = %compile_version,
+                        err = %e,
+                        "Failed to extract node definitions from WASM"
+                    );
+                    None
+                }
+            };
+
             let tmp_registry =
                 ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
             match tmp_registry
@@ -1558,15 +1611,41 @@ impl ServerRegistry {
                 .await
             {
                 Ok(platforms) => {
-                    let _ = wasm_package_version::ActiveModel {
+                    let mut update = wasm_package_version::ActiveModel {
                         id: Set(version_id.clone()),
                         compilation_status: Set(WasmCompilationStatus::Compiled),
                         compiled_platforms: Set(Some(platforms)),
                         compilation_error: Set(None),
                         ..Default::default()
+                    };
+
+                    if let Some(ref nodes) = extracted_nodes {
+                        update.nodes = Set(nodes.clone());
                     }
-                    .update(&compile_db)
-                    .await;
+
+                    // Auto-approve private packages on successful inline compilation
+                    if is_private_package {
+                        let now_approve = chrono::Utc::now().naive_utc();
+                        update.status = Set(WasmPackageStatus::Active);
+                        update.approved_at = Set(Some(now_approve));
+                    }
+
+                    let _ = update.update(&compile_db).await;
+
+                    // Promote version data to parent package for auto-approved private packages
+                    if is_private_package {
+                        let now_promote = chrono::Utc::now().naive_utc();
+                        let mut pkg_update = wasm_package::ActiveModel {
+                            id: Set(compile_pkg_id.clone()),
+                            version: Set(compile_version.clone()),
+                            updated_at: Set(now_promote),
+                            ..Default::default()
+                        };
+                        if let Some(ref nodes) = extracted_nodes {
+                            pkg_update.nodes = Set(nodes.clone());
+                        }
+                        let _ = pkg_update.update(&compile_db).await;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -1575,14 +1654,17 @@ impl ServerRegistry {
                         err = %e,
                         "AOT compilation failed"
                     );
-                    let _ = wasm_package_version::ActiveModel {
+                    // Still save extracted nodes even if AOT fails
+                    let mut update = wasm_package_version::ActiveModel {
                         id: Set(version_id.clone()),
                         compilation_status: Set(WasmCompilationStatus::LocalOnly),
                         compilation_error: Set(Some(e.to_string())),
                         ..Default::default()
+                    };
+                    if let Some(ref nodes) = extracted_nodes {
+                        update.nodes = Set(nodes.clone());
                     }
-                    .update(&compile_db)
-                    .await;
+                    let _ = update.update(&compile_db).await;
                 }
             }
         }

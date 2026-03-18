@@ -281,7 +281,12 @@ export function doPinsMatch(
 	}
 
 	if (sourcePin.schema && targetPin.schema) {
-		if (schemaSource !== schemaTarget) return false;
+		if (
+			schemaSource !== schemaTarget &&
+			sourcePin.options?.enforce_schema !== false &&
+			targetPin.options?.enforce_schema !== false
+		)
+			return false;
 	}
 
 	if (targetPin.value_type !== sourcePin.value_type) {
