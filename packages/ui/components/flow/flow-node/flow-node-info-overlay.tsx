@@ -33,6 +33,7 @@ import { Separator } from "../../ui/separator";
 import { Sheet, SheetContent, SheetHeader } from "../../ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { typeToColor } from "../utils";
+import { NODE_PERMISSION_LABELS } from "../../../lib/permission/node-permission";
 
 export interface FlowNodeInfoOverlayHandle {
 	openNodeInfo: (node: INode) => void;
@@ -178,24 +179,8 @@ const OverviewSection = memo(({ node }: { node: INode }) => {
 });
 OverviewSection.displayName = "OverviewSection";
 
-const PERMISSION_LABELS: Record<string, { label: string; icon: string }> = {
-	"network:http": { label: "Network Access (HTTP)", icon: "🌐" },
-	"network:websocket": { label: "WebSocket Connections", icon: "🔌" },
-	"storage:read": { label: "Storage Read", icon: "📖" },
-	"storage:write": { label: "Storage Write", icon: "💾" },
-	"storage:node": { label: "Node Storage", icon: "📦" },
-	"storage:user": { label: "User Storage", icon: "👤" },
-	variables: { label: "Flow Variables", icon: "🔀" },
-	cache: { label: "Execution Cache", icon: "⚡" },
-	streaming: { label: "Streaming Output", icon: "📡" },
-	models: { label: "AI Model Access", icon: "🤖" },
-	a2ui: { label: "Dynamic UI (A2UI)", icon: "🖼️" },
-	oauth: { label: "OAuth Authentication", icon: "🔑" },
-	functions: { label: "Function Calls", icon: "⚙️" },
-};
-
 function formatPermission(perm: string): { label: string; icon: string } {
-	return PERMISSION_LABELS[perm] ?? { label: perm, icon: "🔒" };
+	return NODE_PERMISSION_LABELS[perm as keyof typeof NODE_PERMISSION_LABELS] ?? { label: perm, icon: "🔒" };
 }
 
 const PermissionsSection = memo(({ node }: { node: INode }) => {

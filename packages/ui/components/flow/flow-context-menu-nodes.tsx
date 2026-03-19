@@ -1,7 +1,7 @@
 "use client";
 import { ChevronRightIcon, WorkflowIcon } from "lucide-react";
 import type { RefObject } from "react";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import {
 	ContextMenuItem,
 	ContextMenuSub,
@@ -12,7 +12,9 @@ import type { INode } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import { DynamicImage } from "../ui/dynamic-image";
 
-export function FlowContextMenuNodes({
+const MAX_SEARCH_RESULTS = 50;
+
+export const FlowContextMenuNodes = memo(function FlowContextMenuNodes({
 	items,
 	filter,
 	pin,
@@ -25,17 +27,17 @@ export function FlowContextMenuNodes({
 	onNodePlace: (node: INode) => Promise<void>;
 	menuBlockedRef?: RefObject<boolean>;
 }>) {
-	const nodeState = useMemo(() => {
+	const { leafs, sortedCategories } = useMemo(() => {
 		const leafs: INode[] = [];
 		const nodes = new Map<string, INode[]>();
 
-		items.forEach((item) => {
+		for (const item of items) {
 			const itemCopy = { ...item };
 			const category = itemCopy.category.trim().split("/");
 
 			if (category.length === 0 || category[0] === "") {
 				leafs.push(itemCopy);
-				return;
+				continue;
 			}
 
 			const root = category.shift() as string;
@@ -45,15 +47,23 @@ export function FlowContextMenuNodes({
 				nodes.set(root, []);
 			}
 			nodes.get(root)?.push(itemCopy);
-		});
+		}
 
-		return { leafs, nodes };
+		const sortedCategories = Array.from(nodes).sort(([a], [b]) =>
+			a.localeCompare(b),
+		);
+
+		return { leafs, sortedCategories };
 	}, [items]);
 
 	if (filter !== "") {
+		const displayItems =
+			items.length > MAX_SEARCH_RESULTS
+				? items.slice(0, MAX_SEARCH_RESULTS)
+				: items;
 		return (
 			<>
-				{items.map((node) => (
+				{displayItems.map((node) => (
 					<ContextMenuItem
 						key={node.id}
 						id={node.id}
@@ -76,34 +86,38 @@ export function FlowContextMenuNodes({
 						{node.friendly_name}
 					</ContextMenuItem>
 				))}
+				{items.length > MAX_SEARCH_RESULTS && (
+					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">
+						Showing {MAX_SEARCH_RESULTS} of {items.length} — refine your
+						search
+					</div>
+				)}
 			</>
 		);
 	}
 
 	return (
 		<>
-			{Array.from(nodeState.nodes)
-				.sort(([categoryA], [categoryB]) => categoryA.localeCompare(categoryB))
-				.map(([category, node]) => (
-					<ContextMenuSub key={category + node.length}>
-						<ContextMenuSubTrigger>
-							<ChevronRightIcon className="h-4 w-4 mr-1" />
-							{category}
-						</ContextMenuSubTrigger>
-						<ContextMenuSubContent className="w-48" key={category}>
-							<div className="max-h-96 overflow-y-auto">
-								<FlowContextMenuNodes
-									items={node}
-									filter={filter}
-									pin={pin}
-									onNodePlace={onNodePlace}
-									menuBlockedRef={menuBlockedRef}
-								/>
-							</div>
-						</ContextMenuSubContent>
-					</ContextMenuSub>
-				))}
-			{nodeState.leafs.map((node) => (
+			{sortedCategories.map(([category, node]) => (
+				<ContextMenuSub key={category + node.length}>
+					<ContextMenuSubTrigger>
+						<ChevronRightIcon className="h-4 w-4 mr-1" />
+						{category}
+					</ContextMenuSubTrigger>
+					<ContextMenuSubContent className="w-48" key={category}>
+						<div className="max-h-96 overflow-y-auto">
+							<FlowContextMenuNodes
+								items={node}
+								filter={filter}
+								pin={pin}
+								onNodePlace={onNodePlace}
+								menuBlockedRef={menuBlockedRef}
+							/>
+						</div>
+					</ContextMenuSubContent>
+				</ContextMenuSub>
+			))}
+			{leafs.map((node) => (
 				<ContextMenuItem
 					key={`context${node.id}`}
 					id={node.id}
@@ -128,4 +142,4 @@ export function FlowContextMenuNodes({
 			))}
 		</>
 	);
-}
+});

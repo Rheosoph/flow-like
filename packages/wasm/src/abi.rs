@@ -2,6 +2,7 @@
 //!
 //! Defines the interface contract between Flow-Like runtime and WASM modules.
 
+use flow_like::flow::node::NodePermission;
 use serde::{Deserialize, Serialize};
 
 /// Current ABI version - bump when making breaking changes
@@ -95,7 +96,7 @@ pub struct WasmNodeDefinition {
     /// Per-node permissions declared by the WASM module.
     /// Empty means the node needs no additional permissions.
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: Vec<NodePermission>,
 }
 
 /// Pin definition for WASM nodes

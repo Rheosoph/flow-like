@@ -97,11 +97,61 @@ pub struct FnRefs {
     pub can_be_referenced_by_fns: bool,
 }
 
+/// Permissions a WASM node can request.
+/// Each node declares exactly which capabilities it needs so the sandbox
+/// and UI can enforce/display them precisely.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum NodePermission {
+    /// Outbound HTTP requests
+    #[serde(rename = "network:http")]
+    NetworkHttp,
+    /// WebSocket connections
+    #[serde(rename = "network:websocket")]
+    NetworkWebsocket,
+    /// TCP socket access
+    #[serde(rename = "network:tcp")]
+    NetworkTcp,
+    /// UDP socket access
+    #[serde(rename = "network:udp")]
+    NetworkUdp,
+    /// DNS lookups
+    #[serde(rename = "network:dns")]
+    NetworkDns,
+    /// Read from node/user storage
+    #[serde(rename = "storage:read")]
+    StorageRead,
+    /// Write to node/user storage
+    #[serde(rename = "storage:write")]
+    StorageWrite,
+    /// Access flow variables
+    #[serde(rename = "variables")]
+    Variables,
+    /// Access execution cache
+    #[serde(rename = "cache")]
+    Cache,
+    /// Stream responses to the client
+    #[serde(rename = "streaming")]
+    Streaming,
+    /// Access LLM / model providers
+    #[serde(rename = "models")]
+    Models,
+    /// Dynamic UI (Agent-to-UI)
+    #[serde(rename = "a2ui")]
+    A2ui,
+    /// OAuth authentication
+    #[serde(rename = "oauth")]
+    OAuth,
+    /// Call other functions/sub-flows
+    #[serde(rename = "functions")]
+    Functions,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct NodeWasm {
     pub package_id: String,
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: Vec<NodePermission>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]

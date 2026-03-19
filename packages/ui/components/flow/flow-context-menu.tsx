@@ -390,6 +390,28 @@ export function FlowContextMenu({
 			.filter((node): node is INode => node !== undefined);
 	}, [filter, searchIndex]);
 
+	const displayedItems = useMemo(() => {
+		const baseItems = filter === "" ? sortedNodes : (searchResults ?? []);
+
+		if (!droppedPin || !contextSensitive) {
+			return baseItems;
+		}
+
+		return baseItems.filter((node) => {
+			const isRefInHandle = droppedPin.id.startsWith("ref_in_");
+			const isRefOutHandle = droppedPin.id.startsWith("ref_out_");
+
+			if (isRefInHandle) return node.fn_refs?.can_reference_fns ?? false;
+			if (isRefOutHandle) return node.fn_refs?.can_be_referenced_by_fns ?? false;
+
+			const pins = Object.values(node.pins);
+			return pins.some((pin) => {
+				if (pin.pin_type === droppedPin.pin_type) return false;
+				return doPinsMatch(pin, droppedPin, refs, node);
+			});
+		});
+	}, [filter, sortedNodes, searchResults, droppedPin, contextSensitive, refs]);
+
 	useEffect(() => {
 		inputRef.current?.focus();
 	}, [filter]);
@@ -547,46 +569,7 @@ export function FlowContextMenu({
 						>
 							{nodes && (
 								<FlowContextMenuNodes
-									items={
-										droppedPin && contextSensitive
-											? [
-													...(filter === ""
-														? sortedNodes
-														: (searchResults ?? [])
-													).filter((node) => {
-														// Check if the dropped pin is a function reference handle
-														const isRefInHandle =
-															droppedPin.id.startsWith("ref_in_");
-														const isRefOutHandle =
-															droppedPin.id.startsWith("ref_out_");
-
-														if (isRefInHandle) {
-															// For ref_in, only show nodes with can_reference_fns
-															return node.fn_refs?.can_reference_fns ?? false;
-														}
-
-														if (isRefOutHandle) {
-															// For ref_out, only show nodes with can_be_referenced_by_fns
-															return (
-																node.fn_refs?.can_be_referenced_by_fns ?? false
-															);
-														}
-
-														// Regular pin matching logic
-														const pins = Object.values(node.pins);
-														return pins.some((pin) => {
-															if (pin.pin_type === droppedPin.pin_type)
-																return false;
-															return doPinsMatch(pin, droppedPin, refs, node);
-														});
-													}),
-												]
-											: [
-													...(filter === ""
-														? sortedNodes
-														: (searchResults ?? [])),
-												]
-									}
+									items={displayedItems}
 									filter={filter}
 									onNodePlace={handleNodePlace}
 									menuBlockedRef={menuBlockedRef}

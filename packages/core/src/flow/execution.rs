@@ -585,7 +585,7 @@ impl RunStack {
 pub type EventTrigger =
     Arc<dyn Fn(&InternalRun) -> BoxFuture<'_, flow_like_types::Result<()>> + Send + Sync>;
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// Cached immutable fields from Run to avoid locking during hot path execution
 #[derive(Clone)]
@@ -632,6 +632,8 @@ pub struct InternalRun {
     cpus: usize,
     log_level: LogLevel,
     completion_callbacks: Arc<RwLock<Vec<EventTrigger>>>,
+    /// Set to true when any node execution fails
+    has_node_errors: Arc<AtomicBool>,
 
     // Cached immutable fields from Run to avoid locking
     pub meta: RunMeta,
@@ -1031,6 +1033,7 @@ impl InternalRun {
             profile: Arc::new(profile.clone()),
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
+            has_node_errors: Arc::new(AtomicBool::new(false)),
             // Cached immutable fields from Run
             meta: RunMeta {
                 run_id: run_id.clone(),
@@ -1071,6 +1074,7 @@ impl InternalRun {
         self.cache.write().await.clear();
         self.stack = Arc::new(RunStack::with_capacity(self.stack.len()));
         self.concurrency_limit = 128_000;
+        self.has_node_errors.store(false, Ordering::Relaxed);
         {
             let mut run = lock_with_timeout(self.run.as_ref(), "run_fork").await?;
             run.status = RunStatus::Running;
@@ -1111,6 +1115,7 @@ impl InternalRun {
         let callback = self.callback.clone();
         let meta = self.meta.clone();
         let user_context = self.user_context.clone();
+        let has_node_errors = self.has_node_errors.clone();
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
@@ -1129,6 +1134,7 @@ impl InternalRun {
                 let nodes = self.nodes.clone();
                 let oauth_tokens = self.oauth_tokens.clone();
                 let user_context = user_context.clone();
+                let has_node_errors = has_node_errors.clone();
 
                 async move {
                     step_core(
@@ -1150,6 +1156,7 @@ impl InternalRun {
                         token,
                         oauth_tokens,
                         user_context,
+                        &has_node_errors,
                     )
                     .await
                 }
@@ -1210,6 +1217,7 @@ impl InternalRun {
             self.token.clone(),
             self.oauth_tokens.clone(),
             self.user_context.clone(),
+            &self.has_node_errors,
         )
         .await;
 
@@ -1341,6 +1349,11 @@ impl InternalRun {
                 break;
             }
             stack_hash = new_stack_hash;
+        }
+
+        // Check if any node reported an error during execution
+        if self.has_node_errors.load(Ordering::Relaxed) {
+            errored = true;
         }
 
         // Stop background flush task
@@ -1586,6 +1599,7 @@ async fn step_core(
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     user_context: Option<UserExecutionContext>,
+    has_node_errors: &Arc<AtomicBool>,
 ) -> flow_like_types::Result<(Vec<ExecutionTarget>, Vec<Trace>)> {
     // Check Node State and Validate Execution Count (to stop infinite loops)
     {
@@ -1651,7 +1665,11 @@ async fn step_core(
         return Ok((connected_nodes, traces));
     }
 
-    Err(anyhow!("Node failed"))
+    // Flag this run as having node errors so RunStatus reflects the failure
+    has_node_errors.store(true, Ordering::Relaxed);
+
+    // Return traces even on failure so error logs are not silently dropped
+    Ok((Vec::new(), traces))
 }
 
 #[derive(Deserialize)]

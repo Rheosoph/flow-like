@@ -182,6 +182,8 @@ impl WasmNode for FileWriterNode {
         node.add_output_pin("file_path", "File Path", "Path of the written file", VariableType::Struct)
             .set_schema::<FlowPath>();
         node.add_output_pin("file_count", "File Count", "Number of files in directory", VariableType::Integer);
+        node.add_permission(NodePermission::StorageRead);
+        node.add_permission(NodePermission::StorageWrite);
         node
     }
 
@@ -228,6 +230,7 @@ impl WasmNode for FileReaderNode {
         node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
         node.add_output_pin("content", "Content", "File text content", VariableType::String);
         node.add_output_pin("exists", "Exists", "Whether the file exists", VariableType::Boolean);
+        node.add_permission(NodePermission::StorageRead);
         node
     }
 

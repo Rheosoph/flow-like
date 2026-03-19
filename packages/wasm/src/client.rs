@@ -706,14 +706,16 @@ impl RegistryClient {
             )
         })?;
 
-        let security = installed.manifest.permissions.to_security_config();
+        let manifest_security = installed.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
 
         let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
             cached
         } else {
-            let mut instance = loaded.instantiate(&engine, security.clone()).await?;
+            let mut instance = loaded
+                .instantiate(&engine, manifest_security.clone())
+                .await?;
             let defs = instance.call_get_nodes().await?;
             engine.cache_definitions(wasm_hash, defs.clone());
             defs
@@ -722,10 +724,13 @@ impl RegistryClient {
         let nodes: Vec<crate::WasmNodeLogic> = definitions
             .into_iter()
             .map(|def| {
+                let node_security =
+                    crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
+                        .with_limits(manifest_security.limits.clone());
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
-                    security.clone(),
+                    node_security,
                     def,
                 )
                 .with_package_id(package_id.to_string())
@@ -751,14 +756,16 @@ impl RegistryClient {
             .ok_or_else(|| anyhow!("Version '{}' not installed for '{}'", version, package_id))?;
 
         let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
-        let security = iv.manifest.permissions.to_security_config();
+        let manifest_security = iv.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
 
         let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
             cached
         } else {
-            let mut instance = loaded.instantiate(&engine, security.clone()).await?;
+            let mut instance = loaded
+                .instantiate(&engine, manifest_security.clone())
+                .await?;
             let defs = instance.call_get_nodes().await?;
             engine.cache_definitions(wasm_hash, defs.clone());
             defs
@@ -767,10 +774,13 @@ impl RegistryClient {
         Ok(definitions
             .into_iter()
             .map(|def| {
+                let node_security =
+                    crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
+                        .with_limits(manifest_security.limits.clone());
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
-                    security.clone(),
+                    node_security,
                     def,
                 )
                 .with_package_id(package_id.to_string())

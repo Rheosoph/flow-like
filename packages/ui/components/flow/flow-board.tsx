@@ -830,6 +830,14 @@ export function FlowBoard({
 					);
 					return;
 				}
+
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				toastError(
+					errorMessage || "Failed to execute board",
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+				return;
 			}
 			removeRun(runId);
 			if (!meta && !runId) {
@@ -912,6 +920,13 @@ export function FlowBoard({
 				);
 			} catch (error) {
 				console.warn("Failed to execute board remotely", error);
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				toastError(
+					errorMessage || "Failed to execute board on server",
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+				return;
 			}
 			removeRun(runId);
 			if (!meta && !runId) {

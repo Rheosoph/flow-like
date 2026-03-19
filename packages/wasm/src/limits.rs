@@ -336,6 +336,44 @@ impl WasmSecurityConfig {
         self.allowed_hosts = Some(hosts);
         self
     }
+
+    /// Build a security config from a set of node-level permissions.
+    /// This is the primary way to derive sandbox capabilities from what
+    /// individual nodes declare they need.
+    pub fn from_node_permissions(permissions: &[flow_like::flow::node::NodePermission]) -> Self {
+        use flow_like::flow::node::NodePermission;
+
+        let mut caps = WasmCapabilities::NONE;
+        for perm in permissions {
+            caps |= match perm {
+                NodePermission::NetworkHttp => WasmCapabilities::HTTP_ALL,
+                NodePermission::NetworkWebsocket => WasmCapabilities::WEBSOCKET,
+                NodePermission::NetworkTcp => WasmCapabilities::TCP,
+                NodePermission::NetworkUdp => WasmCapabilities::UDP,
+                NodePermission::NetworkDns => WasmCapabilities::DNS,
+                NodePermission::StorageRead => WasmCapabilities::STORAGE_READ,
+                NodePermission::StorageWrite => {
+                    WasmCapabilities::STORAGE_WRITE | WasmCapabilities::STORAGE_DELETE
+                }
+                NodePermission::Variables => WasmCapabilities::VARIABLES_ALL,
+                NodePermission::Cache => WasmCapabilities::CACHE_ALL,
+                NodePermission::Streaming => WasmCapabilities::STREAMING,
+                NodePermission::Models => WasmCapabilities::MODELS,
+                NodePermission::A2ui => WasmCapabilities::A2UI,
+                NodePermission::OAuth => WasmCapabilities::OAUTH,
+                NodePermission::Functions => WasmCapabilities::FUNCTIONS,
+            };
+        }
+
+        let has_network = caps.intersects(WasmCapabilities::NETWORK_ALL);
+        Self {
+            limits: WasmLimits::default(),
+            capabilities: caps,
+            allow_wasi: false,
+            allow_wasi_network: has_network,
+            allowed_hosts: None,
+        }
+    }
 }
 
 #[cfg(test)]

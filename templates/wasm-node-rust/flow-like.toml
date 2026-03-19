@@ -19,20 +19,8 @@ description = "A template WASM node built with Rust"
 id = "my_custom_node"
 name = "My Custom Node"
 
+# Resource limits for the package sandbox (memory & timeout).
+# Permissions are declared per-node in Rust code via `node.add_permission(NodePermission::*)`.
 [permissions]
 memory = "standard"
-models = true
-streaming = true
 timeout = "standard"
-
-[permissions.filesystem]
-node_storage = false
-user_storage = false
-
-[permissions.network]
-allowed_hosts = []
-dns_enabled = true
-http_enabled = true
-tcp_enabled = true
-udp_enabled = true
-websocket_enabled = true

@@ -1,3 +1,5 @@
+import type { INodePermission } from "../flow/board";
+
 export interface PackageAuthor {
 	name: string;
 	email?: string;
@@ -144,7 +146,7 @@ export interface PackageNodeEntry {
 	requiredOauthScopes?: Record<string, string[]>;
 	onlyOffline: boolean;
 	version?: number;
-	permissions: string[];
+	permissions: INodePermission[];
 	metadata: Record<string, unknown>;
 }
 

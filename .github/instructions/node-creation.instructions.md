@@ -95,6 +95,41 @@ If you need more abstract memory, like a thread-handle or database connections y
 - Add a nice node and pin description, so the user understands what the node does.
 - Add scores to the node rating: privacy, security, performance, governance, reliability, cost. 0 - 10 (bad - good)
 
+## WASM Node Permissions
+WASM nodes must declare their required permissions per-node using the `NodePermission` enum. Permissions are enforced by the sandbox at runtime and displayed in the UI sideload warning dialog.
+
+Available permissions (from `NodePermission` enum):
+- `NetworkHttp` — outbound HTTP requests
+- `NetworkWebsocket` — WebSocket connections
+- `NetworkTcp` — TCP socket access
+- `NetworkUdp` — UDP socket access
+- `NetworkDns` — DNS lookups
+- `StorageRead` — read from node/user storage
+- `StorageWrite` — write to node/user storage
+- `Variables` — access flow variables
+- `Cache` — access execution cache
+- `Streaming` — stream responses to the client
+- `Models` — access LLM / model providers
+- `A2ui` — dynamic UI (Agent-to-UI)
+- `OAuth` — OAuth authentication
+- `Functions` — call other functions/sub-flows
+
+Only declare permissions the node actually uses. Nodes with no side effects need no permissions.
+
+### Rust SDK example
+```rust
+fn get_node(&self) -> NodeDefinition {
+    let mut node = NodeDefinition::new("my_node", "My Node", "Does something", "Custom");
+    // ... pins ...
+    node.add_permission(NodePermission::NetworkHttp);
+    node.add_permission(NodePermission::StorageRead);
+    node
+}
+```
+
+### Native catalog nodes
+Native (built-in) catalog nodes do not need permissions — they are trusted by default and have no WASM sandbox.
+
 ## CRITICAL: Input and Output Pins Must Have Different Names
 When a value passes through a node (input → output), the input pin and output pin MUST have different `name` values (first argument). The friendly name (second argument) CAN be the same. Pin names are used by `context.evaluate_pin()` / `context.get_pin_by_name()` and `context.set_pin_value()` to identify which pin to read/write — if an input and output share the same name, get/set operations will collide.
 

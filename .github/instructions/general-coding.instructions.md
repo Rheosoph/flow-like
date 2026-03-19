@@ -3,6 +3,9 @@ applyTo: "**"
 ---
 # Project general coding standards
 
+## GIT OPERATIONS
+- NEVER GIT DIFF; STASH ETC. I AM ALSO WORKING IN THIS CODE BASE. NO GIT OPERATIONS IF NOT ASKED FOR EXPLICITLY AND CONFIRMED
+
 ## Comments and Verbosity
 - Do not comment code that is self-explanatory.
 - Avoid verbose comments; use concise, clear language.

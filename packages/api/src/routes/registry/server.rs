@@ -29,7 +29,7 @@ use utoipa::ToSchema;
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
 const WASM_COMPILED_PATH: &str = "wasm-compiled";
-const WASMTIME_VERSION: &str = "40";
+const WASMTIME_VERSION: &str = "42";
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {

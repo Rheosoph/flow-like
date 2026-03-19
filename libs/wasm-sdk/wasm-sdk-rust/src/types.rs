@@ -6,6 +6,54 @@ use serde::{Deserialize, Serialize};
 /// Current ABI version
 pub const ABI_VERSION: u32 = 1;
 
+/// Permissions a WASM node can request.
+/// Declared per-node so the sandbox and UI can enforce/display them precisely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NodePermission {
+    /// Outbound HTTP requests
+    #[serde(rename = "network:http")]
+    NetworkHttp,
+    /// WebSocket connections
+    #[serde(rename = "network:websocket")]
+    NetworkWebsocket,
+    /// TCP socket access
+    #[serde(rename = "network:tcp")]
+    NetworkTcp,
+    /// UDP socket access
+    #[serde(rename = "network:udp")]
+    NetworkUdp,
+    /// DNS lookups
+    #[serde(rename = "network:dns")]
+    NetworkDns,
+    /// Read from node/user storage
+    #[serde(rename = "storage:read")]
+    StorageRead,
+    /// Write to node/user storage
+    #[serde(rename = "storage:write")]
+    StorageWrite,
+    /// Access flow variables
+    #[serde(rename = "variables")]
+    Variables,
+    /// Access execution cache
+    #[serde(rename = "cache")]
+    Cache,
+    /// Stream responses to the client
+    #[serde(rename = "streaming")]
+    Streaming,
+    /// Access LLM / model providers
+    #[serde(rename = "models")]
+    Models,
+    /// Dynamic UI (Agent-to-UI)
+    #[serde(rename = "a2ui")]
+    A2ui,
+    /// OAuth authentication
+    #[serde(rename = "oauth")]
+    OAuth,
+    /// Call other functions/sub-flows
+    #[serde(rename = "functions")]
+    Functions,
+}
+
 /// The kind of data a pin carries — mirrors the native `VariableType` enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VariableType {
@@ -63,7 +111,7 @@ pub struct NodeDefinition {
     pub abi_version: Option<u32>,
     /// Per-node permissions. Empty means no additional permissions needed.
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: Vec<NodePermission>,
 }
 
 impl NodeDefinition {
@@ -142,8 +190,10 @@ impl NodeDefinition {
         self
     }
 
-    pub fn add_permission(&mut self, permission: &str) -> &mut Self {
-        self.permissions.push(permission.to_string());
+    pub fn add_permission(&mut self, permission: NodePermission) -> &mut Self {
+        if !self.permissions.contains(&permission) {
+            self.permissions.push(permission);
+        }
         self
     }
 }

@@ -132,11 +132,11 @@ async fn load_single_package(
         }
     };
 
-    let security = flow_like_wasm::WasmSecurityConfig::default();
+    let init_security = flow_like_wasm::WasmSecurityConfig::default();
     let loaded = flow_like_wasm::LoadedWasm::Module(wasm_module);
 
     let mut instance = loaded
-        .instantiate(engine, security.clone())
+        .instantiate(engine, init_security.clone())
         .await
         .map_err(|e| {
             ExecutorError::Execution(format!(
@@ -155,10 +155,12 @@ async fn load_single_package(
     let nodes: Vec<Arc<dyn NodeLogic>> = definitions
         .into_iter()
         .map(|def| {
+            let node_security =
+                flow_like_wasm::WasmSecurityConfig::from_node_permissions(&def.permissions);
             let logic = WasmNodeLogic::from_loaded_with_target(
                 loaded.clone(),
                 engine.clone(),
-                security.clone(),
+                node_security,
                 def,
             )
             .with_package_id(package_id.to_string());

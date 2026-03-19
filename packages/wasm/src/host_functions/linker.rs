@@ -1615,7 +1615,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
             "flowlike_models",
             "llm_prompt",
             |caller: Caller<'_, StoreData>,
-             (bit_ptr, bit_len, messages_ptr, messages_len, stream): (
+             (bit_ptr, bit_len, messages_ptr, messages_len, _stream): (
                 u32,
                 u32,
                 u32,
@@ -1630,8 +1630,231 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     {
                         return 0u64;
                     }
-                    let _ = (bit_ptr, bit_len, messages_ptr, messages_len, stream);
-                    0u64
+
+                    let bit_json = match read_string_from_caller(&caller, bit_ptr, bit_len) {
+                        Ok(s) => s,
+                        Err(_) => return 0u64,
+                    };
+
+                    let messages_json =
+                        match read_string_from_caller(&caller, messages_ptr, messages_len) {
+                            Ok(s) => s,
+                            Err(_) => return 0u64,
+                        };
+
+                    let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
+                        Ok(b) => b,
+                        Err(_) => return 0u64,
+                    };
+
+                    let model_ctx = match &caller.data().host_state.model_context {
+                        Some(c) => c,
+                        None => return 0u64,
+                    };
+                    let app_state = model_ctx.app_state.clone();
+
+                    // Parse messages_json: either {messages, tools} or a plain array
+                    #[derive(serde::Deserialize)]
+                    struct LlmPromptRequest {
+                        messages: Vec<serde_json::Value>,
+                        #[serde(default)]
+                        tools: Option<Vec<serde_json::Value>>,
+                    }
+
+                    let (raw_messages, raw_tools) =
+                        match serde_json::from_str::<LlmPromptRequest>(&messages_json) {
+                            Ok(req) => (req.messages, req.tools),
+                            Err(_) => {
+                                match serde_json::from_str::<Vec<serde_json::Value>>(
+                                    &messages_json,
+                                ) {
+                                    Ok(msgs) => (msgs, None),
+                                    Err(_) => return 0u64,
+                                }
+                            }
+                        };
+
+                    // Convert WASM SDK messages → native HistoryMessage
+                    let mut history_messages = Vec::with_capacity(raw_messages.len());
+                    for msg in &raw_messages {
+                        let role_str =
+                            msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                        let role = match role_str {
+                            "system" => flow_like_model_provider::history::Role::System,
+                            "assistant" => flow_like_model_provider::history::Role::Assistant,
+                            "tool" => flow_like_model_provider::history::Role::Tool,
+                            _ => flow_like_model_provider::history::Role::User,
+                        };
+
+                        let content =
+                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
+                                flow_like_model_provider::history::MessageContent::String(
+                                    c.to_string(),
+                                )
+                            } else if let Some(parts) =
+                                msg.get("parts").and_then(|v| v.as_array())
+                            {
+                                let mut contents = Vec::new();
+                                for part in parts {
+                                    if let Some(text) =
+                                        part.get("text").and_then(|t| t.as_str())
+                                    {
+                                        contents.push(
+                                            flow_like_model_provider::history::Content::Text {
+                                                content_type:
+                                                    flow_like_model_provider::history::ContentType::Text,
+                                                text: text.to_string(),
+                                            },
+                                        );
+                                    }
+                                }
+                                flow_like_model_provider::history::MessageContent::Contents(
+                                    contents,
+                                )
+                            } else {
+                                flow_like_model_provider::history::MessageContent::String(
+                                    String::new(),
+                                )
+                            };
+
+                        let tool_calls = msg
+                            .get("tool_calls")
+                            .and_then(|v| v.as_array())
+                            .map(|tcs| {
+                                tcs.iter()
+                                    .filter_map(|tc| {
+                                        let id = tc.get("id")?.as_str()?.to_string();
+                                        let name = tc.get("name")?.as_str()?.to_string();
+                                        let args =
+                                            tc.get("arguments").cloned().unwrap_or_default();
+                                        let args_str = if args.is_string() {
+                                            args.as_str().unwrap_or("{}").to_string()
+                                        } else {
+                                            serde_json::to_string(&args).unwrap_or_default()
+                                        };
+                                        Some(flow_like_model_provider::history::ToolCall {
+                                            id,
+                                            r#type: "function".to_string(),
+                                            function:
+                                                flow_like_model_provider::history::ToolCallFunction {
+                                                    name,
+                                                    arguments: args_str,
+                                                },
+                                        })
+                                    })
+                                    .collect()
+                            });
+
+                        let tool_call_id = msg
+                            .get("tool_call_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+
+                        history_messages.push(
+                            flow_like_model_provider::history::HistoryMessage {
+                                role,
+                                content,
+                                name: None,
+                                tool_calls,
+                                tool_call_id,
+                                annotations: None,
+                            },
+                        );
+                    }
+
+                    let mut history = flow_like_model_provider::history::History::new(
+                        bit.id.clone(),
+                        history_messages,
+                    );
+
+                    // Convert tool definitions if present
+                    if let Some(tools) = raw_tools {
+                        let native_tools: Vec<flow_like_model_provider::history::Tool> = tools
+                            .iter()
+                            .filter_map(|t| {
+                                let name = t.get("name")?.as_str()?.to_string();
+                                let desc = t
+                                    .get("description")
+                                    .and_then(|d| d.as_str())
+                                    .map(String::from);
+                                let params = t.get("parameters").cloned().unwrap_or_default();
+                                Some(flow_like_model_provider::history::Tool {
+                                    tool_type:
+                                        flow_like_model_provider::history::ToolType::Function,
+                                    function:
+                                        flow_like_model_provider::history::HistoryFunction {
+                                            name,
+                                            description: desc,
+                                            parameters: serde_json::from_value(params).ok()?,
+                                        },
+                                })
+                            })
+                            .collect();
+                        if !native_tools.is_empty() {
+                            history.tools = Some(native_tools);
+                        }
+                    }
+
+                    // Build model and invoke
+                    let model = {
+                        let mut factory = app_state.model_factory.lock().await;
+                        match factory.build(&bit, app_state.clone(), None).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                tracing::warn!("llm_prompt: failed to build model: {e}");
+                                return 0u64;
+                            }
+                        }
+                    };
+
+                    let response = match model.invoke(&history, None).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!("llm_prompt: model invoke failed: {e}");
+                            return 0u64;
+                        }
+                    };
+
+                    // Convert response to SDK ChatMessage JSON
+                    let resp_msg = match response.last_message() {
+                        Some(m) => m,
+                        None => return 0u64,
+                    };
+
+                    let tool_calls_json: Option<Vec<serde_json::Value>> =
+                        if resp_msg.tool_calls.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                resp_msg
+                                    .tool_calls
+                                    .iter()
+                                    .map(|tc| {
+                                        let args: serde_json::Value =
+                                            serde_json::from_str(&tc.function.arguments)
+                                                .unwrap_or(serde_json::Value::Object(
+                                                    Default::default(),
+                                                ));
+                                        serde_json::json!({
+                                            "id": tc.id,
+                                            "name": tc.function.name,
+                                            "arguments": args,
+                                        })
+                                    })
+                                    .collect(),
+                            )
+                        };
+
+                    let result = serde_json::json!({
+                        "role": "assistant",
+                        "content": resp_msg.content.clone().unwrap_or_default(),
+                        "tool_calls": tool_calls_json,
+                    });
+
+                    let result_str = result.to_string();
+                    let (ptr, len) =
+                        caller.data().host_state.store_result(result_str.as_bytes());
+                    pack_ptr_len(ptr, len)
                 })
             },
         )
@@ -1931,7 +2154,7 @@ fn register_emscripten_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
             |mut caller: Caller<'_, StoreData>, _args: ()| {
                 Box::new(async move {
                     caller.data_mut().longjmp_pending = true;
-                    Result::<(), anyhow::Error>::Err(anyhow::anyhow!("__longjmp__"))
+                    Result::<(), wasmtime::Error>::Err(wasmtime::Error::msg("__longjmp__"))
                 })
             },
         )

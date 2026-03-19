@@ -22,7 +22,7 @@ flow-like-wasm.workspace = true
 
 blake3.workspace = true
 moka.workspace = true
-wasmtime = "40"
+wasmtime.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true

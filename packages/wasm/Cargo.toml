@@ -8,9 +8,9 @@ repository = "https://github.com/TM9657/flow-like"
 
 [dependencies]
 # WASM Runtime
-wasmtime = { version = "40", features = ["async", "cranelift", "parallel-compilation", "gc"] }
-wasmtime-wasi = "40"
-wasmtime-wasi-http = "40"
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 
 # Flow-Like dependencies
 flow-like-types.workspace = true
@@ -81,6 +81,6 @@ component-model = ["wasmtime/component-model"]
 # Enable model/embedding support for WASM host functions
 model = ["flow-like/model"]
 # Enable OpenAPI schema generation
-openapi = ["utoipa"]
+openapi = ["utoipa", "flow-like/openapi"]
 # Enable all cranelift backends for cross-compilation
 all-arch = ["wasmtime/all-arch"]

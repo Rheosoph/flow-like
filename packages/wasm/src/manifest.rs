@@ -393,7 +393,7 @@ pub struct PackageNodeEntry {
     pub version: Option<u32>,
     /// Node-level permission labels
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: Vec<flow_like::flow::node::NodePermission>,
     /// Additional node-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,

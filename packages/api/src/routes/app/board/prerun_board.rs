@@ -12,7 +12,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::board::ExecutionMode;
+use flow_like::flow::{board::ExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -62,8 +62,8 @@ pub struct PrerunBoardResponse {
     pub has_wasm_nodes: bool,
     /// package_id values of all WASM nodes present in the board
     pub wasm_package_ids: Vec<String>,
-    /// Per-package permissions declared by WASM nodes (package_id -> list of permission strings)
-    pub wasm_package_permissions: HashMap<String, Vec<String>>,
+    /// Per-package permissions declared by WASM nodes (package_id -> list of permissions)
+    pub wasm_package_permissions: HashMap<String, Vec<NodePermission>>,
 }
 
 fn parse_version(version_str: &str) -> Option<(u32, u32, u32)> {
@@ -135,13 +135,13 @@ pub async fn prerun_board(
     let mut oauth_scopes: HashMap<String, Vec<String>> = HashMap::new();
     let mut requires_local_execution = false;
     let mut wasm_package_ids: Vec<String> = Vec::new();
-    let mut wasm_package_permissions: HashMap<String, Vec<String>> = HashMap::new();
+    let mut wasm_package_permissions: HashMap<String, Vec<NodePermission>> = HashMap::new();
 
     let process_node = |node: &flow_like::flow::node::Node,
                         oauth_scopes: &mut HashMap<String, Vec<String>>,
                         requires_local: &mut bool,
                         wasm_ids: &mut Vec<String>,
-                        wasm_perms: &mut HashMap<String, Vec<String>>| {
+                        wasm_perms: &mut HashMap<String, Vec<NodePermission>>| {
         // Collect WASM (external) node package IDs
         if let Some(wasm) = &node.wasm {
             if !wasm_ids.contains(&wasm.package_id) {

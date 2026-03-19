@@ -91,9 +91,26 @@ export interface INode {
 	[property: string]: any;
 }
 
+export enum INodePermission {
+	NetworkHttp = "network:http",
+	NetworkWebsocket = "network:websocket",
+	NetworkTcp = "network:tcp",
+	NetworkUdp = "network:udp",
+	NetworkDns = "network:dns",
+	StorageRead = "storage:read",
+	StorageWrite = "storage:write",
+	Variables = "variables",
+	Cache = "cache",
+	Streaming = "streaming",
+	Models = "models",
+	A2ui = "a2ui",
+	OAuth = "oauth",
+	Functions = "functions",
+}
+
 export interface INodeWasm {
 	package_id: string;
-	permissions: string[];
+	permissions: INodePermission[];
 }
 
 export interface IPin {
