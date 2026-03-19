@@ -87,6 +87,7 @@ copilot-sdk.workspace = true
 once_cell = "1.21.3"
 tokio.workspace = true
 rayon = "1.11.0"
+tauri-plugin-remote-push = {git = "https://github.com/TM9657/tauri-plugin-remote-push", rev = "cc554f2"}
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }

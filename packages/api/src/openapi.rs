@@ -134,6 +134,8 @@ impl Modify for SecurityAddon {
         crate::routes::user::notifications::mark_notification_read,
         crate::routes::user::notifications::mark_all_read,
         crate::routes::user::notifications::delete_notification,
+        crate::routes::user::push_targets::register_push_target,
+        crate::routes::user::push_targets::unregister_push_target,
         crate::routes::user::get_invites::get_invites,
         crate::routes::user::manage_invite::accept_invite,
         crate::routes::user::manage_invite::reject_invite,

@@ -167,6 +167,34 @@ pub enum NotificationType {
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",
+    enum_name = "PushNotificationTargetPlatform"
+)]
+pub enum PushNotificationTargetPlatform {
+    #[sea_orm(string_value = "IOS")]
+    Ios,
+    #[sea_orm(string_value = "ANDROID")]
+    Android,
+    #[sea_orm(string_value = "DESKTOP")]
+    Desktop,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "PushNotificationTargetProvider"
+)]
+pub enum PushNotificationTargetProvider {
+    #[sea_orm(string_value = "FCM")]
+    Fcm,
+    #[sea_orm(string_value = "AWS_SNS")]
+    AwsSns,
+    #[sea_orm(string_value = "AZURE_NOTIFICATION_HUBS")]
+    AzureNotificationHubs,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
     enum_name = "PublicationRequestStatus"
 )]
 pub enum PublicationRequestStatus {

@@ -937,6 +937,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const executionService = useExecutionServiceOptional();
 	const { components, canvasSettings, actionContext, widgetRefs } =
 		useBuilder();
+	const effectiveSurfaceId = actionContext?.pageId ?? surfaceId;
 	const previewCanvasId = useId();
 	const [previewComponents, setPreviewComponents] = useState<Map<
 		string,
@@ -1025,14 +1026,18 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const surface: Surface = useMemo(
 		() => ({
-			id: surfaceId,
+			id: effectiveSurfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(activeComponents),
 			canvasSettings: presignedCanvasSettings.customCss
 				? { customCss: presignedCanvasSettings.customCss }
 				: undefined,
 		}),
-		[surfaceId, activeComponents, presignedCanvasSettings.customCss],
+		[
+			effectiveSurfaceId,
+			activeComponents,
+			presignedCanvasSettings.customCss,
+		],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1042,7 +1047,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
 			if (message.type === "setCanvasSettings") {
-				if (message.surfaceId !== surfaceId) return;
+				if (message.surfaceId !== effectiveSurfaceId) return;
 
 				setPresignedCanvasSettings((prev) => ({
 					...prev,
@@ -1058,9 +1063,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 			const [msgSurfaceId, componentId] = elementId.includes("/")
 				? elementId.split("/", 2)
-				: [surfaceId, elementId];
+				: [effectiveSurfaceId, elementId];
 
-			if (msgSurfaceId !== surfaceId) return;
+			if (msgSurfaceId !== effectiveSurfaceId) return;
 
 			setPreviewComponents((prev) => {
 				// Use ref to always get latest components, avoiding stale closure
@@ -1075,7 +1080,6 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					);
 					return prev;
 				}
-
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;
 				let updatedComponent: SurfaceComponent = { ...component };
@@ -1291,7 +1295,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				return newMap;
 			});
 		},
-		[surfaceId],
+		[effectiveSurfaceId],
 	); // Removed components - using componentsRef instead
 
 	// Convert components map to elements object for the workflow payload
@@ -1300,14 +1304,14 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		const elements: Record<string, unknown> = {};
 		const currentComponents = componentsRef.current;
 		for (const [componentId, surfaceComponent] of currentComponents.entries()) {
-			const elementId = `${surfaceId}/${componentId}`;
+			const elementId = `${effectiveSurfaceId}/${componentId}`;
 			elements[elementId] = {
 				...surfaceComponent,
 				__element_id: elementId,
 			};
 		}
 		return elements;
-	}, [surfaceId]); // Only depends on surfaceId which doesn't change during preview
+	}, [effectiveSurfaceId]); // Only depends on the stable preview surface id
 
 	// Execute onLoad event when entering preview mode
 	useEffect(() => {

@@ -791,12 +791,7 @@ const FlowNodeInner = memo(
 				{playNode}
 				{props.data.node.long_running && (
 					<div className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full">
-						{useMemo(
-							() => (
-								<ClockIcon className="w-2 h-2 text-foreground" />
-							),
-							[],
-						)}
+						<ClockIcon className="w-2 h-2 text-foreground" />
 					</div>
 				)}
 				{props.data.node.only_offline && (
@@ -804,12 +799,7 @@ const FlowNodeInner = memo(
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
 						title="This node can only run locally"
 					>
-						{useMemo(
-							() => (
-								<MonitorIcon className="w-2 h-2 text-blue-500" />
-							),
-							[],
-						)}
+						<MonitorIcon className="w-2 h-2 text-blue-500" />
 					</div>
 				)}
 				{isWasmNode && !isReroute && (
@@ -817,12 +807,7 @@ const FlowNodeInner = memo(
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full"
 						title={`WASM sandbox node — package: ${props.data.node.wasm?.package_id}`}
 					>
-						{useMemo(
-							() => (
-								<BoxIcon className="w-2 h-2 text-amber-500" />
-							),
-							[],
-						)}
+						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
 				)}
 				{props.data.isUnavailable && !isReroute && (
@@ -880,17 +865,13 @@ const FlowNodeInner = memo(
 						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-primary/50 to-primary"} ${isReroute && "w-6"}`}
 					>
 						<div className={"flex flex-row items-center gap-1 min-w-0"}>
-							{useMemo(
-								() =>
-									props.data.node?.icon ? (
-										<DynamicImage
-											className="w-2 h-2 bg-foreground shrink-0"
-											url={props.data.node.icon}
-										/>
-									) : (
-										<WorkflowIcon className="w-2 h-2 shrink-0" />
-									),
-								[props.data.node?.icon],
+							{props.data.node?.icon ? (
+								<DynamicImage
+									className="w-2 h-2 bg-foreground shrink-0"
+									url={props.data.node.icon}
+								/>
+							) : (
+								<WorkflowIcon className="w-2 h-2 shrink-0" />
 							)}
 							<small className="font-medium leading-none text-start truncate">
 								<AutoResizeText

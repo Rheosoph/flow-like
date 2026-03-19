@@ -350,6 +350,15 @@ export function TauriProvider({
 		};
 	}, [queryClient]);
 
+	// Eagerly initialize the WASM package registry so installed packages
+	// appear in the catalog without requiring the user to visit the store.
+	useEffect(() => {
+		if (!backend) return;
+		backend.registryState.init?.().catch((e: unknown) => {
+			console.warn("Registry init (eager):", e);
+		});
+	}, [backend]);
+
 	useEffect(() => {
 		console.time("TauriProvider Initialization");
 		const backend = new TauriBackend((promise) => {

@@ -18,6 +18,10 @@
 		DC1EA3752E7C10EC00431604 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */; };
 		DC3181AD2E75CEDB000C3F5C /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DC3181AC2E75CEDB000C3F5C /* icon.icon */; };
 		DC3BF2A02E78AE330048A30D /* splash.png in Resources */ = {isa = PBXBuildFile; fileRef = DC3BF29F2E78AE330048A30D /* splash.png */; };
+		DC66728A2F6BE19D00160C5D /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */; };
+		DC66728D2F6BE41C00160C5D /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = DC66728C2F6BE41C00160C5D /* FirebaseMessaging */; };
+		DC66728F2F6BE82400160C5D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC66728E2F6BE81E00160C5D /* AppDelegate.swift */; };
+		DC6672922F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */; };
 		E083E5A09A5613BE75ECDE6C /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 9765DE5BE922A06C0CA8BA5F /* LaunchScreen.storyboard */; };
 		F439207FAC54CA183A9531D5 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA58C22D1BB3716CAD06FD10 /* MetalKit.framework */; };
 		FA0CC56A2E28AAAE51733B8B /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F2764F91BCC1150304FB91AC /* CoreGraphics.framework */; };
@@ -63,6 +67,9 @@
 		DC3181AC2E75CEDB000C3F5C /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DC380F432E7A0CAE00C066A7 /* libonnxruntime.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libonnxruntime.a; path = ../../../../../thirdparty/onnxruntime/ios/libonnxruntime.a; sourceTree = "<group>"; };
 		DC3BF29F2E78AE330048A30D /* splash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = splash.png; sourceTree = "<group>"; };
+		DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		DC66728E2F6BE81E00160C5D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		DC6672902F6BE83700160C5D /* flow-like-desktop_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "flow-like-desktop_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		DF38CBDD0FEF44AD730DA6C5 /* functions.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = functions.rs; sourceTree = "<group>"; };
 		F2764F91BCC1150304FB91AC /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		F662587278F1EFF589CA19D6 /* settings.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = settings.rs; sourceTree = "<group>"; };
@@ -79,9 +86,11 @@
 			files = (
 				0397521AECC609F3FB0D060D /* libapp.a in Frameworks */,
 				FA0CC56A2E28AAAE51733B8B /* CoreGraphics.framework in Frameworks */,
+				DC66728D2F6BE41C00160C5D /* FirebaseMessaging in Frameworks */,
 				DC1EA3752E7C10EC00431604 /* onnxruntime.xcframework in Frameworks */,
 				9D3CC2A8FC9EE8D73A28C132 /* Metal.framework in Frameworks */,
 				F439207FAC54CA183A9531D5 /* MetalKit.framework in Frameworks */,
+				DC6672922F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta in Frameworks */,
 				255CFA4E3B311D277951C11C /* QuartzCore.framework in Frameworks */,
 				93885DD61620BAB3F4966EEE /* Security.framework in Frameworks */,
 				BD999E1D015351A22CC3CFE6 /* UIKit.framework in Frameworks */,
@@ -106,6 +115,7 @@
 			children = (
 				2A3149ABC578B5319B6AE7BD /* flow-like-desktop_iOS.entitlements */,
 				86B082A69FFC739D5FE3C620 /* Info.plist */,
+				DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */,
 			);
 			path = "flow-like-desktop_iOS";
 			sourceTree = "<group>";
@@ -251,8 +261,10 @@
 		FB5008F287CFC1953E071B4B /* flow-like-desktop */ = {
 			isa = PBXGroup;
 			children = (
+				DC66728E2F6BE81E00160C5D /* AppDelegate.swift */,
 				FE841B414893A9D8539A5AD4 /* main.mm */,
 				A59909275A02E6D6EA6F8EEE /* bindings */,
+				DC6672902F6BE83700160C5D /* flow-like-desktop_iOS-Bridging-Header.h */,
 			);
 			path = "flow-like-desktop";
 			sourceTree = "<group>";
@@ -275,6 +287,8 @@
 			);
 			name = "flow-like-desktop_iOS";
 			packageProductDependencies = (
+				DC66728C2F6BE41C00160C5D /* FirebaseMessaging */,
+				DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */,
 			);
 			productName = "flow-like-desktop_iOS";
 			productReference = 194092FA8C7BD83859D3D7A1 /* Flow Like.app */;
@@ -288,6 +302,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					9CB33D41E41562D2F070169F = {
+						LastSwiftMigration = 2600;
+					};
+				};
 			};
 			buildConfigurationList = 6FC42D6D3C49D6767E42F678 /* Build configuration list for PBXProject "flow-like-desktop" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -299,6 +318,9 @@
 			);
 			mainGroup = 95311537C7BD5DE850EE9940;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -314,6 +336,7 @@
 			files = (
 				E083E5A09A5613BE75ECDE6C /* LaunchScreen.storyboard in Resources */,
 				DC3BF2A02E78AE330048A30D /* splash.png in Resources */,
+				DC66728A2F6BE19D00160C5D /* GoogleService-Info.plist in Resources */,
 				C3C6EB3F74C498D2FE8F7661 /* assets in Resources */,
 				DC3181AD2E75CEDB000C3F5C /* icon.icon in Resources */,
 			);
@@ -350,6 +373,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DC66728F2F6BE82400160C5D /* AppDelegate.swift in Sources */,
 				050A989B75BD371962346B70 /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -363,9 +387,10 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "VVT9DYMA6M";
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
 				ENABLE_BITCODE = NO;
 				EXCLUDED_ARCHS = "";
 				FRAMEWORK_SEARCH_PATHS = (
@@ -395,9 +420,12 @@
 				);
 				MARKETING_VERSION = 0.0.6;
 				OTHER_LDFLAGS = "-lz";
-				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app";
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
 			};
@@ -409,9 +437,10 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "VVT9DYMA6M";
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -441,9 +470,11 @@
 				);
 				MARKETING_VERSION = 0.0.6;
 				OTHER_LDFLAGS = "-lz";
-				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app";
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
 			};
@@ -590,6 +621,29 @@
 			defaultConfigurationName = debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.11.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DC66728C2F6BE41C00160C5D /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+		DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = "FirebaseInAppMessaging-Beta";
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C2521A9DB2E17032A7BB97A8 /* Project object */;
 }

@@ -311,15 +311,21 @@ pub fn build_node_from_definition(definition: &WasmNodeDefinition) -> Node {
 #[async_trait]
 impl NodeLogic for WasmNodeLogic {
     fn get_node(&self) -> Node {
-        let rt = flow_like_types::tokio::runtime::Handle::try_current();
+        let definition = if let Ok(cached) = self.cached_definition.try_read() {
+            cached.as_ref().cloned()
+        } else {
+            None
+        }
+        .or_else(|| {
+            let handle = flow_like_types::tokio::runtime::Handle::try_current().ok()?;
+            if handle.runtime_flavor() != flow_like_types::tokio::runtime::RuntimeFlavor::MultiThread {
+                return None;
+            }
 
-        let definition = if let Ok(handle) = rt {
             flow_like_types::tokio::task::block_in_place(|| {
                 handle.block_on(async { self.get_definition().await.ok() })
             })
-        } else {
-            None
-        };
+        });
 
         let definition = definition.unwrap_or_else(|| WasmNodeDefinition {
             name: "wasm_node".to_string(),
@@ -335,36 +341,7 @@ impl NodeLogic for WasmNodeLogic {
             permissions: vec![],
         });
 
-        let mut node = Node::new(
-            &definition.name,
-            &definition.friendly_name,
-            &definition.description,
-            &definition.category,
-        );
-
-        for (i, wasm_pin) in definition.pins.iter().enumerate() {
-            let pin = Self::to_flow_pin(wasm_pin, i as u16);
-            node.pins.insert(pin.id.clone(), pin);
-        }
-
-        if let Some(icon) = &definition.icon {
-            node.icon = Some(icon.clone());
-        }
-
-        if let Some(scores) = &definition.scores {
-            node.scores = Some(NodeScores {
-                privacy: scores.privacy,
-                security: scores.security,
-                performance: scores.performance,
-                governance: scores.governance,
-                reliability: scores.reliability,
-                cost: scores.cost,
-            });
-        }
-
-        if definition.long_running.unwrap_or(false) {
-            node.long_running = Some(true);
-        }
+        let mut node = build_node_from_definition(&definition);
 
         if let Some(package_id) = &self.package_id {
             node.wasm = Some(NodeWasm {

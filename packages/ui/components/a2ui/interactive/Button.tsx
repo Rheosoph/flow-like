@@ -2,6 +2,7 @@
 
 import * as LucideIcons from "lucide-react";
 import { Loader2 } from "lucide-react";
+import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { useExecuteAction } from "../ActionHandler";
@@ -60,6 +61,8 @@ export function A2UIButton({
 	surfaceId,
 	onAction,
 }: ComponentProps<ButtonComponent>) {
+	const pointerActivationAtRef = useRef(0);
+	const keyboardActivationAtRef = useRef(0);
 	const label = useResolved<string>(component.label) ?? "";
 	const disabled = useResolved<boolean>(component.disabled);
 	const loading = useResolved<boolean>(component.loading);
@@ -73,6 +76,20 @@ export function A2UIButton({
 	const size = sizeMap[sizeValue ?? "md"] ?? "default";
 
 	const handleClick = () => {
+		const now = Date.now();
+		const hasPointerIntent = now - pointerActivationAtRef.current < 1000;
+		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
+
+		if (!hasPointerIntent && !hasKeyboardIntent) {
+			console.log("[A2UI Button] Ignoring click without local activation intent:", {
+				componentId,
+			});
+			return;
+		}
+
+		pointerActivationAtRef.current = 0;
+		keyboardActivationAtRef.current = 0;
+
 		const action = component.actions?.[0];
 		console.log("[A2UI Button] handleClick:", { componentId, action, hasActions: !!component.actions, actionsLength: component.actions?.length });
 		if (action) {
@@ -100,6 +117,14 @@ export function A2UIButton({
 			disabled={disabled || loading}
 			className={cn(loading && "cursor-wait", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
+			onPointerDown={() => {
+				pointerActivationAtRef.current = Date.now();
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					keyboardActivationAtRef.current = Date.now();
+				}
+			}}
 			onClick={handleClick}
 		>
 			{loading ? (

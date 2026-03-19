@@ -137,7 +137,6 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 
 	if (
 		pin.name.startsWith("element_ref") &&
-		pin.data_type === IVariableType.String &&
 		pin.value_type === IValueType.Normal
 	) {
 		return (

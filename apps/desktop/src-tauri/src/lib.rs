@@ -434,6 +434,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_remote_push::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -616,6 +617,13 @@ pub fn run() {
 
                 // Load developer project WASM nodes into catalog
                 functions::developer::load_all_developer_nodes(&handle).await;
+
+                // Initialize the WASM package registry so installed packages
+                // appear in the catalog immediately (without waiting for the
+                // user to visit the store page).
+                if let Err(e) = functions::registry::registry_init(handle.clone(), None).await {
+                    tracing::warn!("Failed to initialize WASM registry at startup: {:?}", e);
+                }
 
                 let model_factory = {
                     println!("Starting GC");

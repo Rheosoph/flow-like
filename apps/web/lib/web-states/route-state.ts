@@ -16,7 +16,7 @@ function generateRouteId(): string {
 export class WebRouteState implements IAppRouteState {
 	constructor(private readonly backend: WebBackendRef) {}
 
-	async getRoutes(appId: string): Promise<IRouteMapping[]> {
+	async getRoutes(appId: string, _force?: boolean): Promise<IRouteMapping[]> {
 		try {
 			const routes = await apiGet<any[]>(
 				`apps/${appId}/routes`,

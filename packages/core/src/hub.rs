@@ -46,6 +46,69 @@ pub struct AlertingConfig {
     pub mail: String,
 }
 
+fn default_false() -> bool {
+    false
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PushNotificationProviderType {
+    Fcm,
+    AwsSns,
+    AzureNotificationHubs,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct FcmPushNotificationsConfig {
+    pub project_id: String,
+    pub service_account_json_env: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct AwsSnsPushNotificationsConfig {
+    pub android_platform_application_arn_env: String,
+    pub ios_platform_application_arn_env: String,
+    pub region_env: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct AzureNotificationHubsPushNotificationsConfig {
+    pub namespace: String,
+    pub hub_name: String,
+    pub sas_key_name_env: String,
+    pub sas_key_value_env: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
+pub struct PushNotificationsConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub allow_mobile: bool,
+    #[serde(default)]
+    pub allow_desktop: bool,
+    pub provider: Option<PushNotificationProviderType>,
+    pub channel_id: Option<String>,
+    pub fcm: Option<FcmPushNotificationsConfig>,
+    pub aws_sns: Option<AwsSnsPushNotificationsConfig>,
+    pub azure_notification_hubs: Option<AzureNotificationHubsPushNotificationsConfig>,
+}
+
+impl Default for PushNotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_mobile: true,
+            allow_desktop: false,
+            provider: None,
+            channel_id: None,
+            fcm: None,
+            aws_sns: None,
+            azure_notification_hubs: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
 pub struct UserTier {
     pub max_non_visible_projects: i32,
@@ -110,6 +173,10 @@ pub struct Hub {
     /// Audit trail configuration
     #[serde(default)]
     pub audit: AuditConfig,
+
+    /// Push notification provider configuration
+    #[serde(default)]
+    pub push_notifications: PushNotificationsConfig,
 
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,

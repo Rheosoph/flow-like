@@ -64,6 +64,7 @@ pub mod lookup;
 pub mod manage_invite;
 pub mod notifications;
 pub mod pat;
+pub mod push_targets;
 pub mod pricing;
 pub mod subscribe;
 pub mod templates;
@@ -90,6 +91,14 @@ pub fn routes() -> Router<AppState> {
         .route("/templates", get(templates::get_templates))
         .route("/widgets", get(widgets::get_widgets))
         .route("/notifications", get(notifications::get_notifications))
+        .route(
+            "/push-targets/register",
+            post(push_targets::register_push_target),
+        )
+        .route(
+            "/push-targets/{device_id}",
+            axum::routing::delete(push_targets::unregister_push_target),
+        )
         .route(
             "/notifications/list",
             get(notifications::list_notifications),

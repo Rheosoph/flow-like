@@ -25,7 +25,7 @@ export class RouteState implements IAppRouteState {
 		return !!this.backend.profile && !!this.backend.auth;
 	}
 
-	async getRoutes(appId: string): Promise<IRouteMapping[]> {
+	async getRoutes(appId: string, force?: boolean): Promise<IRouteMapping[]> {
 		const local = await invoke<IRouteMapping[]>("get_app_routes", { appId });
 
 		const isOffline = await this.backend.isOffline(appId);
@@ -33,24 +33,38 @@ export class RouteState implements IAppRouteState {
 			return local;
 		}
 
+		const syncRemote = async () => {
+			const remote = await fetcher<RemoteRouteMapping[]>(
+				this.backend.profile!,
+				`apps/${appId}/routes`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			const mapped = remote.map(toRouteMapping);
+			for (const r of mapped) {
+				await invoke("set_app_route", {
+					appId,
+					path: r.path,
+					eventId: r.eventId,
+				}).catch(() => {});
+			}
+			return mapped;
+		};
+
+		if (force) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getRoutes.name || "backendFn", appId];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch (error) {
+				console.warn("[RouteSync] Forced route fetch failed, falling back to local routes:", error);
+				return local;
+			}
+		}
+
 		const promise = injectDataFunction(
-			async () => {
-				const remote = await fetcher<RemoteRouteMapping[]>(
-					this.backend.profile!,
-					`apps/${appId}/routes`,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-				const mapped = remote.map(toRouteMapping);
-				for (const r of mapped) {
-					await invoke("set_app_route", {
-						appId,
-						path: r.path,
-						eventId: r.eventId,
-					}).catch(() => {});
-				}
-				return mapped;
-			},
+			syncRemote,
 			this,
 			this.backend.queryClient,
 			this.getRoutes,

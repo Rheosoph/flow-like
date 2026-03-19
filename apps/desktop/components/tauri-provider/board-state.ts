@@ -46,6 +46,11 @@ interface DiffEntry {
 	remote: any;
 }
 
+interface SystemTimeLike {
+	secs_since_epoch?: number;
+	nanos_since_epoch?: number;
+}
+
 // Hub configuration cache
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
@@ -192,8 +197,257 @@ const preserveSecretValues = (
 	return remoteBoard;
 };
 
+const preserveNodeRuntimeFields = (
+	remoteNode: INode,
+	localNode?: INode,
+): INode => {
+	if (!localNode) return remoteNode;
+
+	if (remoteNode.hash == null && localNode.hash != null) {
+		remoteNode.hash = localNode.hash;
+	}
+
+	if (remoteNode.wasm == null && localNode.wasm != null) {
+		remoteNode.wasm = structuredClone(localNode.wasm);
+	}
+
+	return remoteNode;
+};
+
+const preserveBoardRuntimeFields = (
+	remoteBoard: IBoard,
+	localBoard?: IBoard,
+): IBoard => {
+	if (!localBoard) return remoteBoard;
+
+	for (const [nodeId, remoteNode] of Object.entries(remoteBoard.nodes)) {
+		preserveNodeRuntimeFields(remoteNode, localBoard.nodes[nodeId]);
+	}
+
+	for (const [layerId, remoteLayer] of Object.entries(remoteBoard.layers)) {
+		const localLayer = localBoard.layers[layerId];
+		if (!localLayer) continue;
+
+		for (const [nodeId, remoteNode] of Object.entries(remoteLayer.nodes)) {
+			preserveNodeRuntimeFields(remoteNode, localLayer.nodes[nodeId]);
+		}
+	}
+
+	return remoteBoard;
+};
+
+const cloneBoard = (board: IBoard): IBoard => structuredClone(board);
+
+const systemTimeToNumber = (time?: SystemTimeLike): number => {
+	if (!time) return 0;
+	return (time.secs_since_epoch ?? 0) * 1_000_000_000 + (time.nanos_since_epoch ?? 0);
+};
+
+const hasIncompletePageIds = (remoteBoard: IBoard, localBoard?: IBoard): boolean =>
+	(remoteBoard.page_ids?.length ?? 0) === 0 && (localBoard?.page_ids?.length ?? 0) > 0;
+
+const shouldApplyRemoteBoard = (
+	remoteBoard: IBoard,
+	localBoard?: IBoard,
+): boolean => {
+	if (!localBoard) return true;
+
+	if (hasIncompletePageIds(remoteBoard, localBoard)) {
+		return false;
+	}
+
+	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
+	const localUpdated = systemTimeToNumber(localBoard.updated_at);
+
+	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
+		return false;
+	}
+
+	return true;
+};
+
+const mergeRemoteBoard = (remoteBoard: IBoard, localBoard?: IBoard): IBoard => {
+	const merged = preserveBoardRuntimeFields(
+		preserveSecretValues(cloneBoard(remoteBoard), localBoard),
+		localBoard,
+	);
+
+	if (hasIncompletePageIds(merged, localBoard)) {
+		merged.page_ids = localBoard?.page_ids ?? merged.page_ids;
+	}
+
+	return merged;
+};
+
+const boardsDifferIgnoringUpdatedAt = (
+	incomingBoard: IBoard,
+	currentBoard?: IBoard,
+): boolean => {
+	if (!currentBoard) return true;
+
+	const comparableBoard = cloneBoard(incomingBoard);
+	comparableBoard.updated_at = currentBoard.updated_at;
+
+	return !isEqual(comparableBoard, currentBoard);
+};
+
+const decodePinDefaultValue = (defaultValue?: number[] | null): unknown => {
+	if (!defaultValue?.length) return undefined;
+
+	try {
+		const jsonString = new TextDecoder("utf-8").decode(
+			new Uint8Array(defaultValue),
+		);
+		return JSON.parse(jsonString);
+	} catch {
+		return undefined;
+	}
+};
+
+const summarizeBoardElementRefs = (board: IBoard) => {
+	const summaries: Array<{
+		nodeId: string;
+		nodeName: string;
+		pinId: string;
+		pinName: string;
+		defaultValue: unknown;
+	}> = [];
+
+	const collectNodePins = (node: INode) => {
+		for (const pin of Object.values(node.pins ?? {})) {
+			if (!pin.name.startsWith("element_ref")) continue;
+			summaries.push({
+				nodeId: node.id,
+				nodeName: node.name,
+				pinId: pin.id,
+				pinName: pin.name,
+				defaultValue: decodePinDefaultValue(pin.default_value),
+			});
+		}
+	};
+
+	for (const node of Object.values(board.nodes)) {
+		collectNodePins(node);
+	}
+
+	for (const layer of Object.values(board.layers)) {
+		for (const node of Object.values(layer.nodes)) {
+			collectNodePins(node);
+		}
+	}
+
+	return summaries;
+};
+
+const getRemoteBoardSkipReason = (
+	remoteBoard: IBoard,
+	localBoard?: IBoard,
+): string | null => {
+	if (!localBoard) return null;
+
+	if (hasIncompletePageIds(remoteBoard, localBoard)) {
+		return "remote page_ids empty while local board still has pages";
+	}
+
+	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
+	const localUpdated = systemTimeToNumber(localBoard.updated_at);
+
+	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
+		return "remote board updated_at is older than local board";
+	}
+
+	return null;
+};
+
 export class BoardState implements IBoardState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async syncRemoteAppPackages(
+		appId: string,
+	): Promise<Array<{ packageId: string; version: string }>> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (
+			isOffline ||
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.backend.appState.listPackages ||
+			!this.backend.appState.addPackage ||
+			!this.backend.appState.removePackage
+		) {
+			return [];
+		}
+
+		try {
+			const [remotePackages, localPackages] = await Promise.all([
+				fetcher<Array<{ packageId: string; version: string }>>(
+					this.backend.profile,
+					`apps/${appId}/packages`,
+					undefined,
+					this.backend.auth,
+				),
+				this.backend.appState.listPackages(appId),
+			]);
+
+			const remotePackageMap = new Map(
+				remotePackages.map((pkg) => [pkg.packageId, pkg.version]),
+			);
+
+			const syncTasks: Promise<void>[] = [];
+
+			for (const [packageId, version] of remotePackageMap) {
+				if (localPackages[packageId] === version) {
+					continue;
+				}
+
+				syncTasks.push(this.backend.appState.addPackage(appId, packageId, version));
+			}
+
+			for (const packageId of Object.keys(localPackages)) {
+				if (remotePackageMap.has(packageId)) {
+					continue;
+				}
+
+				syncTasks.push(this.backend.appState.removePackage(appId, packageId));
+			}
+
+			if (syncTasks.length > 0) {
+				await Promise.all(syncTasks);
+			}
+
+			return remotePackages;
+		} catch (error) {
+			console.warn("Failed to sync remote app packages into local catalog state:", error);
+			return [];
+		}
+	}
+
+	private async ensureRemoteAppPackagesInstalled(
+		packages: Array<{ packageId: string; version: string }>,
+	): Promise<void> {
+		if (!this.backend.registryState || packages.length === 0) {
+			return;
+		}
+
+		try {
+			const installedPackages = await this.backend.registryState.getInstalledPackages();
+			const installedVersionMap = new Map(
+				installedPackages.map((pkg) => [pkg.id, pkg.version]),
+			);
+
+			const installTasks = packages
+				.filter((pkg) => installedVersionMap.get(pkg.packageId) !== pkg.version)
+				.map((pkg) =>
+					this.backend.registryState.installPackage(pkg.packageId, pkg.version),
+				);
+
+			if (installTasks.length > 0) {
+				await Promise.all(installTasks);
+			}
+		} catch (error) {
+			console.warn("Failed to install remote app packages into local registry:", error);
+		}
+	}
 
 	async getBoards(appId: string): Promise<IBoard[]> {
 		let boards: IBoard[] = await invoke("get_app_boards", {
@@ -236,19 +490,40 @@ export class BoardState implements IBoardState {
 
 				for (const board of remoteData) {
 					const localBoard = mergedBoards.get(board.id);
-					const merged = preserveSecretValues(board, localBoard);
-					if (!isEqual(merged, localBoard)) {
+					const skipReason = getRemoteBoardSkipReason(board, localBoard);
+					const nextBoard = shouldApplyRemoteBoard(board, localBoard)
+						? mergeRemoteBoard(board, localBoard)
+						: localBoard ?? mergeRemoteBoard(board, localBoard);
+
+					if (localBoard && nextBoard === localBoard) {
+						console.warn(
+							"Skipping stale or incomplete remote board during board list sync:",
+							{
+								boardId: board.id,
+								skipReason,
+								localPageIds: localBoard.page_ids,
+								remotePageIds: board.page_ids,
+								localUpdatedAt: localBoard.updated_at,
+								remoteUpdatedAt: board.updated_at,
+							},
+						);
+					}
+
+					if (boardsDifferIgnoringUpdatedAt(nextBoard, localBoard)) {
 						console.log("Board data changed, updating local state:");
 						await invoke("upsert_board", {
 							appId: appId,
-							boardId: merged.id,
-							name: merged.name,
-							description: merged.description,
-							boardData: merged,
+							boardId: nextBoard.id,
+							name: nextBoard.name,
+							description: nextBoard.description,
+							logLevel: nextBoard.log_level,
+							stage: nextBoard.stage,
+							executionMode: nextBoard.execution_mode,
+							boardData: nextBoard,
 						});
 					}
 
-					mergedBoards.set(board.id, merged);
+					mergedBoards.set(board.id, nextBoard);
 				}
 
 				return Array.from(mergedBoards.values());
@@ -266,6 +541,23 @@ export class BoardState implements IBoardState {
 		return boards;
 	}
 	async getCatalog(appId: string): Promise<INode[]> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline && this.backend.profile && this.backend.auth) {
+			try {
+				return await fetcher<INode[]>(
+					this.backend.profile,
+					`apps/${appId}/nodes`,
+					{ method: "GET" },
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.warn("Failed to fetch remote app catalog, falling back to local catalog:", error);
+			}
+		}
+
+		const remotePackages = await this.syncRemoteAppPackages(appId);
+		await this.ensureRemoteAppPackagesInstalled(remotePackages);
 		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;
 	}
@@ -347,10 +639,33 @@ export class BoardState implements IBoardState {
 					throw new Error("Failed to fetch board data");
 				}
 
-				remoteData.updated_at = board.updated_at;
-				const merged = preserveSecretValues(remoteData, board);
+				const shouldUseRemote = shouldApplyRemoteBoard(remoteData, board);
+				const skipReason = getRemoteBoardSkipReason(remoteData, board);
+				const merged = shouldUseRemote
+					? mergeRemoteBoard(remoteData, board)
+					: board;
 
-				if (!isEqual(merged, board) && typeof version === "undefined") {
+				if (!shouldUseRemote) {
+					console.warn(
+						"Skipping stale or incomplete remote board during board sync:",
+						{
+							boardId,
+							skipReason,
+							localPageIds: board.page_ids,
+							remotePageIds: remoteData.page_ids,
+							localUpdatedAt: board.updated_at,
+							remoteUpdatedAt: remoteData.updated_at,
+							localElementRefs: summarizeBoardElementRefs(board),
+							remoteElementRefs: summarizeBoardElementRefs(remoteData),
+						},
+					);
+					return board;
+				}
+
+				if (
+					boardsDifferIgnoringUpdatedAt(merged, board) &&
+					typeof version === "undefined"
+				) {
 					console.log("Board Missmatch, updating local state:");
 
 					logBoardDifferences(board, merged);
@@ -360,6 +675,9 @@ export class BoardState implements IBoardState {
 						boardId: boardId,
 						name: merged.name,
 						description: merged.description,
+						logLevel: merged.log_level,
+						stage: merged.stage,
+						executionMode: merged.execution_mode,
 						boardData: merged,
 					});
 				} else {
@@ -682,6 +1000,13 @@ export class BoardState implements IBoardState {
 		const board = await this.getBoard(appId, boardId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
+
+		console.log("[BoardState] executeBoard board summary:", {
+			boardId,
+			pageIds: board.page_ids,
+			updatedAt: board.updated_at,
+			elementRefs: summarizeBoardElementRefs(board),
+		});
 
 		if (requires_local_execution) {
 			try {
@@ -1293,6 +1618,13 @@ export class BoardState implements IBoardState {
 			},
 		);
 
+		console.log("[BoardState] getExecutionElements local result:", {
+			boardId,
+			pageId,
+			wildcard,
+			localElementKeys: Object.keys(localElements),
+		});
+
 		// For offline apps or if we have local elements, return them
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || Object.keys(localElements).length > 0) {
@@ -1312,6 +1644,12 @@ export class BoardState implements IBoardState {
 					{ method: "GET" },
 					this.backend.auth,
 				);
+				console.log("[BoardState] getExecutionElements remote fallback result:", {
+					boardId,
+					pageId,
+					wildcard,
+					remoteElementKeys: Object.keys(response.elements ?? {}),
+				});
 				return response.elements;
 			} catch (error) {
 				console.warn("Failed to fetch execution elements from API:", error);

@@ -22,20 +22,19 @@ export class RegistryState implements IRegistryState {
 	constructor(private readonly backend: TauriBackend) {}
 
 	async init(registryUrl?: string): Promise<void> {
-		const config = registryUrl ? { registry_url: registryUrl } : null;
-		await invoke("registry_init", { config });
-		this.initialized = true;
+		if (this.initialized) return;
+		if (this.initPromise) return this.initPromise;
+		this.initPromise = (async () => {
+			const config = registryUrl ? { registry_url: registryUrl } : null;
+			await invoke("registry_init", { config });
+			this.initialized = true;
+			this.initPromise = null;
+		})();
+		return this.initPromise;
 	}
 
 	private async ensureInit(): Promise<void> {
-		if (this.initialized) return;
-		if (!this.initPromise) {
-			this.initPromise = this.init().then(
-				() => { this.initPromise = null; },
-				(err) => { this.initPromise = null; throw err; },
-			);
-		}
-		return this.initPromise;
+		return this.init();
 	}
 
 	async searchPackages(filters?: SearchFilters): Promise<SearchResults> {

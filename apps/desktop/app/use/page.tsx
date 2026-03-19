@@ -45,7 +45,11 @@ export default function UsePage() {
 	const setQueryParams = useSetQueryParams();
 
 	const routes = useInvoke(
-		backend.routeState.getRoutes,
+		useMemo(() => {
+			const getRoutes = (currentAppId: string) =>
+				backend.routeState.getRoutes(currentAppId, true);
+			return getRoutes;
+		}, [backend.routeState]),
 		backend.routeState,
 		[appId ?? ""],
 		typeof appId === "string",
@@ -63,22 +67,32 @@ export default function UsePage() {
 		if (!appId) {
 			setRouteMapping(null);
 			setRouteEvent(null);
+			setPageData(null);
 			setRouteLoading(false);
 			return;
 		}
 
 		const loadRoute = async () => {
+			setRouteMapping(null);
+			setRouteEvent(null);
+			setPageData(null);
 			setRouteLoading(true);
 			try {
-				// Get route mapping by path or default
-				let mapping: IRouteMapping | null = null;
-				if (routePath && routePath !== "/") {
-					mapping = await backend.routeState.getRouteByPath(appId, routePath);
+				const availableRoutes = routes.data ?? [];
+				const defaultRoute =
+					availableRoutes.find((route) => route.path === "/") ?? null;
+
+				let mapping: IRouteMapping | null =
+					routePath && routePath !== "/"
+						? availableRoutes.find((route) => route.path === routePath) ?? null
+						: defaultRoute;
+
+				if (!mapping && routePath !== "/" && routes.isFetching) {
+					return;
 				}
 
-				// If no specific route found, try default route
 				if (!mapping) {
-					mapping = await backend.routeState.getDefaultRoute(appId);
+					mapping = defaultRoute;
 				}
 
 				setRouteMapping(mapping);
@@ -103,7 +117,7 @@ export default function UsePage() {
 		};
 
 		loadRoute();
-	}, [appId, routePath, backend.routeState, backend.eventState]);
+	}, [appId, routePath, routes.data, routes.isFetching, backend.eventState]);
 
 	const usableEvents = useMemo(() => {
 		const events = new Map<
@@ -218,7 +232,7 @@ export default function UsePage() {
 	const config = useMemo(() => {
 		if (!activeEvent) return {};
 		try {
-			return parseUint8ArrayToJson(activeEvent.config);
+			return parseUint8ArrayToJson(activeEvent.config) ?? {};
 		} catch (e) {
 			console.error("Error parsing event config:", e);
 			return {};
@@ -315,9 +329,17 @@ export default function UsePage() {
 		return true;
 	}, [routeLoading, routeEvent]);
 
+	const isResolvingCurrentRoute = useMemo(() => {
+		if (routeLoading) return true;
+		if (!appId) return false;
+		if (routePath === "/") return false;
+		if (routeMapping) return false;
+		return routes.isFetching;
+	}, [appId, routeLoading, routeMapping, routePath, routes.isFetching]);
+
 	const inner = useMemo(() => {
 		if (!appId) return <NotFound />;
-		if (routeLoading) return <LoadingScreen />;
+		if (isResolvingCurrentRoute) return <LoadingScreen />;
 
 		// Route event has a page - render the page interface
 		if (pageData && routeEvent?.default_page_id) {
@@ -326,7 +348,7 @@ export default function UsePage() {
 					<PageInterface
 						appId={appId}
 						event={routeEvent}
-						config={parseUint8ArrayToJson(routeEvent.config)}
+						config={parseUint8ArrayToJson(routeEvent.config) ?? {}}
 						page={pageData}
 						toolbarRef={headerRef}
 						sidebarRef={sidebarRef}
@@ -347,7 +369,7 @@ export default function UsePage() {
 						<InterfaceComponent
 							appId={appId}
 							event={routeEvent}
-							config={parseUint8ArrayToJson(routeEvent.config)}
+							config={parseUint8ArrayToJson(routeEvent.config) ?? {}}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
 						/>
@@ -382,7 +404,7 @@ export default function UsePage() {
 		return <NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />;
 	}, [
 		appId,
-		routeLoading,
+		isResolvingCurrentRoute,
 		pageData,
 		routeEvent,
 		sortedEvents,

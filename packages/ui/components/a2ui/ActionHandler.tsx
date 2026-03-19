@@ -11,6 +11,7 @@ import {
 	useState,
 } from "react";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
+import type { IBoard } from "../../lib/schema/flow/board";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
@@ -33,6 +34,122 @@ function toBoundValue(value: unknown): Record<string, unknown> {
 	if (Array.isArray(value)) return { literalString: JSON.stringify(value) };
 	if (value === null || value === undefined) return { literalString: "" };
 	return { literalString: JSON.stringify(value) };
+}
+
+function mergeStoredElementValues(
+	elementsMap: Record<string, unknown>,
+	storedValues: Record<string, unknown>,
+	components: Record<string, SurfaceComponent> | undefined,
+	surfaceId: string,
+): Record<string, unknown> {
+	const mergedElements: Record<string, unknown> = {};
+
+	for (const [elementId, element] of Object.entries(elementsMap)) {
+		const storedValue = storedValues[elementId];
+		if (storedValue !== undefined) {
+			const comp = element as Record<string, unknown>;
+			const componentData = comp.component as Record<string, unknown> | undefined;
+			if (componentData) {
+				mergedElements[elementId] = {
+					...comp,
+					component: {
+						...componentData,
+						value: toBoundValue(storedValue),
+					},
+				};
+			} else {
+				mergedElements[elementId] = element;
+			}
+		} else {
+			mergedElements[elementId] = element;
+		}
+	}
+
+	for (const [elementId, storedValue] of Object.entries(storedValues)) {
+		if (mergedElements[elementId] !== undefined) continue;
+		const prefix = `${surfaceId}/`;
+		if (!elementId.startsWith(prefix)) continue;
+
+		const componentId = elementId.slice(prefix.length);
+		const component = components?.[componentId];
+		if (!component) continue;
+
+		const componentRecord = component as unknown as Record<string, unknown>;
+		const componentData = componentRecord.component as
+			| Record<string, unknown>
+			| undefined;
+
+		mergedElements[elementId] = componentData
+			? {
+					...componentRecord,
+					component: {
+						...componentData,
+						value: toBoundValue(storedValue),
+					},
+				}
+			: componentRecord;
+	}
+
+	return mergedElements;
+}
+
+function decodePinDefaultValue(defaultValue: unknown): unknown {
+	if (!Array.isArray(defaultValue) || defaultValue.length === 0) {
+		return undefined;
+	}
+
+	try {
+		const jsonString = new TextDecoder("utf-8").decode(
+			new Uint8Array(defaultValue),
+		);
+		return JSON.parse(jsonString);
+	} catch {
+		return undefined;
+	}
+}
+
+function summarizeBoardElementRefs(board: IBoard) {
+	const refs: Array<{
+		nodeId: string;
+		nodeName: string;
+		pinId: string;
+		pinName: string;
+		defaultValue: unknown;
+	}> = [];
+
+	const collectNodeRefs = (node: Record<string, unknown>) => {
+		const pins = (node.pins as Record<string, Record<string, unknown>>) ?? {};
+		for (const pin of Object.values(pins)) {
+			const pinName = pin.name;
+			if (typeof pinName !== "string" || !pinName.startsWith("element_ref")) {
+				continue;
+			}
+
+			refs.push({
+				nodeId: String(node.id ?? ""),
+				nodeName: String(node.name ?? ""),
+				pinId: String(pin.id ?? ""),
+				pinName,
+				defaultValue: decodePinDefaultValue(pin.default_value),
+			});
+		}
+	};
+
+	for (const node of Object.values(board.nodes ?? {})) {
+		collectNodeRefs(node as Record<string, unknown>);
+	}
+
+	for (const layer of Object.values(board.layers ?? {})) {
+		const layerNodes =
+			(layer as Record<string, unknown>).nodes as
+				| Record<string, Record<string, unknown>>
+				| undefined;
+		for (const node of Object.values(layerNodes ?? {})) {
+			collectNodeRefs(node);
+		}
+	}
+
+	return refs;
 }
 
 interface ActionContextValue {
@@ -434,11 +551,6 @@ export function useExecuteAction() {
 		getElementValues,
 	} = useContext(ActionContext) ?? {};
 
-	// Cache for execution elements per board
-	const executionElementsCache = useRef<Map<string, Record<string, unknown>>>(
-		new Map(),
-	);
-
 	const handleA2UIEvents = useCallback(
 		(events: IIntercomEvent[]) => {
 			console.log("[A2UI] Received events from backend:", events);
@@ -510,12 +622,10 @@ export function useExecuteAction() {
 							pathname,
 						);
 
-						// Use window.location for navigation in Tauri/desktop environment
-						// This ensures the navigation actually works regardless of React/Next.js state
 						if (replace) {
-							window.location.replace(navUrl);
+							router.replace(navUrl);
 						} else {
-							window.location.href = navUrl;
+							router.push(navUrl);
 						}
 						// Continue to next event, navigation is fully handled here
 						continue;
@@ -707,43 +817,66 @@ export function useExecuteAction() {
 
 					if (nodeId && effectiveBoardId && effectiveAppId) {
 						try {
-							// Get cached execution elements or fetch them
 							const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-							let elementsMap = executionElementsCache.current.get(cacheKey);
+							let elementsMap: Record<string, unknown> | undefined;
 
-							if (!elementsMap) {
-								// Fetch required elements from backend
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false, // wildcard = false, only get required elements
-									);
+							console.log("[A2UI] workflow_event execution context:", {
+								nodeId,
+								effectiveAppId,
+								effectiveBoardId,
+								boardVersion,
+								surfaceId,
+								cacheKey,
+								hadCachedElements: false,
+								componentIds: Object.keys(components ?? {}),
+							});
 
-									// If no specific elements returned, fall back to all components
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = {};
-										if (components && surfaceId) {
-											for (const [id, comp] of Object.entries(components)) {
-												elementsMap[`${surfaceId}/${id}`] = comp;
-											}
-										}
-									}
+							try {
+								const currentBoard = await backend.boardState.getBoard(
+									effectiveAppId,
+									effectiveBoardId,
+									undefined,
+								);
+								console.log("[A2UI] workflow_event local board element refs:", {
+									boardId: effectiveBoardId,
+									pageIds: currentBoard.page_ids,
+									updatedAt: currentBoard.updated_at,
+									elementRefs: summarizeBoardElementRefs(currentBoard),
+								});
+							} catch (boardErr) {
+								console.warn(
+									"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
+									boardErr,
+								);
+							}
 
-									// Cache for subsequent executions
-									executionElementsCache.current.set(cacheKey, elementsMap);
-								} catch (err) {
-									console.warn(
-										"[A2UI] Failed to fetch execution elements, falling back to all components:",
-										err,
-									);
-									// Fall back to all components
+							// Always fetch current execution elements in preview mode.
+							// The flow graph can change without any cache invalidation signal.
+							try {
+								elementsMap = await backend.boardState.getExecutionElements(
+									effectiveAppId,
+									effectiveBoardId,
+									surfaceId || "",
+									false,
+								);
+
+								if (!elementsMap || Object.keys(elementsMap).length === 0) {
 									elementsMap = {};
 									if (components && surfaceId) {
 										for (const [id, comp] of Object.entries(components)) {
 											elementsMap[`${surfaceId}/${id}`] = comp;
 										}
+									}
+								}
+							} catch (err) {
+								console.warn(
+									"[A2UI] Failed to fetch execution elements, falling back to all components:",
+									err,
+								);
+								elementsMap = {};
+								if (components && surfaceId) {
+									for (const [id, comp] of Object.entries(components)) {
+										elementsMap[`${surfaceId}/${id}`] = comp;
 									}
 								}
 							}
@@ -756,7 +889,6 @@ export function useExecuteAction() {
 								storedValues,
 							});
 
-							const mergedElements: Record<string, unknown> = {};
 							for (const [elementId, element] of Object.entries(elementsMap)) {
 								const storedValue = storedValues[elementId];
 								console.log("[A2UI] Checking element:", {
@@ -764,26 +896,14 @@ export function useExecuteAction() {
 									hasStoredValue: storedValue !== undefined,
 									storedValue,
 								});
-								if (storedValue !== undefined) {
-									const comp = element as Record<string, unknown>;
-									const componentData = comp.component as
-										| Record<string, unknown>
-										| undefined;
-									if (componentData) {
-										mergedElements[elementId] = {
-											...comp,
-											component: {
-												...componentData,
-												value: toBoundValue(storedValue),
-											},
-										};
-									} else {
-										mergedElements[elementId] = element;
-									}
-								} else {
-									mergedElements[elementId] = element;
-								}
 							}
+
+							const mergedElements = mergeStoredElementValues(
+								elementsMap,
+								storedValues,
+								components,
+								surfaceId || "",
+							);
 
 							const currentPageId = pathname || "default";
 
@@ -866,29 +986,26 @@ export function useExecuteAction() {
 					if (effectiveBoardId && effectiveAppId) {
 						try {
 							const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-							let elementsMap = executionElementsCache.current.get(cacheKey);
+							let elementsMap: Record<string, unknown> | undefined;
 
-							if (!elementsMap) {
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false,
-									);
+							console.log("[A2UI] widget_event execution context:", {
+								effectiveAppId,
+								effectiveBoardId,
+								surfaceId,
+								cacheKey,
+								hadCachedElements: false,
+								componentIds: Object.keys(components ?? {}),
+							});
 
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = {};
-										if (components && surfaceId) {
-											for (const [id, comp] of Object.entries(components)) {
-												elementsMap[`${surfaceId}/${id}`] = comp;
-											}
-										}
-									}
+							try {
+								elementsMap = await backend.boardState.getExecutionElements(
+									effectiveAppId,
+									effectiveBoardId,
+									surfaceId || "",
+									false,
+								);
 
-									executionElementsCache.current.set(cacheKey, elementsMap);
-								} catch (err) {
-									console.warn("[A2UI] Failed to fetch execution elements for widget_event:", err);
+								if (!elementsMap || Object.keys(elementsMap).length === 0) {
 									elementsMap = {};
 									if (components && surfaceId) {
 										for (const [id, comp] of Object.entries(components)) {
@@ -896,30 +1013,26 @@ export function useExecuteAction() {
 										}
 									}
 								}
+							} catch (err) {
+								console.warn(
+									"[A2UI] Failed to fetch execution elements for widget_event:",
+									err,
+								);
+								elementsMap = {};
+								if (components && surfaceId) {
+									for (const [id, comp] of Object.entries(components)) {
+										elementsMap[`${surfaceId}/${id}`] = comp;
+									}
+								}
 							}
 
 							const storedValues = getElementValues?.() ?? {};
-							const mergedElements: Record<string, unknown> = {};
-							for (const [elementId, element] of Object.entries(elementsMap)) {
-								const storedValue = storedValues[elementId];
-								if (storedValue !== undefined) {
-									const comp = element as Record<string, unknown>;
-									const componentData = comp.component as Record<string, unknown> | undefined;
-									if (componentData) {
-										mergedElements[elementId] = {
-											...comp,
-											component: {
-												...componentData,
-												value: toBoundValue(storedValue),
-											},
-										};
-									} else {
-										mergedElements[elementId] = element;
-									}
-								} else {
-									mergedElements[elementId] = element;
-								}
-							}
+							const mergedElements = mergeStoredElementValues(
+								elementsMap,
+								storedValues,
+								components,
+								surfaceId || "",
+							);
 
 							const payload = {
 								id: nodeId,

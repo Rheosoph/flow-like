@@ -119,24 +119,18 @@ async fn load_single_package(
         )));
     }
 
-    // SAFETY: These `.cwasm` files were compiled by our own server from verified `.wasm`
-    // bytecode and their integrity is confirmed by the blake3 checksum above.
-    let module =
-        unsafe { wasmtime::Module::deserialize(engine.engine(), &cwasm_bytes) }.map_err(|e| {
-            ExecutorError::Execution(format!(
-                "Failed to deserialize cwasm for {} v{}: {}",
-                package_id, pkg_ref.version, e
-            ))
-        })?;
-
-    let wasm_module = Arc::new(
-        WasmModule::from_precompiled(module, pkg_ref.wasm_hash.clone()).map_err(|e| {
-            ExecutorError::Execution(format!(
-                "Failed to build WasmModule for {} v{}: {}",
-                package_id, pkg_ref.version, e
-            ))
-        })?,
-    );
+    let wasm_module = match deserialize_cwasm(engine, package_id, pkg_ref, &cwasm_bytes) {
+        Ok(module) => module,
+        Err(deserialize_error) => {
+            tracing::warn!(
+                package_id = %package_id,
+                version = %pkg_ref.version,
+                error = %deserialize_error,
+                "Failed to deserialize cwasm, falling back to raw wasm compilation"
+            );
+            compile_raw_wasm(engine, http, package_id, pkg_ref).await?
+        }
+    };
 
     let security = flow_like_wasm::WasmSecurityConfig::default();
     let loaded = flow_like_wasm::LoadedWasm::Module(wasm_module);
@@ -173,4 +167,75 @@ async fn load_single_package(
         .collect();
 
     Ok(nodes)
+}
+
+fn deserialize_cwasm(
+    engine: &Arc<WasmEngine>,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+    cwasm_bytes: &[u8],
+) -> Result<Arc<WasmModule>, ExecutorError> {
+    let module = unsafe { wasmtime::Module::deserialize(engine.engine(), cwasm_bytes) }
+        .map_err(|e| {
+            ExecutorError::Execution(format!(
+                "Failed to deserialize cwasm for {} v{}: {}",
+                package_id, pkg_ref.version, e
+            ))
+        })?;
+
+    Ok(Arc::new(
+        WasmModule::from_precompiled(module, pkg_ref.wasm_hash.clone()).map_err(|e| {
+            ExecutorError::Execution(format!(
+                "Failed to build WasmModule for {} v{}: {}",
+                package_id, pkg_ref.version, e
+            ))
+        })?,
+    ))
+}
+
+async fn compile_raw_wasm(
+    engine: &Arc<WasmEngine>,
+    http: &reqwest::Client,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Arc<WasmModule>, ExecutorError> {
+    let wasm_resp = http.get(&pkg_ref.wasm_url).send().await.map_err(|e| {
+        ExecutorError::Storage(format!(
+            "Failed to download raw wasm for {}: {}",
+            package_id, e
+        ))
+    })?;
+
+    if !wasm_resp.status().is_success() {
+        return Err(ExecutorError::Storage(format!(
+            "raw wasm download failed for {} v{}: HTTP {}",
+            package_id,
+            pkg_ref.version,
+            wasm_resp.status()
+        )));
+    }
+
+    let wasm_bytes = wasm_resp
+        .bytes()
+        .await
+        .map_err(|e| ExecutorError::Storage(format!("Failed to read raw wasm bytes: {}", e)))?;
+
+    let actual = blake3::hash(&wasm_bytes).to_hex().to_string();
+    if actual != pkg_ref.wasm_hash {
+        return Err(ExecutorError::Execution(format!(
+            "Checksum mismatch for raw wasm {} v{}: expected {}, got {}",
+            package_id, pkg_ref.version, pkg_ref.wasm_hash, actual
+        )));
+    }
+
+    Ok(Arc::new(
+        WasmModule::from_bytes(engine, &wasm_bytes, pkg_ref.wasm_hash.clone())
+            .await
+            .map_err(|e| {
+                ExecutorError::Execution(format!(
+                    "Failed to compile raw wasm for {} v{}: {}",
+                    package_id, pkg_ref.version, e
+                ))
+            })?,
+    ))
 }

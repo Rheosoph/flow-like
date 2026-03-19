@@ -71,6 +71,38 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Decode GoogleService-Info.plist (macOS)
+        if: runner.os == 'macOS'
+        env:
+          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          echo "$GOOGLE_SERVICE_INFO_PLIST_BASE64" | base64 --decode > apps/desktop/src-tauri/gen/apple/flow-like-desktop_iOS/GoogleService-Info.plist
+          echo "GoogleService-Info.plist decoded successfully"
+
+      - name: Decode google-services.json (Linux/macOS)
+        if: runner.os != 'Windows'
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > apps/desktop/src-tauri/gen/android/app/google-services.json
+            echo "google-services.json decoded successfully"
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 not set, skipping"
+          fi
+
+      - name: Decode google-services.json (Windows)
+        if: runner.os == 'Windows'
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if ($env:GOOGLE_SERVICES_JSON_BASE64) {
+            [System.Convert]::FromBase64String($env:GOOGLE_SERVICES_JSON_BASE64) | Set-Content -Path "apps/desktop/src-tauri/gen/android/app/google-services.json" -AsByteStream
+            Write-Host "google-services.json decoded successfully"
+          } else {
+            Write-Host "GOOGLE_SERVICES_JSON_BASE64 not set, skipping"
+          }
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |

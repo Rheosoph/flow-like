@@ -1,7 +1,7 @@
 import type { IAppRouteState, IRouteMapping } from "../route-state";
 
 export class EmptyRouteState implements IAppRouteState {
-	getRoutes(_appId: string): Promise<IRouteMapping[]> {
+	getRoutes(_appId: string, _force?: boolean): Promise<IRouteMapping[]> {
 		throw new Error("Method not implemented.");
 	}
 	getRouteByPath(_appId: string, _path: string): Promise<IRouteMapping | null> {

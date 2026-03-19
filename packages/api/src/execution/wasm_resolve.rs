@@ -53,14 +53,25 @@ pub async fn resolve_wasm_packages(
             }
         };
 
-        match registry
-            .sign_cwasm_urls(&pkg.package_id, &pkg.version, &target)
-            .await
-        {
+        let wasm_url = match registry.get_wasm_url(&pkg.package_id, Some(&pkg.version)).await {
+            Ok((download_url, _, _)) => download_url,
+            Err(e) => {
+                tracing::warn!(
+                    package_id = %pkg.package_id,
+                    version = %pkg.version,
+                    error = %e,
+                    "Failed to generate raw WASM download URL — skipping"
+                );
+                continue;
+            }
+        };
+
+        match registry.sign_cwasm_urls(&pkg.package_id, &pkg.version, &target).await {
             Ok((cwasm_url, checksum_url)) => {
                 let resolved = flow_like_types::dispatch::WasmPackageRef {
                     version: pkg.version.clone(),
                     wasm_hash: version_record.wasm_hash.clone(),
+                    wasm_url,
                     cwasm_url,
                     cwasm_checksum_url: checksum_url,
                 };

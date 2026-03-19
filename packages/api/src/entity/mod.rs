@@ -39,6 +39,7 @@ pub mod pat;
 pub mod profile;
 pub mod publication_log;
 pub mod publication_request;
+pub mod push_notification_target;
 pub mod role;
 pub mod sea_orm_active_enums;
 pub mod sink_token;

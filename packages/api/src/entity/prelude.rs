@@ -37,6 +37,7 @@ pub use super::pat::Entity as Pat;
 pub use super::profile::Entity as Profile;
 pub use super::publication_log::Entity as PublicationLog;
 pub use super::publication_request::Entity as PublicationRequest;
+pub use super::push_notification_target::Entity as PushNotificationTarget;
 pub use super::role::Entity as Role;
 pub use super::sink_token::Entity as SinkToken;
 pub use super::solution_log::Entity as SolutionLog;

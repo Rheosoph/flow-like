@@ -63,7 +63,22 @@ impl NodeLogic for ParallelExecutionNode {
         context.deactivate_exec_pin("exec_done").await?;
 
         let mode: String = context.evaluate_pin("thread_model").await?;
-        let use_threads = matches!(mode.as_str(), "threads");
+        let requested_threads = matches!(mode.as_str(), "threads");
+        let use_threads = if requested_threads {
+            matches!(
+                tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()),
+                Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+            )
+        } else {
+            false
+        };
+
+        if requested_threads && !use_threads {
+            context.log_message(
+                "Parallel Execution 'threads' mode requires a multi-thread Tokio runtime; falling back to task mode",
+                LogLevel::Warn,
+            );
+        }
 
         let exec_out_pins = context.get_pins_by_name("exec_out").await?;
         let mut to_run = Vec::new();

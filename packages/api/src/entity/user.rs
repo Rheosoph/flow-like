@@ -92,6 +92,8 @@ pub enum Relation {
     PublicationLog,
     #[sea_orm(has_many = "super::publication_request::Entity")]
     PublicationRequest,
+    #[sea_orm(has_many = "super::push_notification_target::Entity")]
+    PushNotificationTarget,
     #[sea_orm(has_many = "super::transaction::Entity")]
     Transaction,
     #[sea_orm(has_many = "super::wasm_package_author::Entity")]
@@ -199,6 +201,12 @@ impl Related<super::publication_log::Entity> for Entity {
 impl Related<super::publication_request::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::PublicationRequest.def()
+    }
+}
+
+impl Related<super::push_notification_target::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PushNotificationTarget.def()
     }
 }
 

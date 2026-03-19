@@ -1,8 +1,9 @@
 use crate::{
     audit_branch, ensure_permission,
-    entity::{app, invitation, membership, meta, sea_orm_active_enums::Visibility},
+    entity::{app, invitation, membership, meta, sea_orm_active_enums::{Visibility, NotificationType}},
     error::ApiError,
     middleware::jwt::AppUser,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     permission::role_permission::RolePermissions,
     state::AppState,
 };
@@ -168,6 +169,30 @@ pub async fn invite_user(
 
     invitation.insert(&txn).await?;
     txn.commit().await?;
+
+    let app_name = meta
+        .as_ref()
+        .map_or("an app".to_string(), |m| m.name.clone());
+
+    if let Err(error) = dispatch_notification(
+        &state,
+        DispatchNotificationInput {
+            user_id: params.sub.clone(),
+            app_id: Some(app_id.clone()),
+            title: format!("You've been invited to {}", app_name),
+            description: Some("Open your invitations to accept or decline.".to_string()),
+            icon: Some("mail".to_string()),
+            link: Some("/invites".to_string()),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to dispatch invitation notification");
+    }
 
     audit_branch!(
         state,

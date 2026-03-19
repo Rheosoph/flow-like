@@ -203,9 +203,10 @@ async fn handle_app_purchase_completed(
     client_ref: &str,
 ) -> Result<(), ApiError> {
     use crate::entity::{
-        app, app_purchase, membership, meta, notification,
+        app, app_purchase, membership, meta,
         sea_orm_active_enums::{NotificationType, PurchaseStatus},
     };
+    use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
 
     let session_id = session.id.to_string();
 
@@ -353,28 +354,26 @@ async fn handle_app_purchase_completed(
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
     let app_link_url = format!("{}/use?id={}", frontend_url, app_id);
 
-    // Create notification for the user
-    let notification_id = flow_like_types::create_id();
-    let notification_model = notification::ActiveModel {
-        id: Set(notification_id.clone()),
-        user_id: Set(user_id.to_string()),
-        app_id: Set(Some(app_id.to_string())),
-        title: Set(format!("Purchase Complete: {}", app_name)),
-        description: Set(Some(format!(
-            "You now have access to {}. Click to start using the app.",
-            app_name
-        ))),
-        icon: Set(Some("shopping-bag".to_string())),
-        link: Set(Some(app_link_url)),
-        r#type: Set(NotificationType::System),
-        read: Set(false),
-        source_run_id: Set(None),
-        source_node_id: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        read_at: Set(None),
-    };
-
-    notification_model.insert(&state.db).await?;
+    // Create notification and dispatch push
+    let notification_id = dispatch_notification(
+        state,
+        DispatchNotificationInput {
+            user_id: user_id.to_string(),
+            app_id: Some(app_id.to_string()),
+            title: format!("Purchase Complete: {}", app_name),
+            description: Some(format!(
+                "You now have access to {}. Click to start using the app.",
+                app_name
+            )),
+            icon: Some("shopping-bag".to_string()),
+            link: Some(app_link_url),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
+    .await?;
 
     tracing::info!(
         notification_id = %notification_id,
@@ -393,11 +392,11 @@ async fn handle_wasm_purchase_completed(
     client_ref: &str,
 ) -> Result<(), ApiError> {
     use crate::entity::{
-        notification,
         sea_orm_active_enums::{NotificationType, PurchaseStatus},
         user, wasm_package, wasm_package_purchase, wasm_package_user,
     };
     use crate::mail::{EmailMessage, templates::purchase_confirmation};
+    use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
 
     let session_id = session.id.to_string();
 
@@ -512,30 +511,28 @@ async fn handle_wasm_purchase_completed(
         "Granted WASM package access from purchase"
     );
 
-    // Send notification
-    let notification_id = flow_like_types::create_id();
+    // Send notification and dispatch push
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
     let link = format!("{}/nodes?id={}", frontend_url, package_id);
 
-    notification::ActiveModel {
-        id: Set(notification_id),
-        user_id: Set(user_id.to_string()),
-        app_id: Set(None),
-        title: Set("WASM Package Purchase Complete".to_string()),
-        description: Set(Some(
-            "You now have access to the purchased WASM package.".to_string(),
-        )),
-        icon: Set(Some("package".to_string())),
-        link: Set(Some(link.clone())),
-        r#type: Set(NotificationType::System),
-        read: Set(false),
-        source_run_id: Set(None),
-        source_node_id: Set(None),
-        created_at: Set(now),
-        read_at: Set(None),
-    }
-    .insert(&state.db)
+    let _notification_id = dispatch_notification(
+        state,
+        DispatchNotificationInput {
+            user_id: user_id.to_string(),
+            app_id: None,
+            title: "WASM Package Purchase Complete".to_string(),
+            description: Some(
+                "You now have access to the purchased WASM package.".to_string(),
+            ),
+            icon: Some("package".to_string()),
+            link: Some(link.clone()),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
     .await?;
 
     // Send purchase confirmation email
