@@ -41,6 +41,7 @@ members = [
     "packages/storage",
     "packages/api",
     "packages/sinks",
+    "packages/secrets",
     "packages/executor",
     "packages/compiler",
     "packages/wasm",
@@ -72,6 +73,7 @@ flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor" }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
+flow-like-secrets = { path = "packages/secrets" }
 tauri-plugin-flow-like-dexie-blob-offload = { path = "packages/dexie-tauri-adapter/backend" }
 lambda_http = "0.15.1"
 futures = "0.3.31"

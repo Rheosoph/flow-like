@@ -8,6 +8,7 @@ use crate::{
     routes::app::events::db::decrypt_token,
     state::AppState,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like::hub::{PushNotificationProviderType, PushNotificationsConfig};
 use flow_like_types::create_id;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -275,14 +276,14 @@ async fn push_to_user(
             continue;
         }
 
-        let Some(token) = decrypt_token(&target.token_encrypted) else {
+        let Some(token) = decrypt_token(&target.token_encrypted, &state.encryption_key) else {
             tracing::warn!(target_id = %target.id, "Failed to decrypt push token");
             continue;
         };
 
         let result = match provider {
             PushNotificationTargetProvider::Fcm => {
-                send_via_fcm(config, &target, &token, notification_id, input).await
+                send_via_fcm(state, config, &target, &token, notification_id, input).await
             }
             PushNotificationTargetProvider::AwsSns => {
                 #[cfg(feature = "aws")]
@@ -378,12 +379,20 @@ async fn invalidate_target(
     Ok(())
 }
 
-/// Reads the service account JSON from the env var.
-/// The value can be either the raw JSON string or a path to a `.json` file.
-fn resolve_service_account_json(env_name: &str) -> flow_like_types::Result<String> {
-    let value = std::env::var(env_name).map_err(|_| {
-        flow_like_types::anyhow!("FCM service account env var '{}' is not set", env_name)
-    })?;
+/// Reads the service account JSON via the secret store.
+/// The resolved value can be either the raw JSON string or a path to a `.json` file.
+async fn resolve_service_account_json(
+    state: &AppState,
+    env_name: &str,
+) -> flow_like_types::Result<String> {
+    let value = state
+        .secrets
+        .get_secret_string(&SecretRef::new(env_name))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| {
+            flow_like_types::anyhow!("FCM service account secret '{}' is not set", env_name)
+        })?;
 
     let trimmed = value.trim();
     if trimmed.starts_with('{') {
@@ -400,6 +409,7 @@ fn resolve_service_account_json(env_name: &str) -> flow_like_types::Result<Strin
 }
 
 async fn send_via_fcm(
+    state: &AppState,
     config: &PushNotificationsConfig,
     target: &push_notification_target::Model,
     token: &str,
@@ -411,7 +421,7 @@ async fn send_via_fcm(
         .as_ref()
         .ok_or_else(|| flow_like_types::anyhow!("Missing FCM push configuration"))?;
 
-    let service_account_json = resolve_service_account_json(&fcm.service_account_json_env)?;
+    let service_account_json = resolve_service_account_json(state, &fcm.service_account_json_env).await?;
 
     let data = notification_data(notification_id, target, input);
     let url = format!(

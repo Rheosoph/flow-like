@@ -9,6 +9,9 @@ use flow_like::flow_like_storage::Path;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::hub::{Environment, Hub};
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner};
+use flow_like_secrets::{
+    EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
+};
 use flow_like_types::bail;
 use flow_like_types::{Result, Value};
 use hyper_util::{
@@ -84,13 +87,68 @@ pub struct State {
     pub wasm_registry: Option<Arc<ServerRegistry>>,
     /// Sink scheduler for cron events (AWS EventBridge, K8s CronJobs, or in-memory)
     pub sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>>,
+    /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
+    pub secrets: Arc<SecretStore>,
+    /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
+    pub encryption_key: [u8; 32],
 }
 
 impl State {
     pub async fn new(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
+        secret_store_config: Option<SecretStoreConfig>,
     ) -> Self {
+        let secrets = {
+            let config = secret_store_config.unwrap_or_else(|| {
+                let prefix = std::env::var("SECRET_PREFIX").ok();
+                SecretStoreConfig::default()
+                    .with_provider(ProviderConfig::Env(EnvProviderConfig { prefix }))
+            });
+            Arc::new(SecretStore::new(config).expect("Failed to create secret store"))
+        };
+
+        let encryption_key = {
+            let key_material = secrets
+                .get_secret_string(&SecretRef::new("SINK_TOKEN_ENCRYPTION_KEY"))
+                .await
+                .map(|s| s.expose_secret().to_string())
+                .unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
+                        Set SINK_TOKEN_ENCRYPTION_KEY in production!"
+                    );
+                    "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
+                });
+            *blake3::hash(key_material.as_bytes()).as_bytes()
+        };
+
+        // Initialize backend JWT keys from the secret store
+        {
+            let backend_key = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KEY"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            let backend_pub = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_PUB"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            let backend_kid = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KID"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+
+            crate::backend_jwt::init(
+                backend_key.as_deref(),
+                backend_pub.as_deref(),
+                backend_kid.clone(),
+            );
+            crate::audit::sign::init(backend_key.as_deref(), backend_kid);
+        }
+
         let platform_config: Hub =
             serde_json::from_str(CONFIG).expect("Failed to parse config file");
 
@@ -114,8 +172,11 @@ impl State {
                 .expect("Failed to create meta store from master credentials"),
         );
 
-        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let mut opt = ConnectOptions::new(db_url.to_owned());
+        let db_url = secrets
+            .get_secret_string(&SecretRef::new("DATABASE_URL"))
+            .await
+            .expect("DATABASE_URL must be set");
+        let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
@@ -130,9 +191,11 @@ impl State {
             .expect("Failed to connect to database");
 
         let stripe_client = if platform_config.features.premium {
-            let stripe_key =
-                std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
-            let stripe_client = stripe::Client::new(stripe_key);
+            let stripe_key = secrets
+                .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))
+                .await
+                .expect("STRIPE_SECRET_KEY must be set");
+            let stripe_client = stripe::Client::new(stripe_key.expose_secret().clone());
             Some(stripe_client)
         } else {
             None
@@ -302,6 +365,8 @@ impl State {
                 .build(),
             wasm_registry,
             sink_scheduler,
+            secrets,
+            encryption_key,
         }
     }
 

@@ -5,13 +5,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use stripe::{Event, EventObject, EventType, Webhook};
-
-fn get_stripe_webhook_secret() -> Option<String> {
-    std::env::var("STRIPE_WEBHOOK_SECRET").ok()
-}
 
 #[tracing::instrument(name = "POST /webhook/stripe", skip(state, headers, payload))]
 pub async fn stripe_webhook(
@@ -24,8 +21,11 @@ pub async fn stripe_webhook(
         .as_ref()
         .ok_or(anyhow!("Stripe not configured"))?;
 
-    let webhook_secret =
-        get_stripe_webhook_secret().ok_or(anyhow!("Webhook secret not configured"))?;
+    let webhook_secret = state
+        .secrets
+        .get_secret_string(&SecretRef::new("STRIPE_WEBHOOK_SECRET"))
+        .await
+        .map_err(|_| anyhow!("Webhook secret not configured"))?;
 
     let signature = headers
         .get("stripe-signature")
@@ -35,7 +35,7 @@ pub async fn stripe_webhook(
     let payload_str =
         std::str::from_utf8(&payload).map_err(|_| anyhow!("Invalid UTF-8 in payload"))?;
 
-    let event = Webhook::construct_event(payload_str, signature, &webhook_secret)
+    let event = Webhook::construct_event(payload_str, signature, webhook_secret.expose_secret())
         .map_err(|e| anyhow!("Failed to verify webhook signature: {}", e))?;
 
     let event_id = event.id.to_string();

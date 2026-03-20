@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 flow-like.workspace = true
-flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "sentry"] }
+flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "sentry", "secrets-aws"] }
+flow-like-secrets = { workspace = true, features = ["aws"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true

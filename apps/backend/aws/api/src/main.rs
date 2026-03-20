@@ -3,6 +3,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_api::construct_router;
 use flow_like_catalog::get_catalog;
+use flow_like_secrets::{
+    AwsParameterStoreProviderConfig, EnvProviderConfig, ProviderConfig, SecretStoreConfig,
+};
 use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
 use lambda_http::{Error, run_with_streaming_response};
@@ -36,11 +39,31 @@ async fn main() -> Result<(), Error> {
         Some(guard)
     };
 
+    // Build secret store (AWS Parameter Store + env fallback)
+    let secret_prefix = std::env::var("SECRET_PREFIX").ok();
+    let secret_config = SecretStoreConfig::default()
+        .with_provider(ProviderConfig::AwsParameterStore(
+            AwsParameterStoreProviderConfig {
+                prefix: secret_prefix.clone(),
+                with_decryption: true,
+                ..Default::default()
+            },
+        ))
+        .with_provider(ProviderConfig::Env(EnvProviderConfig {
+            prefix: secret_prefix,
+        }));
+    let secrets = flow_like_secrets::SecretStore::new(secret_config.clone())
+        .expect("Failed to create secret store");
+
     // CDN bucket (e.g. Cloudflare R2) — separate endpoint + credentials
     let cdn_bucket_name = std::env::var("CDN_BUCKET_NAME").expect("CDN_BUCKET_NAME must be set");
     let cdn_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
     let cdn_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
-    let cdn_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
+    let cdn_secret_key = secrets
+        .get_secret_string(&flow_like_secrets::SecretRef::new("CDN_BUCKET_SECRET_ACCESS_KEY"))
+        .await
+        .ok()
+        .map(|s| flow_like_secrets::ExposeSecret::expose_secret(&*s).to_string());
 
     let mut cdn_builder = AmazonS3Builder::new().with_bucket_name(cdn_bucket_name);
     if let Some(ep) = &cdn_endpoint {
@@ -59,7 +82,9 @@ async fn main() -> Result<(), Error> {
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_builder.build().unwrap()));
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket)).await);
+    let state = Arc::new(
+        flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
+    );
     let app = construct_router(state);
 
     run_with_streaming_response(app).await

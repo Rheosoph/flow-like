@@ -121,7 +121,7 @@ pub async fn trigger_event(
     input: TriggerEventInput,
 ) -> FlResult<TriggerResponse> {
     use crate::routes::app::events::db::decrypt_token;
-
+    let encryption_key = &state.encryption_key;
     // Look up sink by event_id
     let sink = event_sink::Entity::find()
         .filter(event_sink::Column::EventId.eq(&input.event_id))
@@ -179,13 +179,13 @@ pub async fn trigger_event(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
@@ -284,6 +284,7 @@ pub async fn trigger_http(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     // Normalize path
     let normalized_path = if path.starts_with('/') {
@@ -431,13 +432,13 @@ pub async fn trigger_http(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
@@ -609,6 +610,7 @@ pub async fn trigger_telegram(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     let client_ip = connect_info.ip();
 
@@ -772,13 +774,13 @@ pub async fn trigger_telegram(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
@@ -935,6 +937,7 @@ pub async fn trigger_discord(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     tracing::info!("Discord webhook trigger for event {}", event_id);
 
@@ -1083,13 +1086,13 @@ pub async fn trigger_discord(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;

@@ -110,7 +110,7 @@ pub async fn register_push_target(
     }
 
     let now = chrono::Utc::now().naive_utc();
-    let token_encrypted = encrypt_token(&body.token);
+    let token_encrypted = encrypt_token(&body.token, &state.encryption_key);
 
     push_notification_target::Entity::update_many()
         .col_expr(push_notification_target::Column::PushEnabled, Expr::value(false))
@@ -251,18 +251,8 @@ fn provider_name(provider: &PushNotificationTargetProvider) -> &'static str {
     }
 }
 
-static ENCRYPTION_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
-    let key_material = std::env::var("SINK_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        tracing::warn!(
-            "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. Set SINK_TOKEN_ENCRYPTION_KEY in production!"
-        );
-        "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
-    });
-    *blake3::hash(key_material.as_bytes()).as_bytes()
-});
-
-fn encrypt_token(token: &str) -> String {
-    let cipher = Aes256Gcm::new_from_slice(&*ENCRYPTION_KEY).expect("Invalid key length");
+fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
+    let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
     let nonce = Nonce::from_slice(&nonce_bytes);

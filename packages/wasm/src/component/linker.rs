@@ -819,17 +819,26 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         .host_state
                         .has_capability(WasmCapabilities::MODELS)
                     {
+                        println!("llm-prompt: MODELS capability not granted");
                         return Ok((None::<String>,));
                     }
 
                     let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
                         Ok(b) => b,
-                        Err(_) => return Ok((None,)),
+                        Err(e) => {
+                            println!("llm-prompt: failed to parse bit JSON: {e}");
+                            let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
+                            return Ok((Some(err),));
+                        }
                     };
 
                     let model_ctx = match &store.data().host_state.model_context {
                         Some(c) => c,
-                        None => return Ok((None,)),
+                        None => {
+                            println!("llm-prompt: model_context is None");
+                            let err = serde_json::json!({"error": "Model context not available — ensure the node has Models permission"}).to_string();
+                            return Ok((Some(err),));
+                        }
                     };
                     let app_state = model_ctx.app_state.clone();
 
@@ -846,9 +855,31 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             Ok(req) => (req.messages, req.tools),
                             Err(_) => match serde_json::from_str::<Vec<Value>>(&messages_json) {
                                 Ok(msgs) => (msgs, None),
-                                Err(_) => return Ok((None,)),
+                                Err(e) => {
+                                    println!("llm-prompt: failed to parse messages JSON: {e}");
+                                    let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
+                                    return Ok((Some(err),));
+                                }
                             },
                         };
+
+                    println!("llm-prompt: received {} messages, tools={}",
+                        raw_messages.len(),
+                        raw_tools.as_ref().map(|t| t.len()).unwrap_or(0)
+                    );
+                    if let Some(ref tools) = raw_tools {
+                        for (i, t) in tools.iter().enumerate() {
+                            println!("llm-prompt: raw tool[{i}]: {}", t);
+                        }
+                    }
+                    for (i, m) in raw_messages.iter().enumerate() {
+                        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
+                        let content_preview = m.get("content")
+                            .and_then(|c| c.as_str())
+                            .map(|s| if s.len() > 200 { format!("{}...", &s[..200]) } else { s.to_string() })
+                            .unwrap_or_else(|| "<non-string>".to_string());
+                        println!("llm-prompt: msg[{i}] role={role} content={content_preview}");
+                    }
 
                     // Convert WASM SDK messages → native HistoryMessage
                     let mut history_messages = Vec::with_capacity(raw_messages.len());
@@ -938,26 +969,38 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         bit.id.clone(),
                         history_messages,
                     );
+                    history.stream = None;
 
                     // Convert tool definitions if present
                     if let Some(tools) = raw_tools {
-                        let native_tools: Vec<flow_like_model_provider::history::Tool> = tools
-                            .iter()
-                            .filter_map(|t| {
-                                let name = t.get("name")?.as_str()?.to_string();
-                                let desc =
-                                    t.get("description").and_then(|d| d.as_str()).map(String::from);
-                                let params = t.get("parameters").cloned().unwrap_or_default();
-                                Some(flow_like_model_provider::history::Tool {
-                                    tool_type: flow_like_model_provider::history::ToolType::Function,
-                                    function: flow_like_model_provider::history::HistoryFunction {
-                                        name,
-                                        description: desc,
-                                        parameters: serde_json::from_value(params).ok()?,
-                                    },
-                                })
-                            })
-                            .collect();
+                        let mut native_tools: Vec<flow_like_model_provider::history::Tool> = Vec::new();
+                        for (i, t) in tools.iter().enumerate() {
+                            let name = match t.get("name").and_then(|n| n.as_str()) {
+                                Some(n) => n.to_string(),
+                                None => {
+                                    println!("llm-prompt: tool[{i}] missing 'name' field");
+                                    continue;
+                                }
+                            };
+                            let desc = t.get("description").and_then(|d| d.as_str()).map(String::from);
+                            let params = t.get("parameters").cloned().unwrap_or_default();
+                            println!("llm-prompt: tool[{i}] '{name}' params: {params}");
+                            match serde_json::from_value::<flow_like_model_provider::history::HistoryFunctionParameters>(params.clone()) {
+                                Ok(parsed) => {
+                                    native_tools.push(flow_like_model_provider::history::Tool {
+                                        tool_type: flow_like_model_provider::history::ToolType::Function,
+                                        function: flow_like_model_provider::history::HistoryFunction {
+                                            name,
+                                            description: desc,
+                                            parameters: parsed,
+                                        },
+                                    });
+                                }
+                                Err(e) => {
+                                    println!("llm-prompt: tool[{i}] '{name}' parameter deserialization FAILED: {e} — raw: {params}");
+                                }
+                            }
+                        }
                         if !native_tools.is_empty() {
                             history.tools = Some(native_tools);
                         }
@@ -969,24 +1012,38 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         match factory.build(&bit, app_state.clone(), None).await {
                             Ok(m) => m,
                             Err(e) => {
-                                tracing::warn!("llm-prompt: failed to build model: {e}");
-                                return Ok((None,));
+                                println!("llm-prompt: failed to build model: {e}");
+                                let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
+                                return Ok((Some(err),));
                             }
                         }
                     };
 
+                    // Log the full History before invoking
+                    if let Ok(history_json) = serde_json::to_string(&history) {
+                        println!("llm-prompt: History to invoke (len={}): {}",
+                            history_json.len(),
+                            if history_json.len() > 2000 { format!("{}...", &history_json[..2000]) } else { history_json }
+                        );
+                    }
+
                     let response = match model.invoke(&history, None).await {
                         Ok(r) => r,
                         Err(e) => {
-                            tracing::warn!("llm-prompt: model invoke failed: {e}");
-                            return Ok((None,));
+                            println!("llm-prompt: model invoke failed: {e}");
+                            let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
+                            return Ok((Some(err),));
                         }
                     };
 
                     // Convert response to SDK ChatMessage JSON
                     let resp_msg = match response.last_message() {
                         Some(m) => m,
-                        None => return Ok((None,)),
+                        None => {
+                            println!("llm-prompt: model returned empty response (no messages)");
+                            let err = serde_json::json!({"error": "Model returned empty response"}).to_string();
+                            return Ok((Some(err),));
+                        }
                     };
 
                     let tool_calls_json: Option<Vec<Value>> =

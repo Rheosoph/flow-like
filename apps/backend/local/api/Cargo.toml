@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 flow-like.workspace = true
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure", "smtp", "sendgrid", "sentry"] }
+flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true

@@ -11,6 +11,7 @@ use flow_like::bit::Bit;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
@@ -18,32 +19,6 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 /// Cached env var for Cloudflare account ID (LazyLock per requirement)
 static CF_ACCOUNT_ID: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("CF_ACCOUNT_ID").ok());
-
-/// Cache for dynamically resolved secrets (secret_name -> value)
-/// Uses RwLock for thread-safe access with LazyLock for initialization
-static SECRET_CACHE: LazyLock<RwLock<HashMap<String, String>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Get a secret value by name, caching the result
-/// The secret_name in bit config points to an env var name
-fn get_secret(secret_name: &str) -> Option<String> {
-    // Check cache first
-    {
-        let cache = SECRET_CACHE.read().ok()?;
-        if let Some(value) = cache.get(secret_name) {
-            return Some(value.clone());
-        }
-    }
-
-    // Fetch from env and cache
-    let value = std::env::var(secret_name).ok()?;
-    {
-        if let Ok(mut cache) = SECRET_CACHE.write() {
-            cache.insert(secret_name.to_string(), value.clone());
-        }
-    }
-    Some(value)
-}
 
 /// Bit cache entry with expiration
 struct CachedBit {
@@ -194,10 +169,10 @@ pub async fn embed_text(
     let start = Instant::now();
     let embeddings = match remote_config.implementation {
         Some(RemoteEmbeddingProvider::HuggingfaceEndpoint) => {
-            call_huggingface(&embedding_provider, &remote_config, &payload).await?
+            call_huggingface(&state, &embedding_provider, &remote_config, &payload).await?
         }
         Some(RemoteEmbeddingProvider::CloudflareWorkersAI) => {
-            call_cloudflare(&embedding_provider, &remote_config, &payload).await?
+            call_cloudflare(&state, &embedding_provider, &remote_config, &payload).await?
         }
         None => {
             return Err(ApiError::bad_request(
@@ -288,18 +263,24 @@ async fn track_embedding_usage(
 }
 
 async fn call_huggingface(
+    state: &AppState,
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
 ) -> Result<Vec<Vec<f32>>, ApiError> {
-    // Use secret_name from bit config to look up the API key
+    // Use secret_name from bit config to look up the API key via SecretStore
     let secret_name = config
         .secret_name
         .as_ref()
         .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = get_secret(secret_name).ok_or_else(|| {
-        ApiError::internal(format!("Secret '{}' not found in environment", secret_name))
-    })?;
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(secret_name.as_str()))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| {
+            ApiError::internal(format!("Secret '{}' not found", secret_name))
+        })?;
     let endpoint = config
         .endpoint
         .as_ref()
@@ -366,6 +347,7 @@ async fn call_huggingface(
 }
 
 async fn call_cloudflare(
+    state: &AppState,
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
@@ -374,14 +356,19 @@ async fn call_cloudflare(
         .as_ref()
         .ok_or_else(|| ApiError::internal("CF_ACCOUNT_ID not configured"))?;
 
-    // Use secret_name from bit config to look up the API key
+    // Use secret_name from bit config to look up the API key via SecretStore
     let secret_name = config
         .secret_name
         .as_ref()
         .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = get_secret(secret_name).ok_or_else(|| {
-        ApiError::internal(format!("Secret '{}' not found in environment", secret_name))
-    })?;
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(secret_name.as_str()))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| {
+            ApiError::internal(format!("Secret '{}' not found", secret_name))
+        })?;
 
     let endpoint = config
         .endpoint

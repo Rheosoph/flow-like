@@ -126,6 +126,9 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
     placed_node.oauth_providers = catalog_node.oauth_providers.clone();
     placed_node.required_oauth_scopes = catalog_node.required_oauth_scopes.clone();
 
+    // Sync WASM permissions from catalog so placed nodes reflect current declarations
+    sync_wasm_permissions(placed_node, catalog_node);
+
     // Clear any previous error since we've updated the node
     placed_node.error = None;
 }
@@ -149,6 +152,7 @@ pub async fn sync_board_node_schemas(
             sync_node_with_catalog(node, &catalog_node);
         } else {
             sync_oauth_metadata(node, &catalog_node);
+            sync_wasm_permissions(node, &catalog_node);
         }
     };
 
@@ -169,6 +173,17 @@ pub async fn sync_board_node_schemas(
 fn sync_oauth_metadata(placed_node: &mut Node, catalog_node: &Node) {
     placed_node.oauth_providers = catalog_node.oauth_providers.clone();
     placed_node.required_oauth_scopes = catalog_node.required_oauth_scopes.clone();
+}
+
+/// Syncs WASM permission declarations from the catalog node to the placed node.
+/// Called regardless of version sync because WASM modules may update their
+/// declared permissions independently of node schema version bumps.
+fn sync_wasm_permissions(placed_node: &mut Node, catalog_node: &Node) {
+    if let Some(catalog_wasm) = &catalog_node.wasm {
+        if let Some(placed_wasm) = &mut placed_node.wasm {
+            placed_wasm.permissions = catalog_wasm.permissions.clone();
+        }
+    }
 }
 
 /// Helper to create a sync function that can be used with NodeLogic

@@ -202,13 +202,28 @@ impl ModelFactory {
         }
 
         if provider.to_lowercase() == "hosted" || provider.to_lowercase().starts_with("hosted:") {
-            if let Some(model) = self.cached_models.get(&bit.id) {
-                self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-                return Ok(model.clone());
-            }
+            // Never serve hosted models from cache — the user's JWT (used as
+            // api_key) is ephemeral and will expire. A cached model would carry
+            // a stale token, causing "Unauthorized" errors on the API proxy.
+            self.cached_models.remove(&bit.id);
+            self.ttl_list.remove(&bit.id);
+
+            let has_token = access_token.is_some();
+            let token_len = access_token.as_ref().map(|t| t.len()).unwrap_or(0);
+            tracing::debug!(
+                bit_id = %bit.id,
+                provider = %provider,
+                has_token = has_token,
+                token_len = token_len,
+                "Building hosted model (no-cache)"
+            );
 
             let mut model_provider = model_provider.clone();
             let mut params = model_provider.params.clone().unwrap_or_default();
+
+            if access_token.is_none() {
+                tracing::warn!(bit_id = %bit.id, "Hosted model built with NO access token — API proxy will reject");
+            }
 
             params.insert(
                 "api_key".into(),
@@ -222,6 +237,14 @@ impl ModelFactory {
 
             model_provider.model_id = Some(bit.id.clone());
             model_provider.params = Some(params.clone());
+
+            let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("<none>");
+            tracing::debug!(
+                bit_id = %bit.id,
+                hosted_type = %provider,
+                endpoint = %endpoint,
+                "Hosted model endpoint resolved"
+            );
 
             let hosted_type = if provider.contains(':') {
                 provider.split(':').nth(1).unwrap_or("openrouter")
@@ -272,8 +295,6 @@ impl ModelFactory {
                 }
             };
 
-            self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-            self.cached_models.insert(bit.id.clone(), model.clone());
             return Ok(model);
         }
 

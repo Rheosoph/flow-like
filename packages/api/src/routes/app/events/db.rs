@@ -292,13 +292,13 @@ pub async fn sync_event_with_sink_tokens(
     };
 
     // Encrypt PAT if provided
-    let pat_encrypted = pat.map(encrypt_token);
+    let pat_encrypted = pat.map(|p| encrypt_token(p, &state.encryption_key));
 
     // Encrypt OAuth tokens if provided
     let oauth_tokens_encrypted = oauth_tokens.and_then(|tokens| {
         serde_json::to_string(tokens)
             .ok()
-            .map(|json| encrypt_token(&json))
+            .map(|json| encrypt_token(&json, &state.encryption_key))
     });
 
     // Sync the sink (creates if not exists, updates if exists)
@@ -324,42 +324,22 @@ pub async fn sync_event_with_sink_tokens(
     Ok(())
 }
 
-/// Lazily initialized encryption key derived from SINK_TOKEN_ENCRYPTION_KEY env var
-static ENCRYPTION_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
-    let key_material = std::env::var("SINK_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        tracing::warn!(
-            "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
-            Set SINK_TOKEN_ENCRYPTION_KEY in production!"
-        );
-        "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
-    });
-    *blake3::hash(key_material.as_bytes()).as_bytes()
-});
-
-fn get_encryption_key() -> &'static [u8; 32] {
-    &ENCRYPTION_KEY
-}
-
 /// Encrypt a token using AES-256-GCM
 /// Returns base64-encoded ciphertext with prepended nonce
-fn encrypt_token(token: &str) -> String {
+fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
 
-    let key = get_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
 
-    // Generate random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Encrypt
     let ciphertext = cipher
         .encrypt(nonce, token.as_bytes())
         .expect("Encryption failed");
 
-    // Prepend nonce to ciphertext and base64 encode
     let mut combined = nonce_bytes.to_vec();
     combined.extend(ciphertext);
     base64::engine::general_purpose::STANDARD.encode(combined)
@@ -367,26 +347,22 @@ fn encrypt_token(token: &str) -> String {
 
 /// Decrypt a token using AES-256-GCM
 /// Expects base64-encoded ciphertext with prepended nonce
-pub fn decrypt_token(encrypted: &str) -> Option<String> {
+pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
 
-    let key = get_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
 
-    // Decode base64
     let combined = base64::engine::general_purpose::STANDARD
         .decode(encrypted)
         .ok()?;
 
-    // Split nonce (12 bytes) and ciphertext
     if combined.len() < 12 {
         return None;
     }
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    // Decrypt
     let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
     String::from_utf8(plaintext).ok()
 }

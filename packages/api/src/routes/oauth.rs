@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::{
@@ -9,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef, SecretStore};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -18,9 +18,6 @@ const OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// OAuth configs loaded at build time (without secrets)
 static OAUTH_CONFIG: &str = include_str!(concat!(env!("OUT_DIR"), "/oauth_config.json"));
-
-/// Cached resolved configs with secrets from env
-static RESOLVED_CONFIGS: OnceLock<HashMap<String, ResolvedOAuthConfig>> = OnceLock::new();
 
 /// How the provider expects credentials on token requests
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,37 +64,41 @@ struct ResolvedOAuthConfig {
     auth_method: AuthMethod,
 }
 
-fn get_oauth_configs() -> &'static HashMap<String, ResolvedOAuthConfig> {
-    RESOLVED_CONFIGS.get_or_init(|| {
-        let raw_configs: HashMap<String, OAuthProviderConfig> =
-            flow_like_types::json::from_str(OAUTH_CONFIG).unwrap_or_default();
+async fn get_oauth_configs(
+    secrets: &SecretStore,
+) -> HashMap<String, ResolvedOAuthConfig> {
+    let raw_configs: HashMap<String, OAuthProviderConfig> =
+        flow_like_types::json::from_str(OAUTH_CONFIG).unwrap_or_default();
 
-        raw_configs
-            .into_iter()
-            .map(|(provider_id, cfg)| {
-                // Resolve client_secret from env var at runtime
-                let client_secret = cfg
-                    .client_secret_env
-                    .as_ref()
-                    .and_then(|env_name| std::env::var(env_name).ok())
-                    .filter(|s| !s.is_empty());
+    let mut resolved = HashMap::with_capacity(raw_configs.len());
+    for (provider_id, cfg) in raw_configs {
+        let client_secret = if let Some(env_name) = &cfg.client_secret_env {
+            secrets
+                .get_secret_string(&SecretRef::new(env_name.as_str()))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
 
-                let auth_method = AuthMethod::from_str_opt(cfg.auth_method.as_deref());
+        let auth_method = AuthMethod::from_str_opt(cfg.auth_method.as_deref());
 
-                let resolved = ResolvedOAuthConfig {
-                    client_id: cfg.client_id,
-                    client_secret,
-                    token_url: cfg.token_url,
-                    revoke_url: cfg.revoke_url,
-                    userinfo_url: cfg.userinfo_url,
-                    device_auth_url: cfg.device_auth_url,
-                    auth_method,
-                };
-
-                (provider_id, resolved)
-            })
-            .collect()
-    })
+        resolved.insert(
+            provider_id,
+            ResolvedOAuthConfig {
+                client_id: cfg.client_id,
+                client_secret,
+                token_url: cfg.token_url,
+                revoke_url: cfg.revoke_url,
+                userinfo_url: cfg.userinfo_url,
+                device_auth_url: cfg.device_auth_url,
+                auth_method,
+            },
+        );
+    }
+    resolved
 }
 
 pub fn routes() -> Router<AppState> {
@@ -372,14 +373,14 @@ fn build_oauth_client() -> Result<flow_like_types::reqwest::Client, OAuthProxyEr
         (status = 500, description = "Internal error", body = ErrorResponse)
     )
 )]
-#[tracing::instrument(name = "POST /oauth/token/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/token/:provider_id", skip(state))]
 pub async fn token_exchange(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<TokenExchangeRequest>,
 ) -> Result<Json<TokenResponse>, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let client_id = require_client_id(&provider_id, provider_config)?;
 
     let client = build_oauth_client()?;
@@ -473,14 +474,14 @@ pub async fn token_exchange(
         (status = 500, description = "Internal error", body = ErrorResponse)
     )
 )]
-#[tracing::instrument(name = "POST /oauth/refresh/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/refresh/:provider_id", skip(state))]
 pub async fn token_refresh(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<TokenRefreshRequest>,
 ) -> Result<Json<TokenResponse>, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let client_id = require_client_id(&provider_id, provider_config)?;
 
     let client = build_oauth_client()?;
@@ -548,14 +549,14 @@ pub async fn token_refresh(
     Ok(Json(token_response))
 }
 
-#[tracing::instrument(name = "POST /oauth/device/start/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/device/start/:provider_id", skip(state))]
 pub async fn device_start(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<DeviceStartRequest>,
 ) -> Result<Json<DeviceStartResponse>, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let device_auth_url = provider_config.device_auth_url.as_ref().ok_or_else(|| {
         OAuthProxyError::new(
             StatusCode::BAD_REQUEST,
@@ -617,14 +618,14 @@ pub async fn device_start(
     Ok(Json(payload))
 }
 
-#[tracing::instrument(name = "POST /oauth/device/poll/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/device/poll/:provider_id", skip(state))]
 pub async fn device_poll(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<DevicePollRequest>,
 ) -> Result<Response, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let client_id = require_client_id(&provider_id, provider_config)?;
 
     let mut params = vec![
@@ -660,14 +661,14 @@ pub async fn device_poll(
     Ok((status, Json(payload)).into_response())
 }
 
-#[tracing::instrument(name = "POST /oauth/userinfo/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/userinfo/:provider_id", skip(state))]
 pub async fn userinfo(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<UserInfoRequest>,
 ) -> Result<Response, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let userinfo_url = provider_config.userinfo_url.as_ref().ok_or_else(|| {
         OAuthProxyError::new(
             StatusCode::BAD_REQUEST,
@@ -709,14 +710,14 @@ pub async fn userinfo(
     Ok((status_code, Json(payload)).into_response())
 }
 
-#[tracing::instrument(name = "POST /oauth/revoke/:provider_id", skip(_state))]
+#[tracing::instrument(name = "POST /oauth/revoke/:provider_id", skip(state))]
 pub async fn revoke_token(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(provider_id): Path<String>,
     Json(request): Json<RevokeTokenRequest>,
 ) -> Result<StatusCode, OAuthProxyError> {
-    let configs = get_oauth_configs();
-    let provider_config = require_provider_config(&provider_id, configs)?;
+    let configs = get_oauth_configs(&state.secrets).await;
+    let provider_config = require_provider_config(&provider_id, &configs)?;
     let revoke_url = provider_config.revoke_url.as_ref().ok_or_else(|| {
         OAuthProxyError::new(
             StatusCode::BAD_REQUEST,
