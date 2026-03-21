@@ -496,7 +496,7 @@ impl Copilot {
                         let graph_ctx = context.clone();
                         async move {
                             let output = self
-                                .execute_tool(&name, &arguments, ctx.as_ref(), &graph_ctx)
+                                .execute_tool(&name, arguments, ctx.as_ref(), &graph_ctx)
                                 .await;
                             (id, name, output)
                         }
@@ -665,20 +665,20 @@ impl Copilot {
     async fn execute_tool(
         &self,
         name: &str,
-        arguments: &serde_json::Value,
+        arguments: serde_json::Value,
         run_context: Option<&RunContext>,
         graph_context: &GraphContext,
     ) -> String {
         match name {
             "think" => {
-                if let Ok(args) = serde_json::from_value::<ThinkingArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<ThinkingArgs>(arguments) {
                     format!("Thinking: {}", args.thought)
                 } else {
                     "Thinking...".to_string()
                 }
             }
             "get_node_details" => {
-                if let Ok(args) = serde_json::from_value::<GetNodeDetailsArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<GetNodeDetailsArgs>(arguments) {
                     // Find the node in the context
                     let node = graph_context.nodes.iter().find(|n| n.id == args.node_id);
 
@@ -747,7 +747,7 @@ impl Copilot {
                 }
             }
             "emit_commands" => {
-                match serde_json::from_value::<EmitCommandsArgs>(arguments.clone()) {
+                match serde_json::from_value::<EmitCommandsArgs>(arguments) {
                     Ok(args) => {
                         let commands_json =
                             serde_json::to_string(&args.commands).unwrap_or_default();
@@ -763,13 +763,12 @@ impl Copilot {
                     }
                     Err(e) => {
                         println!("[Copilot] emit_commands: Failed to parse args: {:?}", e);
-                        println!("[Copilot] emit_commands: Raw arguments: {:?}", arguments);
                         format!("Failed to parse commands: {}", e)
                     }
                 }
             }
             "catalog_search" => {
-                if let Ok(args) = serde_json::from_value::<SearchArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<SearchArgs>(arguments) {
                     let matches = self.catalog_provider.search(&args.query).await;
                     serde_json::to_string(&matches).unwrap_or_default()
                 } else {
@@ -777,7 +776,7 @@ impl Copilot {
                 }
             }
             "search_by_pin" => {
-                if let Ok(args) = serde_json::from_value::<SearchByPinArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<SearchByPinArgs>(arguments) {
                     let matches = self
                         .catalog_provider
                         .search_by_pin_type(&args.pin_type, args.is_input)
@@ -788,7 +787,7 @@ impl Copilot {
                 }
             }
             "filter_category" => {
-                if let Ok(args) = serde_json::from_value::<FilterCategoryArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<FilterCategoryArgs>(arguments) {
                     let matches = self
                         .catalog_provider
                         .filter_by_category(&args.category_prefix)
@@ -799,7 +798,7 @@ impl Copilot {
                 }
             }
             "search_templates" => {
-                if let Ok(args) = serde_json::from_value::<SearchTemplatesArgs>(arguments.clone()) {
+                if let Ok(args) = serde_json::from_value::<SearchTemplatesArgs>(arguments) {
                     let query_lower = args.query.to_lowercase();
                     let mut matches: Vec<&TemplateInfo> = self
                         .templates
@@ -837,7 +836,7 @@ impl Copilot {
                 #[cfg(feature = "flow-runtime")]
                 {
                     if let Some(ctx) = run_context {
-                        let args = serde_json::from_value::<QueryLogsArgs>(arguments.clone())
+                        let args = serde_json::from_value::<QueryLogsArgs>(arguments)
                             .unwrap_or(QueryLogsArgs {
                                 filter: None,
                                 limit: None,

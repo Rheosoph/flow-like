@@ -21,6 +21,7 @@ pub mod get_indices;
 pub mod list_tables;
 pub mod optimize;
 pub mod presign_db_access;
+pub mod table_view;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -49,4 +50,5 @@ pub fn routes() -> Router<AppState> {
         .route("/{table}/schema", get(get_db_schema::get_db_schema))
         .route("/{table}/count", get(db_count::db_count))
         .route("/{table}/indices", get(get_indices::get_db_indices))
+        .route("/{table}/view", get(table_view::table_view))
 }

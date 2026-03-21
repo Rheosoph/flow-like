@@ -104,7 +104,8 @@ model App {
   packages   AppPackage[]
   purchases  AppPurchase[]
   discounts  AppDiscount[]
-  salesDaily AppSalesDaily[]
+  salesDaily     AppSalesDaily[]
+  analyticsDaily AppAnalyticsDaily[]
 
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -179,11 +180,16 @@ model Comment {
   template   Template? @relation(fields: [templateId], references: [id], onDelete: Cascade)
   templateId String?
 
+  package   WasmPackage? @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([userId, appId])
+  @@unique([userId, packageId])
   @@index([appId])
+  @@index([packageId])
   @@index([userId])
 }
 
@@ -515,6 +521,42 @@ model AppDiscount {
   @@index([appId])
   @@index([appId, isActive])
   @@index([code])
+}
+
+/// Pre-aggregated daily analytics data for efficient dashboard queries
+model AppAnalyticsDaily {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  /// Date for this aggregation
+  date DateTime @db.Date
+
+  totalExecutions      BigInt @default(0)
+  successfulExecutions BigInt @default(0)
+  failedExecutions     BigInt @default(0)
+  uniqueUsers          BigInt @default(0)
+  feedbackCount        BigInt @default(0)
+  avgFeedbackRating    Float?
+  positiveFeedback     BigInt @default(0)
+  negativeFeedback     BigInt @default(0)
+  totalLlmCalls        BigInt @default(0)
+  totalLlmTokensIn     BigInt @default(0)
+  totalLlmTokensOut    BigInt @default(0)
+  totalLlmCost         BigInt @default(0)
+  avgLatencyMs         Float?
+  p95LatencyMs         Float?
+  totalEmbeddingCalls  BigInt @default(0)
+  totalEmbeddingTokens BigInt @default(0)
+  totalEmbeddingCost   BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, date])
+  @@index([appId])
+  @@index([appId, date])
 }
 
 /// Pre-aggregated daily sales data for efficient dashboard queries

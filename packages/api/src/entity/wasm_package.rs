@@ -6,7 +6,7 @@ use super::sea_orm_active_enums::WasmPackageVisibility;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(schema_name = "public", table_name = "WasmPackage")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -52,10 +52,18 @@ pub struct Model {
     pub primary_category: Option<WasmPackageCategory>,
     #[sea_orm(column_name = "secondaryCategory")]
     pub secondary_category: Option<WasmPackageCategory>,
+    #[sea_orm(column_name = "ratingSum")]
+    pub rating_sum: i64,
+    #[sea_orm(column_name = "ratingCount")]
+    pub rating_count: i64,
+    #[sea_orm(column_name = "avgRating")]
+    pub avg_rating: Option<f64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::comment::Entity")]
+    Comment,
     #[sea_orm(has_many = "super::meta::Entity")]
     Meta,
     #[sea_orm(has_many = "super::wasm_package_author::Entity")]
@@ -72,6 +80,12 @@ pub enum Relation {
     WasmPackageUser,
     #[sea_orm(has_many = "super::wasm_package_version::Entity")]
     WasmPackageVersion,
+}
+
+impl Related<super::comment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Comment.def()
+    }
 }
 
 impl Related<super::meta::Entity> for Entity {

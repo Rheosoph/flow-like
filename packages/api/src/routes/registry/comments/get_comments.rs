@@ -1,6 +1,5 @@
 use crate::{
-    ensure_in_project,
-    entity::{app, comment, sea_orm_active_enums::Visibility, user},
+    entity::{comment, user, wasm_package},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -43,17 +42,16 @@ pub struct CommentsResponse {
 
 #[utoipa::path(
     get,
-    path = "/apps/{app_id}/comments",
-    tag = "comments",
-    description = "List review comments for an app. Public apps allow unauthenticated access.",
+    path = "/registry/package/{package_id}/comments",
+    tag = "package-comments",
+    description = "List review comments for a WASM package.",
     params(
-        ("app_id" = String, Path, description = "Application ID"),
+        ("package_id" = String, Path, description = "Package ID"),
         CommentsQuery,
     ),
     responses(
         (status = 200, description = "Paginated comment list", body = CommentsResponse),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Not found")
+        (status = 404, description = "Package not found")
     ),
     security(
         (),
@@ -62,35 +60,28 @@ pub struct CommentsResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/comments", skip(state, user))]
+#[tracing::instrument(name = "GET /registry/package/{package_id}/comments", skip(state, _user))]
 pub async fn get_comments(
     State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(app_id): Path<String>,
+    Extension(_user): Extension<AppUser>,
+    Path(package_id): Path<String>,
     Query(query): Query<CommentsQuery>,
 ) -> Result<Json<CommentsResponse>, ApiError> {
-    let app_model = app::Entity::find_by_id(&app_id)
+    wasm_package::Entity::find_by_id(&package_id)
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-
-    let is_public = app_model.visibility == Visibility::Public
-        || app_model.visibility == Visibility::PublicRequestAccess;
-
-    if !is_public {
-        ensure_in_project!(user, &app_id, &state);
-    }
 
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(20).min(100);
 
     let total = comment::Entity::find()
-        .filter(comment::Column::AppId.eq(&app_id))
+        .filter(comment::Column::PackageId.eq(&package_id))
         .count(&state.db)
         .await?;
 
     let comments_with_users = comment::Entity::find()
-        .filter(comment::Column::AppId.eq(&app_id))
+        .filter(comment::Column::PackageId.eq(&package_id))
         .find_also_related(user::Entity)
         .order_by_desc(comment::Column::CreatedAt)
         .limit(Some(limit))

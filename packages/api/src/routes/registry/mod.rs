@@ -2,6 +2,7 @@
 
 pub mod check_id;
 pub mod check_version;
+pub mod comments;
 pub mod download;
 pub mod hash_check;
 mod index;
@@ -176,6 +177,7 @@ pub fn routes() -> Router<AppState> {
             post(join_queue::accept_access_request).delete(join_queue::reject_access_request),
         )
         .route("/package/{package_id}/purchase", post(purchase::purchase))
+        .nest("/package/{package_id}/comments", comments::routes())
         .route(
             "/invitation/{invitation_id}/accept",
             post(users::accept_invitation),

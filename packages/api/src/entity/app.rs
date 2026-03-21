@@ -52,6 +52,8 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::app_analytics_daily::Entity")]
+    AppAnalyticsDaily,
     #[sea_orm(has_many = "super::app_discount::Entity")]
     AppDiscount,
     #[sea_orm(has_many = "super::app_package::Entity")]
@@ -120,6 +122,12 @@ pub enum Relation {
     Template,
     #[sea_orm(has_many = "super::widget::Entity")]
     Widget,
+}
+
+impl Related<super::app_analytics_daily::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppAnalyticsDaily.def()
+    }
 }
 
 impl Related<super::app_discount::Entity> for Entity {

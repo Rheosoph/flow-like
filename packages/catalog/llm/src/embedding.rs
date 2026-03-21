@@ -12,7 +12,7 @@ pub mod image;
 pub mod load;
 pub mod text;
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema, Debug)]
 pub struct CachedEmbeddingModel {
     pub cache_key: String,
     pub model_type: BitTypes,

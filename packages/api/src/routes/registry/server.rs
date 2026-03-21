@@ -1456,6 +1456,9 @@ impl ServerRegistry {
                 created_at: Set(now),
                 updated_at: Set(now),
                 published_at: Set(None),
+                rating_sum: Set(0),
+                rating_count: Set(0),
+                avg_rating: Set(None),
             };
             package_model.insert(&self.db).await?;
 

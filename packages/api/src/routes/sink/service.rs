@@ -37,6 +37,8 @@ pub struct SinkConfig {
     pub oauth_tokens_encrypted: Option<String>,
     /// Snapshot of the last updater's profile (bits, hubs) for trigger execution
     pub profile_json: Option<serde_json::Value>,
+    /// Whether the sink should be active (synced from event.active)
+    pub active: Option<bool>,
 }
 
 /// Sync a sink to the database and external schedulers
@@ -66,6 +68,12 @@ pub async fn sync_sink(
 
         active_model.sink_type = Set(config.sink_type.clone());
         active_model.updated_at = Set(now);
+
+        // Sync active state if provided
+        let new_active = config.active.unwrap_or(old_active);
+        if new_active != old_active {
+            active_model.active = Set(new_active);
+        }
 
         // Only update optional fields if provided
         if config.path.is_some() {
@@ -101,6 +109,15 @@ pub async fn sync_sink(
                 // Update or create the schedule
                 update_external_scheduler(state, &config.event_id, cron_expr, old_active).await?;
             }
+
+            // Sync active state with external scheduler
+            if new_active != old_active {
+                if new_active {
+                    enable_external_schedule(state, &config.event_id).await?;
+                } else {
+                    disable_external_schedule(state, &config.event_id).await?;
+                }
+            }
         } else if old_sink_type == sink_types::CRON && config.sink_type != sink_types::CRON {
             // Type changed from cron to something else - delete the schedule
             delete_external_schedule(state, &config.event_id).await?;
@@ -110,13 +127,14 @@ pub async fn sync_sink(
     } else {
         // Create new sink
         let sink_id = flow_like_types::create_id();
+        let initial_active = config.active.unwrap_or(true);
 
         let active_model = event_sink::ActiveModel {
             id: Set(sink_id),
             event_id: Set(config.event_id.clone()),
             app_id: Set(config.app_id.clone()),
             sink_type: Set(config.sink_type.clone()),
-            active: Set(true),
+            active: Set(initial_active),
             path: Set(config.path.clone()),
             auth_token: Set(config.auth_token),
             webhook_secret: Set(config.webhook_secret),
@@ -136,6 +154,9 @@ pub async fn sync_sink(
             && let Some(ref cron_expr) = config.cron_expression
         {
             create_external_schedule(state, &config.event_id, cron_expr).await?;
+            if !initial_active {
+                disable_external_schedule(state, &config.event_id).await?;
+            }
         }
 
         created

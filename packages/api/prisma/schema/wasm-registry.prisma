@@ -102,6 +102,11 @@ model WasmPackage {
   joinQueue   WasmPackageJoinQueue[]
   purchases   WasmPackagePurchase[]
   authors     WasmPackageAuthor[]
+  comments    Comment[]
+
+  ratingSum   BigInt @default(0)
+  ratingCount BigInt @default(0)
+  avgRating   Float?
 
   @@unique([id, version])
   @@index([name])

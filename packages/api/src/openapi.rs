@@ -94,8 +94,10 @@ impl Modify for SecurityAddon {
         (name = "roles", description = "Role management"),
         (name = "packages", description = "App package management"),
         (name = "team", description = "Team management"),
+        (name = "analytics", description = "Analytics and usage metrics"),
         (name = "sales", description = "Sales and pricing"),
         (name = "api-keys", description = "API key management"),
+        (name = "comments", description = "App review comments"),
         (name = "notifications", description = "App notifications"),
         (name = "registry", description = "Package registry"),
         (name = "bit", description = "Bit (component) management"),
@@ -225,6 +227,10 @@ impl Modify for SecurityAddon {
         crate::routes::app::api::get_api_keys::get_api_keys,
         crate::routes::app::api::create_api_key::create_api_key,
         crate::routes::app::api::delete_api_key::delete_api_key,
+        // Analytics routes
+        crate::routes::app::analytics::overview::get_analytics_overview,
+        crate::routes::app::analytics::overview::get_analytics_stats,
+        crate::routes::app::analytics::feedback::list_feedback,
         // Sales routes
         crate::routes::app::sales::overview::get_sales_overview,
         crate::routes::app::sales::overview::get_sales_stats,
@@ -247,6 +253,10 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::invoke_event::invoke_event,
         crate::routes::app::events::invoke_event_async::invoke_event_async,
         crate::routes::app::events::upsert_event_feedback::upsert_event_feedback,
+        // Comment routes
+        crate::routes::app::comments::get_comments::get_comments,
+        crate::routes::app::comments::upsert_comment::upsert_comment,
+        crate::routes::app::comments::remove_comment::remove_comment,
         // Notifications routes
         crate::routes::app::notifications::create_notification,
         // Data routes
@@ -381,6 +391,14 @@ impl Modify for SecurityAddon {
         crate::routes::app::api::ApiKeyInfo,
         crate::routes::app::api::ApiKeyInput,
         crate::routes::app::api::ApiKeyOut,
+        // Analytics
+        crate::routes::app::analytics::overview::AnalyticsStatsQuery,
+        crate::routes::app::analytics::overview::AnalyticsOverview,
+        crate::routes::app::analytics::overview::DailyAnalyticsStat,
+        crate::routes::app::analytics::overview::AnalyticsStats,
+        crate::routes::app::analytics::feedback::FeedbackQuery,
+        crate::routes::app::analytics::feedback::FeedbackItem,
+        crate::routes::app::analytics::feedback::PaginatedFeedback,
         // Sales
         crate::routes::app::sales::overview::StatsQuery,
         crate::routes::app::sales::overview::SalesOverview,
@@ -410,6 +428,12 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::invoke_event_async::InvokeEventAsyncResponse,
         crate::routes::app::events::upsert_event_feedback::FeedbackBody,
         crate::routes::app::events::upsert_event_feedback::FeedbackResponse,
+        // Comments
+        crate::routes::app::comments::upsert_comment::CommentBody,
+        crate::routes::app::comments::upsert_comment::CommentResponse,
+        crate::routes::app::comments::get_comments::CommentsQuery,
+        crate::routes::app::comments::get_comments::CommentItem,
+        crate::routes::app::comments::get_comments::CommentsResponse,
         // App packages
         crate::routes::app::packages::AddPackageRequest,
         crate::routes::app::packages::UpdatePackageRequest,

@@ -317,6 +317,7 @@ pub async fn sync_event_with_sink_tokens(
             pat_encrypted,
             oauth_tokens_encrypted,
             profile_json,
+            active: Some(event.active),
         },
     )
     .await?;

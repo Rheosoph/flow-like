@@ -14,7 +14,7 @@ use flow_like::flow::node::{Node, NodeWasm};
 use flow_like_wasm::manifest::PackageNodeEntry;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
+pub fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
     Node {
         id: entry.id.clone(),
         name: entry.name.clone(),

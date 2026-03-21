@@ -967,6 +967,10 @@ pub fn run() {
             functions::recording::insert_recording_to_board,
             functions::statistics::get_board_statistics,
             functions::interaction::respond_to_interaction,
+            functions::feedback::upsert_offline_feedback,
+            functions::feedback::get_offline_feedback,
+            functions::feedback::get_offline_feedback_stats,
+            functions::feedback::delete_offline_feedback,
         ]);
 
     #[cfg(desktop)]

@@ -1,4 +1,8 @@
 use crate::generative::agent::{Agent, ContextManagementMode};
+#[cfg(feature = "execute")]
+use crate::generative::embedding::CachedEmbeddingModelObject;
+#[cfg(feature = "execute")]
+use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
 /// # Agent Execution Helpers
 /// This module contains reusable logic for executing agents with tools and streaming.
 /// Extracted from simple.rs to be shared across multiple agent nodes.
@@ -773,7 +777,7 @@ pub async fn execute_agent_streaming(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: History,
-    tool_name_to_node: HashMap<String, Arc<InternalNode>>,
+    mut tool_name_to_node: HashMap<String, Arc<InternalNode>>,
     stream_state: &dyn StreamHandler,
 ) -> flow_like_types::Result<AgentExecutionResult> {
     let model_display_name = agent
@@ -953,6 +957,32 @@ pub async fn execute_agent_streaming(
     // Deduplicate tools by name, keeping the first occurrence
     let mut seen_tool_names = std::collections::HashSet::new();
     tool_definitions.retain(|tool| seen_tool_names.insert(tool.name.clone()));
+
+    // Expose the lazy-search meta-tool when the agent has indexed tool pools
+    if !agent.lazy_function_refs.is_empty() {
+        tool_definitions.push(ToolDefinition {
+            name: "_lazy_search_tools".to_string(),
+            description:
+                "Search for available tools by describing what you need to do. \
+                 Call this whenever you need a capability that you don't see in your current tool list. \
+                 The matching tools will be added to your available tools for subsequent calls."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Description of what you need to do or what kind of tool you are looking for"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of tools to return (default: 5)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        });
+    }
 
     let (prompt, history_msgs) = history
         .extract_prompt_and_history()
@@ -1433,6 +1463,31 @@ pub async fn execute_agent_streaming(
                         LogLevel::Debug,
                     );
                     json::json!(format!("<think>{}</think>", thought))
+                } else if name == "_lazy_search_tools"
+                    && !agent.lazy_function_refs.is_empty()
+                {
+                    let query = arguments
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let limit = arguments
+                        .get("limit")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5)
+                        .min(20) as usize;
+                    handle_lazy_tool_search(
+                        context,
+                        agent,
+                        &query,
+                        limit,
+                        &mut tool_definitions,
+                        &mut tool_name_to_node,
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        json::json!({ "error": format!("Lazy tool search failed: {}", e) })
+                    })
                 } else {
                     return Err(anyhow!(
                         "Tool '{}' not found in referenced functions or MCP servers",
@@ -1717,4 +1772,185 @@ pub async fn execute_agent_streaming(
 
         iteration += 1;
     }
+}
+
+/// Perform a hybrid (FTS + vector) search over all lazy tool indexes registered on the
+/// agent and inject the matching nodes into `tool_definitions` / `tool_name_to_node` so
+/// that the LLM can call them in the next iteration.
+///
+/// Returns a human-readable JSON summary of the tools that were found and added.
+#[cfg(feature = "execute")]
+async fn handle_lazy_tool_search(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    query: &str,
+    limit: usize,
+    tool_definitions: &mut Vec<ToolDefinition>,
+    tool_name_to_node: &mut HashMap<String, Arc<InternalNode>>,
+) -> flow_like_types::Result<Value> {
+    use flow_like_storage::databases::vector::VectorStore;
+
+    if query.is_empty() {
+        return Ok(json::json!({ "added_tools": [], "message": "Empty query – no tools searched." }));
+    }
+
+    let mut added_tool_names: Vec<String> = Vec::new();
+    let mut already_loaded_count: usize = 0;
+
+    let lazy_model_key = match &agent.lazy_embedding_model {
+        Some(m) => m.cache_key.clone(),
+        None => {
+            context.log_message(
+                "Lazy search: no embedding model set on agent",
+                LogLevel::Warn,
+            );
+            return Ok(json::json!({ "added_tools": [], "message": "No embedding model configured for lazy tool search." }));
+        }
+    };
+
+    let text_model_opt: Option<_> = {
+        let cache = context.cache.read().await;
+        cache.get(&lazy_model_key).and_then(|entry| {
+            entry
+                .as_any()
+                .downcast_ref::<CachedEmbeddingModelObject>()
+                .and_then(|obj| obj.text_model.clone())
+        })
+    };
+    let text_model = match text_model_opt {
+        Some(m) => m,
+        None => {
+            context.log_message(
+                &format!(
+                    "Lazy search: embedding model '{}' not in cache or has no text model",
+                    lazy_model_key
+                ),
+                LogLevel::Warn,
+            );
+            return Ok(json::json!({ "added_tools": [], "message": "Embedding model not available." }));
+        }
+    };
+
+    let embeddings = match text_model
+        .text_embed_query(&vec![query.to_string()])
+        .await
+    {
+        Ok(e) => e,
+        Err(err) => {
+            context.log_message(
+                &format!("Lazy search: embedding failed: {}", err),
+                LogLevel::Warn,
+            );
+            return Ok(json::json!({ "added_tools": [], "message": format!("Embedding failed: {}", err) }));
+        }
+    };
+    if embeddings.is_empty() {
+        return Ok(json::json!({ "added_tools": [], "message": "Embedding returned empty result." }));
+    }
+    let vector: Vec<f64> = embeddings[0].iter().map(|&v| v as f64).collect();
+
+    for lazy_ref in &agent.lazy_function_refs {
+        let db_arc_opt: Option<_> = {
+            let cache = context.cache.read().await;
+            cache.get(&lazy_ref.db_cache_key).and_then(|entry| {
+                entry
+                    .as_any()
+                    .downcast_ref::<CachedLazyToolDB>()
+                    .map(|db| db.db.clone())
+            })
+        };
+        let db_arc = match db_arc_opt {
+            Some(db) => db,
+            None => {
+                context.log_message(
+                    &format!(
+                        "Lazy search: tool DB '{}' not in cache, skipping",
+                        lazy_ref.db_cache_key
+                    ),
+                    LogLevel::Warn,
+                );
+                continue;
+            }
+        };
+
+        let results = {
+            let db = db_arc.read().await;
+            db.hybrid_search(
+                vector.clone(),
+                query,
+                None,
+                Some(vec!["node_id".to_string()]),
+                Some(vec!["content".to_string()]),
+                limit,
+                0,
+                true,
+            )
+            .await
+            .unwrap_or_default()
+        };
+
+        for result in results {
+            let node_id = match result.get("node_id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            if let Some(internal_node) = context.nodes.get(&node_id) {
+                let node = internal_node.clone();
+                let node_guard = node.node.lock().await;
+                let tool_name = node_guard.name.clone();
+                let friendly_name = node_guard
+                    .friendly_name
+                    .to_lowercase()
+                    .replace([' ', '-'], "_");
+                drop(node_guard);
+
+                if tool_name_to_node.contains_key(&tool_name)
+                    || tool_name_to_node.contains_key(&friendly_name)
+                {
+                    already_loaded_count += 1;
+                } else {
+                    tool_name_to_node.insert(tool_name.clone(), node.clone());
+                    tool_name_to_node.insert(friendly_name.clone(), node.clone());
+
+                    if let Ok(tool) = generate_tool_from_function(&node).await {
+                        let parameters = json::to_value(&tool.function.parameters)
+                            .unwrap_or_else(|_| json::json!({}));
+                        tool_definitions.push(ToolDefinition {
+                            name: tool.function.name.clone(),
+                            description: tool.function.description.clone().unwrap_or_default(),
+                            parameters,
+                        });
+                        added_tool_names.push(tool.function.name);
+                    }
+                }
+            }
+        }
+    }
+
+    let message = if added_tool_names.is_empty() && already_loaded_count > 0 {
+        format!(
+            "All {} matching tool(s) for '{}' are already available in your current tool list. Check your existing tools and use them directly.",
+            already_loaded_count, query
+        )
+    } else if added_tool_names.is_empty() {
+        format!("No tools found matching '{}'. Try a different query.", query)
+    } else {
+        format!(
+            "Found {} tool(s) matching '{}'. They are now available: {}. You can call them directly.",
+            added_tool_names.len(),
+            query,
+            added_tool_names.join(", ")
+        )
+    };
+
+    context.log_message(
+        &format!("Lazy tool search '{}': {}", query, message),
+        LogLevel::Debug,
+    );
+
+    Ok(json::json!({
+        "added_tools": added_tool_names,
+        "message": message,
+    }))
 }

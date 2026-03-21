@@ -31,7 +31,7 @@ impl CallFunctionNode {
                 let mut found = false;
                 for node in context.nodes.values() {
                     if let Ok(inner_pin) = node.get_pin_by_id(dep_pin_id) {
-                        if let Some(value) = inner_pin.get_value().await {
+                        if let Some(value) = inner_pin.get_raw_value().await {
                             let _ = context.set_pin_value(&layer_pin.name, value).await;
                         }
                         found = true;

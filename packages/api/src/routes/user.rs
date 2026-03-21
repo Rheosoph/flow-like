@@ -58,6 +58,7 @@ pub async fn sign_avatar(
 }
 
 pub mod billing;
+pub mod bootstrap;
 pub mod get_invites;
 pub mod info;
 pub mod lookup;
@@ -73,6 +74,7 @@ pub mod widgets;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/bootstrap", get(bootstrap::bootstrap))
         .route(
             "/pat",
             get(pat::get_pats::get_pats).put(pat::create_pat::create_pat),

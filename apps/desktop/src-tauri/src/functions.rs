@@ -7,6 +7,7 @@ pub mod bit;
 pub mod developer;
 pub mod download;
 pub mod event_sink_commands;
+pub mod feedback;
 pub mod file;
 pub mod flow;
 pub mod interaction;

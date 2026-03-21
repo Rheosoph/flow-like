@@ -1,9 +1,8 @@
 use crate::{
-    ensure_in_project,
     entity::comment,
     error::ApiError,
     middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
+    permission::wasm_package_permission::WasmPackagePermission,
     state::AppState,
 };
 use axum::{
@@ -12,15 +11,15 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, TransactionTrait};
 
-use super::upsert_comment::adjust_app_ratings;
+use super::upsert_comment::adjust_package_ratings;
 
 #[utoipa::path(
     delete,
-    path = "/apps/{app_id}/comments/{comment_id}",
-    tag = "comments",
-    description = "Delete a review comment. Users can delete their own; admins and owners can delete any.",
+    path = "/registry/package/{package_id}/comments/{comment_id}",
+    tag = "package-comments",
+    description = "Delete a package review. Users can delete their own; package maintainers can delete any.",
     params(
-        ("app_id" = String, Path, description = "Application ID"),
+        ("package_id" = String, Path, description = "Package ID"),
         ("comment_id" = String, Path, description = "Comment ID")
     ),
     responses(
@@ -36,36 +35,39 @@ use super::upsert_comment::adjust_app_ratings;
     )
 )]
 #[tracing::instrument(
-    name = "DELETE /apps/{app_id}/comments/{comment_id}",
+    name = "DELETE /registry/package/{package_id}/comments/{comment_id}",
     skip(state, user)
 )]
 pub async fn remove_comment(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Path((app_id, comment_id)): Path<(String, String)>,
+    Path((package_id, comment_id)): Path<(String, String)>,
 ) -> Result<Json<()>, ApiError> {
-    let permission = ensure_in_project!(user, &app_id, &state);
-    let sub = permission.sub()?;
+    let sub = user
+        .sub()
+        .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
     let txn = state.db.begin().await?;
 
     let comment = comment::Entity::find_by_id(&comment_id)
-        .filter(comment::Column::AppId.eq(&app_id))
+        .filter(comment::Column::PackageId.eq(&package_id))
         .one(&txn)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
     let is_owner = comment.user_id == sub;
-    let is_admin = permission.has_permission(RolePermissions::Admin)
-        || permission.has_permission(RolePermissions::Owner);
+    let is_maintainer =
+        crate::check_wasm_access!(state, &sub, &package_id)
+            .map(|p| p.has_permission(WasmPackagePermission::Maintainer))
+            .unwrap_or(false);
 
-    if !is_owner && !is_admin {
+    if !is_owner && !is_maintainer {
         return Err(ApiError::FORBIDDEN);
     }
 
     let rating = comment.rating;
     comment.delete(&txn).await?;
-    adjust_app_ratings(&txn, &app_id, -rating, -1).await?;
+    adjust_package_ratings(&txn, &package_id, -rating, -1).await?;
     txn.commit().await?;
 
     Ok(Json(()))

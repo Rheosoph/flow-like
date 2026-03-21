@@ -14,8 +14,10 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub mod internal;
 
+pub mod analytics;
 pub mod api;
 pub mod board;
+pub mod comments;
 pub mod data;
 pub mod db;
 pub mod events;
@@ -45,6 +47,10 @@ pub fn routes() -> Router<AppState> {
                 .delete(internal::delete_app::delete_app),
         )
         .route(
+            "/{app_id}/detail",
+            get(internal::get_detail::get_detail),
+        )
+        .route(
             "/{app_id}/visibility",
             patch(internal::change_visibility::change_visibility),
         )
@@ -59,8 +65,10 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/meta", meta::routes())
         .nest("/{app_id}/roles", roles::routes())
         .nest("/{app_id}/team", team::routes())
+        .nest("/{app_id}/analytics", analytics::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())
+        .nest("/{app_id}/comments", comments::routes())
         .nest("/{app_id}/publication", publication::routes())
         .nest("/{app_id}/packages", packages::routes())
         .nest("/{app_id}/data", data::routes())
