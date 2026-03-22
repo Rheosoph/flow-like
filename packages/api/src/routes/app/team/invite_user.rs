@@ -1,10 +1,13 @@
 use crate::{
     audit_branch, ensure_permission,
-    entity::{app, invitation, membership, meta, sea_orm_active_enums::{Visibility, NotificationType}},
+    entity::{
+        app, invitation, membership, meta,
+        sea_orm_active_enums::{NotificationType, Visibility},
+    },
     error::ApiError,
     middleware::jwt::AppUser,
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
     permission::role_permission::RolePermissions,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
 use axum::{

@@ -3,11 +3,14 @@ import type {
 	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
+	PackageCommentsResponse,
 	PackageUpdate,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
 	SearchResults,
+	UpsertPackageCommentRequest,
+	UpsertPackageCommentResponse,
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
@@ -206,5 +209,45 @@ export class RegistryState implements IRegistryState {
 
 	async setAuthToken(token: string | null): Promise<void> {
 		return invoke("registry_set_auth_token", { token });
+	}
+
+	async getPackageComments(packageId: string, offset?: number, limit?: number): Promise<PackageCommentsResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			return { comments: [], total: 0, offset: 0, limit: 20 };
+		}
+		const params = new URLSearchParams();
+		if (offset != null) params.set("offset", String(offset));
+		if (limit != null) params.set("limit", String(limit));
+		const qs = params.toString();
+		return fetcher<PackageCommentsResponse>(
+			this.backend.profile,
+			`registry/package/${packageId}/comments${qs ? `?${qs}` : ""}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async upsertPackageComment(packageId: string, body: UpsertPackageCommentRequest): Promise<UpsertPackageCommentResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in to leave a review.");
+		}
+		return fetcher<UpsertPackageCommentResponse>(
+			this.backend.profile,
+			`registry/package/${packageId}/comments`,
+			{ method: "PUT", body: JSON.stringify(body) },
+			this.backend.auth,
+		);
+	}
+
+	async deletePackageComment(packageId: string, commentId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("You must be logged in.");
+		}
+		await fetcher<void>(
+			this.backend.profile,
+			`registry/package/${packageId}/comments/${commentId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
 	}
 }

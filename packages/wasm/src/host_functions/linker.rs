@@ -1669,6 +1669,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         }
                     };
                     let app_state = model_ctx.app_state.clone();
+                    let access_token = model_ctx.token.clone();
 
                     // Parse messages_json: either {messages, tools} or a plain array
                     #[derive(serde::Deserialize)]
@@ -1846,7 +1847,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     // Build model and invoke
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
-                        match factory.build(&bit, app_state.clone(), None).await {
+                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
                             Ok(m) => m,
                             Err(e) => {
                                 println!("llm_prompt: failed to build model: {e}");

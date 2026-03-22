@@ -1,6 +1,6 @@
 use crate::functions::TauriFunctionError;
 use crate::state::TauriSettingsState;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};

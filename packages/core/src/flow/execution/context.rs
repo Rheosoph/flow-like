@@ -771,10 +771,7 @@ impl ExecutionContext {
         Ok(value)
     }
 
-    pub async fn evaluate_pin_to_ref(
-        &self,
-        name: &str,
-    ) -> flow_like_types::Result<Value> {
+    pub async fn evaluate_pin_to_ref(&self, name: &str) -> flow_like_types::Result<Value> {
         let pin = self.get_pin_by_name(name).await?;
         let value = evaluate_pin_value_reference(pin).await?;
         Ok(value)

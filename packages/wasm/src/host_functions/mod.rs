@@ -99,9 +99,10 @@ impl StorageContext {
     }
 }
 
-/// Model context for WASM modules — provides embedding access without exposing API keys.
+/// Model context for WASM modules — provides model access including auth tokens.
 pub struct ModelContext {
     pub app_state: Arc<flow_like::state::FlowLikeState>,
+    pub token: Option<String>,
 }
 
 impl std::fmt::Debug for ModelContext {

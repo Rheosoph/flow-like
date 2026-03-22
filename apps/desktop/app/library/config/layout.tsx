@@ -183,7 +183,6 @@ const navigationItems = [
 		label: "Analytics",
 		icon: ChartAreaIcon,
 		description: "Performance metrics and insights",
-		disabled: true,
 	},
 	{
 		href: "/library/config/endpoints",

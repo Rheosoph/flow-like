@@ -147,8 +147,8 @@ export function WasmSandboxWarningDialog({
 					</>
 				)}
 
-				<DialogFooter className="flex-col sm:flex-col gap-2">
-					<div className="flex gap-2 w-full justify-end">
+				<DialogFooter className="flex-col gap-2 sm:flex-col">
+					<div className="flex flex-wrap gap-2 w-full justify-end">
 						<Button variant="outline" onClick={onCancel}>
 							Cancel
 						</Button>
@@ -158,7 +158,11 @@ export function WasmSandboxWarningDialog({
 						<Button variant="secondary" onClick={handleRunOnce}>
 							Run once
 						</Button>
-						<Button onClick={handleAlwaysTrust} className="gap-1.5">
+						<Button
+							onClick={handleAlwaysTrust}
+							variant="destructive"
+							className="gap-1.5"
+						>
 							<ShieldCheckIcon className="w-4 h-4" />
 							Always trust
 						</Button>

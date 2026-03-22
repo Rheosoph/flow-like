@@ -8,6 +8,7 @@ export { A2UIRadioGroup } from "./RadioGroup";
 export { A2UIDateTimeInput } from "./DateTimeInput";
 export { A2UIFileInput } from "./FileInput";
 export { A2UIImageInput } from "./ImageInput";
+export { A2UIVoiceInput } from "./VoiceInput";
 export { A2UILink } from "./Link";
 export { A2UIImageLabeler } from "./ImageLabeler";
 export { A2UIImageHotspot } from "./ImageHotspot";

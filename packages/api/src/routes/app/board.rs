@@ -57,8 +57,5 @@ pub fn routes() -> Router<AppState> {
             "/{board_id}/invoke/async",
             post(invoke_board_async::invoke_board_async),
         )
-        .route(
-            "/{board_id}/workspace",
-            get(workspace::workspace),
-        )
+        .route("/{board_id}/workspace", get(workspace::workspace))
 }

@@ -46,10 +46,7 @@ pub fn routes() -> Router<AppState> {
                 .put(internal::upsert_app::upsert_app)
                 .delete(internal::delete_app::delete_app),
         )
-        .route(
-            "/{app_id}/detail",
-            get(internal::get_detail::get_detail),
-        )
+        .route("/{app_id}/detail", get(internal::get_detail::get_detail))
         .route(
             "/{app_id}/visibility",
             patch(internal::change_visibility::change_visibility),

@@ -1,6 +1,6 @@
 "use client";
-import NotFound from "../not-found";
+import { AnalyticsDashboard } from "@tm9657/flow-like-ui/components/settings/analytics/analytics-dashboard";
 
 export default function Page() {
-	return <NotFound />;
+	return <AnalyticsDashboard />;
 }

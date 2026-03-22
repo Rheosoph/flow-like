@@ -60,7 +60,9 @@ async fn main() -> Result<(), Error> {
     let cdn_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
     let cdn_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
     let cdn_secret_key = secrets
-        .get_secret_string(&flow_like_secrets::SecretRef::new("CDN_BUCKET_SECRET_ACCESS_KEY"))
+        .get_secret_string(&flow_like_secrets::SecretRef::new(
+            "CDN_BUCKET_SECRET_ACCESS_KEY",
+        ))
         .await
         .ok()
         .map(|s| flow_like_secrets::ExposeSecret::expose_secret(&*s).to_string());

@@ -491,7 +491,7 @@ pub struct FlowLikeResponse;
 /// the host-call protocol and returns the result.
 #[derive(Clone)]
 pub struct FlowLikeCompletionModel {
-    bit: Bit,
+    pub(crate) bit: Bit,
     ctx: *const Context,
 }
 
@@ -552,8 +552,15 @@ impl CompletionModel for FlowLikeCompletionModel {
 
         async move {
             let text = result.ok_or_else(|| {
-                CompletionError::ProviderError("FlowLike host LLM prompt returned None".into())
+                CompletionError::ProviderError("FlowLike host LLM prompt returned None (MODELS capability may not be granted)".into())
             })?;
+
+            // Check for host-side error response
+            if let Ok(err_obj) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(err_msg) = err_obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(CompletionError::ProviderError(err_msg.to_string()));
+                }
+            }
 
             let choice = parse_llm_response(&text);
 
@@ -580,9 +587,16 @@ impl CompletionModel for FlowLikeCompletionModel {
         async move {
             let text = result.ok_or_else(|| {
                 CompletionError::ProviderError(
-                    "FlowLike host LLM streaming prompt returned None".into(),
+                    "FlowLike host LLM streaming prompt returned None (MODELS capability may not be granted)".into(),
                 )
             })?;
+
+            // Check for host-side error response
+            if let Ok(err_obj) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(err_msg) = err_obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(CompletionError::ProviderError(err_msg.to_string()));
+                }
+            }
 
             let items: Vec<Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>> =
                 vec![
@@ -596,6 +610,175 @@ impl CompletionModel for FlowLikeCompletionModel {
 
             Ok(StreamingCompletionResponse::stream(raw_stream))
         }
+    }
+}
+
+// =============================================================================
+// WASI-compatible agent — bypasses rig::Agent / ToolServer (js-sys panic)
+// =============================================================================
+
+/// A tool definition + callable pair for the WASI agent loop.
+pub struct WasiToolEntry {
+    pub definition: rig::completion::ToolDefinition,
+    pub call: Box<dyn Fn(serde_json::Value) -> Result<String, String> + Send + Sync>,
+}
+
+/// A lightweight agent that runs entirely inside WASI without spawning
+/// background tasks.  Avoids `rig::agent::Agent` which calls
+/// `wasm_bindgen_futures::spawn_local` (panics in Wasmtime).
+pub struct WasiAgent {
+    model: FlowLikeCompletionModel,
+    preamble: Option<String>,
+    tools: Vec<WasiToolEntry>,
+    max_steps: usize,
+}
+
+impl WasiAgent {
+    pub fn new(model: FlowLikeCompletionModel) -> Self {
+        Self {
+            model,
+            preamble: None,
+            tools: Vec::new(),
+            max_steps: 10,
+        }
+    }
+
+    pub fn preamble(mut self, preamble: impl Into<String>) -> Self {
+        self.preamble = Some(preamble.into());
+        self
+    }
+
+    pub fn max_steps(mut self, n: usize) -> Self {
+        self.max_steps = n;
+        self
+    }
+
+    /// Register a tool with a sync callback.
+    pub fn tool(
+        mut self,
+        definition: rig::completion::ToolDefinition,
+        call: impl Fn(serde_json::Value) -> Result<String, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.tools.push(WasiToolEntry {
+            definition,
+            call: Box::new(call),
+        });
+        self
+    }
+
+    /// Run the agent loop: send the prompt, handle tool calls, repeat until
+    /// the model produces a text response or we hit `max_steps`.
+    pub fn prompt(&self, user_message: &str) -> Result<String, String> {
+        let rig_tools: Vec<rig::completion::ToolDefinition> =
+            self.tools.iter().map(|t| t.definition.clone()).collect();
+
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        if let Some(ref p) = self.preamble {
+            messages.push(ChatMessage::system(p.clone()));
+        }
+        messages.push(ChatMessage::user(user_message.to_string()));
+
+        for step in 0..self.max_steps {
+            crate::host::debug(&format!("WasiAgent: step {step}"));
+
+            let json = if rig_tools.is_empty() {
+                serde_json::to_string(&messages).ok()
+            } else {
+                let tool_defs: Vec<serde_json::Value> = rig_tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&serde_json::json!({
+                    "messages": messages,
+                    "tools": tool_defs,
+                }))
+                .ok()
+            };
+
+            let json = json.ok_or("Failed to serialize messages")?;
+            let bit_json =
+                serde_json::to_string(&self.model.bit).map_err(|e| format!("Bit serialize: {e}"))?;
+
+            let resp_str = crate::host::llm_prompt(&bit_json, &json, false)
+                .ok_or("Host LLM prompt returned None (MODELS capability may not be granted)")?;
+
+            // Check for host-side error response
+            if let Ok(err_obj) = serde_json::from_str::<serde_json::Value>(&resp_str) {
+                if let Some(err_msg) = err_obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(err_msg.to_string());
+                }
+            }
+
+            // Parse host response
+            #[derive(serde::Deserialize)]
+            struct HostResp {
+                #[serde(default)]
+                content: Option<String>,
+                #[serde(default)]
+                tool_calls: Option<Vec<HostToolCall>>,
+            }
+            #[derive(serde::Deserialize, Clone)]
+            struct HostToolCall {
+                id: String,
+                name: String,
+                arguments: serde_json::Value,
+            }
+
+            let resp: HostResp = serde_json::from_str(&resp_str)
+                .map_err(|e| format!("Failed to parse host response: {e}"))?;
+
+            let tool_calls = resp.tool_calls.unwrap_or_default();
+
+            if tool_calls.is_empty() {
+                return Ok(resp.content.unwrap_or_default());
+            }
+
+            // Build assistant message with tool calls
+            let tc_data: Vec<ToolCallData> = tool_calls
+                .iter()
+                .map(|tc| ToolCallData {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                })
+                .collect();
+
+            messages.push(ChatMessage {
+                role: "assistant".into(),
+                content: ChatContent::Text {
+                    content: resp.content.clone().unwrap_or_default(),
+                },
+                tool_calls: Some(tc_data),
+                tool_call_id: None,
+            });
+
+            // Execute each tool call and append result messages
+            for tc in &tool_calls {
+                let result = if let Some(entry) = self.tools.iter().find(|t| t.definition.name == tc.name) {
+                    match (entry.call)(tc.arguments.clone()) {
+                        Ok(r) => r,
+                        Err(e) => format!("Tool error: {e}"),
+                    }
+                } else {
+                    format!("Unknown tool: {}", tc.name)
+                };
+
+                messages.push(ChatMessage {
+                    role: "tool".into(),
+                    content: ChatContent::Text { content: result },
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+        }
+
+        Err(format!("Agent exceeded max steps ({})", self.max_steps))
     }
 }
 

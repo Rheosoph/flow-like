@@ -257,6 +257,8 @@ export class EventState implements IEventState {
 					event: event,
 					version_type: versionType,
 					profile_id: this.backend.profile.id,
+					pat: personalAccessToken,
+					oauth_tokens: oauthTokens,
 				}),
 			},
 			this.backend.auth,
@@ -353,7 +355,30 @@ export class EventState implements IEventState {
 		},
 	): Promise<string> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) return "";
+		if (isOffline) {
+			try {
+				const now = Math.floor(Date.now() / 1000);
+				await invoke("upsert_offline_feedback", {
+					appId,
+					feedback: {
+						id: feedbackId,
+						app_id: appId,
+						event_id: eventId,
+						message_id: feedbackId,
+						session_id: "",
+						rating: feedback.rating,
+						comment: feedback.comment ?? null,
+						include_chat_history: !!feedback.history,
+						can_contact: false,
+						created_at: now,
+						updated_at: now,
+					},
+				});
+			} catch (e) {
+				console.warn("[Feedback] Failed to save offline feedback:", e);
+			}
+			return feedbackId;
+		}
 
 		if (
 			!this.backend.profile ||

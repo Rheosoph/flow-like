@@ -134,6 +134,12 @@ pub struct RegistryEntry {
     pub price: i64,
     #[serde(default)]
     pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_rating: Option<f64>,
+    #[serde(default)]
+    pub rating_count: i64,
+    #[serde(default)]
+    pub rating_sum: i64,
     /// The caller's permission bits on this package (None if unauthenticated)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_user_permission: Option<i32>,
@@ -178,6 +184,10 @@ pub struct PackageSummary {
     pub primary_category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_rating: Option<f64>,
+    #[serde(default)]
+    pub rating_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
 }

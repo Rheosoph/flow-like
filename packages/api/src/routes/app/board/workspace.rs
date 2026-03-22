@@ -1,12 +1,7 @@
 use crate::{
-    ensure_permission,
-    entity::app_package,
-    entity::wasm_package_version,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::template::get_template::VersionQuery,
-    state::AppState,
+    ensure_permission, entity::app_package, entity::wasm_package_version, error::ApiError,
+    middleware::jwt::AppUser, permission::role_permission::RolePermissions,
+    routes::app::template::get_template::VersionQuery, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -52,7 +47,10 @@ pub struct WorkspaceResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/{board_id}/workspace", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/board/{board_id}/workspace",
+    skip(state, user)
+)]
 pub async fn workspace(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

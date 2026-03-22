@@ -1,16 +1,14 @@
 use crate::{
-    ensure_permission,
-    entity::feedback,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    state::AppState,
+    ensure_permission, entity::feedback, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use sea_orm::{ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 

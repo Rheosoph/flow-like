@@ -522,9 +522,7 @@ async fn handle_wasm_purchase_completed(
             user_id: user_id.to_string(),
             app_id: None,
             title: "WASM Package Purchase Complete".to_string(),
-            description: Some(
-                "You now have access to the purchased WASM package.".to_string(),
-            ),
+            description: Some("You now have access to the purchased WASM package.".to_string()),
             icon: Some("package".to_string()),
             link: Some(link.clone()),
             image: None,

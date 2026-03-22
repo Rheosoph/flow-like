@@ -133,7 +133,9 @@ pub async fn list_sinks(
         let mut response = SinkResponse::from(sink.clone());
 
         // Use database lookup instead of bucket
-        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await {
+        if let Ok(Some(event)) =
+            get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await
+        {
             response.event_name = Some(event.name.clone());
             response.event_type = Some(event.event_type.clone());
             response.board_id = Some(event.board_id.clone());
@@ -183,7 +185,9 @@ pub async fn list_app_sinks(
     for sink in sinks {
         let mut response = SinkResponse::from(sink.clone());
 
-        if let Ok(Some(event)) = get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await {
+        if let Ok(Some(event)) =
+            get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await
+        {
             response.event_name = Some(event.name.clone());
             response.event_type = Some(event.event_type.clone());
             response.board_id = Some(event.board_id.clone());

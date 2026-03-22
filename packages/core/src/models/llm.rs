@@ -238,7 +238,10 @@ impl ModelFactory {
             model_provider.model_id = Some(bit.id.clone());
             model_provider.params = Some(params.clone());
 
-            let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("<none>");
+            let endpoint = params
+                .get("endpoint")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<none>");
             tracing::debug!(
                 bit_id = %bit.id,
                 hosted_type = %provider,

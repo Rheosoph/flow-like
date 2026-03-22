@@ -184,7 +184,10 @@ async fn execute_inner(
         if !wasm_packages.is_empty() {
             match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
                 Ok(wasm_nodes) => {
-                    tracing::info!(count = wasm_nodes.len(), "Loaded WASM nodes for streaming execution");
+                    tracing::info!(
+                        count = wasm_nodes.len(),
+                        "Loaded WASM nodes for streaming execution"
+                    );
                     for logic in wasm_nodes {
                         let node = logic.get_node();
                         registry.insert(node, logic);
@@ -215,14 +218,16 @@ async fn execute_inner(
     let board_version = request.board_version;
     let board = crate::execute::BOARD_CACHE
         .try_get_with(cache_key, async move {
-            let b = Board::load(storage_root_clone, &board_id_clone, state_clone, board_version)
-                .await
-                .map_err(|e| {
-                    ExecutorError::BoardLoad(format!(
-                        "Failed to load board {}: {}",
-                        board_id_clone, e
-                    ))
-                })?;
+            let b = Board::load(
+                storage_root_clone,
+                &board_id_clone,
+                state_clone,
+                board_version,
+            )
+            .await
+            .map_err(|e| {
+                ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id_clone, e))
+            })?;
             Ok::<Arc<Board>, ExecutorError>(Arc::new(b))
         })
         .await

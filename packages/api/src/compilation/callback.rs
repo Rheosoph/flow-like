@@ -1,5 +1,7 @@
 use crate::compilation::jwt;
-use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility};
+use crate::entity::sea_orm_active_enums::{
+    WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility,
+};
 use crate::entity::{wasm_package, wasm_package_version};
 use axum::Json;
 use axum::extract::State;

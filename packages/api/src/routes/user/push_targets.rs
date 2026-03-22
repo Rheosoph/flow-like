@@ -5,9 +5,7 @@ use crate::{
     },
     error::ApiError,
     middleware::jwt::AppUser,
-    push_notifications::{
-        configured_provider, prepare_provider_target_registration,
-    },
+    push_notifications::{configured_provider, prepare_provider_target_registration},
     routes::user::ensure_user_exists,
     state::AppState,
 };
@@ -113,7 +111,10 @@ pub async fn register_push_target(
     let token_encrypted = encrypt_token(&body.token, &state.encryption_key);
 
     push_notification_target::Entity::update_many()
-        .col_expr(push_notification_target::Column::PushEnabled, Expr::value(false))
+        .col_expr(
+            push_notification_target::Column::PushEnabled,
+            Expr::value(false),
+        )
         .col_expr(
             push_notification_target::Column::InvalidatedAt,
             Expr::value(Some(now)),
@@ -122,7 +123,10 @@ pub async fn register_push_target(
             push_notification_target::Column::InvalidationReason,
             Expr::value(Some("Device reassigned to another user")),
         )
-        .col_expr(push_notification_target::Column::UpdatedAt, Expr::value(now))
+        .col_expr(
+            push_notification_target::Column::UpdatedAt,
+            Expr::value(now),
+        )
         .filter(push_notification_target::Column::DeviceId.eq(body.device_id.clone()))
         .filter(push_notification_target::Column::Provider.eq(provider.clone()))
         .filter(push_notification_target::Column::UserId.ne(sub.clone()))
@@ -144,7 +148,9 @@ pub async fn register_push_target(
         platform.clone(),
         provider.clone(),
         &body.token,
-        existing.as_ref().and_then(|target| target.endpoint_arn.as_deref()),
+        existing
+            .as_ref()
+            .and_then(|target| target.endpoint_arn.as_deref()),
         existing
             .as_ref()
             .and_then(|target| target.installation_id.as_deref()),
@@ -222,7 +228,10 @@ pub async fn unregister_push_target(
     let sub = user.sub()?;
 
     push_notification_target::Entity::update_many()
-        .col_expr(push_notification_target::Column::PushEnabled, Expr::value(false))
+        .col_expr(
+            push_notification_target::Column::PushEnabled,
+            Expr::value(false),
+        )
         .col_expr(
             push_notification_target::Column::UpdatedAt,
             Expr::value(chrono::Utc::now().naive_utc()),

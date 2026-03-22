@@ -9,6 +9,7 @@ pub mod add_datafusion;
 pub mod from_model;
 pub mod helpers;
 pub mod invoke;
+pub mod lazy_register_tools;
 pub mod memory;
 pub mod register_mcp_tools;
 pub mod register_thinking;
@@ -16,7 +17,6 @@ pub mod register_tools;
 pub mod set_system_prompt;
 pub mod simple;
 pub mod stream_invoke;
-pub mod lazy_register_tools;
 
 /// MCP server registration with optional tool filtering
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -972,8 +972,7 @@ impl InternalRun {
                 for pin in node.pins.values() {
                     if let Some(internal_pin) = pins.get(&pin.id) {
                         node_pins.insert(pin.id.clone(), internal_pin.clone());
-                        let cached_array =
-                            pin_cache.entry(pin.name.clone()).or_insert(vec![]);
+                        let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
                         cached_array.push(internal_pin.clone());
                     }
                 }
@@ -1178,7 +1177,9 @@ impl InternalRun {
 
         // Merge all collected traces in one lock acquisition
         if !new_stack.1.is_empty() {
-            if let Ok(mut run_locked) = lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await {
+            if let Ok(mut run_locked) =
+                lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await
+            {
                 run_locked.traces.extend(new_stack.1);
             }
         }
@@ -1228,7 +1229,9 @@ impl InternalRun {
             }
             // Merge traces in one lock acquisition
             if !traces.is_empty() {
-                if let Ok(mut run_locked) = lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await {
+                if let Ok(mut run_locked) =
+                    lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await
+                {
                     run_locked.traces.extend(traces);
                 }
             }

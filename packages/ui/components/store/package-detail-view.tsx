@@ -20,6 +20,7 @@ import {
 	Settings,
 	Shield,
 	ShoppingCart,
+	Star,
 	Tag,
 	Trash2,
 	User,
@@ -64,6 +65,7 @@ import {
 } from "../ui/package-status-badge";
 import { PackageAccessTab } from "./package-access-tab";
 import { PackageMetaTab } from "./package-meta-tab";
+import { PackageReviewsTab } from "./package-reviews-tab";
 import { PackageUsersContainer } from "./package-users-container";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 
@@ -373,6 +375,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											<Download className="h-4 w-4" />
 											{(pkg.downloadCount ?? 0).toLocaleString()} downloads
 										</span>
+										{(pkg.ratingCount ?? 0) > 0 && (
+											<span className="flex items-center gap-1">
+												<Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+												{(pkg.avgRating ?? 0).toFixed(1)}
+												<span className="text-xs">({pkg.ratingCount})</span>
+											</span>
+										)}
 										{price != null && price > 0 ? (
 											<span className="flex items-center gap-1 font-medium">
 												{priceLabel}
@@ -479,6 +488,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
 						</TabsTrigger>
+						<TabsTrigger value="reviews">Reviews</TabsTrigger>
 						{currentUserPermission != null &&
 							isMaintainer(currentUserPermission) &&
 							fetcher && (
@@ -684,9 +694,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										<p className="text-sm text-muted-foreground">Nodes</p>
 									</div>
 									<div>
-										<p className="text-sm text-muted-foreground">Created</p>
-										<p className="text-sm">
-											{safeFormatDistance(pkg.createdAt)}
+										<p className="text-2xl font-bold">
+											{(pkg.ratingCount ?? 0) > 0
+												? (pkg.avgRating ?? 0).toFixed(1)
+												: "N/A"}
+										</p>
+										<p className="text-sm text-muted-foreground">
+											Avg Rating{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
 										</p>
 									</div>
 								</div>
@@ -917,6 +931,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								)}
 							</CardContent>
 						</Card>
+					</TabsContent>
+
+					<TabsContent value="reviews" className="space-y-4">
+						<PackageReviewsTab packageId={pkg.id} />
 					</TabsContent>
 
 					{currentUserPermission != null &&

@@ -74,7 +74,8 @@ impl Command for UpsertVariableCommand {
             &mut board.variables
         };
 
-        if let Some(old_variable) = variables.insert(self.variable.id.clone(), self.variable.clone())
+        if let Some(old_variable) =
+            variables.insert(self.variable.id.clone(), self.variable.clone())
         {
             if !old_variable.editable {
                 variables.insert(old_variable.id.clone(), old_variable);

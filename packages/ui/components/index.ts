@@ -19,3 +19,4 @@ export * from "./builder/index";
 export * from "./store/index";
 export * from "./library/index";
 export * from "./layout/index";
+export * from "./animated-icons/index";

@@ -30,7 +30,10 @@ pub fn is_signing_configured() -> bool {
 }
 
 pub fn current_kid() -> &'static str {
-    KEY_ID.get().map(|s| s.as_str()).unwrap_or("backend-es256-v1")
+    KEY_ID
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("backend-es256-v1")
 }
 
 /// Sign an entry hash using raw P-256 ECDSA.

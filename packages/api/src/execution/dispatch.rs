@@ -353,7 +353,9 @@ impl Dispatcher {
 
         #[cfg(feature = "lambda")]
         let lambda_client = if config.backend.is_lambda() || config.async_backend.is_lambda() {
-            aws_config.as_ref().map(|cfg| aws_sdk_lambda::Client::new(cfg))
+            aws_config
+                .as_ref()
+                .map(|cfg| aws_sdk_lambda::Client::new(cfg))
         } else {
             None
         };

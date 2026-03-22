@@ -141,33 +141,32 @@ pub async fn get_analytics_overview(
         ));
     }
 
-    let total_executions: i64 =
-        all_daily.iter().map(|d| d.total_executions).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.executions);
-    let successful_executions: i64 =
-        all_daily.iter().map(|d| d.successful_executions).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.executions - t.failed_executions);
-    let failed_executions: i64 =
-        all_daily.iter().map(|d| d.failed_executions).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.failed_executions);
-    let unique_users: i64 =
-        all_daily.iter().map(|d| d.unique_users).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.unique_users);
-    let total_feedback: i64 =
-        all_daily.iter().map(|d| d.feedback_count).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.feedback_count);
-    let positive_feedback: i64 =
-        all_daily.iter().map(|d| d.positive_feedback).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.positive_feedback);
-    let negative_feedback: i64 =
-        all_daily.iter().map(|d| d.negative_feedback).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.negative_feedback);
-    let total_llm_cost: i64 =
-        all_daily.iter().map(|d| d.total_llm_cost).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.llm_cost);
-    let total_embedding_cost: i64 =
-        all_daily.iter().map(|d| d.total_embedding_cost).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.embedding_cost);
+    let total_executions: i64 = all_daily.iter().map(|d| d.total_executions).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.executions);
+    let successful_executions: i64 = all_daily
+        .iter()
+        .map(|d| d.successful_executions)
+        .sum::<i64>()
+        + today_stat
+            .as_ref()
+            .map_or(0, |t| t.executions - t.failed_executions);
+    let failed_executions: i64 = all_daily.iter().map(|d| d.failed_executions).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.failed_executions);
+    let unique_users: i64 = all_daily.iter().map(|d| d.unique_users).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.unique_users);
+    let total_feedback: i64 = all_daily.iter().map(|d| d.feedback_count).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.feedback_count);
+    let positive_feedback: i64 = all_daily.iter().map(|d| d.positive_feedback).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.positive_feedback);
+    let negative_feedback: i64 = all_daily.iter().map(|d| d.negative_feedback).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.negative_feedback);
+    let total_llm_cost: i64 = all_daily.iter().map(|d| d.total_llm_cost).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.llm_cost);
+    let total_embedding_cost: i64 = all_daily
+        .iter()
+        .map(|d| d.total_embedding_cost)
+        .sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.embedding_cost);
 
     let rated_days: Vec<_> = all_daily
         .iter()
@@ -185,7 +184,11 @@ pub async fn get_analytics_overview(
                 count += 1;
             }
         }
-        if count == 0 { None } else { Some(sum / count as f64) }
+        if count == 0 {
+            None
+        } else {
+            Some(sum / count as f64)
+        }
     };
 
     let latency_days: Vec<_> = all_daily
@@ -201,19 +204,24 @@ pub async fn get_analytics_overview(
                 count += 1;
             }
         }
-        if count == 0 { None } else { Some(sum / count as f64) }
+        if count == 0 {
+            None
+        } else {
+            Some(sum / count as f64)
+        }
     };
 
     let current_period: Vec<_> = all_daily
         .iter()
         .filter(|d| d.date >= thirty_days_ago)
         .collect();
-    let period_executions: i64 =
-        current_period.iter().map(|d| d.total_executions).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.executions);
-    let period_unique_users: i64 =
-        current_period.iter().map(|d| d.unique_users).sum::<i64>()
-            + today_stat.as_ref().map_or(0, |t| t.unique_users);
+    let period_executions: i64 = current_period
+        .iter()
+        .map(|d| d.total_executions)
+        .sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.executions);
+    let period_unique_users: i64 = current_period.iter().map(|d| d.unique_users).sum::<i64>()
+        + today_stat.as_ref().map_or(0, |t| t.unique_users);
 
     let prev_period: Vec<_> = all_daily
         .iter()
@@ -557,8 +565,10 @@ async fn compute_daily_stats_from_raw(
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
-        let user_ids: std::collections::HashSet<_> =
-            day_execs.iter().filter_map(|e| e.user_id.as_ref()).collect();
+        let user_ids: std::collections::HashSet<_> = day_execs
+            .iter()
+            .filter_map(|e| e.user_id.as_ref())
+            .collect();
 
         let latencies: Vec<f64> = day_llm.iter().filter_map(|l| l.latency).collect();
         let avg_latency = if latencies.is_empty() {
@@ -644,7 +654,11 @@ async fn compute_today_live(
         .all(&state.db)
         .await?;
 
-    if executions.is_empty() && feedbacks.is_empty() && llm_records.is_empty() && embedding_records.is_empty() {
+    if executions.is_empty()
+        && feedbacks.is_empty()
+        && llm_records.is_empty()
+        && embedding_records.is_empty()
+    {
         return Ok(None);
     }
 
@@ -653,7 +667,10 @@ async fn compute_today_live(
         .iter()
         .filter(|e| matches!(e.status, ExecutionStatus::Error | ExecutionStatus::Fatal))
         .count() as i64;
-    let user_ids: HashSet<_> = executions.iter().filter_map(|e| e.user_id.as_ref()).collect();
+    let user_ids: HashSet<_> = executions
+        .iter()
+        .filter_map(|e| e.user_id.as_ref())
+        .collect();
 
     let latencies: Vec<f64> = llm_records.iter().filter_map(|l| l.latency).collect();
     let avg_latency = if latencies.is_empty() {

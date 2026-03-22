@@ -18,6 +18,7 @@ import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { VoiceMode } from "./VoiceMode";
 
 type ChatItem =
 	| { type: "message"; data: IMessage; timestamp: number }
@@ -90,6 +91,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [sendingContent, setSendingContent] = useState("");
 		const pendingMessageRef = useRef<IMessage | null>(null);
 		const rafIdRef = useRef<number | null>(null);
+		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 
 		// Cleanup RAF on unmount
 		useEffect(() => {
@@ -285,6 +287,14 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[onSendMessage, scrollToBottom],
 		);
 
+		const handleVoiceModeSend = useCallback(
+			async (audioFile: File) => {
+				setVoiceModeOpen(false);
+				await handleSendMessage("", undefined, undefined, audioFile);
+			},
+			[handleSendMessage],
+		);
+
 		// iOS keyboard/open focus handling to reduce layout jump and zoom
 		useEffect(() => {
 			const onFocusIn = (e: FocusEvent) => {
@@ -478,10 +488,22 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={config?.allow_voice_input ?? true}
+								onVoiceModeToggle={
+									(config?.allow_voice_mode ?? true)
+										? () => setVoiceModeOpen(true)
+										: undefined
+								}
 							/>
 						)}
 					</div>
 				</div>
+
+				{/* Voice Mode Overlay */}
+				<VoiceMode
+					open={voiceModeOpen}
+					onClose={() => setVoiceModeOpen(false)}
+					onSend={handleVoiceModeSend}
+				/>
 			</main>
 		);
 	},

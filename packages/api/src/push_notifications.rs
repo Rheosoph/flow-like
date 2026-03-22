@@ -8,9 +8,10 @@ use crate::{
     routes::app::events::db::decrypt_token,
     state::AppState,
 };
-use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like::hub::{PushNotificationProviderType, PushNotificationsConfig};
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::create_id;
+use flow_like_types::tokio::sync::RwLock;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::StatusCode;
 use sea_orm::{
@@ -20,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
-use flow_like_types::tokio::sync::RwLock;
 
 #[cfg(feature = "azure")]
 use base64::Engine;
@@ -300,8 +300,7 @@ async fn push_to_user(
             PushNotificationTargetProvider::AzureNotificationHubs => {
                 #[cfg(feature = "azure")]
                 {
-                    send_via_azure_notification_hubs(config, &target, notification_id, input)
-                        .await
+                    send_via_azure_notification_hubs(config, &target, notification_id, input).await
                 }
                 #[cfg(not(feature = "azure"))]
                 {
@@ -400,11 +399,7 @@ async fn resolve_service_account_json(
     }
 
     std::fs::read_to_string(trimmed).map_err(|e| {
-        flow_like_types::anyhow!(
-            "Failed to read service account file '{}': {}",
-            trimmed,
-            e
-        )
+        flow_like_types::anyhow!("Failed to read service account file '{}': {}", trimmed, e)
     })
 }
 
@@ -421,7 +416,8 @@ async fn send_via_fcm(
         .as_ref()
         .ok_or_else(|| flow_like_types::anyhow!("Missing FCM push configuration"))?;
 
-    let service_account_json = resolve_service_account_json(state, &fcm.service_account_json_env).await?;
+    let service_account_json =
+        resolve_service_account_json(state, &fcm.service_account_json_env).await?;
 
     let data = notification_data(notification_id, target, input);
     let url = format!(
@@ -532,9 +528,7 @@ async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
         Some("UNREGISTERED") | Some("INVALID_ARGUMENT") | Some("SENDER_ID_MISMATCH") => {
             FcmOutcome::InvalidateTarget(reason)
         }
-        _ if matches!(status_code, 429 | 500 | 503) => {
-            FcmOutcome::Transient(status_code, reason)
-        }
+        _ if matches!(status_code, 429 | 500 | 503) => FcmOutcome::Transient(status_code, reason),
         _ => FcmOutcome::Permanent(reason),
     }
 }
@@ -640,7 +634,11 @@ async fn send_via_aws_sns(
         .endpoint_arn
         .as_ref()
         .ok_or_else(|| flow_like_types::anyhow!("AWS SNS target is missing an endpoint ARN"))?;
-    let payload = aws_sns_payload(target, input, notification_string_data(notification_id, target, input))?;
+    let payload = aws_sns_payload(
+        target,
+        input,
+        notification_string_data(notification_id, target, input),
+    )?;
 
     aws_sdk_sns::Client::new(&state.aws_client)
         .publish()
@@ -682,7 +680,10 @@ fn aws_sns_payload(
     input: &DispatchNotificationInput,
     data: HashMap<String, String>,
 ) -> flow_like_types::Result<String> {
-    let default_body = input.description.clone().unwrap_or_else(|| input.title.clone());
+    let default_body = input
+        .description
+        .clone()
+        .unwrap_or_else(|| input.title.clone());
     let payload = match target.platform {
         PushNotificationTargetPlatform::Android => {
             let mut notification = serde_json::json!({
@@ -829,7 +830,10 @@ async fn send_via_azure_notification_hubs(
         .post(format!("{}/messages/?api-version=2015-01", resource_uri))
         .header("Authorization", authorization)
         .header("Content-Type", "application/json;charset=utf-8")
-        .header("ServiceBusNotification-Format", azure_message_format(&target.platform)?)
+        .header(
+            "ServiceBusNotification-Format",
+            azure_message_format(&target.platform)?,
+        )
         .header(
             "ServiceBusNotification-Tags",
             format!("device:{}", target.device_id),
@@ -931,7 +935,11 @@ fn azure_hub_resource_uri(
 }
 
 #[cfg(feature = "azure")]
-fn azure_sas_token(resource_uri: &str, key_name: &str, key_value: &str) -> flow_like_types::Result<String> {
+fn azure_sas_token(
+    resource_uri: &str,
+    key_name: &str,
+    key_value: &str,
+) -> flow_like_types::Result<String> {
     type HmacSha256 = Hmac<Sha256>;
 
     let expiry = (chrono::Utc::now().timestamp() + 3600).to_string();

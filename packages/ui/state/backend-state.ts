@@ -40,6 +40,7 @@ import type {
 import type { IStorageState } from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
+import type { IAnalyticsState } from "./backend-state/analytics-state";
 import type { IUsageState } from "./backend-state/usage-state";
 import type { IUserState } from "./backend-state/user-state";
 import type { IWidgetState } from "./backend-state/widget-state";
@@ -73,6 +74,7 @@ export type {
 	IUserState,
 	IWidgetState,
 	IUsageState,
+	IAnalyticsState,
 };
 
 export type { SinkType } from "./backend-state/sink-state";
@@ -153,6 +155,8 @@ export interface IBackendState {
 	salesState?: ISalesState;
 	/** Usage tracking state for LLM, embedding, and execution usage history */
 	usageState?: IUsageState;
+	/** Analytics state for creator dashboard metrics and feedback */
+	analyticsState?: IAnalyticsState;
 
 	/** Optional runtime profile (desktop/mobile providers populate this). */
 	profile?: IProfile;

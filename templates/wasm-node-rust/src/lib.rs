@@ -256,62 +256,11 @@ impl WasmNode for FileReaderNode {
     }
 }
 
-// ── Weather Tool (rig tool demo) ───────────────────────────────────────
+// ── Node 6: Weather Agent (WasiAgent + tool demo) ─────────────────────
 
-#[derive(serde::Deserialize)]
-pub struct GetWeatherArgs {
-    pub location: String,
-}
-
-#[derive(Debug)]
-pub struct WeatherError;
-
-impl std::fmt::Display for WeatherError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Weather lookup failed")
-    }
-}
-
-impl std::error::Error for WeatherError {}
-
-pub struct GetWeatherTool;
-
-impl rig::tool::Tool for GetWeatherTool {
-    const NAME: &'static str = "get_weather";
-    type Error = WeatherError;
-    type Args = GetWeatherArgs;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-        rig::completion::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get the current weather for a given location.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "City name, e.g. 'San Francisco' or 'Tokyo'"
-                    }
-                },
-                "required": ["location"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Ok(format!(
-            "Weather in {}: 22°C, partly cloudy, humidity 65%, wind 12 km/h NW",
-            args.location
-        ))
-    }
-}
-
-// ── Node 6: Weather Agent (rig agent + tool demo) ─────────────────────
-
-/// Demonstrates building a rig agent with a custom tool via the WASM SDK.
-/// Constructs a `FlowLikeCompletionModel` from the Bit, attaches a weather
-/// tool, and lets the agent autonomously decide when to call it.
+/// Demonstrates building an agent with a custom tool via the WASM SDK's
+/// `WasiAgent`. Uses `FlowLikeCompletionModel` to call the host LLM and
+/// handles tool calls in a synchronous loop compatible with WASI/Wasmtime.
 #[register_node]
 #[derive(Default)]
 pub struct WeatherAgentNode;
@@ -332,6 +281,8 @@ impl WasmNode for WeatherAgentNode {
         node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
         node.add_output_pin("response", "Response", "Agent response", VariableType::String);
         node.set_long_running(true);
+        node.add_permission(NodePermission::Models);
+        node.add_permission(NodePermission::NetworkHttp);
         node
     }
 
@@ -345,20 +296,102 @@ impl WasmNode for WeatherAgentNode {
         log::info(&format!("WeatherAgent: message={message}"));
 
         let completion_model = FlowLikeCompletionModel::new(model, &ctx);
-        log::info("WeatherAgent: model created, building agent");
 
-        let agent = rig::agent::AgentBuilder::new(completion_model)
+        let weather_def = rig::completion::ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get the current weather for a given location.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name, e.g. 'San Francisco' or 'Tokyo'"
+                    }
+                },
+                "required": ["location"]
+            }),
+        };
+
+        let agent = WasiAgent::new(completion_model)
             .preamble(
                 "You are a helpful weather assistant. \
                  Use the get_weather tool to look up current weather conditions \
                  when the user asks about the weather.",
             )
-            .tool(GetWeatherTool)
-            .build();
+            .tool(weather_def, |args: serde_json::Value| {
+                let location = args
+                    .get("location")
+                    .and_then(|v: &serde_json::Value| v.as_str())
+                    .unwrap_or("unknown");
+
+                // Step 1: Geocode the location name → lat/lon via Open-Meteo
+                let geo_url = format!(
+                    "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
+                    location.replace(' ', "+")
+                );
+                let geo_resp = flow_like_wasm_sdk::http_ns::http_request(0, &geo_url, "{}", &[]);
+                let geo_json: serde_json::Value = match geo_resp {
+                    Some(r) => serde_json::from_str(&r).unwrap_or_default(),
+                    None => return Ok(format!("Could not geocode location: {location}")),
+                };
+
+                let body_str = geo_json.get("body").and_then(|b| b.as_str()).unwrap_or("");
+                let body: serde_json::Value = serde_json::from_str(body_str).unwrap_or_default();
+                let results = body.get("results").and_then(|r| r.as_array());
+                let (lat, lon, resolved_name) = match results.and_then(|r| r.first()) {
+                    Some(hit) => {
+                        let lat = hit.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let lon = hit.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let name = hit.get("name").and_then(|v| v.as_str()).unwrap_or(location);
+                        (lat, lon, name.to_string())
+                    }
+                    None => return Ok(format!("Location not found: {location}")),
+                };
+
+                // Step 2: Fetch current weather from Open-Meteo
+                let weather_url = format!(
+                    "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
+                     &current=temperature_2m,relative_humidity_2m,apparent_temperature,\
+                     wind_speed_10m,wind_direction_10m,weather_code"
+                );
+                let wx_resp = flow_like_wasm_sdk::http_ns::http_request(0, &weather_url, "{}", &[]);
+                let wx_json: serde_json::Value = match wx_resp {
+                    Some(r) => serde_json::from_str(&r).unwrap_or_default(),
+                    None => return Ok(format!("Weather API request failed for {resolved_name}")),
+                };
+
+                let wx_body_str = wx_json.get("body").and_then(|b| b.as_str()).unwrap_or("");
+                let wx: serde_json::Value = serde_json::from_str(wx_body_str).unwrap_or_default();
+                let current = wx.get("current").unwrap_or(&serde_json::Value::Null);
+
+                let temp = current.get("temperature_2m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let feels = current.get("apparent_temperature").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let humidity = current.get("relative_humidity_2m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let wind = current.get("wind_speed_10m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let wind_dir = current.get("wind_direction_10m").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let code = current.get("weather_code").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                let condition = match code {
+                    0 => "Clear sky",
+                    1..=3 => "Partly cloudy",
+                    45 | 48 => "Foggy",
+                    51..=57 => "Drizzle",
+                    61..=67 => "Rain",
+                    71..=77 => "Snow",
+                    80..=82 => "Rain showers",
+                    85 | 86 => "Snow showers",
+                    95..=99 => "Thunderstorm",
+                    _ => "Unknown",
+                };
+
+                Ok(format!(
+                    "Current weather in {resolved_name}: {temp}°C (feels like {feels}°C), \
+                     {condition}, humidity {humidity}%, wind {wind} km/h from {wind_dir}°"
+                ))
+            });
 
         log::info("WeatherAgent: agent built, calling prompt");
-        use rig::completion::Prompt;
-        match futures::executor::block_on(async { agent.prompt(&message).await }) {
+        match agent.prompt(&message) {
             Ok(response) => {
                 log::info(&format!("WeatherAgent: success, response len={}", response.len()));
                 ctx.set_output("response", response);

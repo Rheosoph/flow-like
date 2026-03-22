@@ -1327,12 +1327,35 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const onMessageUpdate = useCallback(
-		async (messageId: string, message: Partial<IMessage>) => {
+		async (messageId: string, updates: Partial<IMessage>) => {
 			await chatDb.messages.update(messageId, {
-				...message,
+				...updates,
 			});
+
+			if (updates.rating !== undefined || updates.ratingSettings !== undefined) {
+				const msg = await chatDb.messages.get(messageId);
+				if (msg && msg.rating !== undefined && msg.rating !== 0) {
+					const feedbackRating = msg.rating > 0 ? 5 : 1;
+					try {
+						await backend.eventState.upsertEventFeedback(
+							appId,
+							event.id,
+							messageId,
+							{
+								rating: feedbackRating,
+								comment: msg.ratingSettings?.comment ?? "",
+								history: msg.ratingSettings?.includeChatHistory
+									? (await chatDb.messages.where("sessionId").equals(msg.sessionId).toArray()).map(m => m.inner)
+									: undefined,
+							},
+						);
+					} catch (e) {
+						console.warn("[Chat] Failed to sync feedback to backend:", e);
+					}
+				}
+			}
 		},
-		[],
+		[appId, event.id, backend.eventState],
 	);
 
 	const showWelcome = useMemo(

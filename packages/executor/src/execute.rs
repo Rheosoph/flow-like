@@ -36,13 +36,14 @@ pub(crate) static PREPARED_REGISTRY: LazyLock<FlowNodeRegistryInner> = LazyLock:
 
 /// Board cache keyed by (app_id, board_id, version).
 /// Max 128 entries, 60s TTL — boards can be large so we limit entry count.
-pub(crate) static BOARD_CACHE: LazyLock<moka::future::Cache<(String, String, Option<(u32, u32, u32)>), Arc<Board>>> =
-    LazyLock::new(|| {
-        moka::future::Cache::builder()
-            .max_capacity(128)
-            .time_to_live(Duration::from_secs(60))
-            .build()
-    });
+pub(crate) static BOARD_CACHE: LazyLock<
+    moka::future::Cache<(String, String, Option<(u32, u32, u32)>), Arc<Board>>,
+> = LazyLock::new(|| {
+    moka::future::Cache::builder()
+        .max_capacity(128)
+        .time_to_live(Duration::from_secs(60))
+        .build()
+});
 
 /// API-compatible event input format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,14 +176,16 @@ pub async fn execute(
     let board_version = request.board_version;
     let board = BOARD_CACHE
         .try_get_with(cache_key, async move {
-            let b = Board::load(storage_root_clone, &board_id_clone, state_clone, board_version)
-                .await
-                .map_err(|e| {
-                    ExecutorError::BoardLoad(format!(
-                        "Failed to load board {}: {}",
-                        board_id_clone, e
-                    ))
-                })?;
+            let b = Board::load(
+                storage_root_clone,
+                &board_id_clone,
+                state_clone,
+                board_version,
+            )
+            .await
+            .map_err(|e| {
+                ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id_clone, e))
+            })?;
             Ok::<Arc<Board>, ExecutorError>(Arc::new(b))
         })
         .await
@@ -408,7 +411,14 @@ pub async fn execute(
         claims.callback_url.trim_end_matches('/')
     );
     let http_client = reqwest::Client::new();
-    let _ = send_progress(&progress_url, &executor_jwt, &progress_update, &config, &http_client).await;
+    let _ = send_progress(
+        &progress_url,
+        &executor_jwt,
+        &progress_update,
+        &config,
+        &http_client,
+    )
+    .await;
 
     Ok(ExecutionResult {
         run_id: claims.run_id,
@@ -587,7 +597,6 @@ async fn send_progress(
     config: &ExecutorConfig,
     client: &reqwest::Client,
 ) -> Result<(), ExecutorError> {
-
     for attempt in 0..=config.callback_retries {
         let result = client
             .post(url)

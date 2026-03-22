@@ -1,8 +1,8 @@
+#[cfg(feature = "execute")]
+use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
 use crate::generative::agent::{Agent, ContextManagementMode};
 #[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
-#[cfg(feature = "execute")]
-use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
 /// # Agent Execution Helpers
 /// This module contains reusable logic for executing agents with tools and streaming.
 /// Extracted from simple.rs to be shared across multiple agent nodes.
@@ -1463,9 +1463,7 @@ pub async fn execute_agent_streaming(
                         LogLevel::Debug,
                     );
                     json::json!(format!("<think>{}</think>", thought))
-                } else if name == "_lazy_search_tools"
-                    && !agent.lazy_function_refs.is_empty()
-                {
+                } else if name == "_lazy_search_tools" && !agent.lazy_function_refs.is_empty() {
                     let query = arguments
                         .get("query")
                         .and_then(|v| v.as_str())
@@ -1485,9 +1483,9 @@ pub async fn execute_agent_streaming(
                         &mut tool_name_to_node,
                     )
                     .await
-                    .unwrap_or_else(|e| {
-                        json::json!({ "error": format!("Lazy tool search failed: {}", e) })
-                    })
+                    .unwrap_or_else(
+                        |e| json::json!({ "error": format!("Lazy tool search failed: {}", e) }),
+                    )
                 } else {
                     return Err(anyhow!(
                         "Tool '{}' not found in referenced functions or MCP servers",
@@ -1791,7 +1789,9 @@ async fn handle_lazy_tool_search(
     use flow_like_storage::databases::vector::VectorStore;
 
     if query.is_empty() {
-        return Ok(json::json!({ "added_tools": [], "message": "Empty query – no tools searched." }));
+        return Ok(
+            json::json!({ "added_tools": [], "message": "Empty query – no tools searched." }),
+        );
     }
 
     let mut added_tool_names: Vec<String> = Vec::new();
@@ -1804,7 +1804,9 @@ async fn handle_lazy_tool_search(
                 "Lazy search: no embedding model set on agent",
                 LogLevel::Warn,
             );
-            return Ok(json::json!({ "added_tools": [], "message": "No embedding model configured for lazy tool search." }));
+            return Ok(
+                json::json!({ "added_tools": [], "message": "No embedding model configured for lazy tool search." }),
+            );
         }
     };
 
@@ -1827,25 +1829,28 @@ async fn handle_lazy_tool_search(
                 ),
                 LogLevel::Warn,
             );
-            return Ok(json::json!({ "added_tools": [], "message": "Embedding model not available." }));
+            return Ok(
+                json::json!({ "added_tools": [], "message": "Embedding model not available." }),
+            );
         }
     };
 
-    let embeddings = match text_model
-        .text_embed_query(&vec![query.to_string()])
-        .await
-    {
+    let embeddings = match text_model.text_embed_query(&vec![query.to_string()]).await {
         Ok(e) => e,
         Err(err) => {
             context.log_message(
                 &format!("Lazy search: embedding failed: {}", err),
                 LogLevel::Warn,
             );
-            return Ok(json::json!({ "added_tools": [], "message": format!("Embedding failed: {}", err) }));
+            return Ok(
+                json::json!({ "added_tools": [], "message": format!("Embedding failed: {}", err) }),
+            );
         }
     };
     if embeddings.is_empty() {
-        return Ok(json::json!({ "added_tools": [], "message": "Embedding returned empty result." }));
+        return Ok(
+            json::json!({ "added_tools": [], "message": "Embedding returned empty result." }),
+        );
     }
     let vector: Vec<f64> = embeddings[0].iter().map(|&v| v as f64).collect();
 
@@ -1934,7 +1939,10 @@ async fn handle_lazy_tool_search(
             already_loaded_count, query
         )
     } else if added_tool_names.is_empty() {
-        format!("No tools found matching '{}'. Try a different query.", query)
+        format!(
+            "No tools found matching '{}'. Try a different query.",
+            query
+        )
     } else {
         format!(
             "Found {} tool(s) matching '{}'. They are now available: {}. You can call them directly.",

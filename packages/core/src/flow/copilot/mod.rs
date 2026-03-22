@@ -746,27 +746,24 @@ impl Copilot {
                     "Failed to parse node ID".to_string()
                 }
             }
-            "emit_commands" => {
-                match serde_json::from_value::<EmitCommandsArgs>(arguments) {
-                    Ok(args) => {
-                        let commands_json =
-                            serde_json::to_string(&args.commands).unwrap_or_default();
-                        println!(
-                            "[Copilot] emit_commands: {} commands, json length: {} chars",
-                            args.commands.len(),
-                            commands_json.len()
-                        );
-                        format!(
-                            "<commands>{}</commands>\n\n{}",
-                            commands_json, args.explanation
-                        )
-                    }
-                    Err(e) => {
-                        println!("[Copilot] emit_commands: Failed to parse args: {:?}", e);
-                        format!("Failed to parse commands: {}", e)
-                    }
+            "emit_commands" => match serde_json::from_value::<EmitCommandsArgs>(arguments) {
+                Ok(args) => {
+                    let commands_json = serde_json::to_string(&args.commands).unwrap_or_default();
+                    println!(
+                        "[Copilot] emit_commands: {} commands, json length: {} chars",
+                        args.commands.len(),
+                        commands_json.len()
+                    );
+                    format!(
+                        "<commands>{}</commands>\n\n{}",
+                        commands_json, args.explanation
+                    )
                 }
-            }
+                Err(e) => {
+                    println!("[Copilot] emit_commands: Failed to parse args: {:?}", e);
+                    format!("Failed to parse commands: {}", e)
+                }
+            },
             "catalog_search" => {
                 if let Ok(args) = serde_json::from_value::<SearchArgs>(arguments) {
                     let matches = self.catalog_provider.search(&args.query).await;
@@ -836,11 +833,12 @@ impl Copilot {
                 #[cfg(feature = "flow-runtime")]
                 {
                     if let Some(ctx) = run_context {
-                        let args = serde_json::from_value::<QueryLogsArgs>(arguments)
-                            .unwrap_or(QueryLogsArgs {
+                        let args = serde_json::from_value::<QueryLogsArgs>(arguments).unwrap_or(
+                            QueryLogsArgs {
                                 filter: None,
                                 limit: None,
-                            });
+                            },
+                        );
 
                         let limit = args.limit.unwrap_or(50).min(100);
                         let filter = args.filter.unwrap_or_default();

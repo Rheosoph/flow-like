@@ -177,8 +177,8 @@ fn deserialize_cwasm(
     pkg_ref: &WasmPackageRef,
     cwasm_bytes: &[u8],
 ) -> Result<Arc<WasmModule>, ExecutorError> {
-    let module = unsafe { wasmtime::Module::deserialize(engine.engine(), cwasm_bytes) }
-        .map_err(|e| {
+    let module =
+        unsafe { wasmtime::Module::deserialize(engine.engine(), cwasm_bytes) }.map_err(|e| {
             ExecutorError::Execution(format!(
                 "Failed to deserialize cwasm for {} v{}: {}",
                 package_id, pkg_ref.version, e

@@ -45,10 +45,22 @@ impl CallFunctionNode {
         }
     }
 
-    fn find_node_id_by_pin(board: &Board, layer: &Layer, layer_id: &str, pin_id: &str) -> Option<String> {
-        layer.nodes.values()
+    fn find_node_id_by_pin(
+        board: &Board,
+        layer: &Layer,
+        layer_id: &str,
+        pin_id: &str,
+    ) -> Option<String> {
+        layer
+            .nodes
+            .values()
             .find(|n| n.pins.contains_key(pin_id))
-            .or_else(|| board.nodes.values().find(|n| n.layer.as_deref() == Some(layer_id) && n.pins.contains_key(pin_id)))
+            .or_else(|| {
+                board
+                    .nodes
+                    .values()
+                    .find(|n| n.layer.as_deref() == Some(layer_id) && n.pins.contains_key(pin_id))
+            })
             .map(|n| n.id.clone())
     }
 
@@ -65,9 +77,7 @@ impl CallFunctionNode {
         let output_layer_pins: Vec<_> = layer
             .pins
             .values()
-            .filter(|p| {
-                p.pin_type == PinType::Output && p.data_type != VariableType::Execution
-            })
+            .filter(|p| p.pin_type == PinType::Output && p.data_type != VariableType::Execution)
             .collect();
 
         if output_layer_pins.is_empty() {
@@ -99,9 +109,7 @@ impl CallFunctionNode {
                 fn_context.delegated = true;
 
                 for (pin_id, pin) in &layer.pins {
-                    if pin.pin_type != PinType::Input
-                        || pin.data_type == VariableType::Execution
-                    {
+                    if pin.pin_type != PinType::Input || pin.data_type == VariableType::Execution {
                         continue;
                     }
                     if let Some(value) = input_values.get(&pin.name) {
@@ -109,8 +117,7 @@ impl CallFunctionNode {
                     }
                 }
 
-                let result =
-                    InternalNode::trigger(&mut fn_context, &mut None, false).await;
+                let result = InternalNode::trigger(&mut fn_context, &mut None, false).await;
                 fn_context.end_trace();
                 context.push_sub_context(&mut fn_context);
 
@@ -202,9 +209,7 @@ impl NodeLogic for CallFunctionNode {
                 .node
                 .pins
                 .values()
-                .filter(|p| {
-                    p.pin_type == PinType::Output && p.data_type == VariableType::Execution
-                })
+                .filter(|p| p.pin_type == PinType::Output && p.data_type == VariableType::Execution)
                 .map(|p| p.name().to_string())
                 .collect();
             for name in &output_exec_names {
@@ -269,12 +274,12 @@ impl NodeLogic for CallFunctionNode {
             }
         } else {
             // --- PURE function: evaluate outputs by triggering feeding nodes ---
-            self.run_pure_function(context, &board, layer, &function_layer_id, &input_values).await?;
+            self.run_pure_function(context, &board, layer, &function_layer_id, &input_values)
+                .await?;
         }
 
         Ok(())
     }
-
 
     async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
         node.error = None;
@@ -333,9 +338,11 @@ impl NodeLogic for CallFunctionNode {
 
         for pin in &input_pins {
             relevant_pin_names.insert(pin.name.clone());
-            if node.pins.iter().any(|(_, p)| {
-                p.name == pin.name && p.pin_type == PinType::Input
-            }) {
+            if node
+                .pins
+                .iter()
+                .any(|(_, p)| p.name == pin.name && p.pin_type == PinType::Input)
+            {
                 continue;
             }
             let new_pin = node.add_input_pin(
@@ -351,9 +358,11 @@ impl NodeLogic for CallFunctionNode {
 
         for pin in &output_pins {
             relevant_pin_names.insert(pin.name.clone());
-            if node.pins.iter().any(|(_, p)| {
-                p.name == pin.name && p.pin_type == PinType::Output
-            }) {
+            if node
+                .pins
+                .iter()
+                .any(|(_, p)| p.name == pin.name && p.pin_type == PinType::Output)
+            {
                 continue;
             }
             let new_pin = node.add_output_pin(
@@ -368,6 +377,7 @@ impl NodeLogic for CallFunctionNode {
         }
 
         // Remove stale pins (only keep function_layer_id + mirrored pins)
-        node.pins.retain(|_, p| relevant_pin_names.contains(&p.name));
+        node.pins
+            .retain(|_, p| relevant_pin_names.contains(&p.name));
     }
 }

@@ -123,7 +123,6 @@ name = "flow-like-wasm-node-template"
 version = "0.1.0"
 dependencies = [
  "flow-like-wasm-sdk",
- "futures",
  "rig-core",
  "serde",
  "serde_json",
@@ -131,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "flow-like-wasm-sdk"
-version = "0.3.1"
+version = "0.3.3"
 dependencies = [
  "flow-like-wasm-sdk-macros",
  "futures",

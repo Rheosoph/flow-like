@@ -42,8 +42,7 @@ fn compute_use_href(app_id: &str, active_events: &[event::Model]) -> Option<Stri
     // Check routes first: any active event with a route that has page_id or is user-facing
     let has_usable_route = active_events.iter().any(|e| {
         e.route.is_some()
-            && (e.page_id.is_some()
-                || USER_FACING_EVENT_TYPES.contains(&e.event_type.as_str()))
+            && (e.page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&e.event_type.as_str()))
     });
 
     if has_usable_route {
@@ -51,9 +50,9 @@ fn compute_use_href(app_id: &str, active_events: &[event::Model]) -> Option<Stri
     }
 
     // Fallback: any active event that is user-facing
-    let fallback = active_events.iter().find(|e| {
-        e.page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&e.event_type.as_str())
-    });
+    let fallback = active_events
+        .iter()
+        .find(|e| e.page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&e.event_type.as_str()));
 
     fallback.map(|e| format!("/use?id={}&eventId={}", app_id, e.id))
 }

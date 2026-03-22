@@ -278,9 +278,7 @@ async fn call_huggingface(
         .get_secret_string(&SecretRef::new(secret_name.as_str()))
         .await
         .map(|s| s.expose_secret().to_string())
-        .map_err(|_| {
-            ApiError::internal(format!("Secret '{}' not found", secret_name))
-        })?;
+        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
     let endpoint = config
         .endpoint
         .as_ref()
@@ -366,9 +364,7 @@ async fn call_cloudflare(
         .get_secret_string(&SecretRef::new(secret_name.as_str()))
         .await
         .map(|s| s.expose_secret().to_string())
-        .map_err(|_| {
-            ApiError::internal(format!("Secret '{}' not found", secret_name))
-        })?;
+        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
 
     let endpoint = config
         .endpoint

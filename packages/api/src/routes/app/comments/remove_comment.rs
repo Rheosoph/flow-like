@@ -1,10 +1,6 @@
 use crate::{
-    ensure_in_project,
-    entity::comment,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    state::AppState,
+    ensure_in_project, entity::comment, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,

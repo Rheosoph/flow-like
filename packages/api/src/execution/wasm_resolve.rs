@@ -53,7 +53,10 @@ pub async fn resolve_wasm_packages(
             }
         };
 
-        let wasm_url = match registry.get_wasm_url(&pkg.package_id, Some(&pkg.version)).await {
+        let wasm_url = match registry
+            .get_wasm_url(&pkg.package_id, Some(&pkg.version))
+            .await
+        {
             Ok((download_url, _, _)) => download_url,
             Err(e) => {
                 tracing::warn!(
@@ -66,7 +69,10 @@ pub async fn resolve_wasm_packages(
             }
         };
 
-        match registry.sign_cwasm_urls(&pkg.package_id, &pkg.version, &target).await {
+        match registry
+            .sign_cwasm_urls(&pkg.package_id, &pkg.version, &target)
+            .await
+        {
             Ok((cwasm_url, checksum_url)) => {
                 let resolved = flow_like_types::dispatch::WasmPackageRef {
                     version: pkg.version.clone(),

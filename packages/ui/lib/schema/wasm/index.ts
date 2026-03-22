@@ -208,6 +208,9 @@ export interface RegistryEntry {
 	price: number;
 	visibility: string;
 	currentUserPermission?: number;
+	avgRating?: number | null;
+	ratingCount?: number;
+	ratingSum?: number;
 }
 
 export interface CachedPackage {
@@ -231,6 +234,8 @@ export interface PackageSummary {
 	primaryCategory?: WasmPackageCategory;
 	secondaryCategory?: WasmPackageCategory;
 	metadata?: MetaSummary;
+	avgRating?: number | null;
+	ratingCount?: number;
 }
 
 export interface SearchResults {
@@ -540,4 +545,33 @@ export interface AccessRequest {
 	packageId: string;
 	comment?: string;
 	createdAt: string;
+}
+
+// Package comment / review types
+
+export interface PackageCommentItem {
+	id: string;
+	text: string;
+	rating: number;
+	userId: string;
+	userName?: string;
+	userAvatar?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PackageCommentsResponse {
+	comments: PackageCommentItem[];
+	total: number;
+	offset: number;
+	limit: number;
+}
+
+export interface UpsertPackageCommentRequest {
+	text: string;
+	rating: number;
+}
+
+export interface UpsertPackageCommentResponse {
+	commentId: string;
 }

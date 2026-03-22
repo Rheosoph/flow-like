@@ -74,7 +74,7 @@ pub mod rig_provider;
 #[cfg(feature = "rig")]
 pub use rig_provider::{
     FlowLikeCompletionModel, FlowPathListTool, FlowPathReadTool, FlowPathToolError,
-    FlowPathWriteTool,
+    FlowPathWriteTool, WasiAgent,
 };
 mod types;
 

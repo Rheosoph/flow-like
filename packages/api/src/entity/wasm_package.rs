@@ -52,12 +52,12 @@ pub struct Model {
     pub primary_category: Option<WasmPackageCategory>,
     #[sea_orm(column_name = "secondaryCategory")]
     pub secondary_category: Option<WasmPackageCategory>,
-    #[sea_orm(column_name = "ratingSum")]
-    pub rating_sum: i64,
+    #[sea_orm(column_name = "avgRating", column_type = "Double", nullable)]
+    pub avg_rating: Option<f64>,
     #[sea_orm(column_name = "ratingCount")]
     pub rating_count: i64,
-    #[sea_orm(column_name = "avgRating")]
-    pub avg_rating: Option<f64>,
+    #[sea_orm(column_name = "ratingSum")]
+    pub rating_sum: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

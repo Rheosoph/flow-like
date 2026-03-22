@@ -11,6 +11,7 @@ import {
 	Search,
 	Shield,
 	SlidersHorizontal,
+	Star,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -134,6 +135,12 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 						<Download className="h-3 w-3" />
 						{pkg.downloadCount.toLocaleString()}
 					</span>
+					{(pkg.ratingCount ?? 0) > 0 && (
+						<span className="flex items-center gap-0.5 border-l border-border/30 pl-2">
+							<Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+							{(pkg.avgRating ?? 0).toFixed(1)}
+						</span>
+					)}
 					{pkg.price > 0 && (
 						<span className="font-semibold text-primary">
 							€{(pkg.price / 100).toFixed(2)}

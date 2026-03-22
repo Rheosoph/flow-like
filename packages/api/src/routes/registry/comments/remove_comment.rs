@@ -1,9 +1,6 @@
 use crate::{
-    entity::comment,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::wasm_package_permission::WasmPackagePermission,
-    state::AppState,
+    entity::comment, error::ApiError, middleware::jwt::AppUser,
+    permission::wasm_package_permission::WasmPackagePermission, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -56,10 +53,9 @@ pub async fn remove_comment(
         .ok_or(ApiError::NOT_FOUND)?;
 
     let is_owner = comment.user_id == sub;
-    let is_maintainer =
-        crate::check_wasm_access!(state, &sub, &package_id)
-            .map(|p| p.has_permission(WasmPackagePermission::Maintainer))
-            .unwrap_or(false);
+    let is_maintainer = crate::check_wasm_access!(state, &sub, &package_id)
+        .map(|p| p.has_permission(WasmPackagePermission::Maintainer))
+        .unwrap_or(false);
 
     if !is_owner && !is_maintainer {
         return Err(ApiError::FORBIDDEN);

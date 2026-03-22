@@ -3,11 +3,14 @@ import type {
 	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
+	PackageCommentsResponse,
 	PackageUpdate,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
 	SearchResults,
+	UpsertPackageCommentRequest,
+	UpsertPackageCommentResponse,
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
@@ -193,6 +196,36 @@ export class WebRegistryState implements IRegistryState {
 	): Promise<void> {
 		await apiDelete(
 			`registry/package/${packageId}/access/${requestId}`,
+			this.backend.auth,
+		);
+	}
+
+	async getPackageComments(packageId: string, offset?: number, limit?: number): Promise<PackageCommentsResponse> {
+		const params = new URLSearchParams();
+		if (offset != null) params.set("offset", String(offset));
+		if (limit != null) params.set("limit", String(limit));
+		const qs = params.toString();
+		try {
+			return await apiGet<PackageCommentsResponse>(
+				`registry/package/${packageId}/comments${qs ? `?${qs}` : ""}`,
+				this.backend.auth,
+			);
+		} catch {
+			return { comments: [], total: 0, offset: 0, limit: 20 };
+		}
+	}
+
+	async upsertPackageComment(packageId: string, body: UpsertPackageCommentRequest): Promise<UpsertPackageCommentResponse> {
+		return apiPut<UpsertPackageCommentResponse>(
+			`registry/package/${packageId}/comments`,
+			body,
+			this.backend.auth,
+		);
+	}
+
+	async deletePackageComment(packageId: string, commentId: string): Promise<void> {
+		await apiDelete(
+			`registry/package/${packageId}/comments/${commentId}`,
 			this.backend.auth,
 		);
 	}

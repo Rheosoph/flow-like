@@ -2,11 +2,15 @@ import type {
 	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
+	PackageCommentItem,
+	PackageCommentsResponse,
 	PackageUpdate,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
 	SearchResults,
+	UpsertPackageCommentRequest,
+	UpsertPackageCommentResponse,
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
 } from "../../lib/schema/wasm";
@@ -29,4 +33,7 @@ export interface IRegistryState {
 	acceptAccessRequest(packageId: string, requestId: string): Promise<void>;
 	rejectAccessRequest(packageId: string, requestId: string): Promise<void>;
 	setAuthToken?(token: string | null): Promise<void>;
+	getPackageComments(packageId: string, offset?: number, limit?: number): Promise<PackageCommentsResponse>;
+	upsertPackageComment(packageId: string, body: UpsertPackageCommentRequest): Promise<UpsertPackageCommentResponse>;
+	deletePackageComment(packageId: string, commentId: string): Promise<void>;
 }

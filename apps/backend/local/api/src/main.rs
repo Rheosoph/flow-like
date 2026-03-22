@@ -48,11 +48,12 @@ async fn main() {
     };
 
     let secret_prefix = std::env::var("SECRET_PREFIX").ok();
-    let secret_config = SecretStoreConfig::default()
-        .with_provider(ProviderConfig::Env(EnvProviderConfig {
+    let secret_config =
+        SecretStoreConfig::default().with_provider(ProviderConfig::Env(EnvProviderConfig {
             prefix: secret_prefix,
         }));
-    let secrets = Arc::new(SecretStore::new(secret_config.clone()).expect("Failed to create secret store"));
+    let secrets =
+        Arc::new(SecretStore::new(secret_config.clone()).expect("Failed to create secret store"));
 
     let cdn_bucket = std::env::var("CDN_BUCKET_NAME").unwrap();
     let cdn_bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
@@ -82,7 +83,9 @@ async fn main() {
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_bucket.build().unwrap()));
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await);
+    let state = Arc::new(
+        flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
+    );
 
     let app = construct_router(state);
 

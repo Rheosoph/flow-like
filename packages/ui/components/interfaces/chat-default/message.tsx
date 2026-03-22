@@ -587,7 +587,11 @@ export const MessageComponent = memo(function MessageComponent({
 				ratingSettings: newRating === 0 ? undefined : message.ratingSettings,
 			});
 
-			toast.success("Thanks for the feedback! ❤️");
+			if (newRating > 0) {
+				toast.success("Thanks for the feedback! ❤️");
+			} else if (newRating < 0) {
+				setShowFeedbackDialog(true);
+			}
 		},
 		[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 	);
@@ -722,6 +726,7 @@ export const MessageComponent = memo(function MessageComponent({
 							onThumbsUp={() => upsertFeedback(1)}
 							onThumbsDown={() => upsertFeedback(-1)}
 							onFeedbackClick={() => setShowFeedbackDialog(true)}
+
 							onEdit={() => setShowEditDialog(true)}
 							onCopy={copyToClipboard}
 							allFiles={processedAttachments}

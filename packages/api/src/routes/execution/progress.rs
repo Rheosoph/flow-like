@@ -22,12 +22,12 @@ use crate::{
     push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
-use flow_like::state::NotificationEvent;
 use axum::{
     Json,
     extract::{Query, State},
     http::HeaderMap,
 };
+use flow_like::state::NotificationEvent;
 use flow_like_types::{anyhow, create_id, tokio};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -293,7 +293,8 @@ pub async fn push_events(
             continue;
         }
 
-        let Ok(notification) = serde_json::from_value::<NotificationEvent>(event.payload.clone()) else {
+        let Ok(notification) = serde_json::from_value::<NotificationEvent>(event.payload.clone())
+        else {
             tracing::warn!(run_id = %claims.run_id, "Ignoring malformed flow_notification payload");
             continue;
         };
@@ -332,7 +333,9 @@ pub async fn push_events(
                 link: notification.link,
                 image: None,
                 notification_type: NotificationType::Workflow,
-                source_run_id: notification.source_run_id.or_else(|| Some(claims.run_id.clone())),
+                source_run_id: notification
+                    .source_run_id
+                    .or_else(|| Some(claims.run_id.clone())),
                 source_node_id: notification.source_node_id,
             },
         )

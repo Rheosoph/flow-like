@@ -7,9 +7,7 @@ use flow_like_types::Value;
 
 use super::execution::internal_pin::InternalPin;
 
-pub async fn evaluate_pin_value_reference(
-    pin: Arc<InternalPin>,
-) -> flow_like_types::Result<Value> {
+pub async fn evaluate_pin_value_reference(pin: Arc<InternalPin>) -> flow_like_types::Result<Value> {
     let mut current_pin = pin;
     let mut visited_pins = std::collections::HashSet::with_capacity(8);
 

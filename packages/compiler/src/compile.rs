@@ -172,8 +172,8 @@ async fn compile_inner(
         // Wait if we've saturated the parallelism limit
         while set.len() >= max_parallel {
             if let Some(done) = set.join_next().await {
-                let platform = done
-                    .map_err(|e| CompilerError::Compilation(format!("Task panicked: {e}")))??;
+                let platform =
+                    done.map_err(|e| CompilerError::Compilation(format!("Task panicked: {e}")))??;
                 compiled_platforms.push(platform);
             }
         }
@@ -227,19 +227,21 @@ async fn compile_inner(
 async fn extract_nodes(
     wasm_bytes: &[u8],
 ) -> Result<Vec<flow_like_wasm::manifest::PackageNodeEntry>, CompilerError> {
-    let engine = WasmEngine::new(WasmConfig::default().without_cache()).map_err(|e| {
-        CompilerError::Compilation(format!("Host engine creation failed: {e}"))
-    })?;
+    let engine = WasmEngine::new(WasmConfig::default().without_cache())
+        .map_err(|e| CompilerError::Compilation(format!("Host engine creation failed: {e}")))?;
     let loaded = engine.load_auto(wasm_bytes).await.map_err(|e| {
         CompilerError::Compilation(format!("Failed to load WASM for node extraction: {e}"))
     })?;
     let security = WasmSecurityConfig::restrictive();
     let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
-        CompilerError::Compilation(format!("Failed to instantiate WASM for node extraction: {e}"))
+        CompilerError::Compilation(format!(
+            "Failed to instantiate WASM for node extraction: {e}"
+        ))
     })?;
-    let defs = instance.call_get_nodes().await.map_err(|e| {
-        CompilerError::Compilation(format!("Failed to call get_nodes: {e}"))
-    })?;
+    let defs = instance
+        .call_get_nodes()
+        .await
+        .map_err(|e| CompilerError::Compilation(format!("Failed to call get_nodes: {e}")))?;
     Ok(defs
         .iter()
         .map(flow_like_wasm::definition_to_package_entry)

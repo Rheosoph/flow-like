@@ -64,9 +64,7 @@ struct ResolvedOAuthConfig {
     auth_method: AuthMethod,
 }
 
-async fn get_oauth_configs(
-    secrets: &SecretStore,
-) -> HashMap<String, ResolvedOAuthConfig> {
+async fn get_oauth_configs(secrets: &SecretStore) -> HashMap<String, ResolvedOAuthConfig> {
     let raw_configs: HashMap<String, OAuthProviderConfig> =
         flow_like_types::json::from_str(OAUTH_CONFIG).unwrap_or_default();
 

@@ -841,6 +841,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         }
                     };
                     let app_state = model_ctx.app_state.clone();
+                    let access_token = model_ctx.token.clone();
 
                     // Parse messages_json: either a wrapper {messages, tools} or a plain array
                     #[derive(serde::Deserialize)]
@@ -1009,7 +1010,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     // Build model and invoke
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
-                        match factory.build(&bit, app_state.clone(), None).await {
+                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
                             Ok(m) => m,
                             Err(e) => {
                                 println!("llm-prompt: failed to build model: {e}");

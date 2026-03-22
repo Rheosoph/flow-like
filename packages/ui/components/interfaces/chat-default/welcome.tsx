@@ -1,9 +1,10 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
+import { VoiceMode } from "./VoiceMode";
 
 interface ChatWelcomeProps {
 	onSendMessage: ISendMessageFunction;
@@ -30,8 +31,17 @@ export function ChatWelcome({
 	isSending = false,
 }: Readonly<ChatWelcomeProps>) {
 	const [currentMessage, setCurrentMessage] = useState("");
+	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
 	const { resolvedTheme } = useTheme();
+
+	const handleVoiceModeSend = useCallback(
+		(audioFile: File) => {
+			setVoiceModeOpen(false);
+			onSendMessage("", [audioFile]);
+		},
+		[onSendMessage],
+	);
 
 	// Fuzzy search function
 	const fuzzyScore = (text: string, searchTerm: string): number => {
@@ -163,6 +173,12 @@ export function ChatWelcome({
 
 	return (
 		<div className="flex flex-col h-full flex-grow bg-background relative">
+			{voiceModeOpen && (
+				<VoiceMode
+					onClose={() => setVoiceModeOpen(false)}
+					onSend={handleVoiceModeSend}
+				/>
+			)}
 			{/* Loading Overlay */}
 			{isSending && (
 				<div className="absolute inset-0 bg-gradient-to-br from-background via-background/95 to-background/90 backdrop-blur-md z-50 flex items-center justify-center overflow-hidden">
@@ -236,6 +252,11 @@ export function ChatWelcome({
 							}}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={config?.allow_voice_input ?? true}
+							onVoiceModeToggle={
+								(config?.allow_voice_mode ?? true)
+									? () => setVoiceModeOpen(true)
+									: undefined
+							}
 						/>
 
 						{/* Example Prompts List */}

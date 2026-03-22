@@ -1,3 +1,5 @@
+#[cfg(feature = "execute")]
+use crate::generative::embedding::CachedEmbeddingModelObject;
 /// # Lazy Register Function Tools Node
 /// Indexes referenced Flow-Like functions into a local LanceDB so that agents can
 /// perform hybrid (FTS + vector) searches to discover tools at runtime instead of
@@ -6,8 +8,6 @@ use crate::generative::{
     agent::{Agent, LazyFunctionRef},
     embedding::CachedEmbeddingModel,
 };
-#[cfg(feature = "execute")]
-use crate::generative::embedding::CachedEmbeddingModelObject;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -15,8 +15,8 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
-use flow_like_types::{Cacheable, async_trait, json};
 use flow_like_types::sync::RwLock;
+use flow_like_types::{Cacheable, async_trait, json};
 use std::sync::Arc;
 
 /// Minimum number of rows before a vector (ANN) index is built.
@@ -153,7 +153,7 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
                     .build_project_database
                     .clone()
                     .ok_or_else(|| flow_like_types::anyhow!("No database builder found"))?(
-                    agents_dir
+                    agents_dir,
                 )
             };
 
@@ -260,14 +260,9 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             // Check whether this node already has an up-to-date record.
             let existing = {
                 let db = db_arc.read().await;
-                db.filter(
-                    &format!("node_id = '{}'", node_id),
-                    None,
-                    1,
-                    0,
-                )
-                .await
-                .unwrap_or_default()
+                db.filter(&format!("node_id = '{}'", node_id), None, 1, 0)
+                    .await
+                    .unwrap_or_default()
             };
 
             if !existing.is_empty() {
@@ -281,9 +276,7 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
                 }
                 // Hash changed: remove the stale record before inserting the new one.
                 let db = db_arc.read().await;
-                let _ = db
-                    .delete(&format!("node_id = '{}'", node_id))
-                    .await;
+                let _ = db.delete(&format!("node_id = '{}'", node_id)).await;
             }
 
             // Embed the content string (document mode for indexing).

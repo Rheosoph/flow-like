@@ -318,7 +318,9 @@ impl NodeLogic for WasmNodeLogic {
         }
         .or_else(|| {
             let handle = flow_like_types::tokio::runtime::Handle::try_current().ok()?;
-            if handle.runtime_flavor() != flow_like_types::tokio::runtime::RuntimeFlavor::MultiThread {
+            if handle.runtime_flavor()
+                != flow_like_types::tokio::runtime::RuntimeFlavor::MultiThread
+            {
                 return None;
             }
 
@@ -476,6 +478,7 @@ impl NodeLogic for WasmNodeLogic {
         // Populate model context from app state
         host_state.model_context = Some(ModelContext {
             app_state: context.app_state.clone(),
+            token: context.token.clone(),
         });
 
         // Execute

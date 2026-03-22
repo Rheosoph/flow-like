@@ -71,12 +71,9 @@ pub async fn bootstrap(
     Query(params): Query<BootstrapParams>,
 ) -> Result<Json<BootstrapResponse>, ApiError> {
     // 1. User info (reuse existing handler directly)
-    let info = super::info::user_info(
-        State(state.clone()),
-        Extension(user.clone()),
-    )
-    .await?
-    .0;
+    let info = super::info::user_info(State(state.clone()), Extension(user.clone()))
+        .await?
+        .0;
 
     let sub = user.sub()?;
 

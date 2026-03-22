@@ -3,8 +3,8 @@ use crate::{
     entity::{membership, sea_orm_active_enums::NotificationType},
     error::ApiError,
     middleware::jwt::AppUser,
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
     permission::role_permission::RolePermissions,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     routes::app::events::db::get_event_from_db,
     state::AppState,
 };

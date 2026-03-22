@@ -13,6 +13,20 @@ import {
 	AlertDialogFooter,
 	AlertDialogHeader,
 	AlertDialogTitle,
+	AnimatedBrainIcon,
+	AnimatedBugIcon,
+	AnimatedDashboardIcon,
+	AnimatedDocsIcon,
+	AnimatedFlowsIcon,
+	AnimatedHomeIcon,
+	AnimatedKeyIcon,
+	AnimatedLibraryIcon,
+	AnimatedPackageIcon,
+	AnimatedSettingsIcon,
+	AnimatedSparklesIcon,
+	AnimatedExploreAppsIcon,
+	AnimatedThemeIcon,
+	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -64,6 +78,8 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
+	AnimatedSidebarIcon,
+	AnimatedCodeIcon,
 } from "@tm9657/flow-like-ui";
 import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
 import {
@@ -71,7 +87,6 @@ import {
 	BarChart3,
 	BellIcon,
 	BookOpenIcon,
-	BrainCircuitIcon,
 	BugIcon,
 	Check,
 	ChevronRight,
@@ -81,32 +96,27 @@ import {
 	Edit3Icon,
 	HomeIcon,
 	KeyIcon,
-	KeyRoundIcon,
-	LayoutDashboardIcon,
-	LibraryIcon,
+
 	LogInIcon,
 	LogOut,
 	type LucideIcon,
 	Moon,
-	Package2Icon,
 	Plus,
 	SettingsIcon,
-	ShoppingBagIcon,
 	SidebarCloseIcon,
 	SidebarOpenIcon,
-	Sparkles,
 	Sun,
 	Trash2Icon,
-	UsersRoundIcon,
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 import { fetcher } from "../lib/api";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
@@ -117,7 +127,7 @@ const data = {
 		{
 			title: "Home",
 			url: "/",
-			icon: HomeIcon,
+			icon: AnimatedHomeIcon,
 			isActive: true,
 			permission: false,
 			items: [],
@@ -125,7 +135,7 @@ const data = {
 		{
 			title: "Explore Apps",
 			url: "/store/explore/apps",
-			icon: ShoppingBagIcon,
+			icon: AnimatedExploreAppsIcon,
 			isActive: false,
 			permission: false,
 			items: [],
@@ -133,7 +143,7 @@ const data = {
 		{
 			title: "Explore Models",
 			url: "/settings/ai",
-			icon: BrainCircuitIcon,
+			icon: AnimatedBrainIcon,
 			isActive: false,
 			permission: false,
 			items: [],
@@ -141,7 +151,7 @@ const data = {
 		{
 			title: "Library",
 			url: "/library",
-			icon: LibraryIcon,
+			icon: AnimatedLibraryIcon,
 			isActive: false,
 			permission: false,
 			items: [],
@@ -149,7 +159,7 @@ const data = {
 		{
 			title: "User Actions",
 			url: "/admin/user",
-			icon: UsersRoundIcon,
+			icon: AnimatedUsersIcon,
 			permission: true,
 			items: [
 				{
@@ -167,7 +177,7 @@ const data = {
 		{
 			title: "Governance",
 			url: "/admin/governance",
-			icon: LayoutDashboardIcon,
+			icon: AnimatedDashboardIcon,
 			permission: true,
 			items: [
 				{
@@ -185,7 +195,7 @@ const data = {
 		{
 			title: "Bits",
 			url: "/admin/bits",
-			icon: Package2Icon,
+			icon: AnimatedPackageIcon,
 			permission: true,
 			items: [
 				{
@@ -208,7 +218,7 @@ const data = {
 		{
 			title: "Solutions",
 			url: "/admin/solutions",
-			icon: Sparkles,
+			icon: AnimatedSparklesIcon,
 			permission: true,
 			items: [
 				{
@@ -221,7 +231,7 @@ const data = {
 		{
 			title: "Sinks",
 			url: "/admin/sinks",
-			icon: KeyRoundIcon,
+			icon: AnimatedKeyIcon,
 			permission: true,
 			items: [
 				{
@@ -234,18 +244,16 @@ const data = {
 	],
 	navDev: [
 		{
-			title: "Packages",
+			title: "Developer",
 			url: "/store/packages",
-			icon: Package2Icon,
+			icon: AnimatedPackageIcon,
 			isActive: false,
-			items: [],
 		},
 		{
 			title: "Developer",
 			url: "/developer/new",
-			icon: Code2Icon,
+			icon: AnimatedCodeIcon,
 			isActive: false,
-			items: [],
 		},
 	],
 };
@@ -393,15 +401,17 @@ function InnerSidebar() {
 				<div className="flex flex-col gap-1">
 					<Dialog>
 						<DialogTrigger asChild>
-							<SidebarMenuButton>
-								<BugIcon />
+							<MotionSidebarMenuButton initial="initial" whileHover="hover">
+								<motion.div variants={iconVariants}>
+									<AnimatedBugIcon />
+								</motion.div>
 								<span>Report Bug</span>
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</DialogTrigger>
 						<DialogContent>
 							<DialogHeader>
 								<DialogTitle className="flex flex-row items-center gap-2">
-									<BugIcon />
+									<AnimatedBugIcon />
 									{"Bug Report"}
 								</DialogTitle>
 								<DialogDescription>
@@ -481,11 +491,12 @@ function InnerSidebar() {
 					</Dialog>
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<SidebarMenuButton>
-								<Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-								<Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+							<MotionSidebarMenuButton initial="initial" whileHover="hover">
+								<motion.div variants={iconVariants}>
+									<AnimatedThemeIcon />
+								</motion.div>
 								<span>{"Toggle Theme"}</span>
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="center" side="right">
 							<DropdownMenuItem onClick={() => setTheme("light")}>
@@ -501,34 +512,40 @@ function InnerSidebar() {
 					</DropdownMenu>
 
 					<a href="/settings">
-						<SidebarMenuButton tooltip="Settings">
-							<SettingsIcon className="size-4" />
+						<MotionSidebarMenuButton tooltip="Settings" initial="initial" whileHover="hover">
+							<motion.div variants={iconVariants}>
+								<AnimatedSettingsIcon className="size-4" />
+							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
 								Settings
 							</span>
-						</SidebarMenuButton>
+						</MotionSidebarMenuButton>
 					</a>
 					<a
 						href="https://docs.flow-like.com"
 						target="_blank"
 						rel="noopener noreferrer"
 					>
-						<SidebarMenuButton tooltip="Documentation">
-							<BookOpenIcon className="size-4" />
+						<MotionSidebarMenuButton tooltip="Documentation" initial="initial" whileHover="hover">
+							<motion.div variants={iconVariants}>
+								<AnimatedDocsIcon className="size-4" />
+							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
 								Documentation{" "}
 							</span>
-						</SidebarMenuButton>
+						</MotionSidebarMenuButton>
 					</a>
-					<SidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar}>
-						{open ? <SidebarCloseIcon /> : <SidebarOpenIcon />}
+					<MotionSidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar} initial="initial" whileHover="hover">
+						<div>
+							<AnimatedSidebarIcon className="size-4" isOpen={open} />
+						</div>
 						<span className="w-full flex flex-row items-center justify-between">
 							Toggle Sidebar{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
 								⌘B
 							</span>
 						</span>
-					</SidebarMenuButton>
+					</MotionSidebarMenuButton>
 				</div>
 				<NavUser user={user} />
 			</SidebarFooter>
@@ -632,9 +649,11 @@ function Profiles() {
 			<SidebarMenuItem>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<SidebarMenuButton
+						<MotionSidebarMenuButton
 							size="lg"
 							className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground relative"
+							initial="initial"
+							whileHover="hover"
 						>
 							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
 								<Avatar className="h-8 w-8 rounded-lg">
@@ -663,8 +682,10 @@ function Profiles() {
 									)}
 								</span>
 							</div>
-							<ChevronsUpDown className="ml-auto" />
-						</SidebarMenuButton>
+							<motion.div variants={iconVariants}>
+								<ChevronsUpDown className="ml-auto" />
+							</motion.div>
+						</MotionSidebarMenuButton>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent
 						className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
@@ -794,10 +815,12 @@ function Profiles() {
 	);
 }
 
+type NavIcon = LucideIcon | ComponentType<{ className?: string }>;
+
 interface INavItem {
 	title: string;
 	url: string;
-	icon?: LucideIcon;
+	icon?: NavIcon;
 	isActive?: boolean;
 	permission?: boolean;
 	items?: {
@@ -806,6 +829,18 @@ interface INavItem {
 		permission?: GlobalPermission;
 	}[];
 }
+
+const MotionLink = motion.create(Link);
+const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
+
+const iconVariants = {
+	initial: { scale: 1, rotate: 0 },
+	hover: {
+		scale: 1.1,
+		rotate: 5,
+		transition: { type: "spring", stiffness: 400, damping: 10 },
+	},
+};
 
 function isItemActive(item: INavItem, pathname: string): boolean {
 	if (pathname === item.url) return true;
@@ -830,10 +865,14 @@ function NavFlatItem({
 				variant={active ? "outline" : "default"}
 				tooltip={item.title}
 			>
-				<Link href={item.url}>
-					{item.icon && <item.icon />}
+				<MotionLink href={item.url} initial="initial" whileHover="hover">
+					{item.icon && (
+						<motion.div variants={iconVariants}>
+							<item.icon className="size-4" />
+						</motion.div>
+					)}
 					<span>{item.title}</span>
-				</Link>
+				</MotionLink>
 			</SidebarMenuButton>
 		</SidebarMenuItem>
 	);
@@ -868,9 +907,11 @@ function NavCollapsible({
 		>
 			<SidebarMenuItem>
 				<CollapsibleTrigger asChild>
-					<SidebarMenuButton
+					<MotionSidebarMenuButton
 						variant={active ? "outline" : "default"}
 						tooltip={item.title}
+						initial="initial"
+						whileHover="hover"
 						onClick={() => {
 							if (!sidebarOpen) onNavigate(item.url);
 						}}
@@ -896,10 +937,14 @@ function NavCollapsible({
 							}
 						}}
 					>
-						{item.icon && <item.icon />}
+						{item.icon && (
+							<motion.div variants={iconVariants}>
+								<item.icon className="size-4" />
+							</motion.div>
+						)}
 						<span>{item.title}</span>
 						<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-					</SidebarMenuButton>
+					</MotionSidebarMenuButton>
 				</CollapsibleTrigger>
 				<CollapsibleContent>
 					<SidebarMenuSub>
@@ -1029,10 +1074,14 @@ function NavMain({
 											variant={pathname === item.url ? "outline" : "default"}
 											tooltip={item.title}
 										>
-											<Link href={item.url}>
-												{item.icon && <item.icon />}
+											<MotionLink href={item.url} initial="initial" whileHover="hover">
+												{item.icon && (
+													<motion.div variants={iconVariants}>
+														<item.icon className="size-4" />
+													</motion.div>
+												)}
 												<span>{item.title}</span>
-											</Link>
+											</MotionLink>
 										</SidebarMenuButton>
 									</SidebarMenuItem>
 								),
@@ -1095,9 +1144,11 @@ export function NavUser({
 			<SidebarMenuItem>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<SidebarMenuButton
+						<MotionSidebarMenuButton
 							size="lg"
 							className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+							initial="initial"
+							whileHover="hover"
 						>
 							<Avatar className="h-8 w-8 rounded-lg">
 								<AvatarImage
@@ -1117,8 +1168,10 @@ export function NavUser({
 								<span className="truncate font-semibold">{displayName}</span>
 								<span className="truncate text-xs">{email}</span>
 							</div>
-							<ChevronsUpDown className="ml-auto size-4" />
-						</SidebarMenuButton>
+							<motion.div variants={iconVariants}>
+								<ChevronsUpDown className="ml-auto size-4" />
+							</motion.div>
+						</MotionSidebarMenuButton>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent
 						className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
@@ -1149,7 +1202,7 @@ export function NavUser({
 										<DropdownMenuGroup>
 											<a href="/subscription">
 												<DropdownMenuItem className="gap-2">
-													<Sparkles className="size-4" />
+													<AnimatedSparklesIcon />
 													Upgrade to Pro
 												</DropdownMenuItem>
 											</a>
@@ -1278,9 +1331,11 @@ function Flows() {
 				>
 					<SidebarMenuItem>
 						<CollapsibleTrigger asChild>
-							<SidebarMenuButton
+							<MotionSidebarMenuButton
 								variant={pathname.startsWith("/flow") ? "outline" : "default"}
 								tooltip={"Flows"}
+								initial="initial"
+								whileHover="hover"
 								onClick={() => {
 									const firstBoard = openBoards.data?.[0];
 									if (firstBoard)
@@ -1289,10 +1344,12 @@ function Flows() {
 										);
 								}}
 							>
-								<WorkflowIcon />
+								<motion.div variants={iconVariants}>
+									<AnimatedFlowsIcon />
+								</motion.div>
 								<span>Open Flows</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>
 						<CollapsibleContent>
 							<SidebarMenuSub>

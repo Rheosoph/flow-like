@@ -545,6 +545,20 @@ export interface ImageInputComponent extends ComponentBase {
 	showPreview?: BoundValue;
 }
 
+export interface VoiceInputComponent extends ComponentBase {
+	type: "voiceInput";
+	value: BoundValue;
+	label?: BoundValue;
+	helperText?: BoundValue;
+	maxDuration?: BoundValue;
+	autoStop?: BoundValue;
+	silenceThreshold?: BoundValue;
+	silenceDuration?: BoundValue;
+	disabled?: BoundValue;
+	error?: BoundValue;
+	visualizer?: BoundValue;
+}
+
 export interface LinkComponent extends ComponentBase {
 	type: "link";
 	href: BoundValue;
@@ -1404,6 +1418,7 @@ export type A2UIComponent =
 	| DateTimeInputComponent
 	| FileInputComponent
 	| ImageInputComponent
+	| VoiceInputComponent
 	| LinkComponent
 	| CardComponent
 	| ModalComponent

@@ -64,6 +64,7 @@ import type { PageListItem } from "@tm9657/flow-like-ui/state/backend-state/page
 import {
 	ActivityIcon,
 	AlertTriangle,
+	Cloud,
 	CodeIcon,
 	CogIcon,
 	EditIcon,
@@ -73,6 +74,7 @@ import {
 	GitBranchIcon,
 	LayersIcon,
 	Loader2,
+	Monitor,
 	Pause,
 	Play,
 	Plus,
@@ -543,6 +545,7 @@ export default function EventsPage({
 							hub={hub}
 							onStartOAuth={onStartOAuth}
 							onRefreshToken={onRefreshToken}
+							isOffline={isOffline ?? undefined}
 						/>
 					)}
 				</div>
@@ -1201,6 +1204,17 @@ function EventConfiguration({
 								<span className="font-medium">
 									{event.active ? "Active" : "Inactive"}
 								</span>
+								{isOffline !== null && (
+									<span
+										className={`text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+									>
+										{isOffline ? (
+											<><Monitor className="h-3 w-3" /> Local</>
+										) : (
+											<><Cloud className="h-3 w-3" /> Online</>
+										)}
+									</span>
+								)}
 							</div>
 							{isEditing && (
 								<Button
@@ -2192,6 +2206,8 @@ interface IEventsTableProps {
 	consentStore?: IOAuthConsentStore;
 	/** Hub configuration for OAuth provider resolution */
 	hub?: IHub;
+	/** Whether the app is offline (local-only) */
+	isOffline?: boolean;
 	/** Callback to start OAuth authorization for a provider */
 	onStartOAuth?: (provider: IOAuthProvider) => Promise<void>;
 	/** Optional callback to refresh expired tokens */
@@ -2216,6 +2232,7 @@ function EventsTable({
 	hub,
 	onStartOAuth,
 	onRefreshToken,
+	isOffline,
 }: Readonly<IEventsTableProps>) {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -2696,6 +2713,17 @@ function EventsTable({
 										{sinkActive ? "Active" : "Inactive"}
 									</span>
 								)}
+								{requiresSink && (
+									<span
+										className={`text-xs px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+									>
+										{isOffline ? (
+											<><Monitor className="h-3 w-3" /> Local</>
+										) : (
+											<><Cloud className="h-3 w-3" /> Online</>
+										)}
+									</span>
+								)}
 							</div>
 							{event.description && (
 								<div className="text-xs text-muted-foreground truncate mt-0.5">
@@ -2988,6 +3016,15 @@ function EventsTable({
 																className={`text-xs px-2 py-0.5 rounded-full inline-block ${sinkActive ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"}`}
 															>
 																{sinkActive ? "Sink Active" : "Sink Inactive"}
+															</div>
+															<div
+																className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+															>
+																{isOffline ? (
+																	<><Monitor className="h-3 w-3" /> Local</>
+																) : (
+																	<><Cloud className="h-3 w-3" /> Online</>
+																)}
 															</div>
 															{!sinkActive && (
 																<TableActivateSinkButton

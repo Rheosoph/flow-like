@@ -59,6 +59,7 @@ import {
 	A2UISlider,
 	A2UISwitch,
 	A2UITextField,
+	A2UIVoiceInput,
 } from "./interactive";
 
 // Container components
@@ -151,6 +152,7 @@ const registry: Record<string, ComponentRenderer> = {
 	imageLabeler: A2UIImageLabeler as ComponentRenderer,
 	imageHotspot: A2UIImageHotspot as ComponentRenderer,
 	imageInput: A2UIImageInput as ComponentRenderer,
+	voiceInput: A2UIVoiceInput as ComponentRenderer,
 	link: A2UILink as ComponentRenderer,
 
 	// Container
