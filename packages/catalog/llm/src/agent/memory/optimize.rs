@@ -27,6 +27,7 @@ impl NodeLogic for OptimizeMemoryNode {
             "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, prune old versions, and rebuild indices. Run periodically or after bulk writes.",
             "AI/Memory",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

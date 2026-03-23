@@ -29,7 +29,7 @@ impl NodeLogic for RegisterFunctionToolsNode {
             "Adds referenced Flow-Like functions as callable tool references to an Agent",
             "AI/Agents/Builder",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_can_reference_fns(true);
 

@@ -252,10 +252,10 @@ impl NodeLogic for CallFunctionNode {
             }
 
             let run_result = InternalNode::trigger(&mut fn_context, &mut None, true).await;
-            fn_context.end_trace();
-            context.push_sub_context(&mut fn_context);
 
             if let Err(error) = run_result {
+                fn_context.end_trace();
+                context.push_sub_context(&mut fn_context);
                 context.log_message(
                     &format!("Error calling function '{}': {:?}", layer.name, error),
                     LogLevel::Error,
@@ -266,6 +266,62 @@ impl NodeLogic for CallFunctionNode {
                     error
                 ));
             }
+
+            // Trigger pure nodes feeding layer outputs — they may not have run
+            // during the exec chain since the layer return boundary is virtual.
+            let mut triggered: HashSet<String> = HashSet::new();
+            for layer_pin in layer.pins.values() {
+                if layer_pin.pin_type != PinType::Output
+                    || layer_pin.data_type == VariableType::Execution
+                {
+                    continue;
+                }
+                for dep_pin_id in &layer_pin.depends_on {
+                    let feeding_node_id =
+                        Self::find_node_id_by_pin(&board, layer, &function_layer_id, dep_pin_id);
+                    let Some(node_id) = feeding_node_id else {
+                        continue;
+                    };
+                    if !triggered.insert(node_id.clone()) {
+                        continue;
+                    }
+                    let Some(node_arc) = fn_context.nodes.get(&node_id).cloned() else {
+                        continue;
+                    };
+                    if let Ok(pin) = node_arc.get_pin_by_id(dep_pin_id) {
+                        if pin.get_raw_value().await.is_some() {
+                            continue;
+                        }
+                    }
+                    let mut sub = fn_context.create_sub_context(&node_arc).await;
+                    sub.delegated = true;
+                    for (pin_id, pin) in &layer.pins {
+                        if pin.pin_type != PinType::Input
+                            || pin.data_type == VariableType::Execution
+                        {
+                            continue;
+                        }
+                        if let Some(value) = input_values.get(&pin.name) {
+                            sub.override_pin_value(pin_id, value.clone());
+                        }
+                    }
+                    let result = InternalNode::trigger(&mut sub, &mut None, false).await;
+                    sub.end_trace();
+                    fn_context.push_sub_context(&mut sub);
+                    if let Err(error) = result {
+                        context.log_message(
+                            &format!(
+                                "Error resolving output '{}': {:?}",
+                                layer_pin.name, error
+                            ),
+                            LogLevel::Error,
+                        );
+                    }
+                }
+            }
+
+            fn_context.end_trace();
+            context.push_sub_context(&mut fn_context);
 
             self.read_outputs(context, layer).await;
 

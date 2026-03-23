@@ -42,7 +42,7 @@ impl NodeLogic for StreamInvokeAgentNode {
             "AI/Agents",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

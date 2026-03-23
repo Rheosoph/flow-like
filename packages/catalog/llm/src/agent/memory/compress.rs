@@ -40,6 +40,7 @@ impl NodeLogic for CompressMemoryNode {
             "Compresses old memory observations into a summary using an LLM, then replaces them in the store. Runs the embedding model to store the summary vector.",
             "AI/Memory",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

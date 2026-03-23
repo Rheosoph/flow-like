@@ -163,6 +163,7 @@ impl NodeLogic for ChartDataAgent {
             "AI agent that generates SQL queries and chart-ready data from DataFusion sessions",
             "UI/Elements/Charts/Agent",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.set_scores(

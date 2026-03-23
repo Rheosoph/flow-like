@@ -31,6 +31,7 @@ impl NodeLogic for SearchMemoryNode {
             "Searches the memory store using the configured recall strategy (recent, relevance, or hybrid)",
             "AI/Memory",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

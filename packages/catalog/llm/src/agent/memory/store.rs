@@ -32,6 +32,7 @@ impl NodeLogic for StoreMemoryNode {
             "Embeds text and stores it as a memory observation in the configured LanceDB table",
             "AI/Memory",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

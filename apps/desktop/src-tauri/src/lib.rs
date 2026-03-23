@@ -17,7 +17,6 @@ async fn tray_update_state() -> Result<(), String> {
 }
 
 use flow_like::{
-    flow::node::NodeLogic,
     flow_like_storage::{
         Path,
         files::store::{FlowLikeStore, local_store::LocalObjectStore},
@@ -852,11 +851,16 @@ pub fn run() {
             functions::bit::delete_bit,
             functions::bit::get_installed_bit,
             functions::flow::storage::storage_list,
+            functions::flow::storage::storage_user_list,
             functions::flow::storage::storage_add,
+            functions::flow::storage::storage_user_add,
             functions::flow::storage::storage_remove,
+            functions::flow::storage::storage_user_remove,
             functions::flow::storage::storage_rename,
             functions::flow::storage::storage_get,
+            functions::flow::storage::storage_user_get,
             functions::flow::storage::storage_to_fullpath,
+            functions::flow::storage::storage_user_to_fullpath,
             functions::flow::catalog::get_catalog,
             functions::flow::board::create_board_version,
             functions::flow::board::get_board_versions,

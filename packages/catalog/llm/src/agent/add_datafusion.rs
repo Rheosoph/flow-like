@@ -29,7 +29,7 @@ impl NodeLogic for AddDataFusionNode {
             "Add a DataFusion SQL session to an agent for data analysis capabilities",
             "AI/Agents/Builder",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/database.svg");
 
         node.set_scores(

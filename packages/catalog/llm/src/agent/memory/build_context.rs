@@ -31,6 +31,7 @@ impl NodeLogic for BuildMemoryContextNode {
             "Assembles retrieved memory records into a token-budgeted context string for injection into agent system prompts",
             "AI/Memory",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

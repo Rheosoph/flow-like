@@ -57,7 +57,7 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             "Indexes referenced Flow-Like functions into a vector DB so agents can discover tools via semantic search at runtime, keeping the context window lean.",
             "AI/Agents/Builder",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_can_reference_fns(true);
         node.set_long_running(true);
