@@ -1,21 +1,24 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType};
+use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store::StaticCredentialProvider;
 use flow_like_storage::object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
-use flow_like_storage::{Path, object_store};
+use flow_like_storage::object_store;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+const GCS_STORAGE_TOKEN_OPTION: &str = "google_storage_token";
+
 /// GCP Shared Credentials that can use either service account key or access token
 ///
 /// SECURITY: Scoped credentials should only contain an access_token, never service_account_key.
 /// The access_token is short-lived (1 hour) and server-generated, preventing client tampering.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GcpSharedCredentials {
     /// Full service account key (only for master credentials)
-    #[serde(default)]
+    /// SECURITY: Never serialize to prevent leaking master credentials to clients
+    #[serde(default, skip_serializing)]
     pub service_account_key: String,
     /// Short-lived OAuth2 access token (for scoped credentials)
     #[serde(default)]
@@ -36,6 +39,20 @@ pub struct GcpSharedCredentials {
     /// User-level content path prefix (e.g., "users/{sub}/apps/{app_id}")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_content_path_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for GcpSharedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpSharedCredentials")
+            .field("service_account_key", &if self.service_account_key.is_empty() { "empty" } else { "[REDACTED]" })
+            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field("meta_bucket", &self.meta_bucket)
+            .field("content_bucket", &self.content_bucket)
+            .field("logs_bucket", &self.logs_bucket)
+            .field("write_access", &self.write_access)
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 fn default_write_access() -> bool {
@@ -116,7 +133,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
                     .cloned()
             })
             .unwrap_or_else(|| format!("apps/{}", app_id));
-        let path = Path::from(base_path).child("storage").child("db");
+        let path = db_path_from_base(&base_path);
 
         // Prefer access token for scoped credentials
         if let Some(ref access_token) = self.access_token
@@ -139,21 +156,9 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         Err(anyhow!("No GCP credentials available"))
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        let inferred_prefix = |prefixes: &Vec<String>, target: &str| {
-            prefixes
-                .iter()
-                .find(|prefix| prefix.starts_with(target))
-                .cloned()
-        };
-
-        let base_path = self
-            .user_content_path_prefix
-            .clone()
-            .or_else(|| inferred_prefix(&self.allowed_prefixes, "users/"))
-            .unwrap_or_else(|| format!("apps/{}", app_id));
-
-        let path = Path::from(base_path).child("storage").child("db");
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        let base_path = format!("users/{}/apps/{}", sub, app_id);
+        let path = db_path_from_base(&base_path);
 
         if let Some(ref access_token) = self.access_token
             && !access_token.is_empty()
@@ -223,7 +228,7 @@ fn make_gcs_builder_with_token(
     move |path| {
         let url = format!("gs://{}/{}", bucket, path);
         lancedb::connect(&url)
-            .storage_option("google_service_account".to_string(), access_token.clone())
+            .storage_option(GCS_STORAGE_TOKEN_OPTION.to_string(), access_token.clone())
     }
 }
 
@@ -273,7 +278,8 @@ mod tests {
 
         assert!(json.contains("my-meta-bucket"));
         assert!(json.contains("my-content-bucket"));
-        assert!(json.contains("service_account"));
+        // service_account_key is skip_serializing for security — must NOT appear
+        assert!(!json.contains("service_account"));
     }
 
     #[test]
@@ -315,10 +321,8 @@ mod tests {
         let json = to_string(&original).expect("Failed to serialize");
         let deserialized: GcpSharedCredentials = from_str(&json).expect("Failed to deserialize");
 
-        assert_eq!(
-            original.service_account_key,
-            deserialized.service_account_key
-        );
+        // service_account_key is skip_serializing for security — not preserved in roundtrip
+        assert!(deserialized.service_account_key.is_empty());
         assert_eq!(original.meta_bucket, deserialized.meta_bucket);
         assert_eq!(original.content_bucket, deserialized.content_bucket);
     }

@@ -11,6 +11,7 @@ use flow_like_secrets::{
 };
 use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
+use sentry_tracing::{EventFilter, default_event_filter};
 use socket2::{Domain, Socket, Type};
 use std::{
     io,
@@ -32,6 +33,10 @@ async fn main() {
             .init();
         None
     } else {
+        let sentry_layer = sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
+            tracing::Level::ERROR => EventFilter::Breadcrumb,
+            _ => default_event_filter(metadata),
+        });
         let guard = sentry::init((
             sentry_endpoint,
             sentry::ClientOptions {
@@ -42,7 +47,7 @@ async fn main() {
         ));
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
-            .with(sentry_tracing::layer())
+            .with(sentry_layer)
             .init();
         Some(guard)
     };

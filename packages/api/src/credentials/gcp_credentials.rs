@@ -14,6 +14,9 @@ use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[cfg(feature = "gcp")]
+const GCS_STORAGE_TOKEN_OPTION: &str = "google_storage_token";
+
 /// GCP Runtime Credentials with downscoped access tokens
 ///
 /// SECURITY: Uses GCP Credential Access Boundaries to create tokens that are
@@ -25,7 +28,7 @@ use std::sync::Arc;
 /// 2. Exchange it for a downscoped token with Credential Access Boundary
 /// 3. The downscoped token can only access the specified paths/permissions
 #[cfg(feature = "gcp")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GcpRuntimeCredentials {
     /// Master service account key (server-side only, never sent to clients)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,6 +45,21 @@ pub struct GcpRuntimeCredentials {
     pub expiration: Option<chrono::DateTime<chrono::Utc>>,
     pub content_path_prefix: Option<String>,
     pub user_content_path_prefix: Option<String>,
+}
+
+#[cfg(feature = "gcp")]
+impl std::fmt::Debug for GcpRuntimeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpRuntimeCredentials")
+            .field("service_account_key", &self.service_account_key.as_ref().map(|_| "[REDACTED]"))
+            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field("meta_bucket", &self.meta_bucket)
+            .field("content_bucket", &self.content_bucket)
+            .field("logs_bucket", &self.logs_bucket)
+            .field("write_access", &self.write_access)
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 #[cfg(feature = "gcp")]
@@ -116,6 +134,8 @@ impl GcpRuntimeCredentials {
         if sub.is_empty() || app_id.is_empty() {
             return Err(anyhow!("Sub or App ID cannot be empty"));
         }
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
 
         let service_account_key = self
             .service_account_key
@@ -131,6 +151,8 @@ impl GcpRuntimeCredentials {
         let (allowed_prefixes, write_access) = match mode {
             CredentialsAccess::EditApp => (vec![apps_prefix], true),
             CredentialsAccess::ReadApp => (vec![apps_prefix], false),
+            CredentialsAccess::EditUser => (vec![user_prefix], true),
+            CredentialsAccess::ReadUser => (vec![user_prefix], false),
             CredentialsAccess::InvokeNone => {
                 (vec![user_prefix, temporary_user_prefix, log_prefix], true)
             }
@@ -194,6 +216,8 @@ impl GcpRuntimeCredentials {
         if sub.is_empty() || app_id.is_empty() {
             return Err(anyhow!("Sub or App ID cannot be empty"));
         }
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
 
         let service_account_key = self
             .service_account_key
@@ -210,6 +234,8 @@ impl GcpRuntimeCredentials {
         let (allowed_prefixes, write_access) = match mode {
             CredentialsAccess::EditApp => (vec![apps_prefix], true),
             CredentialsAccess::ReadApp => (vec![apps_prefix], false),
+            CredentialsAccess::EditUser => (vec![user_prefix], true),
+            CredentialsAccess::ReadUser => (vec![user_prefix], false),
             CredentialsAccess::InvokeNone => {
                 (vec![user_prefix, temporary_user_prefix, log_prefix], true)
             }
@@ -422,7 +448,7 @@ async fn downscope_token(
         }
     });
 
-    let cab_encoded = urlencoding::encode(&cab.to_string()).into_owned();
+    let cab_json = cab.to_string();
 
     let form = [
         (
@@ -438,7 +464,7 @@ async fn downscope_token(
             "requested_token_type",
             "urn:ietf:params:oauth:token-type:access_token",
         ),
-        ("options", &cab_encoded),
+        ("options", cab_json.as_str()),
     ];
 
     let client = reqwest::Client::new();
@@ -507,8 +533,8 @@ impl RuntimeCredentialsTrait for GcpRuntimeCredentials {
         self.into_shared_credentials().to_db(app_id).await
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(app_id).await
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        self.into_shared_credentials().to_db_scoped(sub, app_id).await
     }
 
     #[tracing::instrument(
@@ -598,7 +624,7 @@ fn make_gcs_builder_with_token(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("gs://{}/{}", bucket, path);
-        connect(&url).storage_option("google_service_account".to_string(), access_token.clone())
+        connect(&url).storage_option(GCS_STORAGE_TOKEN_OPTION.to_string(), access_token.clone())
     }
 }
 
@@ -610,7 +636,6 @@ fn make_gcs_builder_with_token(
 mod tests {
     use super::*;
     use crate::credentials::CredentialsAccess;
-    use flow_like::credentials::SharedCredentialsTrait;
     use flow_like_storage::Path;
     use flow_like_storage::object_store::ObjectStore;
     use flow_like_types::json::{from_str, to_string};
@@ -884,23 +909,16 @@ mod tests {
 
         match &store {
             flow_like::flow_like_storage::files::store::FlowLikeStore::Google(s) => {
-                // Note: GCP access tokens don't have path-level restrictions built-in,
-                // so this write may succeed at the GCP level. The server-side validation
-                // should reject operations outside allowed_prefixes before this point.
-                // This test documents the expected behavior for defense-in-depth.
                 let result = s.put(&path, b"should fail".to_vec().into()).await;
 
-                // If IAM conditions are configured on the service account, this should fail.
-                // If not, the test passes but logs a warning.
                 if result.is_ok() {
-                    eprintln!(
-                        "WARNING: GCP scoped credentials were able to write outside scope. \
-                        This is expected if IAM Conditions are not configured on the service account. \
-                        Server-side path validation is the primary security control."
-                    );
-                    // Cleanup
                     s.delete(&path).await.ok();
                 }
+
+                assert!(
+                    result.is_err(),
+                    "Downscoped GCP credentials must not write outside their allowed prefixes"
+                );
             }
             _ => panic!("Expected GCP store"),
         }
@@ -938,20 +956,16 @@ mod tests {
 
         match &store {
             flow_like::flow_like_storage::files::store::FlowLikeStore::Google(s) => {
-                // Note: GCP access tokens with devstorage.read_write scope allow writes.
-                // Read-only enforcement is handled server-side by checking write_access flag.
-                // This test documents the expected behavior.
                 let result = s.put(&path, b"should fail".to_vec().into()).await;
 
                 if result.is_ok() {
-                    eprintln!(
-                        "WARNING: GCP read-only scoped credentials were able to write. \
-                        This is expected since GCP tokens have read_write scope. \
-                        Server-side validation using write_access flag is the primary control."
-                    );
-                    // Cleanup
                     s.delete(&path).await.ok();
                 }
+
+                assert!(
+                    result.is_err(),
+                    "Read-only downscoped GCP credentials must not allow writes"
+                );
             }
             _ => panic!("Expected GCP store"),
         }
@@ -964,9 +978,12 @@ mod tests {
             access_token: Some("ya29.test-token".to_string()),
             meta_bucket: "meta".to_string(),
             content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
             allowed_prefixes: vec!["apps/test-app".to_string()],
             write_access: true,
             expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
         };
 
         let json = to_string(&creds).expect("Failed to serialize");
@@ -985,9 +1002,12 @@ mod tests {
             access_token: Some("ya29.scoped-token".to_string()),
             meta_bucket: "meta".to_string(),
             content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
             allowed_prefixes: vec!["apps/test-app".to_string()],
             write_access: false,
             expiration: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            content_path_prefix: None,
+            user_content_path_prefix: None,
         };
 
         let json = to_string(&creds).expect("Failed to serialize");
@@ -1015,9 +1035,12 @@ mod tests {
             access_token: Some("token".to_string()),
             meta_bucket: "meta".to_string(),
             content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
             allowed_prefixes: vec![apps_prefix.clone()],
             write_access: true,
             expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
         };
         assert!(creds.write_access);
         assert_eq!(creds.allowed_prefixes, vec![apps_prefix.clone()]);
@@ -1027,9 +1050,12 @@ mod tests {
             access_token: Some("token".to_string()),
             meta_bucket: "meta".to_string(),
             content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
             allowed_prefixes: vec![apps_prefix.clone()],
             write_access: false,
             expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
         };
         assert!(!creds.write_access);
 
@@ -1038,6 +1064,7 @@ mod tests {
             access_token: Some("token".to_string()),
             meta_bucket: "meta".to_string(),
             content_bucket: "content".to_string(),
+            logs_bucket: "logs".to_string(),
             allowed_prefixes: vec![
                 apps_prefix.clone(),
                 user_prefix.clone(),
@@ -1047,6 +1074,8 @@ mod tests {
             ],
             write_access: true,
             expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
         };
         assert!(creds.write_access);
         assert_eq!(creds.allowed_prefixes.len(), 5);

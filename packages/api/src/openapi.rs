@@ -261,10 +261,15 @@ impl Modify for SecurityAddon {
         crate::routes::app::notifications::create_notification,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
+        crate::routes::app::data::upload_files::upload_user_files,
         crate::routes::app::data::download_files::download_files,
+        crate::routes::app::data::download_files::download_user_files,
         crate::routes::app::data::list_files::list_files,
+        crate::routes::app::data::list_files::list_user_files,
         crate::routes::app::data::delete_files::delete_files,
+        crate::routes::app::data::delete_files::delete_user_files,
         crate::routes::app::data::presign_data_access::presign_data_access,
+        crate::routes::app::data::presign_data_access::presign_user_data_access,
         // Realtime board routes
         crate::routes::app::board::realtime::jwks,
         crate::routes::app::board::realtime::access,

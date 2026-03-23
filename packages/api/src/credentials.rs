@@ -27,14 +27,31 @@ pub mod azure_credentials;
 #[cfg(feature = "gcp")]
 pub mod gcp_credentials;
 pub mod local_credentials;
+pub mod mixed_credentials;
 #[cfg(feature = "r2")]
 pub mod r2_credentials;
+
+/// Validates that a path component (sub, app_id) does not contain path traversal
+/// or injection characters. Allows alphanumeric, hyphens, underscores, and dots.
+pub fn validate_path_component(value: &str, name: &str) -> Result<()> {
+    if value.contains("..") || value.contains('/') || value.contains('\\') || value.contains('\0') || value.contains('*') {
+        return Err(flow_like_types::anyhow!(
+            "Invalid {}: contains forbidden characters (path traversal or wildcards)", name
+        ));
+    }
+    if !value.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '|' || c == ':') {
+        return Err(flow_like_types::anyhow!(
+            "Invalid {}: contains forbidden characters", name
+        ));
+    }
+    Ok(())
+}
 
 #[async_trait]
 pub trait RuntimeCredentialsTrait {
     async fn to_state(&self, state: AppState) -> Result<FlowLikeState>;
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder>;
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder>;
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder>;
     fn into_shared_credentials(&self) -> SharedCredentials;
 }
 
@@ -42,6 +59,8 @@ pub trait RuntimeCredentialsTrait {
 pub enum CredentialsAccess {
     EditApp,
     ReadApp,
+    EditUser,
+    ReadUser,
     InvokeNone,
     InvokeRead,
     InvokeWrite,
@@ -53,6 +72,8 @@ impl Display for CredentialsAccess {
         match self {
             CredentialsAccess::EditApp => write!(f, "edit_app"),
             CredentialsAccess::ReadApp => write!(f, "read_app"),
+            CredentialsAccess::EditUser => write!(f, "edit_user"),
+            CredentialsAccess::ReadUser => write!(f, "read_user"),
             CredentialsAccess::InvokeNone => write!(f, "invoke_none"),
             CredentialsAccess::InvokeRead => write!(f, "invoke_read"),
             CredentialsAccess::InvokeWrite => write!(f, "invoke_write"),
@@ -71,6 +92,7 @@ pub enum RuntimeCredentials {
     Gcp(GcpRuntimeCredentials),
     #[cfg(feature = "r2")]
     R2(R2RuntimeCredentials),
+    Mixed(mixed_credentials::MixedRuntimeCredentials),
 }
 
 impl RuntimeCredentials {
@@ -91,6 +113,14 @@ impl RuntimeCredentials {
         state: &State,
         mode: CredentialsAccess,
     ) -> Result<Self> {
+        // Check for mixed-provider configuration first (runtime detection).
+        // When per-bucket providers differ, scope each independently.
+        if let Some(mixed) = mixed_credentials::MixedRuntimeCredentials::detect_from_env() {
+            return Ok(RuntimeCredentials::Mixed(
+                mixed.scoped_credentials(sub, app_id, state, mode).await?,
+            ));
+        }
+
         #[cfg(feature = "r2")]
         return Ok(RuntimeCredentials::R2(
             R2RuntimeCredentials::from_env()
@@ -134,6 +164,13 @@ impl RuntimeCredentials {
     }
 
     pub async fn master_credentials() -> Result<Self> {
+        // Check for mixed-provider configuration first.
+        if let Some(mixed) = mixed_credentials::MixedRuntimeCredentials::detect_from_env() {
+            return Ok(RuntimeCredentials::Mixed(
+                mixed.master_credentials().await?,
+            ));
+        }
+
         #[cfg(feature = "r2")]
         return Ok(RuntimeCredentials::R2(
             R2RuntimeCredentials::from_env().master_credentials().await,
@@ -179,6 +216,9 @@ impl RuntimeCredentials {
             RuntimeCredentials::Gcp(gcp) => gcp.into_shared_credentials().to_store(meta).await,
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.into_shared_credentials().to_store(meta).await,
+            RuntimeCredentials::Mixed(mixed) => {
+                mixed.into_shared_credentials().to_store(meta).await
+            }
         }
     }
 
@@ -192,19 +232,21 @@ impl RuntimeCredentials {
             RuntimeCredentials::Gcp(gcp) => gcp.to_db(app_id).await,
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_db(app_id).await,
+            RuntimeCredentials::Mixed(mixed) => mixed.to_db(app_id).await,
         }
     }
 
-    pub async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
+    pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         match self {
             #[cfg(feature = "aws")]
-            RuntimeCredentials::Aws(aws) => aws.to_db_scoped(app_id).await,
+            RuntimeCredentials::Aws(aws) => aws.to_db_scoped(sub, app_id).await,
             #[cfg(feature = "azure")]
-            RuntimeCredentials::Azure(azure) => azure.to_db_scoped(app_id).await,
+            RuntimeCredentials::Azure(azure) => azure.to_db_scoped(sub, app_id).await,
             #[cfg(feature = "gcp")]
-            RuntimeCredentials::Gcp(gcp) => gcp.to_db_scoped(app_id).await,
+            RuntimeCredentials::Gcp(gcp) => gcp.to_db_scoped(sub, app_id).await,
             #[cfg(feature = "r2")]
-            RuntimeCredentials::R2(r2) => r2.to_db_scoped(app_id).await,
+            RuntimeCredentials::R2(r2) => r2.to_db_scoped(sub, app_id).await,
+            RuntimeCredentials::Mixed(mixed) => mixed.to_db_scoped(sub, app_id).await,
         }
     }
 
@@ -219,6 +261,7 @@ impl RuntimeCredentials {
             RuntimeCredentials::Gcp(gcp) => gcp.to_state(state).await,
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_state(state).await,
+            RuntimeCredentials::Mixed(mixed) => mixed.to_state(state).await,
         }
     }
 
@@ -233,6 +276,7 @@ impl RuntimeCredentials {
             RuntimeCredentials::Gcp(gcp) => gcp.into_shared_credentials(),
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.into_shared_credentials(),
+            RuntimeCredentials::Mixed(mixed) => mixed.into_shared_credentials(),
         }
     }
 }

@@ -292,8 +292,16 @@ impl Command for CopyPasteCommand {
                         }
                     }
 
-                    pin.schema = blueprint_pin.schema.clone();
-                    pin.options = blueprint_pin.options.clone();
+                    // Only override schema/options from the blueprint if the blueprint
+                    // actually defines them. Dynamic schemas (set by on_update, not
+                    // in get_node()) must survive the paste cycle so that on_update
+                    // can find the schema on the first pass without clearing pins.
+                    if blueprint_pin.schema.is_some() {
+                        pin.schema = blueprint_pin.schema.clone();
+                    }
+                    if blueprint_pin.options.is_some() {
+                        pin.options = blueprint_pin.options.clone();
+                    }
 
                     if new_node.start.unwrap_or(false)
                         && pin.pin_type == PinType::Input

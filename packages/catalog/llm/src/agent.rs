@@ -2,6 +2,7 @@ use crate::embedding::CachedEmbeddingModel;
 use flow_like::bit::Bit;
 use flow_like_model_provider::history::{History, Tool};
 use flow_like_types::JsonSchema;
+use memory::MemoryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -189,6 +190,12 @@ pub struct Agent {
     /// swapping the model automatically uses a fresh table (old embeddings are abandoned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lazy_embedding_model: Option<CachedEmbeddingModel>,
+
+    /// Persistent memory configuration. When set, the agent gains built-in
+    /// `_memory_search`, `_memory_store`, and `_memory_compress` tools to
+    /// autonomously store, recall, and compress observations across conversations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryConfig>,
 }
 
 impl Agent {
@@ -210,6 +217,7 @@ impl Agent {
             max_context_tokens: None,
             lazy_function_refs: Vec::new(),
             lazy_embedding_model: None,
+            memory: None,
         }
     }
 
@@ -301,6 +309,26 @@ impl Agent {
             );
         }
 
+        if self.memory.is_some() {
+            base_prompt.push_str("\n\n## Memory\n\n");
+            base_prompt.push_str(
+                "You have persistent memory across conversations. Use these tools proactively:\n\n\
+                 - `_memory_search`: Search your memory for relevant context.\n\
+                   Call this at the START of each conversation to recall relevant context.\n\
+                   Parameters: query (string), filter (optional SQL filter string)\n\n\
+                 - `_memory_store`: Store important facts, user preferences, decisions, and context.\n\
+                   Call this for any information worth remembering across conversations.\n\
+                   Parameters: content (string), role (one of: \"user\", \"assistant\", \"observation\")\n\n\
+                 Memory compression happens automatically — you do not need to manage it.\n\
+                 When older conversation messages are evicted from context, they are also stored \
+                 to memory automatically so you can retrieve them with `_memory_search`.\n\n\
+                 **Guidelines:**\n\
+                 - ALWAYS search memory at the start of a new conversation\n\
+                 - Store key facts, preferences, and decisions after learning them\n\
+                 - Don't store trivial or transient information\n",
+            );
+        }
+
         Some(base_prompt)
     }
 
@@ -317,5 +345,10 @@ impl Agent {
     /// Check if this agent has any DataFusion contexts
     pub fn has_datafusion_contexts(&self) -> bool {
         !self.datafusion_contexts.is_empty()
+    }
+
+    /// Set persistent memory configuration
+    pub fn set_memory(&mut self, config: MemoryConfig) {
+        self.memory = Some(config);
     }
 }

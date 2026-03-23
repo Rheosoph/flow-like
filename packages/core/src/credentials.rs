@@ -6,17 +6,29 @@ use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::Result;
 use flow_like_types::async_trait;
 use gcp_credentials::GcpSharedCredentials;
+use mixed_credentials::MixedSharedCredentials;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod aws_credentials;
 pub mod azure_credentials;
 pub mod gcp_credentials;
+pub mod mixed_credentials;
 
 pub use aws_credentials::BucketConfig;
 
 /// Type alias for the logs database builder callback
 pub type LogsDbBuilder = Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>;
+
+pub(crate) fn db_path_from_base(base_path: &str) -> Path {
+    let base = Path::from(base_path);
+
+    if base_path.starts_with("users/") {
+        return base.child("db");
+    }
+
+    base.child("storage").child("db")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreType {
@@ -30,7 +42,7 @@ pub trait SharedCredentialsTrait {
     async fn to_store(&self, meta: bool) -> Result<FlowLikeStore>;
     async fn to_store_type(&self, store_type: StoreType) -> Result<FlowLikeStore>;
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder>;
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder>;
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder>;
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder>;
 }
 
@@ -39,6 +51,7 @@ pub enum SharedCredentials {
     Aws(AwsSharedCredentials),
     Azure(AzureSharedCredentials),
     Gcp(GcpSharedCredentials),
+    Mixed(MixedSharedCredentials),
 }
 
 impl SharedCredentials {
@@ -47,6 +60,7 @@ impl SharedCredentials {
             SharedCredentials::Aws(aws) => aws.to_store(meta).await,
             SharedCredentials::Azure(azure) => azure.to_store(meta).await,
             SharedCredentials::Gcp(gcp) => gcp.to_store(meta).await,
+            SharedCredentials::Mixed(mixed) => mixed.to_store(meta).await,
         }
     }
 
@@ -55,6 +69,7 @@ impl SharedCredentials {
             SharedCredentials::Aws(aws) => aws.to_store_type(store_type).await,
             SharedCredentials::Azure(azure) => azure.to_store_type(store_type).await,
             SharedCredentials::Gcp(gcp) => gcp.to_store_type(store_type).await,
+            SharedCredentials::Mixed(mixed) => mixed.to_store_type(store_type).await,
         }
     }
 
@@ -63,14 +78,16 @@ impl SharedCredentials {
             SharedCredentials::Aws(aws) => aws.to_db(app_id).await,
             SharedCredentials::Azure(azure) => azure.to_db(app_id).await,
             SharedCredentials::Gcp(gcp) => gcp.to_db(app_id).await,
+            SharedCredentials::Mixed(mixed) => mixed.to_db(app_id).await,
         }
     }
 
-    pub async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
+    pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         match self {
-            SharedCredentials::Aws(aws) => aws.to_db_scoped(app_id).await,
-            SharedCredentials::Azure(azure) => azure.to_db_scoped(app_id).await,
-            SharedCredentials::Gcp(gcp) => gcp.to_db_scoped(app_id).await,
+            SharedCredentials::Aws(aws) => aws.to_db_scoped(sub, app_id).await,
+            SharedCredentials::Azure(azure) => azure.to_db_scoped(sub, app_id).await,
+            SharedCredentials::Gcp(gcp) => gcp.to_db_scoped(sub, app_id).await,
+            SharedCredentials::Mixed(mixed) => mixed.to_db_scoped(sub, app_id).await,
         }
     }
 
@@ -79,6 +96,7 @@ impl SharedCredentials {
             SharedCredentials::Aws(aws) => aws.to_logs_db_builder(),
             SharedCredentials::Azure(azure) => azure.to_logs_db_builder(),
             SharedCredentials::Gcp(gcp) => gcp.to_logs_db_builder(),
+            SharedCredentials::Mixed(mixed) => mixed.to_logs_db_builder(),
         }
     }
 }
@@ -87,6 +105,20 @@ impl SharedCredentials {
 mod tests {
     use super::*;
     use flow_like_types::json::{from_str, to_string};
+
+    #[test]
+    fn test_db_path_from_base_for_app_scope() {
+        let path = db_path_from_base("apps/test-app");
+
+        assert_eq!(path.to_string(), "apps/test-app/storage/db");
+    }
+
+    #[test]
+    fn test_db_path_from_base_for_user_scope() {
+        let path = db_path_from_base("users/test-user/apps/test-app");
+
+        assert_eq!(path.to_string(), "users/test-user/apps/test-app/db");
+    }
 
     fn sample_aws() -> AwsSharedCredentials {
         AwsSharedCredentials {

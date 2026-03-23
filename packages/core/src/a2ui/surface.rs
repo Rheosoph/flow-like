@@ -16,6 +16,9 @@ pub struct SurfaceComponent {
     pub id: String,
     pub style: Option<Style>,
     pub component: Value,
+    /// When true, this component's current value is included in widget action event payloads
+    #[serde(default)]
+    pub event_relevant: bool,
 }
 
 impl SurfaceComponent {
@@ -24,7 +27,13 @@ impl SurfaceComponent {
             id: id.into(),
             style: None,
             component,
+            event_relevant: false,
         }
+    }
+
+    pub fn with_event_relevant(mut self, event_relevant: bool) -> Self {
+        self.event_relevant = event_relevant;
+        self
     }
 
     pub fn with_style(mut self, style: Style) -> Self {
@@ -525,6 +534,7 @@ impl From<proto::Component> for SurfaceComponent {
             id: proto.id,
             style: proto.style.map(Into::into),
             component,
+            event_relevant: false,
         }
     }
 }

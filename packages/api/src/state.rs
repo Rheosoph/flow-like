@@ -219,7 +219,7 @@ impl State {
 
         let cache = moka::sync::Cache::builder()
             .max_capacity(32 * 1024 * 1024) // 32 MB
-            .time_to_live(Duration::from_secs(30 * 60)) // 30 minutes
+            .time_to_live(Duration::from_secs(20 * 60)) // 20 minutes — credentials are valid for 1h, so cached ones always have ≥40min remaining
             .build();
 
         let response_cache = moka::sync::Cache::builder()

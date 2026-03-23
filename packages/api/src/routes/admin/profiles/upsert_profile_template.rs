@@ -18,7 +18,7 @@ pub async fn upsert_profile_template(
     Path(profile_id): Path<String>,
     Json(profile_data): Json<Profile>,
 ) -> Result<Json<Profile>, ApiError> {
-    user.check_global_permission(&state, GlobalPermission::WriteBits)
+    user.check_global_permission(&state, GlobalPermission::WriteProfile)
         .await?;
 
     let profile = template_profile::Entity::find()

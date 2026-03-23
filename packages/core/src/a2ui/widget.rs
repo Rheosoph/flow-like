@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time::SystemTime};
 
 use flow_like_types::json::{Deserialize, Serialize};
+use flow_like_types::Value;
 use schemars::JsonSchema;
 
 use super::{DataEntry, SurfaceComponent};
@@ -338,6 +339,16 @@ impl WidgetActionContextField {
         self
     }
 }
+
+/// Payload containing action context fields from a widget action trigger.
+/// Keys are field names defined in the action's context_schema.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ActionContextPayload(pub HashMap<String, Value>);
+
+/// Payload containing current values of event-relevant widget components.
+/// Keys are component IDs, values are the components' current state values.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct InputValuesPayload(pub HashMap<String, Value>);
 
 /// Reference to a widget in another app
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

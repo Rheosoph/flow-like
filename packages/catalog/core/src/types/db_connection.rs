@@ -9,7 +9,7 @@ use flow_like_types::{
 };
 use std::sync::Arc;
 
-#[derive(Default, Serialize, Deserialize, JsonSchema, Clone)]
+#[derive(Default, Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct NodeDBConnection {
     pub cache_key: String,
 }

@@ -20,8 +20,8 @@ use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
 use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::Expr, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -666,7 +666,10 @@ impl ServerRegistry {
         // Sum all download counts
         let downloads_result: Option<i64> = wasm_package::Entity::find()
             .select_only()
-            .column_as(wasm_package::Column::DownloadCount.sum(), "total")
+            .expr_as(
+                Expr::cust(r#"CAST(SUM("downloadCount") AS BIGINT)"#),
+                "total",
+            )
             .into_tuple()
             .one(&self.db)
             .await?;

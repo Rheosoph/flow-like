@@ -180,6 +180,15 @@ pub async fn request_publication(
         return Err(ApiError::bad_request("Package is already public"));
     }
 
+    wasm_package::ActiveModel {
+        id: Set(package_id.clone()),
+        status: Set(WasmPackageStatus::PendingReview),
+        updated_at: Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    }
+    .update(&state.db)
+    .await?;
+
     let review = wasm_package_review::ActiveModel {
         id: Set(create_id()),
         package_id: Set(package_id.clone()),

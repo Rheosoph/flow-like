@@ -1,7 +1,7 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType};
+use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store::aws::AmazonS3Builder;
-use flow_like_storage::{Path, object_store};
+use flow_like_storage::object_store;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ pub struct BucketConfig {
     pub express: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AwsSharedCredentials {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -46,6 +46,21 @@ pub struct AwsSharedCredentials {
     /// User-level content path prefix (e.g., "users/{sub}/apps/{app_id}")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_content_path_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for AwsSharedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsSharedCredentials")
+            .field("access_key_id", &self.access_key_id.as_ref().map(|_| "[REDACTED]"))
+            .field("secret_access_key", &self.secret_access_key.as_ref().map(|_| "[REDACTED]"))
+            .field("session_token", &self.session_token.as_ref().map(|_| "[REDACTED]"))
+            .field("meta_bucket", &self.meta_bucket)
+            .field("content_bucket", &self.content_bucket)
+            .field("logs_bucket", &self.logs_bucket)
+            .field("region", &self.region)
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 impl AwsSharedCredentials {
@@ -119,7 +134,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
             .content_path_prefix
             .clone()
             .unwrap_or_else(|| format!("apps/{}", app_id));
-        let path = Path::from(base_path).child("storage").child("db");
+        let path = db_path_from_base(&base_path);
         let connection = make_s3_builder(
             &self.content_bucket,
             self.content_config
@@ -137,14 +152,9 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         Ok(connection)
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        let base_path = self
-            .user_content_path_prefix
-            .clone()
-            .or_else(|| self.content_path_prefix.clone())
-            .unwrap_or_else(|| format!("apps/{}", app_id));
-
-        let path = Path::from(base_path).child("storage").child("db");
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        let base_path = format!("users/{}/apps/{}", sub, app_id);
+        let path = db_path_from_base(&base_path);
         let connection = make_s3_builder(
             &self.content_bucket,
             self.content_config

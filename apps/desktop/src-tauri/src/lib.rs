@@ -827,6 +827,7 @@ pub fn run() {
             functions::app::sharing::export_app_to_file,
             functions::app::sharing::import_app_from_file,
             functions::app::tables::db_table_names,
+            functions::app::tables::db_table_names_user,
             functions::app::tables::db_schema,
             functions::app::tables::db_list,
             functions::app::tables::db_count,

@@ -1,4 +1,4 @@
-use flow_like::a2ui::widget::{ExposedPropType, WidgetActionContextField};
+use flow_like::a2ui::widget::{ActionContextPayload, InputValuesPayload};
 use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
@@ -9,47 +9,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 use std::sync::Arc;
-
-fn exposed_prop_type_to_json_schema_type(prop_type: &ExposedPropType) -> &'static str {
-    match prop_type {
-        ExposedPropType::String
-        | ExposedPropType::Color
-        | ExposedPropType::ImageUrl
-        | ExposedPropType::Icon
-        | ExposedPropType::TailwindClass
-        | ExposedPropType::Enum { .. } => "string",
-        ExposedPropType::Number => "number",
-        ExposedPropType::Boolean => "boolean",
-        ExposedPropType::Json | ExposedPropType::StyleObject | ExposedPropType::BoundValue => {
-            "object"
-        }
-    }
-}
-
-fn build_context_schema(fields: &[WidgetActionContextField]) -> String {
-    let mut properties = flow_like_types::json::Map::new();
-    for field in fields {
-        let mut prop = flow_like_types::json::Map::new();
-        prop.insert(
-            "type".to_string(),
-            json!(exposed_prop_type_to_json_schema_type(&field.field_type)),
-        );
-        if let Some(desc) = &field.description {
-            prop.insert("description".to_string(), json!(desc));
-        }
-        if let ExposedPropType::Enum { choices } = &field.field_type {
-            prop.insert("enum".to_string(), json!(choices));
-        }
-        properties.insert(field.name.clone(), flow_like_types::Value::Object(prop));
-    }
-
-    let schema = json!({
-        "type": "object",
-        "properties": properties,
-    });
-
-    flow_like_types::json::to_string(&schema).unwrap_or_default()
-}
 
 /// Widget Action Event - Entry point for widget action triggers.
 ///
@@ -114,8 +73,17 @@ impl NodeLogic for WidgetActionEvent {
             "action_context",
             "Action Context",
             "The context data passed from the widget action (JSON object with field values)",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<ActionContextPayload>();
+
+        node.add_output_pin(
+            "input_values",
+            "Input Values",
+            "Map of component ID to current value for components marked as event-relevant",
+            VariableType::Struct,
+        )
+        .set_schema::<InputValuesPayload>();
 
         node
     }
@@ -147,6 +115,13 @@ impl NodeLogic for WidgetActionEvent {
             .cloned()
             .unwrap_or(json!({}));
 
+        let input_values = payload
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("_input_values"))
+            .cloned()
+            .unwrap_or(json!({}));
+
         // Set output pins
         context
             .get_pin_by_name("widget_instance_id")
@@ -164,6 +139,12 @@ impl NodeLogic for WidgetActionEvent {
             .get_pin_by_name("action_context")
             .await?
             .set_value(action_context)
+            .await;
+
+        context
+            .get_pin_by_name("input_values")
+            .await?
+            .set_value(input_values)
             .await;
 
         // Activate execution flow
@@ -227,30 +208,6 @@ impl NodeLogic for WidgetActionEvent {
                                         "Action '{}' is not defined on widget '{}'",
                                         action_id, widget_name
                                     ));
-                                }
-
-                                // Type the action_context output pin from the action's context_schema
-                                if let Some(action) =
-                                    widget.actions.iter().find(|a| a.id == action_id)
-                                {
-                                    if !action.context_schema.is_empty() {
-                                        let schema = build_context_schema(&action.context_schema);
-                                        if let Some(pin) =
-                                            node.get_pin_mut_by_name("action_context")
-                                        {
-                                            pin.data_type = VariableType::Struct;
-                                            pin.schema = Some(schema);
-                                        }
-                                    } else if let Some(pin) =
-                                        node.get_pin_mut_by_name("action_context")
-                                    {
-                                        pin.data_type = VariableType::Generic;
-                                        pin.schema = None;
-                                    }
-                                } else if let Some(pin) = node.get_pin_mut_by_name("action_context")
-                                {
-                                    pin.data_type = VariableType::Generic;
-                                    pin.schema = None;
                                 }
 
                                 return;

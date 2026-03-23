@@ -11,7 +11,7 @@ use flow_like_types::{
     json::{self, Deserialize, Serialize, json},
 };
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum RecallStrategy {
     RecentFirst,
     Relevance,
@@ -24,7 +24,7 @@ impl Default for RecallStrategy {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryConfig {
     pub database: NodeDBConnection,
     pub embedding_model: CachedEmbeddingModel,

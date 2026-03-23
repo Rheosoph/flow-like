@@ -1,10 +1,11 @@
 use crate::{
     ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
+    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
@@ -39,12 +40,13 @@ pub async fn add_to_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
+    Query(scope): Query<ScopeParams>,
     Json(payload): Json<AddToDBPayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    validate_table_name(&table)?;
 
-    let credentials = state.master_credentials().await?;
-    let connection = credentials.to_db(&app_id).await?.execute().await?;
+    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let mut db = LanceDBVectorStore::from_connection(connection, table).await;
 
     db.insert(payload.items).await?;

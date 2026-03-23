@@ -84,20 +84,20 @@ fn estimate_message_tokens(msg: &rig::message::Message) -> usize {
 
 /// Truncate message history using sliding window to fit within token budget.
 /// Preserves most recent messages while keeping tool call/result pairs intact.
-/// Returns (truncated_history, truncated_count) where truncated_count is the number of removed messages.
+/// Returns (truncated_history, evicted_messages) where evicted_messages are the removed messages.
 #[cfg(feature = "execute")]
 fn truncate_history_to_budget(
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> (Vec<rig::message::Message>, usize) {
+) -> (Vec<rig::message::Message>, Vec<rig::message::Message>) {
     if history.is_empty() {
-        return (history, 0);
+        return (history, vec![]);
     }
 
     let total_tokens: usize = history.iter().map(estimate_message_tokens).sum();
 
     if total_tokens <= max_tokens as usize {
-        return (history, 0);
+        return (history, vec![]);
     }
 
     let mut result = Vec::new();
@@ -106,9 +106,10 @@ fn truncate_history_to_budget(
 
     // Track tool call IDs to keep pairs together
     let mut required_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut kept_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     // First pass: from end, collect messages until budget
-    for msg in history.iter().rev() {
+    for (idx, msg) in history.iter().enumerate().rev() {
         let msg_tokens = estimate_message_tokens(msg);
 
         // Check for tool results - we need the corresponding tool call
@@ -122,6 +123,7 @@ fn truncate_history_to_budget(
 
         if current_tokens + msg_tokens <= target_tokens {
             result.push(msg.clone());
+            kept_indices.insert(idx);
             current_tokens += msg_tokens;
 
             // Track tool calls so we don't orphan results
@@ -144,6 +146,7 @@ fn truncate_history_to_budget(
                 });
                 if has_required {
                     result.push(msg.clone());
+                    kept_indices.insert(idx);
                     current_tokens += msg_tokens;
                     for c in content.iter() {
                         if let AssistantContent::ToolCall(tc) = c {
@@ -161,27 +164,32 @@ fn truncate_history_to_budget(
 
     result.reverse();
 
-    let truncated_count = history.len() - result.len();
-    (result, truncated_count)
+    let evicted: Vec<rig::message::Message> = history
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !kept_indices.contains(idx))
+        .map(|(_, msg)| msg.clone())
+        .collect();
+    (result, evicted)
 }
 
 /// Summarize old messages using LLM to compress context while preserving key information.
-/// Returns (updated_history, summarized_count, optional_usage) where usage captures the summarization LLM call tokens.
+/// Returns (updated_history, evicted_messages, optional_usage).
 #[cfg(feature = "execute")]
 async fn summarize_history_to_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize, Option<ResponseUsage>)> {
+) -> flow_like_types::Result<(Vec<rig::message::Message>, Vec<rig::message::Message>, Option<ResponseUsage>)> {
     if history.is_empty() {
-        return Ok((history, 0, None));
+        return Ok((history, vec![], None));
     }
 
     let total_tokens: usize = history.iter().map(estimate_message_tokens).sum();
 
     if total_tokens <= max_tokens as usize {
-        return Ok((history, 0, None));
+        return Ok((history, vec![], None));
     }
 
     // Find the split point: keep recent messages, summarize older ones
@@ -201,14 +209,14 @@ async fn summarize_history_to_budget(
 
     // If split would leave nothing to summarize, fall back to truncation
     if split_idx <= 1 {
-        let (h, c) = truncate_history_to_budget(history, max_tokens);
-        return Ok((h, c, None));
+        let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+        return Ok((h, evicted, None));
     }
 
     let (old_messages, recent_messages) = history.split_at(split_idx);
 
     if old_messages.is_empty() {
-        return Ok((recent_messages.to_vec(), 0, None));
+        return Ok((recent_messages.to_vec(), vec![], None));
     }
 
     // Convert old messages to text for summarization
@@ -249,6 +257,8 @@ async fn summarize_history_to_budget(
         }
     }
 
+    let evicted_messages = old_messages.to_vec();
+
     // Use the agent's model to generate a summary
     let summary_prompt = format!(
         "Summarize the following conversation history concisely, preserving key facts, decisions, and context that would be important for continuing the conversation. Focus on: user goals, important information shared, actions taken, and outcomes.\n\n---\n{}\n---\n\nProvide a concise summary:",
@@ -278,8 +288,8 @@ async fn summarize_history_to_budget(
                                 "Summary response was empty, falling back to truncation",
                                 LogLevel::Warn,
                             );
-                            let (h, c) = truncate_history_to_budget(history, max_tokens);
-                            return Ok((h, c, Some(usage)));
+                            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                            return Ok((h, evicted, Some(usage)));
                         }
                         (text, Some(usage))
                     }
@@ -288,8 +298,8 @@ async fn summarize_history_to_budget(
                             &format!("Failed to get summary response: {}", e),
                             LogLevel::Warn,
                         );
-                        let (h, c) = truncate_history_to_budget(history, max_tokens);
-                        return Ok((h, c, None));
+                        let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                        return Ok((h, evicted, None));
                     }
                 },
                 Err(e) => {
@@ -297,8 +307,8 @@ async fn summarize_history_to_budget(
                         &format!("Failed to create summary completion: {}", e),
                         LogLevel::Warn,
                     );
-                    let (h, c) = truncate_history_to_budget(history, max_tokens);
-                    return Ok((h, c, None));
+                    let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                    return Ok((h, evicted, None));
                 }
             }
         }
@@ -307,8 +317,8 @@ async fn summarize_history_to_budget(
                 &format!("Failed to create summary agent: {}", e),
                 LogLevel::Warn,
             );
-            let (h, c) = truncate_history_to_budget(history, max_tokens);
-            return Ok((h, c, None));
+            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+            return Ok((h, evicted, None));
         }
     };
 
@@ -325,26 +335,25 @@ async fn summarize_history_to_budget(
     let mut result = vec![summary_msg];
     result.extend(recent_messages.iter().cloned());
 
-    let summarized_count = old_messages.len();
-    Ok((result, summarized_count, summary_usage))
+    Ok((result, evicted_messages, summary_usage))
 }
 
 /// Manage context budget using the appropriate strategy (truncate or summarize).
-/// Returns (managed_history, affected_count, optional_usage).
+/// Returns (managed_history, evicted_messages, optional_usage).
 #[cfg(feature = "execute")]
 async fn manage_context_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize, Option<ResponseUsage>)> {
+) -> flow_like_types::Result<(Vec<rig::message::Message>, Vec<rig::message::Message>, Option<ResponseUsage>)> {
     match agent.context_management_mode {
         ContextManagementMode::Summarize => {
             summarize_history_to_budget(context, agent, history, max_tokens).await
         }
         ContextManagementMode::Truncate => {
-            let (h, c) = truncate_history_to_budget(history, max_tokens);
-            Ok((h, c, None))
+            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+            Ok((h, evicted, None))
         }
     }
 }
@@ -984,6 +993,65 @@ pub async fn execute_agent_streaming(
         });
     }
 
+    // Expose built-in memory tools when the agent has a memory config
+    if agent.memory.is_some() {
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_search".to_string(),
+            description:
+                "Search persistent memory for relevant context. Call this at the start of conversations \
+                 and whenever you need to recall previously stored information."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query text for vector similarity and/or full-text search"
+                    },
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional SQL filter (e.g. \"role = 'user'\")"
+                    }
+                },
+                "required": ["query"]
+            }),
+        });
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_store".to_string(),
+            description:
+                "Store an observation in persistent memory. Use this to remember important facts, \
+                 user preferences, decisions, and context worth preserving across conversations."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Text content to store as a memory observation"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "observation"],
+                        "description": "Role label for the memory entry (default: observation)"
+                    }
+                },
+                "required": ["content"]
+            }),
+        });
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_compress".to_string(),
+            description:
+                "Compress old memory observations into a concise summary. Call this when \
+                 _memory_store reports a high observation count to keep memory efficient."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        });
+    }
+
     let (prompt, history_msgs) = history
         .extract_prompt_and_history()
         .map_err(|e| anyhow!("Failed to convert history: {e}"))?;
@@ -1148,13 +1216,14 @@ pub async fn execute_agent_streaming(
     };
 
     if agent.infinite_context {
-        let (managed, count, summarize_usage) =
+        let (managed, evicted, summarize_usage) =
             manage_context_budget(context, agent, current_history, max_context_tokens).await?;
         current_history = managed;
         if let Some(usage) = summarize_usage {
             accumulated_stats.accumulate(&usage, Some(&model_display_name));
         }
-        if count > 0 {
+        if !evicted.is_empty() {
+            let count = evicted.len();
             let mode_name = match agent.context_management_mode {
                 ContextManagementMode::Summarize => "summarized",
                 ContextManagementMode::Truncate => "truncated",
@@ -1166,6 +1235,14 @@ pub async fn execute_agent_streaming(
                 ),
                 LogLevel::Debug,
             );
+            if agent.memory.is_some() {
+                if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
+                    context.log_message(
+                        &format!("Failed to store evicted messages to memory (non-fatal): {}", e),
+                        LogLevel::Warn,
+                    );
+                }
+            }
         }
     }
 
@@ -1486,6 +1563,10 @@ pub async fn execute_agent_streaming(
                     .unwrap_or_else(
                         |e| json::json!({ "error": format!("Lazy tool search failed: {}", e) }),
                     )
+                } else if name.starts_with("_memory_") && agent.memory.is_some() {
+                    handle_memory_tool_call(context, agent, name, arguments)
+                        .await
+                        .unwrap_or_else(|e| json::json!({ "error": format!("{}", e) }))
                 } else {
                     return Err(anyhow!(
                         "Tool '{}' not found in referenced functions or MCP servers",
@@ -1747,13 +1828,14 @@ pub async fn execute_agent_streaming(
 
         // Apply context management after adding tool results if infinite context is enabled
         if agent.infinite_context {
-            let (managed, count, summarize_usage) =
+            let (managed, evicted, summarize_usage) =
                 manage_context_budget(context, agent, current_history, max_context_tokens).await?;
             current_history = managed;
             if let Some(usage) = summarize_usage {
                 accumulated_stats.accumulate(&usage, Some(&model_display_name));
             }
-            if count > 0 {
+            if !evicted.is_empty() {
+                let count = evicted.len();
                 let mode_name = match agent.context_management_mode {
                     ContextManagementMode::Summarize => "summarized",
                     ContextManagementMode::Truncate => "truncated",
@@ -1765,6 +1847,14 @@ pub async fn execute_agent_streaming(
                     ),
                     LogLevel::Debug,
                 );
+                if agent.memory.is_some() {
+                    if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
+                        context.log_message(
+                            &format!("Failed to store evicted messages to memory (non-fatal): {}", e),
+                            LogLevel::Warn,
+                        );
+                    }
+                }
             }
         }
 
@@ -1961,4 +2051,492 @@ async fn handle_lazy_tool_search(
         "added_tools": added_tool_names,
         "message": message,
     }))
+}
+
+#[cfg(feature = "execute")]
+async fn handle_memory_tool_call(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    tool_name: &str,
+    arguments: &Value,
+) -> flow_like_types::Result<Value> {
+    use flow_like_catalog_core::CachedDB;
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    let memory = agent
+        .memory
+        .as_ref()
+        .ok_or_else(|| anyhow!("Memory not configured on agent"))?;
+
+    let cached_db: CachedDB = {
+        let cache = context.cache.read().await;
+        let entry = cache
+            .get(&memory.database.cache_key)
+            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
+        entry
+            .as_any()
+            .downcast_ref::<CachedDB>()
+            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
+            .clone()
+    };
+
+    match tool_name {
+        "_memory_search" => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let filter = arguments
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let filter_opt: Option<&str> = if filter.is_empty() { None } else { Some(filter) };
+            let top_k = memory.recall_top_k as usize;
+
+            cached_db.ensure_flushed().await?;
+
+            let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+
+            let results: Vec<Value> = match memory.recall_strategy {
+                crate::generative::agent::memory::config::RecallStrategy::RecentFirst => {
+                    db.filter(
+                        filter_opt.unwrap_or("1=1"),
+                        Some(vec![
+                            "id".to_string(),
+                            "content".to_string(),
+                            "role".to_string(),
+                            "timestamp".to_string(),
+                        ]),
+                        top_k,
+                        0,
+                    )
+                    .await?
+                }
+                crate::generative::agent::memory::config::RecallStrategy::Relevance => {
+                    let vector = embed_memory_query(context, memory, &query).await?;
+                    db.vector_search(vector, filter_opt, None, top_k, 0).await?
+                }
+                crate::generative::agent::memory::config::RecallStrategy::Hybrid => {
+                    let vector = embed_memory_query(context, memory, &query).await?;
+                    db.hybrid_search(
+                        vector,
+                        &query,
+                        filter_opt,
+                        None,
+                        Some(vec!["content".to_string()]),
+                        top_k,
+                        0,
+                        true,
+                    )
+                    .await?
+                }
+            };
+
+            context.log_message(
+                &format!("_memory_search '{}': {} results", query, results.len()),
+                LogLevel::Debug,
+            );
+
+            Ok(json::json!({
+                "results": results,
+                "count": results.len(),
+            }))
+        }
+        "_memory_store" => {
+            let content = arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let role = arguments
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("observation")
+                .to_string();
+
+            if content.trim().is_empty() {
+                return Ok(json::json!({ "stored": false, "reason": "Empty content" }));
+            }
+
+            let embeddings = embed_memory_document(context, memory, &content).await?;
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let record = json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "content": content,
+                "role": role,
+                "vector": embeddings,
+                "timestamp": now,
+            });
+
+            let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+            db.insert(vec![record]).await?;
+            let count = db.count(None).await.unwrap_or(0);
+            drop(db);
+
+            context.log_message(
+                &format!(
+                    "_memory_store: stored '{}' (role={}, total={})",
+                    content.chars().take(80).collect::<String>(),
+                    role,
+                    count
+                ),
+                LogLevel::Debug,
+            );
+
+            let threshold = memory.compress_threshold as usize;
+            if memory.auto_compress && count >= threshold {
+                context.log_message(
+                    &format!(
+                        "_memory_store: auto-compress triggered ({} >= {})",
+                        count, threshold
+                    ),
+                    LogLevel::Debug,
+                );
+                match run_memory_compress(context, agent, memory, &cached_db).await {
+                    Ok(result) => {
+                        return Ok(json::json!({
+                            "stored": true,
+                            "observation_count": count,
+                            "auto_compressed": result,
+                        }));
+                    }
+                    Err(e) => {
+                        context.log_message(
+                            &format!("Auto-compress failed (non-fatal): {}", e),
+                            LogLevel::Warn,
+                        );
+                    }
+                }
+            }
+
+            Ok(json::json!({
+                "stored": true,
+                "observation_count": count,
+            }))
+        }
+        "_memory_compress" => {
+            run_memory_compress(context, agent, memory, &cached_db).await
+        }
+        _ => Err(anyhow!("Unknown memory tool: {}", tool_name)),
+    }
+}
+
+/// Store evicted conversation messages into persistent memory so they remain
+/// discoverable via `_memory_search` even after being dropped from the context window.
+#[cfg(feature = "execute")]
+async fn store_evicted_to_memory(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    evicted: &[rig::message::Message],
+) -> flow_like_types::Result<()> {
+    use flow_like_catalog_core::CachedDB;
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::RwLockWriteGuard;
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    let memory = agent
+        .memory
+        .as_ref()
+        .ok_or_else(|| anyhow!("Memory not configured"))?;
+
+    // Extract text content from evicted messages, grouped into a single document
+    let mut text_parts: Vec<String> = Vec::new();
+    for msg in evicted {
+        match msg {
+            rig::message::Message::User { content } => {
+                for c in content.iter() {
+                    if let rig::message::UserContent::Text(t) = c {
+                        if !t.text.is_empty() {
+                            text_parts.push(format!("[user] {}", t.text));
+                        }
+                    }
+                }
+            }
+            rig::message::Message::Assistant { content, .. } => {
+                for c in content.iter() {
+                    if let AssistantContent::Text(t) = c {
+                        if !t.text.is_empty() {
+                            text_parts.push(format!("[assistant] {}", t.text));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if text_parts.is_empty() {
+        return Ok(());
+    }
+
+    // Combine into a single document, truncating to avoid excessively large embeddings
+    let combined = text_parts.join("\n");
+    let content = if combined.len() > 8000 {
+        format!("{}...", &combined[..8000])
+    } else {
+        combined
+    };
+
+    let embeddings = embed_memory_document(context, memory, &content).await?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let record = json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "content": content,
+        "role": "context",
+        "vector": embeddings,
+        "timestamp": now,
+    });
+
+    let cached_db: CachedDB = {
+        let cache = context.cache.read().await;
+        let entry = cache
+            .get(&memory.database.cache_key)
+            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
+        entry
+            .as_any()
+            .downcast_ref::<CachedDB>()
+            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
+            .clone()
+    };
+
+    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+    db.insert(vec![record]).await?;
+    drop(db);
+
+    context.log_message(
+        &format!(
+            "Stored {} evicted messages ({} chars) to memory",
+            evicted.len(),
+            content.len()
+        ),
+        LogLevel::Debug,
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "execute")]
+async fn run_memory_compress(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    cached_db: &flow_like_catalog_core::CachedDB,
+) -> flow_like_types::Result<Value> {
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    cached_db.ensure_flushed().await?;
+
+    let count = {
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.count(None).await.unwrap_or(0)
+    };
+
+    let threshold = memory.compress_threshold as usize;
+    if count < threshold {
+        return Ok(json::json!({
+            "compressed": false,
+            "reason": format!("Only {} observations (threshold: {})", count, threshold),
+            "observation_count": count,
+        }));
+    }
+
+    let observations: Vec<Value> = {
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.filter(
+            "role != 'summary'",
+            Some(vec![
+                "id".to_string(),
+                "content".to_string(),
+                "role".to_string(),
+                "timestamp".to_string(),
+            ]),
+            threshold,
+            0,
+        )
+        .await
+        .unwrap_or_default()
+    };
+
+    if observations.is_empty() {
+        return Ok(json::json!({
+            "compressed": false,
+            "reason": "No non-summary observations to compress",
+        }));
+    }
+
+    let mut obs_text = String::new();
+    let mut obs_ids: Vec<String> = Vec::new();
+    for obs in &observations {
+        if let Some(content) = obs.get("content").and_then(|c| c.as_str()) {
+            let role = obs
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("observation");
+            obs_text.push_str(&format!("[{}] {}\n", role, content));
+        }
+        if let Some(id) = obs.get("id").and_then(|i| i.as_str()) {
+            obs_ids.push(id.to_string());
+        }
+    }
+
+    let prompt = format!(
+        "Compress the following conversation/observation history into a concise summary. \
+         Preserve key facts, decisions, user preferences, and context. \
+         Drop redundant details. Output only the summary text, nothing else.\n\n{}",
+        obs_text
+    );
+
+    let history: Option<History> = None;
+    let agent_builder = agent.model.agent(context, &history).await?;
+    let summary_agent = agent_builder
+        .preamble("You are a memory compressor. Be concise but preserve key facts, decisions, user preferences, and context.")
+        .build();
+
+    let response = summary_agent
+        .completion(prompt, vec![])
+        .await
+        .map_err(|e| anyhow!("Failed to create compression request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| anyhow!("Compression LLM call failed: {}", e))?;
+
+    let mut summary = String::new();
+    for content in response.choice {
+        if let AssistantContent::Text(t) = content {
+            summary.push_str(&t.text);
+        }
+    }
+    let summary = summary.trim().to_string();
+
+    if summary.is_empty() {
+        return Err(anyhow!("LLM returned empty summary"));
+    }
+
+    let summary_embedding = embed_memory_document(context, memory, &summary).await?;
+
+    if !obs_ids.is_empty() {
+        let ids_filter = obs_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("id IN ({})", ids_filter);
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.delete(&filter).await?;
+        drop(db);
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let summary_record = json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "content": summary,
+        "role": "summary",
+        "vector": summary_embedding,
+        "timestamp": now,
+    });
+
+    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+    db.insert(vec![summary_record]).await?;
+    drop(db);
+
+    let compressed_count = observations.len();
+    context.log_message(
+        &format!(
+            "memory_compress: compressed {} observations into summary",
+            compressed_count
+        ),
+        LogLevel::Debug,
+    );
+
+    Ok(json::json!({
+        "compressed": true,
+        "compressed_count": compressed_count,
+        "summary": summary,
+    }))
+}
+
+#[cfg(feature = "execute")]
+async fn embed_memory_query(
+    context: &mut ExecutionContext,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    query: &str,
+) -> flow_like_types::Result<Vec<f64>> {
+    let cached_model = context
+        .get_cache(&memory.embedding_model.cache_key)
+        .await
+        .ok_or_else(|| anyhow!("Embedding model not found in cache"))?;
+    let embedding_obj = cached_model
+        .as_any()
+        .downcast_ref::<CachedEmbeddingModelObject>()
+        .ok_or_else(|| anyhow!("Failed to downcast embedding model"))?;
+
+    let embeddings = if let Some(model) = &embedding_obj.text_model {
+        model.text_embed_query(&vec![query.to_string()]).await?
+    } else {
+        return Err(anyhow!("No text embedding model available"));
+    };
+
+    if embeddings.is_empty() {
+        return Err(anyhow!("Embedding returned empty vector"));
+    }
+
+    Ok(embeddings[0].iter().map(|x| *x as f64).collect())
+}
+
+#[cfg(feature = "execute")]
+async fn embed_memory_document(
+    context: &mut ExecutionContext,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    content: &str,
+) -> flow_like_types::Result<Vec<f32>> {
+    let cached_model = context
+        .get_cache(&memory.embedding_model.cache_key)
+        .await
+        .ok_or_else(|| anyhow!("Embedding model not found in cache"))?;
+    let embedding_obj = cached_model
+        .as_any()
+        .downcast_ref::<CachedEmbeddingModelObject>()
+        .ok_or_else(|| anyhow!("Failed to downcast embedding model"))?;
+
+    let embeddings = if let Some(model) = &embedding_obj.text_model {
+        model
+            .text_embed_document(&vec![content.to_string()])
+            .await?
+    } else {
+        return Err(anyhow!("No text embedding model available"));
+    };
+
+    if embeddings.is_empty() {
+        return Err(anyhow!("Embedding returned empty vector"));
+    }
+
+    Ok(embeddings[0].clone())
 }

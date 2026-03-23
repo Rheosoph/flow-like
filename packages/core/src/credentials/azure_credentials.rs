@@ -1,13 +1,13 @@
-use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType};
+use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
-use flow_like_storage::{Path, object_store};
+use flow_like_storage::object_store;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureSharedCredentials {
     /// SAS token for meta container
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,7 +25,8 @@ pub struct AzureSharedCredentials {
     pub content_container: String,
     pub logs_container: String,
     pub account_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SECURITY: Never serialize account_key to prevent leaking master credentials to clients
+    #[serde(default, skip_serializing)]
     pub account_key: Option<String>,
     pub expiration: Option<chrono::DateTime<chrono::Utc>>,
     /// App-level content path prefix (e.g., "apps/{app_id}")
@@ -34,6 +35,23 @@ pub struct AzureSharedCredentials {
     /// User-level content path prefix (e.g., "users/{sub}/apps/{app_id}")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_content_path_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for AzureSharedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureSharedCredentials")
+            .field("meta_sas_token", &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field("content_sas_token", &self.content_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field("user_content_sas_token", &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field("logs_sas_token", &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field("meta_container", &self.meta_container)
+            .field("content_container", &self.content_container)
+            .field("logs_container", &self.logs_container)
+            .field("account_name", &self.account_name)
+            .field("account_key", &self.account_key.as_ref().map(|_| "[REDACTED]"))
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 impl AzureSharedCredentials {
@@ -117,7 +135,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
             .unwrap_or_else(|| format!("apps/{}", app_id));
         let sas_token = self.content_sas_token.clone().unwrap_or_default();
 
-        let path = Path::from(base_path).child("storage").child("db");
+        let path = db_path_from_base(&base_path);
         let connection = make_azure_builder(
             self.account_name.clone(),
             self.content_container.clone(),
@@ -132,19 +150,15 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
         skip(self),
         level = "debug"
     )]
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        let base_path = self
-            .user_content_path_prefix
-            .clone()
-            .or_else(|| self.content_path_prefix.clone())
-            .unwrap_or_else(|| format!("apps/{}", app_id));
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        let base_path = format!("users/{}/apps/{}", sub, app_id);
         let sas_token = self
             .user_content_sas_token
             .clone()
             .or_else(|| self.content_sas_token.clone())
             .unwrap_or_default();
 
-        let path = Path::from(base_path).child("storage").child("db");
+        let path = db_path_from_base(&base_path);
         let connection = make_azure_builder(
             self.account_name.clone(),
             self.content_container.clone(),

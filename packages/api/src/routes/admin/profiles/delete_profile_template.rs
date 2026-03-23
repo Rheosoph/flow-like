@@ -28,7 +28,7 @@ pub async fn delete_profile_template(
     Extension(user): Extension<AppUser>,
     Path(profile_id): Path<String>,
 ) -> Result<Json<Vec<Profile>>, ApiError> {
-    user.check_global_permission(&state, GlobalPermission::WriteBits)
+    user.check_global_permission(&state, GlobalPermission::WriteProfile)
         .await?;
 
     let audit_profile_id = profile_id.clone();

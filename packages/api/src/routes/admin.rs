@@ -14,6 +14,7 @@ pub mod profiles;
 pub mod publication;
 pub mod sinks;
 pub mod solutions;
+pub mod users;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -71,4 +72,10 @@ pub fn routes() -> Router<AppState> {
             get(sinks::list_tokens::list_tokens).post(sinks::register_sink::register_sink),
         )
         .route("/sinks/{jti}", delete(sinks::revoke_sink::revoke_sink))
+        // User management routes
+        .route("/users", get(users::list_users::list_users))
+        .route(
+            "/users/{user_id}",
+            patch(users::update_user::update_user),
+        )
 }
