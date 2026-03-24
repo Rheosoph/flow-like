@@ -189,6 +189,14 @@ impl Board {
             }
         }
 
+        for layer in self.layers.values_mut() {
+            for variable in layer.variables.values_mut() {
+                for step in steps.iter_mut() {
+                    (*step).main_variable_iteration(variable, &pins);
+                }
+            }
+        }
+
         for step in steps.iter_mut() {
             (*step).post_process(self, &pins);
         }

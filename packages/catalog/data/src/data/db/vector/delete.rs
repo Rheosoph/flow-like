@@ -1,7 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::VectorStore;
@@ -25,10 +25,11 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         let mut node = Node::new(
             "filter_delete_local_db",
             "Delete",
-            "Filter Database",
+            "Delete rows from a database table and return the removed rows",
             "Data/Database/Delete",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -43,7 +44,7 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         node.add_input_pin(
             "filter",
             "SQL Filter",
-            "Optional SQL Filter",
+            "Optional SQL filter. Leave empty to delete all rows.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -54,6 +55,14 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             "Done Creating Database",
             VariableType::Execution,
         );
+
+        node.add_output_pin(
+            "deleted_values",
+            "Deleted Values",
+            "Rows that were deleted",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node
     }
@@ -66,7 +75,34 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
         let filter: String = context.evaluate_pin("filter").await?;
-        database.delete(&filter).await?;
+
+        let normalized_filter = filter.trim().to_string();
+
+        let deleted_values = if normalized_filter.is_empty() {
+            let count = database.count(None).await?;
+            if count == 0 {
+                Vec::new()
+            } else {
+                database.list(None, count, 0).await?
+            }
+        } else {
+            let count = database.count(Some(normalized_filter.clone())).await?;
+            if count == 0 {
+                Vec::new()
+            } else {
+                database.filter(&normalized_filter, None, count, 0).await?
+            }
+        };
+
+        if normalized_filter.is_empty() {
+            database.delete("true").await?;
+        } else {
+            database.delete(&normalized_filter).await?;
+        }
+
+        context
+            .set_pin_value("deleted_values", json!(deleted_values))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

@@ -12,7 +12,9 @@ use std::sync::Arc;
 pub use flow_like_catalog_core::{CachedDB, NodeDBConnection};
 
 pub mod count;
+pub mod add_column;
 pub mod delete;
+pub mod drop_column;
 pub mod filter;
 pub mod flush;
 pub mod fts_search;
@@ -21,6 +23,7 @@ pub mod index;
 pub mod insert;
 pub mod list;
 pub mod list_tables;
+pub mod make_column_optional;
 pub mod optimize;
 pub mod purge;
 pub mod schema;

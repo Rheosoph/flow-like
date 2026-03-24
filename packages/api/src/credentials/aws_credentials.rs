@@ -445,7 +445,7 @@ fn invoke_read_write_policy(
                 "s3express:CreateSession",
             ],
             "Resource": [
-                format!("arn:aws:s3express:::{}", credentials.meta_bucket)
+                "*"
             ]
           }
         ],
@@ -516,7 +516,7 @@ fn invoke_read_policy(
                 "s3express:CreateSession",
             ],
             "Resource": [
-                format!("arn:aws:s3express:::{}", credentials.meta_bucket)
+                "*"
             ]
           }
         ],
@@ -589,7 +589,7 @@ fn invoke_none_policy(
                 "s3express:CreateSession",
             ],
             "Resource": [
-                format!("arn:aws:s3express:::{}", credentials.meta_bucket)
+                "*"
             ]
           }
         ],
@@ -640,7 +640,7 @@ fn edit_app_policy(
                 "s3express:CreateSession",
             ],
             "Resource": [
-                format!("arn:aws:s3express:::{}", credentials.meta_bucket)
+                "*"
             ]
           }
         ],
@@ -689,7 +689,7 @@ fn read_app_policy(
                 "s3express:CreateSession",
             ],
             "Resource": [
-                format!("arn:aws:s3express:::{}", credentials.meta_bucket)
+                "*"
             ]
           }
         ],

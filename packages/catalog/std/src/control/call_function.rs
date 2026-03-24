@@ -1,10 +1,11 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::{BTreeMap, HashSet}, sync::Arc};
 
 use flow_like::flow::{
     board::{Board, Layer, LayerType},
     execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
     node::{Node, NodeLogic},
     pin::PinType,
+    utils::evaluate_pin_value,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::from_slice};
@@ -18,7 +19,18 @@ impl CallFunctionNode {
         CallFunctionNode {}
     }
 
-    async fn read_outputs(&self, context: &mut ExecutionContext, layer: &Layer) {
+    async fn read_outputs(
+        &self,
+        context: &mut ExecutionContext,
+        layer: &Layer,
+        overrides: &BTreeMap<String, Value>,
+    ) {
+        let overrides_opt = if overrides.is_empty() {
+            None
+        } else {
+            Some(overrides.clone())
+        };
+
         for layer_pin in layer.pins.values() {
             if layer_pin.pin_type != PinType::Output
                 || layer_pin.data_type == VariableType::Execution
@@ -26,19 +38,24 @@ impl CallFunctionNode {
                 continue;
             }
 
-            // Find the inner node output pin that feeds this layer output (via depends_on)
             for dep_pin_id in &layer_pin.depends_on {
-                let mut found = false;
+                // Find the InternalPin for this dependency
+                let mut found_pin = None;
                 for node in context.nodes.values() {
-                    if let Ok(inner_pin) = node.get_pin_by_id(dep_pin_id) {
-                        if let Some(value) = inner_pin.get_raw_value().await {
-                            let _ = context.set_pin_value(&layer_pin.name, value).await;
-                        }
-                        found = true;
+                    if let Ok(pin) = node.get_pin_by_id(dep_pin_id) {
+                        found_pin = Some(pin);
                         break;
                     }
                 }
-                if found {
+                let Some(pin) = found_pin else {
+                    continue;
+                };
+
+                // Use evaluate_pin_value to follow the full dependency chain
+                // while checking overrides at each step. This correctly handles
+                // bridge pins, relay pins, and prevents stale shared pin reads.
+                if let Ok(value) = evaluate_pin_value(pin, &overrides_opt).await {
+                    let _ = context.set_pin_value(&layer_pin.name, value).await;
                     break;
                 }
             }
@@ -86,6 +103,7 @@ impl CallFunctionNode {
 
         // Find all inner nodes that directly feed outputs
         let mut triggered: HashSet<String> = HashSet::new();
+        let mut all_overrides: BTreeMap<String, Value> = BTreeMap::new();
 
         for layer_pin in &output_layer_pins {
             for dep_pin_id in &layer_pin.depends_on {
@@ -118,6 +136,9 @@ impl CallFunctionNode {
                 }
 
                 let result = InternalNode::trigger(&mut fn_context, &mut None, false).await;
+                if let Some(overrides) = fn_context.context_pin_overrides.take() {
+                    all_overrides.extend(overrides);
+                }
                 fn_context.end_trace();
                 context.push_sub_context(&mut fn_context);
 
@@ -135,7 +156,7 @@ impl CallFunctionNode {
         }
 
         // Read output values
-        self.read_outputs(context, layer).await;
+        self.read_outputs(context, layer, &all_overrides).await;
         Ok(())
     }
 }
@@ -194,6 +215,19 @@ impl NodeLogic for CallFunctionNode {
             if let Ok(value) = context.evaluate_pin_ref::<Value>(pin.clone()).await {
                 input_values.insert(pin.name.clone(), value);
             }
+        }
+
+        // Clear mirrored data outputs before each call to avoid leaking
+        // previous invocation values when a function output is not produced.
+        let output_data_pins: Vec<_> = context
+            .node
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && p.data_type != VariableType::Execution)
+            .cloned()
+            .collect();
+        for pin in &output_data_pins {
+            let _ = context.set_pin_ref_value(pin, Value::Null).await;
         }
 
         // Check if the function is impure (has an input execution layer pin)
@@ -288,8 +322,8 @@ impl NodeLogic for CallFunctionNode {
                     let Some(node_arc) = fn_context.nodes.get(&node_id).cloned() else {
                         continue;
                     };
-                    if let Ok(pin) = node_arc.get_pin_by_id(dep_pin_id) {
-                        if pin.get_raw_value().await.is_some() {
+                    if let Some(overrides) = &fn_context.context_pin_overrides {
+                        if overrides.contains_key(dep_pin_id.as_str()) {
                             continue;
                         }
                     }
@@ -320,10 +354,11 @@ impl NodeLogic for CallFunctionNode {
                 }
             }
 
+            let overrides = fn_context.context_pin_overrides.take().unwrap_or_default();
             fn_context.end_trace();
             context.push_sub_context(&mut fn_context);
 
-            self.read_outputs(context, layer).await;
+            self.read_outputs(context, layer, &overrides).await;
 
             for name in &output_exec_names {
                 let _ = context.activate_exec_pin(name).await;

@@ -7,7 +7,7 @@ use crate::flow::{
         Board, Layer,
         cleanup::{BoardCleanupLogic, NodeOrLayer, NodeOrLayerRef, PinLookup},
     },
-    pin::Pin,
+    pin::{Pin, PinType},
 };
 
 /// Plan for creating bridge pins for a single internal pin
@@ -195,6 +195,7 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
                 let in_bridge_pin_id = create_id();
                 let mut in_bridge_pin = original_pin.clone();
                 in_bridge_pin.id = in_bridge_pin_id.clone();
+                in_bridge_pin.pin_type = PinType::Input;
                 // Input bridge connects TO the original pin
                 in_bridge_pin.connected_to = BTreeSet::from([original_pin.id.clone()]);
                 // Input bridge depends ON external pins
@@ -207,6 +208,7 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
                 let out_bridge_pin_id = create_id();
                 let mut out_bridge_pin = original_pin.clone();
                 out_bridge_pin.id = out_bridge_pin_id.clone();
+                out_bridge_pin.pin_type = PinType::Output;
                 // Output bridge connects TO external pins
                 out_bridge_pin.connected_to = plan.outside_connected_to.clone();
                 // Output bridge depends ON the original pin
@@ -258,6 +260,7 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
 
             // OUTGOING: original_pin → bridge_pin → external_pins
             if has_outgoing {
+                bridge_pin.pin_type = PinType::Output;
                 // Original pin sends to bridge
                 original_pin.connected_to.insert(bridge_pin_id.clone());
                 // Bridge depends on original (receives from it)
@@ -266,6 +269,7 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
 
             // INCOMING: external_pins → bridge_pin → original_pin
             if has_incoming {
+                bridge_pin.pin_type = PinType::Input;
                 // Original pin depends on bridge (receives from it)
                 original_pin.depends_on.insert(bridge_pin.id.clone());
                 // Bridge sends to original

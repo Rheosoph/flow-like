@@ -9,7 +9,7 @@ use crate::{
         node::{Node, NodeState},
         oauth::OAuthToken,
         pin::PinType,
-        utils::{evaluate_pin_value, evaluate_pin_value_reference},
+        utils::evaluate_pin_value,
         variable::{Variable, VariableType},
     },
     profile::Profile,
@@ -485,7 +485,7 @@ impl ExecutionContext {
         }
 
         context.local_variables = Some(Arc::new(Mutex::new(local_vars)));
-        context.context_pin_overrides = None;
+        context.context_pin_overrides = Some(BTreeMap::new());
 
         context
     }
@@ -773,7 +773,7 @@ impl ExecutionContext {
 
     pub async fn evaluate_pin_to_ref(&self, name: &str) -> flow_like_types::Result<Value> {
         let pin = self.get_pin_by_name(name).await?;
-        let value = evaluate_pin_value_reference(pin).await?;
+        let value = evaluate_pin_value(pin, &self.context_pin_overrides).await?;
         Ok(value)
     }
 
@@ -804,27 +804,17 @@ impl ExecutionContext {
         pin: &Arc<InternalPin>,
         value: Value,
     ) -> flow_like_types::Result<()> {
-        // Direct access - no lock needed for id
         let pin_id = pin.id();
 
-        // CRITICAL: If this specific pin was overridden in the context,
-        // we should update the override map instead of the actual pin value
-        // to prevent race conditions in parallel execution
-        if let Some(overrides) = &self.context_pin_overrides
-            && overrides.contains_key(pin_id)
-        {
-            // This pin was already overridden, so update the override
-            self.override_pin_value(pin_id, value);
-            return Ok(());
-        }
-
-        // For pins that haven't been overridden, set the actual pin value
-        // BUT if we're in an override context, also add it to overrides to maintain isolation
+        // When in an override context, write to BOTH the override map AND the
+        // shared pin. The override map provides per-invocation isolation so
+        // read_outputs can read the correct value for each parallel call.
+        // The shared pin write keeps bridge pin chains, get_raw_value() checks,
+        // and other non-override-aware code paths working.
         if self.context_pin_overrides.is_some() {
             self.override_pin_value(pin_id, value.clone());
         }
 
-        // Only value access needs locking
         pin.set_value(value).await;
         Ok(())
     }
@@ -887,6 +877,16 @@ impl ExecutionContext {
         self.sub_traces.extend(sub_traces);
         if let Some(result) = &context.result {
             self.result = Some(result.clone());
+        }
+        // Propagate pin overrides back so function contexts accumulate
+        // all pin values written during the exec chain, ensuring parallel
+        // invocations each read their own isolated output values.
+        if let Some(child_overrides) = context.context_pin_overrides.take() {
+            if !child_overrides.is_empty() {
+                self.context_pin_overrides
+                    .get_or_insert_with(BTreeMap::new)
+                    .extend(child_overrides);
+            }
         }
     }
 

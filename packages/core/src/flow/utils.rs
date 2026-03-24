@@ -65,6 +65,7 @@ pub async fn evaluate_pin_value(
 ) -> flow_like_types::Result<Value> {
     let mut current_pin = pin;
     let mut visited_pins = std::collections::HashSet::with_capacity(8);
+    let has_overrides = overrides.is_some();
 
     loop {
         let pin_id = current_pin.id().to_string();
@@ -80,16 +81,29 @@ pub async fn evaluate_pin_value(
             return Ok(found_override.clone());
         }
 
-        if let Some(value) = current_pin.get_raw_value().await {
-            return Ok(value);
+        let deps = current_pin.depends_on();
+        let has_deps = deps.first().and_then(|d| d.upgrade());
+
+        // When overrides are active (inside a function context), prefer the
+        // dependency chain over shared pin values. Shared pins may carry stale
+        // data from previous invocations due to dual-write. Only fall back to
+        // shared pin at leaf pins (no deps) where it's the sole value source.
+        if !has_overrides {
+            if let Some(value) = current_pin.get_raw_value().await {
+                return Ok(value);
+            }
         }
 
-        let deps = current_pin.depends_on();
-        if let Some(first_dep) = deps.first()
-            && let Some(dep_pin) = first_dep.upgrade()
-        {
+        if let Some(dep_pin) = has_deps {
             current_pin = dep_pin;
             continue;
+        }
+
+        // Leaf pin — no dependency chain to follow. Use shared pin or default.
+        if has_overrides {
+            if let Some(value) = current_pin.get_raw_value().await {
+                return Ok(value);
+            }
         }
 
         if let Some(default_value) = &current_pin.default_value {

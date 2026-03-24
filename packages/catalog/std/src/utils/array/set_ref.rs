@@ -103,7 +103,7 @@ impl NodeLogic for SetIndexArrayRefNode {
             }
         };
 
-        let variable = match board.get_variable(&var_ref_value) {
+        let variable = match board.get_any_variable(&var_ref_value) {
             Some(var) => var,
             None => {
                 node.error = Some(format!("Variable '{}' not found", var_ref_value));
