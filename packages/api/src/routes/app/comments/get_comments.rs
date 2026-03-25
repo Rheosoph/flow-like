@@ -104,9 +104,12 @@ pub async fn get_comments(
             id: c.id,
             text: c.text,
             rating: c.rating,
-            user_id: c.user_id,
-            user_name: u.as_ref().and_then(|u| u.name.clone()),
+            user_name: u
+                .as_ref()
+                .and_then(|u| u.name.clone().or(u.username.clone()))
+                .or_else(|| Some(c.user_id.clone())),
             user_avatar: u.as_ref().and_then(|u| u.avatar.clone()),
+            user_id: c.user_id,
             created_at: c.created_at.to_string(),
             updated_at: c.updated_at.to_string(),
         })

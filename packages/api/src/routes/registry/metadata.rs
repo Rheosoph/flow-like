@@ -4,6 +4,7 @@ use crate::entity::sea_orm_active_enums::{
 use crate::entity::{meta, wasm_package, wasm_package_review};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
+use crate::routes::registry::server::PackageReview;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
@@ -29,6 +30,50 @@ pub struct UpdateReadmeRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub message: String,
+}
+
+/// GET /registry/package/{package_id}/publication-reviews
+/// Retrieve internal publication review history for package maintainers.
+#[utoipa::path(
+    get,
+    path = "/registry/package/{package_id}/publication-reviews",
+    tag = "registry",
+    params(("package_id" = String, Path, description = "Package ID")),
+    responses(
+        (status = 200, description = "Package publication review history", body = [PackageReview]),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Package not found"),
+        (status = 503, description = "WASM registry not configured")
+    )
+)]
+pub async fn get_publication_reviews(
+    Extension(user): Extension<AppUser>,
+    State(state): State<AppState>,
+    Path(package_id): Path<String>,
+) -> Result<Json<Vec<PackageReview>>, ApiError> {
+    let user_id = user
+        .sub()
+        .map_err(|_| ApiError::unauthorized("Authentication required"))?;
+
+    let registry = state
+        .wasm_registry
+        .as_ref()
+        .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
+
+    let _package = wasm_package::Entity::find_by_id(&package_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
+    crate::ensure_wasm_permission!(
+        state,
+        &user_id,
+        &package_id,
+        WasmPackagePermission::Maintainer
+    );
+
+    Ok(Json(registry.get_reviews(&package_id).await?))
 }
 
 /// GET /registry/package/{package_id}/readme

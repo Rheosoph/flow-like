@@ -16,7 +16,10 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::{
-    history::{Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool},
+    history::{
+        Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool,
+        normalize_json_schema_strings,
+    },
     response::{LLMUsageStats, Response, Usage as ResponseUsage},
     response_chunk::ResponseChunk,
 };
@@ -358,11 +361,97 @@ async fn manage_context_budget(
     }
 }
 
+#[cfg(feature = "execute")]
+fn sanitize_tool_description(value: &str) -> String {
+    value
+        .replace('"', "'")
+        .replace('`', "'")
+        .chars()
+        .map(|ch| if ch.is_control() && ch != '\n' && ch != '\t' { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+#[cfg(feature = "execute")]
+fn sanitize_tool_identifier(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+
+    for ch in value.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if matches!(ch, ' ' | '-' | '_' | '.' | '/' | ':' | '\\') {
+            Some('_')
+        } else {
+            None
+        };
+
+        match normalized {
+            Some('_') => {
+                if !previous_was_separator && !sanitized.is_empty() {
+                    sanitized.push('_');
+                }
+                previous_was_separator = true;
+            }
+            Some(letter) => {
+                sanitized.push(letter);
+                previous_was_separator = false;
+            }
+            None => {
+                previous_was_separator = true;
+            }
+        }
+    }
+
+    let sanitized = sanitized.trim_matches('_').to_string();
+    if sanitized.is_empty() {
+        "value".to_string()
+    } else if sanitized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+    {
+        format!("arg_{}", sanitized)
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(feature = "execute")]
+fn assign_sanitized_argument_names(names: Vec<(u16, String)>) -> HashMap<String, String> {
+    let mut sorted_names = names;
+    sorted_names.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+
+    let mut counters: HashMap<String, usize> = HashMap::new();
+    let mut sanitized_names = HashMap::new();
+
+    for (_index, original_name) in sorted_names {
+        let base_name = sanitize_tool_identifier(&original_name);
+        let entry = counters.entry(base_name.clone()).or_insert(0);
+        *entry += 1;
+
+        let sanitized_name = if *entry == 1 {
+            base_name
+        } else {
+            format!("{}_{}", base_name, entry)
+        };
+
+        sanitized_names.entry(original_name).or_insert(sanitized_name);
+    }
+
+    sanitized_names
+}
+
 /// Generate OpenAI function call schema from a referenced function node.
 /// Returns a Tool definition with function name, description, and parameter schema.
 #[cfg(feature = "execute")]
 pub async fn generate_tool_from_function(
     referenced_node: &Arc<InternalNode>,
+    refs: &HashMap<String, String>,
 ) -> flow_like_types::Result<Tool> {
     use flow_like_model_provider::history::{
         HistoryFunction, HistoryFunctionParameters, HistoryJSONSchemaDefine, HistoryJSONSchemaType,
@@ -370,9 +459,121 @@ pub async fn generate_tool_from_function(
     };
     use std::collections::HashMap;
 
+    fn resolve_ref(value: &str, refs: &HashMap<String, String>) -> String {
+        refs.get(value)
+            .cloned()
+            .unwrap_or_else(|| value.to_string())
+    }
+
+    fn nested_schema_from_string(
+        schema_str: &str,
+        refs: &HashMap<String, String>,
+        description: &str,
+    ) -> Option<HistoryJSONSchemaDefine> {
+        let resolved_schema = resolve_ref(schema_str, refs);
+
+        let Ok(mut schema_value) = flow_like_types::json::from_str::<Value>(&resolved_schema) else {
+            return None;
+        };
+
+        normalize_json_schema_strings(&mut schema_value);
+
+        let props = schema_value.get("properties").and_then(|p| p.as_object())?;
+
+        let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
+        for (prop_name, prop_schema) in props {
+            let sanitized_prop_name = sanitize_tool_identifier(prop_name);
+            let prop_type = match prop_schema.get("type").and_then(|t| t.as_str()) {
+                Some("string") => HistoryJSONSchemaType::String,
+                Some("number") | Some("integer") => HistoryJSONSchemaType::Number,
+                Some("boolean") => HistoryJSONSchemaType::Boolean,
+                Some("array") => HistoryJSONSchemaType::Array,
+                _ => HistoryJSONSchemaType::Object,
+            };
+            let prop_desc = prop_schema
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(sanitize_tool_description);
+            let prop_enum = prop_schema.get("enum").and_then(|e| {
+                e.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(sanitize_tool_description))
+                        .collect()
+                })
+            });
+            nested_props.insert(
+                sanitized_prop_name,
+                Box::new(HistoryJSONSchemaDefine {
+                    schema_type: Some(prop_type),
+                    description: prop_desc,
+                    enum_values: prop_enum,
+                    properties: None,
+                    required: None,
+                    items: None,
+                }),
+            );
+        }
+
+        Some(HistoryJSONSchemaDefine {
+            schema_type: Some(HistoryJSONSchemaType::Object),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(sanitize_tool_description(description))
+            },
+            enum_values: None,
+            properties: Some(nested_props),
+            required: schema_value
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(sanitize_tool_identifier))
+                        .collect()
+                }),
+            items: None,
+        })
+    }
+
+    fn wrap_value_type(
+        base_def: HistoryJSONSchemaDefine,
+        value_type: &ValueType,
+        description: &str,
+    ) -> HistoryJSONSchemaDefine {
+        match value_type {
+            ValueType::Array | ValueType::HashSet => HistoryJSONSchemaDefine {
+                schema_type: Some(HistoryJSONSchemaType::Array),
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description.to_string())
+                },
+                enum_values: None,
+                properties: None,
+                required: None,
+                items: Some(Box::new(base_def)),
+            },
+            ValueType::HashMap => HistoryJSONSchemaDefine {
+                schema_type: Some(HistoryJSONSchemaType::Object),
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description.to_string())
+                },
+                enum_values: None,
+                properties: None,
+                required: None,
+                items: None,
+            },
+            ValueType::Normal => base_def,
+        }
+    }
+
     /// Convert a Pin to HistoryJSONSchemaDefine, handling ValueType (Array/HashSet/HashMap),
     /// pin schemas for Struct/Generic, and enum values from pin options.
-    fn pin_to_schema_define(pin: &Pin) -> HistoryJSONSchemaDefine {
+    fn pin_to_schema_define(pin: &Pin, refs: &HashMap<String, String>) -> HistoryJSONSchemaDefine {
+        let pin_description = sanitize_tool_description(&resolve_ref(&pin.description, refs));
+
         // Map base VariableType to schema type
         let (base_type, base_properties) = match pin.data_type {
             VariableType::String | VariableType::PathBuf | VariableType::Date => {
@@ -383,62 +584,11 @@ pub async fn generate_tool_from_function(
             }
             VariableType::Boolean => (HistoryJSONSchemaType::Boolean, None),
             VariableType::Struct | VariableType::Generic => {
-                // Try to parse nested schema from pin
                 if let Some(schema_str) = &pin.schema
-                    && let Ok(schema_value) = flow_like_types::json::from_str::<Value>(schema_str)
-                    && let Some(props) = schema_value.get("properties").and_then(|p| p.as_object())
+                    && let Some(schema_define) =
+                        nested_schema_from_string(schema_str, refs, &pin_description)
                 {
-                    let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> =
-                        HashMap::new();
-                    for (prop_name, prop_schema) in props {
-                        let prop_type = match prop_schema.get("type").and_then(|t| t.as_str()) {
-                            Some("string") => HistoryJSONSchemaType::String,
-                            Some("number") | Some("integer") => HistoryJSONSchemaType::Number,
-                            Some("boolean") => HistoryJSONSchemaType::Boolean,
-                            Some("array") => HistoryJSONSchemaType::Array,
-                            _ => HistoryJSONSchemaType::Object,
-                        };
-                        let prop_desc = prop_schema
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .map(String::from);
-                        let prop_enum = prop_schema.get("enum").and_then(|e| {
-                            e.as_array().map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            })
-                        });
-                        nested_props.insert(
-                            prop_name.clone(),
-                            Box::new(HistoryJSONSchemaDefine {
-                                schema_type: Some(prop_type),
-                                description: prop_desc,
-                                enum_values: prop_enum,
-                                properties: None,
-                                required: None,
-                                items: None,
-                            }),
-                        );
-                    }
-                    return HistoryJSONSchemaDefine {
-                        schema_type: Some(HistoryJSONSchemaType::Object),
-                        description: if pin.description.is_empty() {
-                            None
-                        } else {
-                            Some(pin.description.clone())
-                        },
-                        enum_values: None,
-                        properties: Some(nested_props),
-                        required: schema_value.get("required").and_then(|r| r.as_array()).map(
-                            |arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            },
-                        ),
-                        items: None,
-                    };
+                    return wrap_value_type(schema_define, &pin.value_type, &pin_description);
                 }
                 (HistoryJSONSchemaType::Object, None)
             }
@@ -450,15 +600,15 @@ pub async fn generate_tool_from_function(
             .options
             .as_ref()
             .and_then(|opts| opts.valid_values.as_ref())
-            .cloned();
+            .map(|values| values.iter().map(|value| sanitize_tool_description(value)).collect());
 
         // Build base definition
         let base_def = HistoryJSONSchemaDefine {
             schema_type: Some(base_type.clone()),
-            description: if pin.description.is_empty() {
+            description: if pin_description.is_empty() {
                 None
             } else {
-                Some(pin.description.clone())
+                Some(pin_description.clone())
             },
             enum_values,
             properties: base_properties,
@@ -466,40 +616,21 @@ pub async fn generate_tool_from_function(
             items: None,
         };
 
-        // Wrap based on ValueType
-        match pin.value_type {
-            ValueType::Array | ValueType::HashSet => HistoryJSONSchemaDefine {
-                schema_type: Some(HistoryJSONSchemaType::Array),
-                description: if pin.description.is_empty() {
-                    None
-                } else {
-                    Some(pin.description.clone())
-                },
-                enum_values: None,
-                properties: None,
-                required: None,
-                items: Some(Box::new(base_def)),
-            },
-            ValueType::HashMap => HistoryJSONSchemaDefine {
-                schema_type: Some(HistoryJSONSchemaType::Object),
-                description: if pin.description.is_empty() {
-                    None
-                } else {
-                    Some(pin.description.clone())
-                },
-                enum_values: None,
-                properties: None, // additionalProperties not supported in HistoryJSONSchemaDefine
-                required: None,
-                items: None,
-            },
-            ValueType::Normal => base_def,
-        }
+        wrap_value_type(base_def, &pin.value_type, &pin_description)
     }
 
     let node = referenced_node.node.lock().await;
-    // Use friendly_name (user-customizable) and convert to snake_case for LLM
-    let function_name = node.friendly_name.to_lowercase().replace([' ', '-'], "_");
-    let description = node.description.clone();
+    let function_name = sanitize_tool_identifier(&node.friendly_name);
+    let description = sanitize_tool_description(&resolve_ref(&node.description, refs));
+    let argument_names = assign_sanitized_argument_names(
+        node.pins
+            .values()
+            .filter(|pin| {
+                pin.data_type != VariableType::Execution && pin.pin_type == PinType::Output
+            })
+            .map(|pin| (pin.index, pin.name.clone()))
+            .collect(),
+    );
 
     // Collect all non-execution output pins to build parameter schema
     let mut properties: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
@@ -519,14 +650,22 @@ pub async fn generate_tool_from_function(
         }
 
         has_data_pins = true;
-        properties.insert(pin.name.clone(), Box::new(pin_to_schema_define(pin)));
+        let argument_name = argument_names
+            .get(&pin.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
+        properties.insert(argument_name, Box::new(pin_to_schema_define(pin, refs)));
     }
 
     // If no data pins exist AND the event has a payload pin defined, add it to the schema
     if !has_data_pins && let Some(payload) = payload_pin {
+        let payload_name = argument_names
+            .get(&payload.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&payload.name));
         properties.insert(
-            "payload".to_string(),
-            Box::new(pin_to_schema_define(payload)),
+            payload_name,
+            Box::new(pin_to_schema_define(payload, refs)),
         );
     }
 
@@ -575,15 +714,30 @@ pub async fn execute_tool_call(
         .as_object()
         .ok_or_else(|| anyhow!("Tool call arguments for '{}' are not an object", tool_name))?;
 
-    // Set values on the referenced function's OUTPUT pins (matching call_ref.rs logic)
+    let argument_names = assign_sanitized_argument_names(
+        referenced_node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .map(|pin| (pin.index, pin.name.clone()))
+            .collect(),
+    );
+
+    // Set values on the referenced function's OUTPUT pins using sanitized tool names,
+    // while still accepting the original pin names for backward compatibility.
     for (_id, pin) in referenced_node.pins.iter() {
-        // Skip input pins and execution pins
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
 
-        // Set value if we have an argument for this pin
-        if let Some(value) = args_obj.get(&pin.name) {
+        let sanitized_name = argument_names
+            .get(&pin.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
+
+        if let Some(value) = args_obj.get(&sanitized_name).or_else(|| args_obj.get(&pin.name)) {
             pin.set_value(value.clone()).await;
         }
     }
@@ -790,10 +944,9 @@ pub async fn execute_agent_streaming(
     stream_state: &dyn StreamHandler,
 ) -> flow_like_types::Result<AgentExecutionResult> {
     let model_display_name = agent
-        .model
-        .meta
-        .get("name")
-        .map(|meta| meta.name.clone())
+        .model_display_name
+        .clone()
+        .or_else(|| agent.model.meta.get("en").map(|meta| meta.name.clone()))
         .unwrap_or_else(|| agent.model.id.clone());
 
     let system_prompt = agent
@@ -952,8 +1105,10 @@ pub async fn execute_agent_streaming(
         .collect();
 
     // Generate tool definitions from function references
+    let board_refs = context.get_board().await?.refs.clone();
+
     for internal_node in tool_name_to_node.values() {
-        let tool = generate_tool_from_function(internal_node).await?;
+        let tool = generate_tool_from_function(internal_node, &board_refs).await?;
         let parameters =
             json::to_value(&tool.function.parameters).unwrap_or_else(|_| json::json!({}));
         tool_definitions.push(ToolDefinition {
@@ -1050,6 +1205,12 @@ pub async fn execute_agent_streaming(
                 "required": []
             }),
         });
+    }
+
+    // Normalize tool schema strings to remove escaped quotes that cause
+    // OpenAI strict mode validation failures (e.g. \" in descriptions/enum values)
+    for tool_def in &mut tool_definitions {
+        normalize_json_schema_strings(&mut tool_def.parameters);
     }
 
     let (prompt, history_msgs) = history
@@ -1416,7 +1577,7 @@ pub async fn execute_agent_streaming(
             if !name.is_empty() && !complete_tool_call_ids.contains(&id) {
                 let tool_call = RigToolCall {
                     id: id.clone(),
-                    call_id: None,
+                    call_id: Some(id.clone()),
                     function: rig::message::ToolFunction {
                         name,
                         arguments: json::from_str(&arguments).unwrap_or(json::json!({})),
@@ -1445,6 +1606,7 @@ pub async fn execute_agent_streaming(
                         LogLevel::Warn,
                     );
                     tc.id = new_id.clone();
+                    tc.call_id = Some(new_id.clone());
                     used_ids.insert(new_id);
                 }
                 id_counter += 1;
@@ -1461,12 +1623,12 @@ pub async fn execute_agent_streaming(
         };
 
         let mut tool_calls_found = false;
-        let mut tool_results: Vec<(String, String, Value, Value)> = Vec::new();
+        let mut tool_results: Vec<(String, Option<String>, String, Value, Value)> = Vec::new();
 
         for content in response_contents.iter() {
             if let AssistantContent::ToolCall(RigToolCall {
                 id,
-                call_id: _,
+                call_id,
                 function:
                     rig::message::ToolFunction {
                         name, arguments, ..
@@ -1598,7 +1760,7 @@ pub async fn execute_agent_streaming(
                     }
                 }
 
-                tool_results.push((id.clone(), name.clone(), arguments.clone(), tool_output));
+                tool_results.push((id.clone(), call_id.clone(), name.clone(), arguments.clone(), tool_output));
             }
         }
 
@@ -1608,7 +1770,7 @@ pub async fn execute_agent_streaming(
                 iteration,
                 tool_results.len()
             );
-            for (id, name, args, output) in &tool_results {
+            for (id, _call_id, name, args, output) in &tool_results {
                 let args_preview = {
                     let s = json::to_string(args).unwrap_or_default();
                     s.chars().take(300).collect::<String>()
@@ -1667,7 +1829,7 @@ pub async fn execute_agent_streaming(
         // the assistant's tool call message in a single message
         let mut tool_result_contents: Vec<UserContent> = Vec::new();
 
-        for (tool_id, tool_name, _tool_args, tool_output) in &tool_results {
+        for (tool_id, tool_call_id, tool_name, _tool_args, tool_output) in &tool_results {
             let tool_result_str = match tool_output.as_str() {
                 Some(s) => s.to_string(),
                 None => json::to_string(tool_output).unwrap_or_default(),
@@ -1701,7 +1863,7 @@ pub async fn execute_agent_streaming(
 
             tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                 id: tool_id.clone(),
-                call_id: None,
+                call_id: tool_call_id.clone().or_else(|| Some(tool_id.clone())),
                 content: OneOrMany::one(ToolResultContent::text(tool_result_str.clone())),
             }));
 
@@ -2008,7 +2170,9 @@ async fn handle_lazy_tool_search(
                     tool_name_to_node.insert(tool_name.clone(), node.clone());
                     tool_name_to_node.insert(friendly_name.clone(), node.clone());
 
-                    if let Ok(tool) = generate_tool_from_function(&node).await {
+                    let board_refs = context.get_board().await?.refs.clone();
+
+                    if let Ok(tool) = generate_tool_from_function(&node, &board_refs).await {
                         let parameters = json::to_value(&tool.function.parameters)
                             .unwrap_or_else(|_| json::json!({}));
                         tool_definitions.push(ToolDefinition {

@@ -180,6 +180,8 @@ pub struct PackageReview {
     pub id: String,
     pub package_id: String,
     pub reviewer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<AuthorInfo>,
     pub action: String,
     pub comment: Option<String>,
     pub security_score: Option<i32>,
@@ -825,6 +827,21 @@ impl ServerRegistry {
         Ok(authors)
     }
 
+    async fn get_user_author_info(
+        &self,
+        user_id: &str,
+    ) -> flow_like_types::Result<Option<AuthorInfo>> {
+        let user_info = user::Entity::find_by_id(user_id).one(&self.db).await?;
+
+        Ok(user_info.map(|user_info| AuthorInfo {
+            user_id: user_id.to_string(),
+            username: user_info.username,
+            name: user_info.name,
+            avatar: user_info.avatar,
+            role: None,
+        }))
+    }
+
     /// Build a RegistryEntry from a package model.
     /// `show_all_versions`: when `true`, all versions are included regardless of
     /// approval status; when `false`, only `Active` versions are returned.
@@ -922,6 +939,7 @@ impl ServerRegistry {
             status: match pkg.status {
                 WasmPackageStatus::Active => PackageStatus::Active,
                 WasmPackageStatus::Deprecated => PackageStatus::Deprecated,
+                WasmPackageStatus::PendingReview => PackageStatus::PendingReview,
                 _ => PackageStatus::Disabled,
             },
             download_count: pkg.download_count as u64,
@@ -1371,7 +1389,7 @@ impl ServerRegistry {
         &self,
         manifest: PackageManifest,
         submitter_id: &str,
-        submitter_email: Option<String>,
+        _submitter_email: Option<String>,
     ) -> flow_like_types::Result<PublishResponse> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
 
@@ -1965,6 +1983,7 @@ impl ServerRegistry {
             id: review_id,
             package_id: package_id.to_string(),
             reviewer_id: reviewer_id.to_string(),
+            reviewer: self.get_user_author_info(reviewer_id).await?,
             action: review.action,
             comment: review.comment,
             security_score: review.security_score,
@@ -1985,35 +2004,38 @@ impl ServerRegistry {
             .all(&self.db)
             .await?;
 
-        Ok(reviews
-            .into_iter()
-            .map(|r| {
-                let action_str = match r.action {
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::Submitted => "submitted",
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::Approved => "approve",
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::Rejected => "reject",
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::RequestedChanges => {
-                        "request_changes"
-                    }
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::Commented => "comment",
-                    crate::entity::sea_orm_active_enums::WasmReviewAction::Flagged => "flag",
-                };
-                PackageReview {
-                    id: r.id,
-                    package_id: r.package_id,
-                    reviewer_id: r.reviewer_id,
-                    action: action_str.to_string(),
-                    comment: r.comment,
-                    security_score: r.security_score,
-                    code_quality_score: r.code_quality_score,
-                    documentation_score: r.documentation_score,
-                    created_at: chrono::DateTime::from_naive_utc_and_offset(
-                        r.created_at,
-                        chrono::Utc,
-                    ),
+        let mut resolved_reviews = Vec::with_capacity(reviews.len());
+
+        for review in reviews {
+            let action_str = match review.action {
+                crate::entity::sea_orm_active_enums::WasmReviewAction::Submitted => "submitted",
+                crate::entity::sea_orm_active_enums::WasmReviewAction::Approved => "approve",
+                crate::entity::sea_orm_active_enums::WasmReviewAction::Rejected => "reject",
+                crate::entity::sea_orm_active_enums::WasmReviewAction::RequestedChanges => {
+                    "request_changes"
                 }
-            })
-            .collect())
+                crate::entity::sea_orm_active_enums::WasmReviewAction::Commented => "comment",
+                crate::entity::sea_orm_active_enums::WasmReviewAction::Flagged => "flag",
+            };
+
+            resolved_reviews.push(PackageReview {
+                id: review.id,
+                package_id: review.package_id,
+                reviewer_id: review.reviewer_id.clone(),
+                reviewer: self.get_user_author_info(&review.reviewer_id).await?,
+                action: action_str.to_string(),
+                comment: review.comment,
+                security_score: review.security_score,
+                code_quality_score: review.code_quality_score,
+                documentation_score: review.documentation_score,
+                created_at: chrono::DateTime::from_naive_utc_and_offset(
+                    review.created_at,
+                    chrono::Utc,
+                ),
+            });
+        }
+
+        Ok(resolved_reviews)
     }
 
     /// Update package status directly (admin)

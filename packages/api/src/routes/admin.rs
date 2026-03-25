@@ -53,6 +53,14 @@ pub fn routes() -> Router<AppState> {
             "/publication/requests/{request_id}",
             patch(publication::upsert_requests::upsert_request),
         )
+        .route(
+            "/publication/apps/{app_id}/content",
+            get(publication::get_app_content::get_app_content),
+        )
+        .route(
+            "/publication/apps/{app_id}/board/{board_id}",
+            get(publication::get_board::get_board),
+        )
         // Package management routes
         .route("/packages", get(packages::get_packages::get_packages))
         .route("/packages/stats", get(packages::get_stats::get_stats))

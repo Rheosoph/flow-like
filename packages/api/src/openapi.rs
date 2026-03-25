@@ -159,6 +159,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::internal::upsert_app::upsert_app,
         crate::routes::app::internal::delete_app::delete_app,
         crate::routes::app::internal::change_visibility::change_visibility,
+        crate::routes::app::publication::get_publication::get_publication_requests,
+        crate::routes::app::publication::upsert_publication::request_publication,
         crate::routes::app::internal::get_nodes::get_nodes,
         // Board routes
         crate::routes::app::board::get_board::get_board,
@@ -344,6 +346,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::packages::delete_package::delete_package,
         crate::routes::admin::packages::review_package::review_package,
         crate::routes::admin::packages::update_package::update_package,
+        crate::routes::registry::metadata::get_publication_reviews,
         crate::routes::admin::bit::delete_bit::delete_bit,
         crate::routes::admin::sinks::list_tokens::list_tokens,
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
@@ -375,6 +378,11 @@ impl Modify for SecurityAddon {
         // App notifications
         crate::routes::app::notifications::CreateNotificationParams,
         crate::routes::app::notifications::CreateNotificationResponse,
+        crate::routes::app::publication::get_publication::AppPublicationActor,
+        crate::routes::app::publication::get_publication::AppPublicationLogItem,
+        crate::routes::app::publication::get_publication::AppPublicationRequestItem,
+        crate::routes::app::publication::upsert_publication::RequestPublicationBody,
+        crate::routes::app::publication::upsert_publication::RequestPublicationResponse,
         // Widgets
         crate::routes::app::widget::get_widget::VersionQuery,
         crate::routes::app::widget::upsert_widget::WidgetUpsert,

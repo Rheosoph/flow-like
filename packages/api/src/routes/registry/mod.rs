@@ -159,6 +159,10 @@ pub fn routes() -> Router<AppState> {
             "/package/{package_id}/request-publication",
             post(metadata::request_publication),
         )
+        .route(
+            "/package/{package_id}/publication-reviews",
+            get(metadata::get_publication_reviews),
+        )
         .route("/package/{package_id}/users", get(users::list_users))
         .route(
             "/package/{package_id}/users/invite",

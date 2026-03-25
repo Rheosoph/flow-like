@@ -18,6 +18,29 @@ use rig::message::{
     UserContent as RigUserContent, Video as RigVideo,
 };
 
+/// Recursively normalize string values in a JSON Value tree,
+/// removing escaped quotes (\" → ") that cause OpenAI strict mode to reject schemas.
+pub fn normalize_json_schema_strings(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            while s.contains("\\\"") {
+                *s = s.replace("\\\"", "\"");
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                normalize_json_schema_strings(item);
+            }
+        }
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                normalize_json_schema_strings(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct ToolCall {
     pub id: String,
@@ -892,12 +915,16 @@ impl History {
 
         let mut definitions = Vec::with_capacity(tools.len());
         for tool in tools {
-            let parameters = json::to_value(&tool.function.parameters).map_err(|e| {
+            let mut parameters = json::to_value(&tool.function.parameters).map_err(|e| {
                 anyhow!(
                     "Failed to serialize tool parameters for '{}': {e}",
                     tool.function.name
                 )
             })?;
+
+            // Normalize schema strings to remove escaped quotes (\" → ")
+            // that cause OpenAI strict mode validation failures
+            normalize_json_schema_strings(&mut parameters);
 
             definitions.push(ToolDefinition {
                 name: tool.function.name.clone(),

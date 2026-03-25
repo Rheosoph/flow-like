@@ -62,7 +62,7 @@ impl SimpleAgentNode {
         let mut agent = Agent::new(model_bit.clone(), max_iterations);
 
         // Set model display name from bit metadata
-        if let Some(meta) = model_bit.meta.get("name") {
+        if let Some(meta) = model_bit.meta.get("en") {
             agent.model_display_name = Some(meta.name.clone());
         }
 
