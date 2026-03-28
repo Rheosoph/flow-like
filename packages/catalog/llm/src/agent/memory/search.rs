@@ -31,7 +31,7 @@ impl NodeLogic for SearchMemoryNode {
             "Searches the memory store using the configured recall strategy (recent, relevance, or hybrid)",
             "AI/Memory",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 
@@ -65,9 +65,9 @@ impl NodeLogic for SearchMemoryNode {
         );
 
         node.add_input_pin(
-            "filter",
-            "SQL Filter",
-            "Optional SQL filter (e.g. \"role = 'user'\")",
+            "role_filter",
+            "Role Filter",
+            "Optional role filter (one of: user, assistant, observation, summary, context)",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -102,12 +102,16 @@ impl NodeLogic for SearchMemoryNode {
 
         let config: MemoryConfig = context.evaluate_pin("memory_config").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let filter: String = context.evaluate_pin("filter").await.unwrap_or_default();
-        let filter_opt: Option<&str> = if filter.is_empty() {
-            None
+        let role_filter: String = context.evaluate_pin("role_filter").await.unwrap_or_default();
+        let allowed_roles = ["user", "assistant", "observation", "summary", "context"];
+        let filter_expr: Option<String> = if !role_filter.is_empty()
+            && allowed_roles.contains(&role_filter.as_str())
+        {
+            Some(format!("role = '{}'", role_filter))
         } else {
-            Some(&filter)
+            None
         };
+        let filter_opt: Option<&str> = filter_expr.as_deref();
 
         let top_k = config.recall_top_k as usize;
 
@@ -115,7 +119,7 @@ impl NodeLogic for SearchMemoryNode {
         cached_db.ensure_flushed().await?;
         let db = cached_db.db.read().await;
 
-        let results: Vec<Value> = match config.recall_strategy {
+        let mut results: Vec<Value> = match config.recall_strategy {
             RecallStrategy::RecentFirst => {
                 db.filter(
                     filter_opt.unwrap_or("1=1"),
@@ -149,6 +153,15 @@ impl NodeLogic for SearchMemoryNode {
                 .await?
             }
         };
+
+        // Client-side sort by timestamp descending for RecentFirst
+        if matches!(config.recall_strategy, RecallStrategy::RecentFirst) {
+            results.sort_by(|a, b| {
+                let ts_a = a.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                let ts_b = b.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                ts_b.cmp(&ts_a)
+            });
+        }
 
         let count = results.len();
         context

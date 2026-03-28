@@ -43,6 +43,13 @@ pub struct WebhookSinkConfig {
     pub secret: Option<String>,
 }
 
+/// Scheduled date+time for one-time execution (local time, paired with timezone)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledLocal {
+    pub date: String, // "YYYY-MM-DD"
+    pub time: String, // "HH:mm"
+}
+
 /// Cron sink configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronSinkConfig {
@@ -52,6 +59,10 @@ pub struct CronSinkConfig {
     /// Timezone for the cron expression (e.g., "UTC", "America/New_York")
     #[serde(default = "default_timezone")]
     pub timezone: String,
+
+    /// One-time scheduled execution (local date+time, resolved with timezone)
+    #[serde(default)]
+    pub scheduled_for: Option<ScheduledLocal>,
 }
 
 fn default_timezone() -> String {
@@ -63,6 +74,26 @@ impl Default for CronSinkConfig {
         Self {
             expression: "0 * * * *".to_string(), // Every hour
             timezone: default_timezone(),
+            scheduled_for: None,
+        }
+    }
+}
+
+impl CronSinkConfig {
+    pub fn is_one_time(&self) -> bool {
+        self.scheduled_for.is_some()
+    }
+
+    /// Returns the effective schedule expression.
+    /// For one-time schedules, returns an `at()` expression for EventBridge
+    /// or a cron expression that would fire at the given time.
+    pub fn effective_expression(&self) -> Option<String> {
+        if let Some(ref scheduled) = self.scheduled_for {
+            Some(format!("at({}T{}:00)", scheduled.date, scheduled.time))
+        } else if !self.expression.is_empty() {
+            Some(self.expression.clone())
+        } else {
+            None
         }
     }
 }

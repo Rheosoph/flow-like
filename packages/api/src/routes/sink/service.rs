@@ -31,6 +31,7 @@ pub struct SinkConfig {
     pub webhook_secret: Option<String>,
     pub cron_expression: Option<String>,
     pub cron_timezone: Option<String>,
+    pub cron_scheduled_for: Option<flow_like_sinks::ScheduledLocal>,
     /// Encrypted PAT for execution (optional - enables model/file access)
     pub pat_encrypted: Option<String>,
     /// Encrypted OAuth tokens JSON (optional - for provider-specific access)
@@ -102,12 +103,11 @@ pub async fn sync_sink(
         if config.sink_type == sink_types::CRON {
             let cron_changed = old_cron != config.cron_expression;
             let type_changed = old_sink_type != config.sink_type;
+            let has_schedule = config.cron_expression.is_some() || config.cron_scheduled_for.is_some();
 
-            if (cron_changed || type_changed)
-                && let Some(ref cron_expr) = config.cron_expression
-            {
-                // Update or create the schedule
-                update_external_scheduler(state, &config.event_id, cron_expr, old_active).await?;
+            if (cron_changed || type_changed) && has_schedule {
+                let cron_expr = config.cron_expression.as_deref().unwrap_or("");
+                update_external_scheduler(state, &config.event_id, cron_expr, config.cron_timezone.as_deref(), config.cron_scheduled_for.as_ref(), old_active).await?;
             }
 
             // Sync active state with external scheduler
@@ -151,9 +151,10 @@ pub async fn sync_sink(
 
         // Create schedule in external system for cron sinks
         if config.sink_type == sink_types::CRON
-            && let Some(ref cron_expr) = config.cron_expression
+            && (config.cron_expression.is_some() || config.cron_scheduled_for.is_some())
         {
-            create_external_schedule(state, &config.event_id, cron_expr).await?;
+            let cron_expr = config.cron_expression.as_deref().unwrap_or("");
+            create_external_schedule(state, &config.event_id, cron_expr, config.cron_timezone.as_deref(), config.cron_scheduled_for.as_ref()).await?;
             if !initial_active {
                 disable_external_schedule(state, &config.event_id).await?;
             }
@@ -227,11 +228,14 @@ async fn create_external_schedule(
     state: &AppState,
     event_id: &str,
     cron_expression: &str,
+    timezone: Option<&str>,
+    scheduled_for: Option<&flow_like_sinks::ScheduledLocal>,
 ) -> flow_like_types::Result<()> {
     if let Some(ref scheduler) = state.sink_scheduler {
         let config = flow_like_sinks::CronSinkConfig {
             expression: cron_expression.to_string(),
-            timezone: "UTC".to_string(),
+            timezone: timezone.unwrap_or("UTC").to_string(),
+            scheduled_for: scheduled_for.cloned(),
         };
 
         scheduler.create_schedule(event_id, cron_expression, &config).await.map_err(|e| {
@@ -239,7 +243,7 @@ async fn create_external_schedule(
             anyhow!("Failed to create schedule: {}", e)
         })?;
 
-        tracing::info!(event_id = %event_id, cron = %cron_expression, "Created external schedule");
+        tracing::info!(event_id = %event_id, cron = %cron_expression, tz = %config.timezone, one_time = config.is_one_time(), "Created external schedule");
     }
 
     Ok(())
@@ -250,12 +254,15 @@ async fn update_external_scheduler(
     state: &AppState,
     event_id: &str,
     cron_expression: &str,
+    timezone: Option<&str>,
+    scheduled_for: Option<&flow_like_sinks::ScheduledLocal>,
     was_active: bool,
 ) -> flow_like_types::Result<()> {
     if let Some(ref scheduler) = state.sink_scheduler {
         let config = flow_like_sinks::CronSinkConfig {
             expression: cron_expression.to_string(),
-            timezone: "UTC".to_string(),
+            timezone: timezone.unwrap_or("UTC").to_string(),
+            scheduled_for: scheduled_for.cloned(),
         };
 
         // If the schedule exists, update it; otherwise create it

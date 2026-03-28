@@ -291,6 +291,28 @@ pub async fn sync_event_with_sink_tokens(
         None
     };
 
+    let cron_scheduled_for = if event.event_type == "cron" {
+        extract_scheduled_for(&event.config)
+    } else {
+        None
+    };
+
+    // Determine the sink path:
+    // - For HTTP/API events, extract from event config (path field)
+    // - For other events, use the UI route
+    let sink_path = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        extract_http_path(&event.config).or_else(|| event.route.clone())
+    } else {
+        event.route.clone()
+    };
+
+    // Extract auth token from HTTP event config
+    let config_auth_token = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        extract_http_auth_token(&event.config)
+    } else {
+        None
+    };
+
     // Encrypt PAT if provided
     let pat_encrypted = pat.map(|p| encrypt_token(p, &state.encryption_key));
 
@@ -309,11 +331,12 @@ pub async fn sync_event_with_sink_tokens(
             event_id: event.id.clone(),
             app_id: app_id.to_string(),
             sink_type: sink_type.to_string(),
-            path: event.route.clone(),
-            auth_token: None,     // Auth token is set separately
+            path: sink_path,
+            auth_token: config_auth_token,
             webhook_secret: None, // Webhook secret is set separately
             cron_expression,
             cron_timezone,
+            cron_scheduled_for,
             pat_encrypted,
             oauth_tokens_encrypted,
             profile_json,
@@ -402,6 +425,51 @@ fn extract_cron_timezone(config: &[u8]) -> Option<String> {
         .or_else(|| value.get("cron_timezone"))
         .or_else(|| value.get("cronTimezone"))
         .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Extract scheduled_for from event config bytes (for one-time cron events)
+fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::ScheduledLocal> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+    let sf = value.get("scheduled_for").or_else(|| value.get("scheduledFor"))?;
+
+    let date = sf.get("date").and_then(|v| v.as_str())?.to_string();
+    let time = sf.get("time").and_then(|v| v.as_str())?.to_string();
+
+    Some(flow_like_sinks::ScheduledLocal { date, time })
+}
+
+/// Extract HTTP path from event config bytes (for api/http/webhook events)
+fn extract_http_path(config: &[u8]) -> Option<String> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+
+    value
+        .get("path")
+        .or_else(|| value.get("path_suffix"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Extract HTTP auth token from event config bytes (for api/http/webhook events)
+fn extract_http_auth_token(config: &[u8]) -> Option<String> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+
+    value
+        .get("auth_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
 

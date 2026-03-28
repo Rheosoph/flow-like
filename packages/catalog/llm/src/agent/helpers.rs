@@ -1163,9 +1163,10 @@ pub async fn execute_agent_streaming(
                         "type": "string",
                         "description": "Search query text for vector similarity and/or full-text search"
                     },
-                    "filter": {
+                    "role_filter": {
                         "type": "string",
-                        "description": "Optional SQL filter (e.g. \"role = 'user'\")"
+                        "enum": ["user", "assistant", "observation", "summary", "context"],
+                        "description": "Optional: only return memories with this role"
                     }
                 },
                 "required": ["query"]
@@ -1191,18 +1192,6 @@ pub async fn execute_agent_streaming(
                     }
                 },
                 "required": ["content"]
-            }),
-        });
-        tool_definitions.push(ToolDefinition {
-            name: "_memory_compress".to_string(),
-            description:
-                "Compress old memory observations into a concise summary. Call this when \
-                 _memory_store reports a high observation count to keep memory efficient."
-                    .to_string(),
-            parameters: json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
             }),
         });
     }
@@ -2257,18 +2246,25 @@ async fn handle_memory_tool_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let filter = arguments
-                .get("filter")
+            let role_filter = arguments
+                .get("role_filter")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let filter_opt: Option<&str> = if filter.is_empty() { None } else { Some(filter) };
+                .filter(|r| {
+                    matches!(
+                        *r,
+                        "user" | "assistant" | "observation" | "summary" | "context"
+                    )
+                });
+            let filter_expr: Option<String> =
+                role_filter.map(|r| format!("role = '{}'", r));
+            let filter_opt: Option<&str> = filter_expr.as_deref();
             let top_k = memory.recall_top_k as usize;
 
             cached_db.ensure_flushed().await?;
 
             let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
 
-            let results: Vec<Value> = match memory.recall_strategy {
+            let mut results: Vec<Value> = match memory.recall_strategy {
                 crate::generative::agent::memory::config::RecallStrategy::RecentFirst => {
                     db.filter(
                         filter_opt.unwrap_or("1=1"),
@@ -2303,6 +2299,18 @@ async fn handle_memory_tool_call(
                 }
             };
 
+            // Client-side sort by timestamp descending for RecentFirst strategy
+            if matches!(
+                memory.recall_strategy,
+                crate::generative::agent::memory::config::RecallStrategy::RecentFirst
+            ) {
+                results.sort_by(|a, b| {
+                    let ts_a = a.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let ts_b = b.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    ts_b.cmp(&ts_a)
+                });
+            }
+
             context.log_message(
                 &format!("_memory_search '{}': {} results", query, results.len()),
                 LogLevel::Debug,
@@ -2329,6 +2337,30 @@ async fn handle_memory_tool_call(
                 return Ok(json::json!({ "stored": false, "reason": "Empty content" }));
             }
 
+            // Dedup: hash lowercase content and check for existing entry
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            content.to_lowercase().hash(&mut hasher);
+            let content_hash = format!("{:x}", hasher.finish());
+
+            {
+                cached_db.ensure_flushed().await?;
+                let db = cached_db.db.read().await;
+                let existing = db
+                    .filter(
+                        &format!("content_hash = '{}'", content_hash),
+                        Some(vec!["id".to_string()]),
+                        1,
+                        0,
+                    )
+                    .await
+                    .unwrap_or_default();
+                if !existing.is_empty() {
+                    return Ok(json::json!({ "stored": false, "reason": "Duplicate content" }));
+                }
+            }
+
             let embeddings = embed_memory_document(context, memory, &content).await?;
 
             let now = SystemTime::now()
@@ -2338,6 +2370,7 @@ async fn handle_memory_tool_call(
             let record = json::json!({
                 "id": uuid::Uuid::new_v4().to_string(),
                 "content": content,
+                "content_hash": content_hash,
                 "role": role,
                 "vector": embeddings,
                 "timestamp": now,
@@ -2345,7 +2378,7 @@ async fn handle_memory_tool_call(
 
             let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
             db.insert(vec![record]).await?;
-            let count = db.count(None).await.unwrap_or(0);
+            let count = db.count(Some("role != 'summary'".to_string())).await.unwrap_or(0);
             drop(db);
 
             context.log_message(
@@ -2388,9 +2421,6 @@ async fn handle_memory_tool_call(
                 "stored": true,
                 "observation_count": count,
             }))
-        }
-        "_memory_compress" => {
-            run_memory_compress(context, agent, memory, &cached_db).await
         }
         _ => Err(anyhow!("Unknown memory tool: {}", tool_name)),
     }
@@ -2449,8 +2479,8 @@ async fn store_evicted_to_memory(
 
     // Combine into a single document, truncating to avoid excessively large embeddings
     let combined = text_parts.join("\n");
-    let content = if combined.len() > 8000 {
-        format!("{}...", &combined[..8000])
+    let content = if combined.chars().count() > 8000 {
+        format!("{}...", combined.chars().take(8000).collect::<String>())
     } else {
         combined
     };
@@ -2517,7 +2547,7 @@ async fn run_memory_compress(
 
     let count = {
         let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
-        db.count(None).await.unwrap_or(0)
+        db.count(Some("role != 'summary'".to_string())).await.unwrap_or(0)
     };
 
     let threshold = memory.compress_threshold as usize;
@@ -2603,6 +2633,33 @@ async fn run_memory_compress(
 
     let summary_embedding = embed_memory_document(context, memory, &summary).await?;
 
+    // Compute content hash for dedup
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    summary.to_lowercase().hash(&mut hasher);
+    let summary_hash = format!("{:x}", hasher.finish());
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let summary_record = json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "content": summary,
+        "content_hash": summary_hash,
+        "role": "summary",
+        "vector": summary_embedding,
+        "timestamp": now,
+    });
+
+    // Insert summary first, then delete old observations (safer ordering)
+    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+    db.insert(vec![summary_record]).await?;
+    drop(db);
+
+    cached_db.ensure_flushed().await?;
+
     if !obs_ids.is_empty() {
         let ids_filter = obs_ids
             .iter()
@@ -2614,22 +2671,6 @@ async fn run_memory_compress(
         db.delete(&filter).await?;
         drop(db);
     }
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-    let summary_record = json::json!({
-        "id": uuid::Uuid::new_v4().to_string(),
-        "content": summary,
-        "role": "summary",
-        "vector": summary_embedding,
-        "timestamp": now,
-    });
-
-    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-    db.insert(vec![summary_record]).await?;
-    drop(db);
 
     let compressed_count = observations.len();
     context.log_message(

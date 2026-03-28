@@ -315,7 +315,7 @@ impl Agent {
                 "You have persistent memory across conversations. Use these tools proactively:\n\n\
                  - `_memory_search`: Search your memory for relevant context.\n\
                    Call this at the START of each conversation to recall relevant context.\n\
-                   Parameters: query (string), filter (optional SQL filter string)\n\n\
+                   Parameters: query (string), role_filter (optional, one of: \"user\", \"assistant\", \"observation\", \"summary\", \"context\")\n\n\
                  - `_memory_store`: Store important facts, user preferences, decisions, and context.\n\
                    Call this for any information worth remembering across conversations.\n\
                    Parameters: content (string), role (one of: \"user\", \"assistant\", \"observation\")\n\n\

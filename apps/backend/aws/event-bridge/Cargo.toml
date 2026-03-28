@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-aws_lambda_events = { version = "0.16.0", default-features = false, features = ["cloudwatch_events"] }
 flow-like-types.workspace = true
 mimalloc.workspace = true
 lambda_runtime = { version = "1.0.2", features = ["anyhow"] }

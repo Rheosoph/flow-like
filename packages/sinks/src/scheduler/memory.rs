@@ -9,6 +9,25 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn parse_scheduled_local(
+    scheduled: &crate::ScheduledLocal,
+    timezone: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    let date_parts: Vec<u32> = scheduled.date.split('-').filter_map(|s| s.parse().ok()).collect();
+    let time_parts: Vec<u32> = scheduled.time.split(':').filter_map(|s| s.parse().ok()).collect();
+    if date_parts.len() < 3 || time_parts.len() < 2 {
+        return None;
+    }
+    let tz: chrono_tz::Tz = timezone.parse().ok()?;
+    tz.with_ymd_and_hms(
+        date_parts[0] as i32, date_parts[1], date_parts[2],
+        time_parts[0], time_parts[1], 0,
+    )
+    .single()
+    .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 /// In-memory scheduler state for a single schedule
 #[derive(Debug, Clone)]
 struct ScheduleState {
@@ -48,11 +67,22 @@ impl InMemoryScheduler {
             .values()
             .filter(|s| s.active)
             .filter(|s| {
-                // Parse cron and check if it should run now
+                // One-time schedule: check if the target time has arrived
+                if let Some(ref scheduled) = s.config.scheduled_for {
+                    if s.last_triggered.is_some() {
+                        return false; // already fired
+                    }
+                    if let Some(target) = parse_scheduled_local(scheduled, &s.config.timezone) {
+                        let diff = target.signed_duration_since(now);
+                        return diff.num_seconds() <= 0 && diff.num_seconds().abs() < 120;
+                    }
+                    return false;
+                }
+
+                // Recurring: parse cron and check if it should run now
                 if let Ok(schedule) = cron::Schedule::from_str(&s.cron_expression)
                     && let Some(next) = schedule.upcoming(chrono::Utc).next()
                 {
-                    // Check if next trigger is within the last minute (for minute-level cron)
                     let diff = next.signed_duration_since(now);
                     return diff.num_seconds().abs() < 60;
                 }
@@ -120,9 +150,11 @@ impl SchedulerBackend for InMemoryScheduler {
         cron_expr: &str,
         config: &CronSinkConfig,
     ) -> SchedulerResult<()> {
-        // Validate cron expression
-        cron::Schedule::from_str(cron_expr)
-            .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+        // Validate cron expression (skip for one-time schedules)
+        if !config.is_one_time() {
+            cron::Schedule::from_str(cron_expr)
+                .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+        }
 
         let mut schedules = self.schedules.write();
 
@@ -150,9 +182,11 @@ impl SchedulerBackend for InMemoryScheduler {
         cron_expr: &str,
         config: &CronSinkConfig,
     ) -> SchedulerResult<()> {
-        // Validate cron expression
-        cron::Schedule::from_str(cron_expr)
-            .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+        // Validate cron expression (skip for one-time schedules)
+        if !config.is_one_time() {
+            cron::Schedule::from_str(cron_expr)
+                .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+        }
 
         let mut schedules = self.schedules.write();
 
@@ -200,9 +234,13 @@ impl SchedulerBackend for InMemoryScheduler {
     async fn get_schedule(&self, event_id: &str) -> SchedulerResult<Option<ScheduleInfo>> {
         let schedules = self.schedules.read();
         Ok(schedules.get(event_id).map(|s| {
-            let next_trigger = cron::Schedule::from_str(&s.cron_expression)
-                .ok()
-                .and_then(|schedule| schedule.upcoming(chrono::Utc).next());
+            let next_trigger = if let Some(ref scheduled) = s.config.scheduled_for {
+                parse_scheduled_local(scheduled, &s.config.timezone)
+            } else {
+                cron::Schedule::from_str(&s.cron_expression)
+                    .ok()
+                    .and_then(|schedule| schedule.upcoming(chrono::Utc).next())
+            };
 
             ScheduleInfo {
                 event_id: s.event_id.clone(),
@@ -228,9 +266,13 @@ impl SchedulerBackend for InMemoryScheduler {
             .skip(offset)
             .take(limit)
             .map(|s| {
-                let next_trigger = cron::Schedule::from_str(&s.cron_expression)
-                    .ok()
-                    .and_then(|schedule| schedule.upcoming(chrono::Utc).next());
+                let next_trigger = if let Some(ref scheduled) = s.config.scheduled_for {
+                    parse_scheduled_local(scheduled, &s.config.timezone)
+                } else {
+                    cron::Schedule::from_str(&s.cron_expression)
+                        .ok()
+                        .and_then(|schedule| schedule.upcoming(chrono::Utc).next())
+                };
 
                 ScheduleInfo {
                     event_id: s.event_id.clone(),

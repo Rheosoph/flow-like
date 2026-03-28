@@ -94,7 +94,7 @@ impl KubernetesScheduler {
         &self,
         event_id: &str,
         cron_expr: &str,
-        _config: &CronSinkConfig,
+        config: &CronSinkConfig,
     ) -> k8s_openapi::api::batch::v1::CronJob {
         use k8s_openapi::api::batch::v1::{CronJob, CronJobSpec, JobSpec, JobTemplateSpec};
         use k8s_openapi::api::core::v1::{
@@ -125,6 +125,19 @@ impl KubernetesScheduler {
         let mut limits = BTreeMap::new();
         limits.insert("memory".to_string(), Quantity("32Mi".to_string()));
         limits.insert("cpu".to_string(), Quantity("50m".to_string()));
+
+        // For one-time schedules, convert to a one-shot cron expression (MM HH DD MM *)
+        let effective_cron = if let Some(ref scheduled) = config.scheduled_for {
+            let time_parts: Vec<&str> = scheduled.time.split(':').collect();
+            let date_parts: Vec<&str> = scheduled.date.split('-').collect();
+            if time_parts.len() >= 2 && date_parts.len() >= 3 {
+                format!("{} {} {} {} *", time_parts[1], time_parts[0], date_parts[2], date_parts[1])
+            } else {
+                cron_expr.to_string()
+            }
+        } else {
+            cron_expr.to_string()
+        };
 
         let container = Container {
             name: "trigger".to_string(),
@@ -189,7 +202,8 @@ impl KubernetesScheduler {
                 ..Default::default()
             },
             spec: Some(CronJobSpec {
-                schedule: cron_expr.to_string(),
+                schedule: effective_cron,
+                time_zone: if config.timezone != "UTC" { Some(config.timezone.clone()) } else { None },
                 concurrency_policy: Some("Forbid".to_string()),
                 successful_jobs_history_limit: Some(3),
                 failed_jobs_history_limit: Some(1),

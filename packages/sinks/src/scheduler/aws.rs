@@ -15,6 +15,8 @@ pub struct AwsEventBridgeConfig {
     pub role_arn: String,
     /// Schedule group name (optional, defaults to "flow-like")
     pub group_name: String,
+    /// ARN of the SQS dead-letter queue for failed schedule invocations
+    pub dlq_arn: Option<String>,
 }
 
 impl AwsEventBridgeConfig {
@@ -28,6 +30,7 @@ impl AwsEventBridgeConfig {
                 .map_err(|_| SchedulerError::ConfigError("EVENTBRIDGE_ROLE_ARN not set".into()))?,
             group_name: std::env::var("EVENTBRIDGE_GROUP_NAME")
                 .unwrap_or_else(|_| "flow-like".to_string()),
+            dlq_arn: std::env::var("EVENTBRIDGE_DLQ_ARN").ok(),
         })
     }
 }
@@ -80,9 +83,31 @@ impl AwsEventBridgeScheduler {
         }
     }
 
-    /// Generate schedule name from event ID
     fn schedule_name(&self, event_id: &str) -> String {
         format!("flow-like-cron-{}", event_id.replace(['/', ':'], "-"))
+    }
+
+    fn schedule_description(event_id: &str) -> String {
+        format!("Flow-Like cron schedule for event {}", event_id)
+    }
+
+    fn build_target(&self, event_id: &str) -> SchedulerResult<aws_sdk_scheduler::types::Target> {
+        use aws_sdk_scheduler::types::{DeadLetterConfig, Target};
+
+        let mut builder = Target::builder()
+            .arn(&self.config.target_arn)
+            .role_arn(&self.config.role_arn)
+            .input(serde_json::json!({ "event_id": event_id }).to_string());
+
+        if let Some(dlq_arn) = &self.config.dlq_arn {
+            builder = builder.dead_letter_config(
+                DeadLetterConfig::builder().arn(dlq_arn).build(),
+            );
+        }
+
+        builder
+            .build()
+            .map_err(|e| SchedulerError::ProviderError(format!("Failed to build target: {}", e)))
     }
 }
 
@@ -123,21 +148,14 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
         &self,
         event_id: &str,
         cron_expr: &str,
-        _config: &CronSinkConfig,
+        config: &CronSinkConfig,
     ) -> SchedulerResult<()> {
         use aws_sdk_scheduler::types::{
-            FlexibleTimeWindow, FlexibleTimeWindowMode, ScheduleState, Target,
+            ActionAfterCompletion, FlexibleTimeWindow, FlexibleTimeWindowMode, ScheduleState,
         };
 
         let schedule_name = self.schedule_name(event_id);
-        let aws_cron = self.to_aws_cron(cron_expr);
-
-        let target = Target::builder()
-            .arn(&self.config.target_arn)
-            .role_arn(&self.config.role_arn)
-            .input(serde_json::json!({ "event_id": event_id }).to_string())
-            .build()
-            .map_err(|e| SchedulerError::ProviderError(format!("Failed to build target: {}", e)))?;
+        let target = self.build_target(event_id)?;
 
         let flexible_time_window = FlexibleTimeWindow::builder()
             .mode(FlexibleTimeWindowMode::Off)
@@ -146,22 +164,41 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
                 SchedulerError::ProviderError(format!("Failed to build time window: {}", e))
             })?;
 
-        self.client
+        let (schedule_expression, action_after) = if config.is_one_time() {
+            let at_expr = config.effective_expression().ok_or_else(|| {
+                SchedulerError::InvalidCronExpression("Missing scheduled_for for one-time schedule".into())
+            })?;
+            (at_expr, Some(ActionAfterCompletion::Delete))
+        } else {
+            (self.to_aws_cron(cron_expr), None)
+        };
+
+        let mut req = self.client
             .create_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)
-            .schedule_expression(&aws_cron)
+            .description(Self::schedule_description(event_id))
+            .schedule_expression(&schedule_expression)
+            .schedule_expression_timezone(&config.timezone)
             .state(ScheduleState::Enabled)
             .flexible_time_window(flexible_time_window)
             .target(target)
-            .send()
+            .client_token(&schedule_name);
+
+        if let Some(action) = action_after {
+            req = req.action_after_completion(action);
+        }
+
+        req.send()
             .await
             .map_err(|e| SchedulerError::ProviderError(format!("AWS SDK error: {}", e)))?;
 
         tracing::info!(
             event_id = %event_id,
             schedule_name = %schedule_name,
-            cron = %aws_cron,
+            expression = %schedule_expression,
+            tz = %config.timezone,
+            one_time = config.is_one_time(),
             "Created EventBridge schedule"
         );
 
@@ -172,19 +209,14 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
         &self,
         event_id: &str,
         cron_expr: &str,
-        _config: &CronSinkConfig,
+        config: &CronSinkConfig,
     ) -> SchedulerResult<()> {
-        use aws_sdk_scheduler::types::{FlexibleTimeWindow, FlexibleTimeWindowMode, Target};
+        use aws_sdk_scheduler::types::{
+            ActionAfterCompletion, FlexibleTimeWindow, FlexibleTimeWindowMode,
+        };
 
         let schedule_name = self.schedule_name(event_id);
-        let aws_cron = self.to_aws_cron(cron_expr);
-
-        let target = Target::builder()
-            .arn(&self.config.target_arn)
-            .role_arn(&self.config.role_arn)
-            .input(serde_json::json!({ "event_id": event_id }).to_string())
-            .build()
-            .map_err(|e| SchedulerError::ProviderError(format!("Failed to build target: {}", e)))?;
+        let target = self.build_target(event_id)?;
 
         let flexible_time_window = FlexibleTimeWindow::builder()
             .mode(FlexibleTimeWindowMode::Off)
@@ -193,21 +225,39 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
                 SchedulerError::ProviderError(format!("Failed to build time window: {}", e))
             })?;
 
-        self.client
+        let (schedule_expression, action_after) = if config.is_one_time() {
+            let at_expr = config.effective_expression().ok_or_else(|| {
+                SchedulerError::InvalidCronExpression("Missing scheduled_for for one-time schedule".into())
+            })?;
+            (at_expr, Some(ActionAfterCompletion::Delete))
+        } else {
+            (self.to_aws_cron(cron_expr), None)
+        };
+
+        let mut req = self.client
             .update_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)
-            .schedule_expression(&aws_cron)
+            .description(Self::schedule_description(event_id))
+            .schedule_expression(&schedule_expression)
+            .schedule_expression_timezone(&config.timezone)
             .flexible_time_window(flexible_time_window)
-            .target(target)
-            .send()
+            .target(target);
+
+        if let Some(action) = action_after {
+            req = req.action_after_completion(action);
+        }
+
+        req.send()
             .await
             .map_err(|e| SchedulerError::ProviderError(format!("AWS SDK error: {}", e)))?;
 
         tracing::info!(
             event_id = %event_id,
             schedule_name = %schedule_name,
-            cron = %aws_cron,
+            expression = %schedule_expression,
+            tz = %config.timezone,
+            one_time = config.is_one_time(),
             "Updated EventBridge schedule"
         );
 
@@ -250,7 +300,7 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
 
         let schedule_name = self.schedule_name(event_id);
 
-        // Get current schedule to preserve settings
+        // Get current schedule to preserve ALL settings (AWS resets omitted fields)
         let current = self
             .client
             .get_schedule()
@@ -272,14 +322,26 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
             SchedulerError::ProviderError("Schedule has no expression".to_string())
         })?;
 
-        self.client
+        let timezone = current
+            .schedule_expression_timezone
+            .unwrap_or_else(|| "UTC".to_string());
+
+        let mut update = self
+            .client
             .update_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)
             .schedule_expression(&schedule_expression)
+            .schedule_expression_timezone(&timezone)
             .state(ScheduleState::Enabled)
             .flexible_time_window(flexible_time_window)
-            .target(target)
+            .target(target);
+
+        if let Some(desc) = current.description {
+            update = update.description(desc);
+        }
+
+        update
             .send()
             .await
             .map_err(|e| SchedulerError::ProviderError(format!("AWS SDK error: {}", e)))?;
@@ -294,7 +356,7 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
 
         let schedule_name = self.schedule_name(event_id);
 
-        // Get current schedule to preserve settings
+        // Get current schedule to preserve ALL settings (AWS resets omitted fields)
         let current = self
             .client
             .get_schedule()
@@ -316,14 +378,26 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
             SchedulerError::ProviderError("Schedule has no expression".to_string())
         })?;
 
-        self.client
+        let timezone = current
+            .schedule_expression_timezone
+            .unwrap_or_else(|| "UTC".to_string());
+
+        let mut update = self
+            .client
             .update_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)
             .schedule_expression(&schedule_expression)
+            .schedule_expression_timezone(&timezone)
             .state(ScheduleState::Disabled)
             .flexible_time_window(flexible_time_window)
-            .target(target)
+            .target(target);
+
+        if let Some(desc) = current.description {
+            update = update.description(desc);
+        }
+
+        update
             .send()
             .await
             .map_err(|e| SchedulerError::ProviderError(format!("AWS SDK error: {}", e)))?;
