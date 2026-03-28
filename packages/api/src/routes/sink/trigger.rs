@@ -1216,10 +1216,7 @@ pub struct ServiceTriggerResponse {
 }
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
-fn validate_sink_trigger_jwt(token: &str) -> Result<SinkTriggerClaims, ApiError> {
-    let secret = std::env::var("SINK_SECRET")
-        .map_err(|_| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
-
+fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerClaims, ApiError> {
     let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
 
@@ -1313,7 +1310,11 @@ pub async fn trigger_service(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Check if token has been revoked (if jti is present)
     if let Some(ref jti) = claims.jti
@@ -1460,7 +1461,11 @@ pub async fn get_cron_sinks(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Only allow tokens with cron access to list schedules
     if !claims.sink_types.contains(&"cron".to_string()) {
@@ -1552,7 +1557,11 @@ pub async fn get_sink_configs(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Only allow tokens with access to the requested sink type
     if !claims.sink_types.contains(&query.sink_type)

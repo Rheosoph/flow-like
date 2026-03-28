@@ -91,6 +91,8 @@ pub struct State {
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
     pub encryption_key: [u8; 32],
+    /// HMAC secret for signing/verifying sink trigger JWTs
+    pub sink_secret: Option<String>,
 }
 
 impl State {
@@ -107,6 +109,16 @@ impl State {
             });
             Arc::new(SecretStore::new(config).expect("Failed to create secret store"))
         };
+
+        let sink_secret = secrets
+            .get_secret_string(&SecretRef::new("SINK_SECRET"))
+            .await
+            .ok()
+            .map(|s| s.expose_secret().to_string());
+
+        if sink_secret.is_none() {
+            tracing::warn!("SINK_SECRET not configured — sink trigger endpoints will be unavailable");
+        }
 
         let encryption_key = {
             let key_material = secrets
@@ -367,6 +379,7 @@ impl State {
             sink_scheduler,
             secrets,
             encryption_key,
+            sink_secret,
         }
     }
 

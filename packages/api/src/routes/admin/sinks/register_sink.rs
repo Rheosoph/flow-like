@@ -97,8 +97,10 @@ pub async fn register_sink(
     }
 
     // Get the signing secret
-    let secret = std::env::var("SINK_SECRET")
-        .map_err(|_| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
 
     // Generate unique JTI
     let jti = format!("sink_{}", create_id());
