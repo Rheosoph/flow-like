@@ -1297,7 +1297,10 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 
                 let resp = match req.send().await {
                     Ok(r) => r,
-                    Err(_) => return Ok((None,)),
+                    Err(e) => {
+                        tracing::warn!("WASM HTTP request to {} failed: {}", url, e);
+                        return Ok((None,));
+                    }
                 };
 
                 let status = resp.status().as_u16();
@@ -1310,12 +1313,16 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             .map(|s| (k.as_str().to_string(), s.to_string()))
                     })
                     .collect();
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_bytes = resp.bytes().await.unwrap_or_default();
+                let body_b64 = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &body_bytes,
+                );
 
                 let result = serde_json::json!({
                     "status": status,
                     "headers": resp_headers,
-                    "body": body_text,
+                    "body_base64": body_b64,
                 });
                 Ok((Some(result.to_string()),))
             })

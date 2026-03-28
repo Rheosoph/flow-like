@@ -144,6 +144,7 @@ impl TauriWasmEngineState {
     pub fn create_shared() -> anyhow::Result<Arc<WasmEngine>> {
         let config = WasmConfig::development()
             .with_cache_dir(flow_like::utils::cache::get_cache_dir().join("wasm"));
+
         let engine = WasmEngine::new(config)
             .map_err(|e| anyhow::anyhow!("Failed to create shared WasmEngine: {}", e))?;
         Ok(Arc::new(engine))

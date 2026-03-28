@@ -95,7 +95,9 @@ pub async fn get_detail(
                 .ok_or(ApiError::NOT_FOUND)?;
             (app, true, Some(perm.role.name.clone()))
         } else {
-            user.sub()?;
+            if !state.platform_config.features.unauthorized_read {
+                user.sub()?;
+            }
             let app = ensure_app_publicly_visible(&app_id, &state).await?;
             (app, false, None)
         };

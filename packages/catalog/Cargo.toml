@@ -46,7 +46,7 @@ execute = [
     "flow-like-catalog-llm/execute",
     "flow-like-catalog-processing/execute",
     "flow-like-catalog-geo/execute",
-    "flow-like-catalog-automation/execute"
+    "flow-like-catalog-automation/execute",
 ]
 
 # Server execution - same as execute but without desktop/RPA automation nodes

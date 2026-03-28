@@ -276,6 +276,9 @@ pub struct DownloadRequest {
     pub package_id: String,
     #[serde(default)]
     pub version: Option<String>,
+    /// Client platform key (e.g. "ios-aarch64-wt42") to receive precompiled artifacts
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_platform: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -290,6 +293,12 @@ pub struct DownloadResponse {
     /// Resolved package metadata (icon, thumbnail, localized name/description)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
+    /// Presigned URL for precompiled `.cwasm` artifact (when target_platform was provided)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwasm_download_url: Option<String>,
+    /// Blake3 checksum of the `.cwasm` artifact (when target_platform was provided)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwasm_checksum: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

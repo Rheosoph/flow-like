@@ -1093,7 +1093,11 @@ pub async fn fetch_profile_for_dispatch(
 
     let model = if let Some(pid) = profile_id {
         profile::Entity::find_by_id(pid)
-            .filter(profile::Column::UserId.eq(user_id))
+            .filter(
+                profile::Column::UserId
+                    .eq(user_id)
+                    .and(profile::Column::DeletedAt.is_null()),
+            )
             .one(db)
             .await
             .ok()
@@ -1106,7 +1110,11 @@ pub async fn fetch_profile_for_dispatch(
         model
     } else {
         let profiles = profile::Entity::find()
-            .filter(profile::Column::UserId.eq(user_id))
+            .filter(
+                profile::Column::UserId
+                    .eq(user_id)
+                    .and(profile::Column::DeletedAt.is_null()),
+            )
             .all(db)
             .await
             .ok()

@@ -42,12 +42,16 @@ impl WasmInstance {
         module: Arc<WasmModule>,
         security: WasmSecurityConfig,
     ) -> WasmResult<Self> {
-        // Create linker with host functions
-        let mut linker = Linker::new(engine.engine());
+        // Use the engine that compiled/deserialized this module to ensure
+        // Store, Linker, and Module are all tied to the same Engine instance.
+        // This is critical for the Pulley fallback on iOS where the
+        // module may come from a different engine than the primary one.
+        let module_engine = module.module().engine();
+
+        let mut linker = Linker::new(module_engine);
         register_host_functions(&mut linker)?;
 
-        // Create store with host state
-        let mut store = Store::new(engine.engine(), StoreData::new(security.capabilities));
+        let mut store = Store::new(module_engine, StoreData::new(security.capabilities));
 
         // Configure store limits
         let fuel_limit = security.limits.fuel_limit;

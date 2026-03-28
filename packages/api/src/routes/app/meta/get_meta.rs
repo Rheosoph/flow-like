@@ -52,7 +52,9 @@ pub async fn get_meta(
         .await
         .is_err()
     {
-        user.sub()?;
+        if !state.platform_config.features.unauthorized_read {
+            user.sub()?;
+        }
         match mode {
             MetaMode::App(_) => {
                 ensure_app_publicly_visible(&app_id, &state).await?;

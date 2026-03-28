@@ -84,38 +84,11 @@ async fn load_single_package(
         .await
         .map_err(|e| ExecutorError::Storage(format!("Failed to read cwasm bytes: {}", e)))?;
 
-    let checksum_resp = http
-        .get(&pkg_ref.cwasm_checksum_url)
-        .send()
-        .await
-        .map_err(|e| {
-            ExecutorError::Storage(format!(
-                "Failed to download checksum for {}: {}",
-                package_id, e
-            ))
-        })?;
-
-    if !checksum_resp.status().is_success() {
-        return Err(ExecutorError::Storage(format!(
-            "checksum download failed for {} v{}: HTTP {}",
-            package_id,
-            pkg_ref.version,
-            checksum_resp.status()
-        )));
-    }
-
-    let expected_hash = checksum_resp
-        .text()
-        .await
-        .map_err(|e| ExecutorError::Storage(format!("Failed to read checksum: {}", e)))?;
-
-    let expected = expected_hash.trim().to_string();
     let actual = blake3::hash(&cwasm_bytes).to_hex().to_string();
-
-    if expected != actual {
+    if actual != pkg_ref.cwasm_checksum {
         return Err(ExecutorError::Execution(format!(
             "Checksum mismatch for {} v{}: expected {}, got {}",
-            package_id, pkg_ref.version, expected, actual
+            package_id, pkg_ref.version, pkg_ref.cwasm_checksum, actual
         )));
     }
 

@@ -49,6 +49,9 @@ pub struct SyncProfileResponse {
     pub created: Vec<SyncedProfile>,
     pub updated: Vec<UpdatedProfile>,
     pub skipped: Vec<String>,
+    /// IDs of profiles that were soft-deleted on the server (tombstones).
+    /// Clients should delete these locally and stop syncing them.
+    pub deleted: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -107,9 +110,10 @@ pub async fn sync_profiles(
     let mut created: Vec<SyncedProfile> = Vec::new();
     let mut updated: Vec<UpdatedProfile> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    let mut deleted: Vec<String> = Vec::new();
 
     for profile_req in profiles {
-        // Check if profile exists on server
+        // Check if profile exists on server (including soft-deleted)
         let found_profile = profile::Entity::find()
             .filter(
                 profile::Column::Id
@@ -120,6 +124,15 @@ pub async fn sync_profiles(
             .await?;
 
         if let Some(existing) = found_profile {
+            // If this profile was soft-deleted, tell the client to delete it locally
+            if existing.deleted_at.is_some() {
+                println!(
+                    "[ProfileSync] Profile {} is soft-deleted, returning as tombstone",
+                    profile_req.id
+                );
+                deleted.push(profile_req.id.clone());
+                continue;
+            }
             println!(
                 "[ProfileSync] Profile {} found in DB, updated_at={}",
                 profile_req.id, existing.updated_at
@@ -336,11 +349,12 @@ pub async fn sync_profiles(
         .collect();
 
     println!(
-        "[ProfileSync] Done: created={}, updated={}, skipped={}, synced={}",
+        "[ProfileSync] Done: created={}, updated={}, skipped={}, synced={}, deleted={}",
         created.len(),
         updated.len(),
         skipped.len(),
-        synced.len()
+        synced.len(),
+        deleted.len()
     );
 
     Ok(Json(SyncProfileResponse {
@@ -348,5 +362,6 @@ pub async fn sync_profiles(
         created,
         updated,
         skipped,
+        deleted,
     }))
 }

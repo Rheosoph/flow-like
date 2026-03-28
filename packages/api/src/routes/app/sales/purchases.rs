@@ -125,7 +125,11 @@ pub async fn list_purchases(
     let user_ids: Vec<_> = purchases.iter().map(|p| p.user_id.clone()).collect();
     let profiles = if !user_ids.is_empty() {
         profile::Entity::find()
-            .filter(profile::Column::UserId.is_in(user_ids))
+            .filter(
+                profile::Column::UserId
+                    .is_in(user_ids)
+                    .and(profile::Column::DeletedAt.is_null()),
+            )
             .all(&state.db)
             .await?
     } else {

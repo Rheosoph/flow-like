@@ -553,12 +553,15 @@ impl ServerRegistry {
         Ok(url.to_string())
     }
 
-    /// Generate presigned GET URLs for a compiled `.cwasm` artifact and its checksum.
+    /// Generate a presigned GET URL for a compiled `.cwasm` artifact and read
+    /// its blake3 checksum directly from storage.
+    ///
+    /// Returns `(cwasm_url, cwasm_checksum)`.
     ///
     /// `target_platform` is the platform key the executor expects
     /// (e.g. `linux-x86_64-wt40`).  Pass [`executor_target_platform()`] when the
     /// caller doesn't have a more specific value.
-    pub async fn sign_cwasm_urls(
+    pub async fn sign_cwasm_url(
         &self,
         package_id: &str,
         version: &str,
@@ -575,12 +578,19 @@ impl ServerRegistry {
             .meta_bucket
             .sign("GET", &cwasm_path, Duration::from_secs(3600))
             .await?;
-        let checksum_url = self
-            .meta_bucket
-            .sign("GET", &checksum_path, Duration::from_secs(3600))
-            .await?;
 
-        Ok((cwasm_url.to_string(), checksum_url.to_string()))
+        let checksum_bytes = self
+            .meta_bucket
+            .as_generic()
+            .get(&checksum_path)
+            .await?
+            .bytes()
+            .await?;
+        let cwasm_checksum = String::from_utf8(checksum_bytes.to_vec())
+            .map(|s| s.trim().to_string())
+            .map_err(|e| flow_like_types::anyhow!("invalid checksum encoding: {}", e))?;
+
+        Ok((cwasm_url.to_string(), cwasm_checksum))
     }
 
     /// Get the registry index (list of all publicly accessible packages)

@@ -193,6 +193,7 @@ pub async fn upsert_board(
                 board.refs = data.refs;
                 board.version = data.version;
                 board.viewport = data.viewport;
+                board.page_ids = data.page_ids;
             }
 
             board.save(None).await?;
@@ -218,6 +219,7 @@ pub async fn upsert_board(
         board.refs = board_data.refs;
         board.version = board_data.version;
         board.viewport = board_data.viewport;
+        board.page_ids = board_data.page_ids;
         board.stage = board.stage.clone();
         board.log_level = board.log_level;
         board.execution_mode = board.execution_mode.clone();

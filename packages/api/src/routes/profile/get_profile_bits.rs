@@ -56,7 +56,8 @@ pub async fn get_profile_bits(
         .filter(
             profile::Column::Id
                 .eq(&profile_id)
-                .and(profile::Column::UserId.eq(&sub)),
+                .and(profile::Column::UserId.eq(&sub))
+                .and(profile::Column::DeletedAt.is_null()),
         )
         .one(&state.db)
         .await?

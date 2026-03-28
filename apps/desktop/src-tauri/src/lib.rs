@@ -78,9 +78,67 @@ fn harden_ios_webview_scroll(window: &tauri::WebviewWindow) {
             let _: () = objc2::msg_send![scroll_view, setAlwaysBounceHorizontal: false];
             // UIScrollViewContentInsetAdjustmentNever = 2
             let _: () = objc2::msg_send![scroll_view, setContentInsetAdjustmentBehavior: 2isize];
+
+            // Disable link previews (3D Touch peek/pop) — avoids accidental long-press pauses
+            let _: () = objc2::msg_send![wk_webview, setAllowsLinkPreview: false];
+
+            // Disable data detectors (phone numbers, addresses, etc.) — reduces layout cost
+            // on pages with lots of text content.
+            let configuration: *mut AnyObject = objc2::msg_send![wk_webview, configuration];
+            if !configuration.is_null() {
+                // WKDataDetectorTypeNone = 0
+                let _: () = objc2::msg_send![configuration, setDataDetectorTypes: 0u64];
+            }
         }
     }) {
         tracing::warn!("Failed to apply iOS webview scroll hardening: {}", err);
+    }
+}
+
+/// Tune the macOS WKWebView for performance.
+/// Must be called after the webview is fully initialised (delayed from setup).
+#[cfg(target_os = "macos")]
+fn tune_macos_webview(window: &tauri::WebviewWindow) {
+    if let Err(err) = window.with_webview(|webview| {
+        unsafe {
+            use objc2::runtime::AnyObject;
+
+            let wk_webview: *mut AnyObject = webview.inner().cast();
+            if wk_webview.is_null() {
+                return;
+            }
+
+            // Disable back-forward navigation gestures — we're a SPA
+            let _: () = objc2::msg_send![wk_webview, setAllowsBackForwardNavigationGestures: false];
+        }
+    }) {
+        tracing::warn!("Failed to tune macOS webview: {}", err);
+    }
+}
+
+/// Tune the Windows WebView2 for performance.
+#[cfg(windows)]
+fn tune_windows_webview(window: &tauri::WebviewWindow) {
+    if let Err(err) = window.with_webview(|webview| {
+        unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings6;
+
+            let controller = webview.controller();
+            let core = controller.CoreWebView2().unwrap();
+
+            // Disable swipe navigation (back-forward gesture) — we're a SPA
+            if let Ok(settings) = core.Settings() {
+                if let Ok(settings6) = settings.cast::<ICoreWebView2Settings6>() {
+                    let _ = settings6.SetIsSwipeNavigationEnabled(false);
+                }
+            }
+
+            // Use COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW when minimized
+            // (the app regains normal budget when re-focused via our event handler)
+            // Not setting this proactively; will be used via visibility change events in JS.
+        }
+    }) {
+        tracing::warn!("Failed to tune Windows webview: {}", err);
     }
 }
 
@@ -170,9 +228,11 @@ macro_rules! eprintln { ($($t:tt)*) => { tracing::error!($($t)*); } }
 pub fn run() {
     // Ensure panics are logged with backtraces in release too.
     std::panic::set_hook(Box::new(|info| {
-        eprintln!(
-            "PANIC: {info}\n{}",
-            std::backtrace::Backtrace::force_capture()
+        // Use write! instead of eprintln! to avoid a double-panic when stderr
+        // is a broken pipe (e.g. the parent process that captured output has gone away).
+        let _ = std::io::Write::write_fmt(
+            &mut std::io::stderr(),
+            format_args!("PANIC: {info}\n{}\n", std::backtrace::Backtrace::force_capture()),
         );
         if let Some(location) = info.location() {
             tracing::error!(
@@ -509,6 +569,30 @@ pub fn run() {
             let deep_link_handle = relay_handle.clone();
             let event_bus_handle = relay_handle.clone();
 
+            // macOS: tune WKWebView after it's fully initialised
+            #[cfg(target_os = "macos")]
+            {
+                let macos_handle = app.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    flow_like_types::tokio::time::sleep(Duration::from_millis(200)).await;
+                    if let Some(main) = macos_handle.get_webview_window("main") {
+                        tune_macos_webview(&main);
+                    }
+                });
+            }
+
+            // Windows: tune WebView2 after it's fully initialised
+            #[cfg(windows)]
+            {
+                let win_handle = app.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    flow_like_types::tokio::time::sleep(Duration::from_millis(200)).await;
+                    if let Some(main) = win_handle.get_webview_window("main") {
+                        tune_windows_webview(&main);
+                    }
+                });
+            }
+
             #[cfg(target_os = "ios")]
             {
                 let ios_handle = app.app_handle().clone();
@@ -781,6 +865,8 @@ pub fn run() {
             functions::ai::invoke::chat_completion,
             functions::ai::invoke::find_best_model,
             functions::system::get_system_info,
+            functions::system::list_apps_for_file,
+            functions::system::open_file_with_app,
             #[cfg(desktop)]
             tray::tray_update_state,
             #[cfg(not(desktop))]

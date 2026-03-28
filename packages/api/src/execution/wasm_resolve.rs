@@ -70,16 +70,16 @@ pub async fn resolve_wasm_packages(
         };
 
         match registry
-            .sign_cwasm_urls(&pkg.package_id, &pkg.version, &target)
+            .sign_cwasm_url(&pkg.package_id, &pkg.version, &target)
             .await
         {
-            Ok((cwasm_url, checksum_url)) => {
+            Ok((cwasm_url, cwasm_checksum)) => {
                 let resolved = flow_like_types::dispatch::WasmPackageRef {
                     version: pkg.version.clone(),
                     wasm_hash: version_record.wasm_hash.clone(),
                     wasm_url,
                     cwasm_url,
-                    cwasm_checksum_url: checksum_url,
+                    cwasm_checksum,
                 };
                 result.insert(pkg.package_id.clone(), resolved);
             }

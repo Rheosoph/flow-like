@@ -104,7 +104,7 @@ impl TelegramClientManager {
         if let Some(bot_instance) = self.bots.get(&token) {
             let mut bot = bot_instance.lock().await;
             bot.handlers.insert(registration.event_id.clone(), handler);
-            println!(
+            tracing::info!(
                 "Updated Telegram bot {} with new handler for event {}",
                 &token[..8.min(token.len())],
                 registration.event_id
@@ -197,15 +197,15 @@ fn should_process_message(
 ) -> bool {
     let chat_id = msg.chat.id.to_string();
 
-    println!(
-        "🔍 [TELEGRAM] Checking message in chat {} (private: {})",
+    tracing::debug!(
+        "[TELEGRAM] Checking message in chat {} (private: {})",
         chat_id,
         msg.chat.is_private()
     );
 
     if !is_chat_allowed(&chat_id, handler) {
-        println!(
-            "🔍 [TELEGRAM] Chat {} not allowed by whitelist/blacklist",
+        tracing::debug!(
+            "[TELEGRAM] Chat {} not allowed by whitelist/blacklist",
             chat_id
         );
         return false;
@@ -214,8 +214,8 @@ fn should_process_message(
     let is_private = msg.chat.is_private();
 
     if is_private {
-        println!(
-            "🔍 [TELEGRAM] Private chat, respond_to_private: {}",
+        tracing::debug!(
+            "[TELEGRAM] Private chat, respond_to_private: {}",
             handler.respond_to_private
         );
         return handler.respond_to_private;
@@ -229,13 +229,13 @@ fn should_process_message(
         _ => "",
     };
 
-    println!(
-        "🔍 [TELEGRAM] Group message text: '{}', prefix: '{}', respond_to_mentions: {}",
+    tracing::debug!(
+        "[TELEGRAM] Group message text: '{}', prefix: '{}', respond_to_mentions: {}",
         text, handler.command_prefix, handler.respond_to_mentions
     );
 
     if text.starts_with(&handler.command_prefix) {
-        println!("🔍 [TELEGRAM] Message starts with command prefix, processing");
+        tracing::debug!("[TELEGRAM] Message starts with command prefix, processing");
         return true;
     }
 
@@ -243,14 +243,14 @@ fn should_process_message(
         && let Some(username) = bot_username
         && text.contains(&format!("@{}", username))
     {
-        println!(
-            "🔍 [TELEGRAM] Message mentions bot @{}, processing",
+        tracing::debug!(
+            "[TELEGRAM] Message mentions bot @{}, processing",
             username
         );
         return true;
     }
 
-    println!("🔍 [TELEGRAM] Message does not match criteria, skipping");
+    tracing::debug!("[TELEGRAM] Message does not match criteria, skipping");
     false
 }
 
@@ -653,7 +653,7 @@ async fn fire_telegram_event(
 ) -> Result<()> {
     use crate::state::TauriEventSinkManagerState;
 
-    println!("🔥 Firing Telegram event: {}", event_id);
+    tracing::info!("Firing Telegram event: {}", event_id);
     let app_handle_clone = app_handle.clone();
 
     let context = Arc::new(Mutex::new(Response::new()));
@@ -685,10 +685,10 @@ async fn fire_telegram_event(
             let bot = bot_clone.clone();
             Box::pin({
                 async move {
-                    eprintln!("📥 [TELEGRAM] Received {} events in callback", events.len());
+                    tracing::debug!("[TELEGRAM] Received {} events in callback", events.len());
 
                     for event in &events {
-                        eprintln!("📥 [TELEGRAM] Event type: {}", event.event_type);
+                        tracing::debug!("[TELEGRAM] Event type: {}", event.event_type);
 
                         if event.event_type == "chat_stream_partial" {
                             let payload: ChatStreamingResponse = flow_like_types::json::from_value(
@@ -711,13 +711,13 @@ async fn fire_telegram_event(
                             let (content_to_send, reasoning_html) = {
                                 let mut ctx = cloned_context.lock().await;
                                 if let Some(chunk) = &payload.chunk {
-                                    eprintln!("📥 [TELEGRAM] Pushing chunk to context");
+                                    tracing::debug!("[TELEGRAM] Pushing chunk to context");
                                     ctx.push_chunk(chunk.clone());
                                 }
 
                                 let last_message = ctx.last_message();
-                                eprintln!(
-                                    "📥 [TELEGRAM] Context has {} choices, last_message content len: {:?}",
+                                tracing::debug!(
+                                    "[TELEGRAM] Context has {} choices, last_message content len: {:?}",
                                     ctx.choices.len(),
                                     last_message.and_then(|m| m.content.as_ref().map(|c| c.len()))
                                 );
@@ -735,8 +735,8 @@ async fn fire_telegram_event(
                             // Send if we have reasoning or content
                             if reasoning_html.is_some() || content_to_send.is_some() {
                                 let content = content_to_send.unwrap_or_default();
-                                eprintln!(
-                                    "📥 [TELEGRAM] Updating message with {} chars content, reasoning: {}",
+                                tracing::debug!(
+                                    "[TELEGRAM] Updating message with {} chars content, reasoning: {}",
                                     content.len(),
                                     reasoning_html.is_some()
                                 );
@@ -871,28 +871,28 @@ async fn run_telegram_bot(
     token: String,
     bot_instance: Arc<flow_like_types::tokio::sync::Mutex<BotInstance>>,
 ) -> Result<()> {
-    println!(
-        "🤖 [TELEGRAM] Starting bot with token {}...",
+    tracing::info!(
+        "[TELEGRAM] Starting bot with token {}...",
         &token[..8.min(token.len())]
     );
 
     let bot = Bot::new(&token);
 
     // Delete any existing webhook to ensure long polling works
-    println!("🤖 [TELEGRAM] Deleting any existing webhook...");
+    tracing::info!("[TELEGRAM] Deleting any existing webhook...");
     if let Err(e) = bot.delete_webhook().await {
-        println!(
-            "⚠️ [TELEGRAM] Failed to delete webhook (might not exist): {}",
+        tracing::warn!(
+            "[TELEGRAM] Failed to delete webhook (might not exist): {}",
             e
         );
     } else {
-        println!("✅ [TELEGRAM] Webhook deleted successfully");
+        tracing::info!("[TELEGRAM] Webhook deleted successfully");
     }
 
     let me = bot.get_me().await?;
     let bot_username = me.username.clone();
-    eprintln!(
-        "✅ [TELEGRAM] Bot @{} is connected and listening for messages!",
+    tracing::info!(
+        "[TELEGRAM] Bot @{} is connected and listening for messages!",
         bot_username.as_deref().unwrap_or("unknown")
     );
 
@@ -909,15 +909,14 @@ async fn run_telegram_bot(
         let bot_username = bot_username_clone.clone();
 
         async move {
-            // Use eprintln for immediate output (no buffering)
-            eprintln!(
-                "📨 [TELEGRAM] === MESSAGE RECEIVED === from {:?} in chat {}",
+            tracing::debug!(
+                "[TELEGRAM] === MESSAGE RECEIVED === from {:?} in chat {}",
                 msg.from.as_ref().map(|u| u.full_name()),
                 msg.chat.id
             );
 
             if msg.from.as_ref().map(|u| u.is_bot).unwrap_or(false) {
-                eprintln!("📨 [TELEGRAM] Ignoring message from bot");
+                tracing::debug!("[TELEGRAM] Ignoring message from bot");
                 return respond(());
             }
 
@@ -925,24 +924,24 @@ async fn run_telegram_bot(
             let handlers: Vec<EventHandler> = bot_locked.handlers.values().cloned().collect();
             drop(bot_locked);
 
-            eprintln!("📨 [TELEGRAM] Found {} registered handlers", handlers.len());
+            tracing::debug!("[TELEGRAM] Found {} registered handlers", handlers.len());
 
             for handler in handlers {
-                eprintln!(
-                    "📨 [TELEGRAM] Checking handler for event {}",
+                tracing::debug!(
+                    "[TELEGRAM] Checking handler for event {}",
                     handler.event_id
                 );
 
                 if !should_process_message(&msg, &handler, bot_username.as_deref()) {
-                    eprintln!(
-                        "📨 [TELEGRAM] Message not matched for event {}",
+                    tracing::debug!(
+                        "[TELEGRAM] Message not matched for event {}",
                         handler.event_id
                     );
                     continue;
                 }
 
-                eprintln!(
-                    "📨 [TELEGRAM] Message matched! Firing event {}",
+                tracing::debug!(
+                    "[TELEGRAM] Message matched! Firing event {}",
                     handler.event_id
                 );
 
@@ -960,8 +959,8 @@ async fn run_telegram_bot(
                 )
                 .await
                 {
-                    eprintln!(
-                        "❌ [TELEGRAM] Failed to fire event {}: {}",
+                    tracing::error!(
+                        "[TELEGRAM] Failed to fire event {}: {}",
                         handler.event_id, e
                     );
                 }
@@ -971,18 +970,18 @@ async fn run_telegram_bot(
         }
     });
 
-    eprintln!("🤖 [TELEGRAM] Setting up dispatcher...");
+    tracing::info!("[TELEGRAM] Setting up dispatcher...");
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .enable_ctrlc_handler()
         .build();
 
-    eprintln!("🤖 [TELEGRAM] Dispatcher built successfully");
-    eprintln!("🤖 [TELEGRAM] Starting long polling - messages should appear below...");
+    tracing::info!("[TELEGRAM] Dispatcher built successfully");
+    tracing::info!("[TELEGRAM] Starting long polling - messages should appear below...");
 
     dispatcher.dispatch().await;
 
-    eprintln!("⚠️ [TELEGRAM] Dispatcher stopped unexpectedly!");
+    tracing::warn!("[TELEGRAM] Dispatcher stopped unexpectedly!");
 
     Ok(())
 }
@@ -1197,20 +1196,20 @@ impl EventSink for TelegramSink {
     async fn start(&self, app_handle: &AppHandle, db: DbConnection) -> Result<()> {
         Self::init_tables(&db)?;
 
-        println!("🤖 [TELEGRAM_SINK] Starting Telegram sink - initializing bot manager...");
+        tracing::info!("[TELEGRAM_SINK] Starting Telegram sink - initializing bot manager...");
 
         let handlers = Self::load_handlers_from_db(&db).await?;
 
-        println!(
-            "📋 [TELEGRAM_SINK] Found {} Telegram handlers in telegram_handlers table",
+        tracing::info!(
+            "[TELEGRAM_SINK] Found {} Telegram handlers in telegram_handlers table",
             handlers.len()
         );
 
         if !handlers.is_empty() {
             let mut manager = TELEGRAM_MANAGER.lock().await;
             for (registration, config) in handlers {
-                println!(
-                    "🤖 [TELEGRAM_SINK] Registering handler for event {} with token {}...",
+                tracing::info!(
+                    "[TELEGRAM_SINK] Registering handler for event {} with token {}...",
                     registration.event_id,
                     &config.bot_token[..8.min(config.bot_token.len())]
                 );
@@ -1218,17 +1217,17 @@ impl EventSink for TelegramSink {
                     .add_or_update_bot(app_handle, &db, &registration, &config)
                     .await
                 {
-                    println!(
-                        "❌ [TELEGRAM_SINK] Failed to initialize Telegram bot for event {}: {}",
+                    tracing::error!(
+                        "[TELEGRAM_SINK] Failed to initialize Telegram bot for event {}: {}",
                         registration.event_id, e
                     );
                 }
             }
         } else {
-            println!("📋 [TELEGRAM_SINK] No handlers found in telegram_handlers table");
+            tracing::info!("[TELEGRAM_SINK] No handlers found in telegram_handlers table");
         }
 
-        println!("✅ [TELEGRAM_SINK] Telegram sink started - bot manager ready");
+        tracing::info!("[TELEGRAM_SINK] Telegram sink started - bot manager ready");
         Ok(())
     }
 

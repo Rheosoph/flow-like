@@ -93,6 +93,28 @@ pub async fn download(
         }
     }
 
+    // If the client specified a target platform, try to provide a presigned cwasm URL + checksum
+    let (cwasm_download_url, cwasm_checksum) =
+        if let Some(ref target_platform) = request.target_platform {
+            match registry
+                .sign_cwasm_url(&request.package_id, &version, target_platform)
+                .await
+            {
+                Ok((cwasm, checksum)) => (Some(cwasm), Some(checksum)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to sign cwasm URL for {} ({}): {}",
+                        request.package_id,
+                        target_platform,
+                        e
+                    );
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+
     Ok(Json(DownloadResponse {
         package_id,
         version,
@@ -100,5 +122,7 @@ pub async fn download(
         download_url: Some(download_url),
         manifest,
         metadata,
+        cwasm_download_url,
+        cwasm_checksum,
     }))
 }

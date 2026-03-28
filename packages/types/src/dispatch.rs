@@ -16,7 +16,7 @@ pub struct WasmPackageRef {
     pub wasm_hash: String,
     pub wasm_url: String,
     pub cwasm_url: String,
-    pub cwasm_checksum_url: String,
+    pub cwasm_checksum: String,
 }
 
 // ============================================================================

@@ -207,6 +207,7 @@ impl RegistryClient {
         let request = DownloadRequest {
             package_id: package_id.to_string(),
             version: version.map(String::from),
+            target_platform: Some(crate::aot_cache::host_platform_key()),
         };
 
         let url = format!("{}/download", self.config.default_registry);
@@ -248,6 +249,15 @@ impl RegistryClient {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&wasm_path, &wasm_data).await?;
+
+        // If the server provided a precompiled .cwasm, download and store it
+        // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
+        if let Some(cwasm_url) = &download.cwasm_download_url {
+            match self.download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path).await {
+                Ok(()) => tracing::info!("Downloaded precompiled cwasm for {}", download.package_id),
+                Err(e) => tracing::error!("Failed to download cwasm for {}: {}", download.package_id, e),
+            }
+        }
 
         let now = Utc::now();
         let wasm_hash = Some(calculate_hash(&wasm_data));
@@ -706,6 +716,9 @@ impl RegistryClient {
             )
         })?;
 
+        // Inject precompiled .cwasm into AOT cache if available
+        Self::inject_precompiled_if_available(&wasm_bytes, &installed.wasm_path, &engine);
+
         let manifest_security = installed.manifest.permissions.to_security_config();
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
@@ -757,6 +770,10 @@ impl RegistryClient {
 
         let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
         let manifest_security = iv.manifest.permissions.to_security_config();
+
+        // Inject precompiled .cwasm into AOT cache if available
+        Self::inject_precompiled_if_available(&wasm_bytes, &iv.wasm_path, &engine);
+
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
 
@@ -807,6 +824,62 @@ impl RegistryClient {
             }
         }
         Ok(packages)
+    }
+
+    /// Download a precompiled `.cwasm` artifact and store it next to the `.wasm` file.
+    async fn download_cwasm(
+        &self,
+        cwasm_url: &str,
+        expected_checksum: Option<&str>,
+        wasm_path: &Path,
+    ) -> Result<()> {
+        let cwasm_response = self.http_client.get(cwasm_url).send().await?;
+        if !cwasm_response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to download cwasm: {}",
+                cwasm_response.status()
+            ));
+        }
+        let cwasm_bytes = cwasm_response.bytes().await?.to_vec();
+
+        if let Some(expected) = expected_checksum {
+            let actual = blake3::hash(&cwasm_bytes).to_hex().to_string();
+            if actual != expected {
+                return Err(anyhow!(
+                    "cwasm checksum mismatch: expected {}, got {}",
+                    expected,
+                    actual
+                ));
+            }
+        }
+
+        let cwasm_path = wasm_path.with_extension("cwasm");
+        tokio::fs::write(&cwasm_path, &cwasm_bytes).await?;
+
+        Ok(())
+    }
+
+    /// If a `.cwasm` file exists next to the `.wasm`, inject it into the AOT
+    /// cache so `load_module` / `load_component` can find it without compiling.
+    fn inject_precompiled_if_available(
+        wasm_bytes: &[u8],
+        wasm_path: &Path,
+        engine: &crate::WasmEngine,
+    ) {
+        let cwasm_path = wasm_path.with_extension("cwasm");
+        let cwasm_bytes = match std::fs::read(&cwasm_path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+
+        let wasm_hash = calculate_hash(wasm_bytes);
+        if let Some(aot) = engine.aot_cache() {
+            if let Err(e) = aot.inject_module(&wasm_hash, &cwasm_bytes) {
+                tracing::warn!("Failed to inject cwasm into AOT cache: {}", e);
+            } else {
+                tracing::info!("Injected precompiled cwasm into AOT cache for {}", wasm_hash);
+            }
+        }
     }
 }
 

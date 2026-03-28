@@ -262,11 +262,14 @@ async fn push_to_user(
         return Ok(());
     };
 
+    let stale_cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(30);
+
     let targets = push_notification_target::Entity::find()
         .filter(push_notification_target::Column::UserId.eq(input.user_id.clone()))
         .filter(push_notification_target::Column::Provider.eq(provider.clone()))
         .filter(push_notification_target::Column::PushEnabled.eq(true))
         .filter(push_notification_target::Column::InvalidatedAt.is_null())
+        .filter(push_notification_target::Column::LastSeenAt.gt(stale_cutoff))
         .order_by_desc(push_notification_target::Column::LastSeenAt)
         .all(&state.db)
         .await?;

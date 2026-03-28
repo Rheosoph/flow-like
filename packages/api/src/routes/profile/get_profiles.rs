@@ -35,6 +35,10 @@ pub struct ProfileResponse {
     pub created_at: chrono::NaiveDateTime,
     #[schema(value_type = String)]
     pub updated_at: chrono::NaiveDateTime,
+    /// Present only for soft-deleted profiles (tombstones)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 #[utoipa::path(
@@ -54,7 +58,11 @@ pub async fn get_profiles(
     let sub = user.sub()?;
     println!("[ProfileSync] GET /profile called by user={}", sub);
     let profiles = profile::Entity::find()
-        .filter(profile::Column::UserId.eq(sub))
+        .filter(
+            profile::Column::UserId
+                .eq(&sub)
+                .and(profile::Column::DeletedAt.is_null()),
+        )
         .all(&state.db)
         .await?;
 
@@ -94,6 +102,7 @@ pub async fn get_profiles(
             hubs: p.hubs,
             created_at: p.created_at,
             updated_at: p.updated_at,
+            deleted_at: None,
         });
     }
 

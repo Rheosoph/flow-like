@@ -110,6 +110,7 @@ pub async fn register_push_target(
     let now = chrono::Utc::now().naive_utc();
     let token_encrypted = encrypt_token(&body.token, &state.encryption_key);
 
+    // Disable targets on the same device+provider owned by a different user
     push_notification_target::Entity::update_many()
         .col_expr(
             push_notification_target::Column::PushEnabled,
@@ -130,6 +131,33 @@ pub async fn register_push_target(
         .filter(push_notification_target::Column::DeviceId.eq(body.device_id.clone()))
         .filter(push_notification_target::Column::Provider.eq(provider.clone()))
         .filter(push_notification_target::Column::UserId.ne(sub.clone()))
+        .filter(push_notification_target::Column::PushEnabled.eq(true))
+        .exec(&state.db)
+        .await?;
+
+    // Disable other targets for the same user+platform+provider but different device_id
+    // (handles device_id drift caused by localStorage being wiped on mobile)
+    push_notification_target::Entity::update_many()
+        .col_expr(
+            push_notification_target::Column::PushEnabled,
+            Expr::value(false),
+        )
+        .col_expr(
+            push_notification_target::Column::InvalidatedAt,
+            Expr::value(Some(now)),
+        )
+        .col_expr(
+            push_notification_target::Column::InvalidationReason,
+            Expr::value(Some("Superseded by newer registration on same platform")),
+        )
+        .col_expr(
+            push_notification_target::Column::UpdatedAt,
+            Expr::value(now),
+        )
+        .filter(push_notification_target::Column::UserId.eq(sub.clone()))
+        .filter(push_notification_target::Column::Platform.eq(platform.clone()))
+        .filter(push_notification_target::Column::Provider.eq(provider.clone()))
+        .filter(push_notification_target::Column::DeviceId.ne(body.device_id.clone()))
         .filter(push_notification_target::Column::PushEnabled.eq(true))
         .exec(&state.db)
         .await?;

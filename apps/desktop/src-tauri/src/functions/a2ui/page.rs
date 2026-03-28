@@ -29,35 +29,47 @@ pub async fn get_pages(
     let mut result = Vec::new();
 
     if let Some(board_id_filter) = &board_id {
-        if let Ok(board) = app.open_board(board_id_filter.clone(), None, None).await {
-            let board_guard = board.lock().await;
-            if let Ok(pages) = board_guard.load_all_pages(None).await {
-                for page in pages {
-                    result.push(PageInfo {
-                        app_id: app_id.clone(),
-                        page_id: page.id.clone(),
-                        board_id: Some(board_id_filter.clone()),
-                        name: page.name.clone(),
-                        description: page.title.clone(),
-                    });
+        match app.open_board(board_id_filter.clone(), None, None).await {
+            Ok(board) => {
+                let board_guard = board.lock().await;
+                match board_guard.load_all_pages(None).await {
+                    Ok(pages) => {
+                        for page in pages {
+                            result.push(PageInfo {
+                                app_id: app_id.clone(),
+                                page_id: page.id.clone(),
+                                board_id: Some(board_id_filter.clone()),
+                                name: page.name.clone(),
+                                description: page.title.clone(),
+                            });
+                        }
+                    }
+                    Err(e) => tracing::error!("Failed to load pages for board {}: {:?}", board_id_filter, e),
                 }
             }
+            Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id_filter, e),
         }
     } else {
         for board_id in app.boards.iter() {
-            if let Ok(board) = app.open_board(board_id.to_string(), None, None).await {
-                let board_guard = board.lock().await;
-                if let Ok(pages) = board_guard.load_all_pages(None).await {
-                    for page in pages {
-                        result.push(PageInfo {
-                            app_id: app_id.clone(),
-                            page_id: page.id.clone(),
-                            board_id: Some(board_id.clone()),
-                            name: page.name.clone(),
-                            description: page.title.clone(),
-                        });
+            match app.open_board(board_id.to_string(), None, None).await {
+                Ok(board) => {
+                    let board_guard = board.lock().await;
+                    match board_guard.load_all_pages(None).await {
+                        Ok(pages) => {
+                            for page in pages {
+                                result.push(PageInfo {
+                                    app_id: app_id.clone(),
+                                    page_id: page.id.clone(),
+                                    board_id: Some(board_id.clone()),
+                                    name: page.name.clone(),
+                                    description: page.title.clone(),
+                                });
+                            }
+                        }
+                        Err(e) => tracing::error!("Failed to load pages for board {}: {:?}", board_id, e),
                     }
                 }
+                Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id, e),
             }
         }
     }

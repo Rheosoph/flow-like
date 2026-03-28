@@ -47,7 +47,9 @@ pub async fn get_app(
         return Ok(Json(app));
     }
 
-    user.sub()?;
+    if !state.platform_config.features.unauthorized_read {
+        user.sub()?;
+    }
     let app = ensure_app_publicly_visible(&app_id, &state).await?;
     Ok(Json(app.into()))
 }
