@@ -48,8 +48,18 @@ impl NodeLogic for DropColumnLocalDatabaseNode {
         )
         .set_default_value(Some(json!("new_column")));
 
-        node.add_output_pin("exec_out", "Done", "Done altering schema", VariableType::Execution);
-        node.add_output_pin("schema", "Schema", "Updated database schema", VariableType::Struct);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Done altering schema",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "schema",
+            "Schema",
+            "Updated database schema",
+            VariableType::Struct,
+        );
 
         node
     }
@@ -64,7 +74,10 @@ impl NodeLogic for DropColumnLocalDatabaseNode {
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
 
-        database.inner().drop_columns(&[column_name.as_str()]).await?;
+        database
+            .inner()
+            .drop_columns(&[column_name.as_str()])
+            .await?;
 
         let schema = database.schema().await?;
         context.set_pin_value("schema", json!(schema)).await?;

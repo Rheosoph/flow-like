@@ -1,6 +1,6 @@
 use crate::{
-    credentials::CredentialsAccess, ensure_permission, error::ApiError,
-    middleware::jwt::AppUser, permission::role_permission::RolePermissions, state::AppState,
+    credentials::CredentialsAccess, ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -38,7 +38,11 @@ pub async fn list_tables_user(
     let credentials = state
         .scoped_credentials(&sub, &app_id, CredentialsAccess::InvokeRead)
         .await?;
-    let connection = credentials.to_db_scoped(&sub, &app_id).await?.execute().await?;
+    let connection = credentials
+        .to_db_scoped(&sub, &app_id)
+        .await?
+        .execute()
+        .await?;
     let tables = connection.table_names().execute().await?;
 
     Ok(Json(tables))

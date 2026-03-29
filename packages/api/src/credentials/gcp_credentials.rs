@@ -51,8 +51,14 @@ pub struct GcpRuntimeCredentials {
 impl std::fmt::Debug for GcpRuntimeCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcpRuntimeCredentials")
-            .field("service_account_key", &self.service_account_key.as_ref().map(|_| "[REDACTED]"))
-            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "service_account_key",
+                &self.service_account_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_bucket", &self.meta_bucket)
             .field("content_bucket", &self.content_bucket)
             .field("logs_bucket", &self.logs_bucket)
@@ -534,7 +540,9 @@ impl RuntimeCredentialsTrait for GcpRuntimeCredentials {
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(sub, app_id).await
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

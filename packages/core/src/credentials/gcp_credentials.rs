@@ -1,8 +1,8 @@
 use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
+use flow_like_storage::object_store;
 use flow_like_storage::object_store::StaticCredentialProvider;
 use flow_like_storage::object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
-use flow_like_storage::object_store;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -44,8 +44,18 @@ pub struct GcpSharedCredentials {
 impl std::fmt::Debug for GcpSharedCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcpSharedCredentials")
-            .field("service_account_key", &if self.service_account_key.is_empty() { "empty" } else { "[REDACTED]" })
-            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "service_account_key",
+                &if self.service_account_key.is_empty() {
+                    "empty"
+                } else {
+                    "[REDACTED]"
+                },
+            )
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_bucket", &self.meta_bucket)
             .field("content_bucket", &self.content_bucket)
             .field("logs_bucket", &self.logs_bucket)

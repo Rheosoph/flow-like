@@ -4,7 +4,7 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json, Value};
+use flow_like_types::{Value, async_trait, json::json};
 
 /// Extracts a single component value from an InputValuesPayload by component ID.
 #[crate::register_node]

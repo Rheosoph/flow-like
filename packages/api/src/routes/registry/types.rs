@@ -208,6 +208,8 @@ pub struct SearchFilters {
     #[serde(default)]
     pub include_deprecated: bool,
     #[serde(default)]
+    pub include_disabled: bool,
+    #[serde(default)]
     pub offset: usize,
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -228,6 +230,7 @@ impl Default for SearchFilters {
             author: None,
             verified_only: false,
             include_deprecated: false,
+            include_disabled: false,
             offset: 0,
             limit: default_limit(),
             sort_by: SortField::default(),

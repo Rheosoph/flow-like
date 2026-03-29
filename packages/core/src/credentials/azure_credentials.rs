@@ -1,7 +1,7 @@
 use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
-use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
 use flow_like_storage::object_store;
+use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -40,15 +40,30 @@ pub struct AzureSharedCredentials {
 impl std::fmt::Debug for AzureSharedCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AzureSharedCredentials")
-            .field("meta_sas_token", &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("content_sas_token", &self.content_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("user_content_sas_token", &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("logs_sas_token", &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "meta_sas_token",
+                &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "content_sas_token",
+                &self.content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "user_content_sas_token",
+                &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "logs_sas_token",
+                &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_container", &self.meta_container)
             .field("content_container", &self.content_container)
             .field("logs_container", &self.logs_container)
             .field("account_name", &self.account_name)
-            .field("account_key", &self.account_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "account_key",
+                &self.account_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("expiration", &self.expiration)
             .finish()
     }

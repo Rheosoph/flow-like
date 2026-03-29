@@ -102,15 +102,17 @@ impl NodeLogic for SearchMemoryNode {
 
         let config: MemoryConfig = context.evaluate_pin("memory_config").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let role_filter: String = context.evaluate_pin("role_filter").await.unwrap_or_default();
+        let role_filter: String = context
+            .evaluate_pin("role_filter")
+            .await
+            .unwrap_or_default();
         let allowed_roles = ["user", "assistant", "observation", "summary", "context"];
-        let filter_expr: Option<String> = if !role_filter.is_empty()
-            && allowed_roles.contains(&role_filter.as_str())
-        {
-            Some(format!("role = '{}'", role_filter))
-        } else {
-            None
-        };
+        let filter_expr: Option<String> =
+            if !role_filter.is_empty() && allowed_roles.contains(&role_filter.as_str()) {
+                Some(format!("role = '{}'", role_filter))
+            } else {
+                None
+            };
         let filter_opt: Option<&str> = filter_expr.as_deref();
 
         let top_k = config.recall_top_k as usize;

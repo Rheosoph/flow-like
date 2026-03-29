@@ -82,8 +82,5 @@ pub fn routes() -> Router<AppState> {
         .route("/sinks/{jti}", delete(sinks::revoke_sink::revoke_sink))
         // User management routes
         .route("/users", get(users::list_users::list_users))
-        .route(
-            "/users/{user_id}",
-            patch(users::update_user::update_user),
-        )
+        .route("/users/{user_id}", patch(users::update_user::update_user))
 }

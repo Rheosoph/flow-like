@@ -5,10 +5,7 @@ use axum::{
 use flow_like_storage::lancedb::Connection;
 
 use crate::{
-    credentials::CredentialsAccess,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    state::AppState,
+    credentials::CredentialsAccess, error::ApiError, middleware::jwt::AppUser, state::AppState,
 };
 
 pub mod add_column;
@@ -59,13 +56,22 @@ impl ScopedPaginationParams {
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
 pub fn validate_table_name(name: &str) -> Result<(), ApiError> {
     if name.is_empty() || name.len() > 256 {
-        return Err(ApiError::bad_request("Table name must be 1-256 characters".to_string()));
+        return Err(ApiError::bad_request(
+            "Table name must be 1-256 characters".to_string(),
+        ));
     }
     if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return Err(ApiError::bad_request("Table name contains forbidden characters".to_string()));
+        return Err(ApiError::bad_request(
+            "Table name contains forbidden characters".to_string(),
+        ));
     }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
-        return Err(ApiError::bad_request("Table name contains invalid characters".to_string()));
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(ApiError::bad_request(
+            "Table name contains invalid characters".to_string(),
+        ));
     }
     Ok(())
 }
@@ -81,7 +87,11 @@ pub async fn resolve_connection(
         let credentials = state
             .scoped_credentials(&sub, app_id, CredentialsAccess::InvokeRead)
             .await?;
-        Ok(credentials.to_db_scoped(&sub, app_id).await?.execute().await?)
+        Ok(credentials
+            .to_db_scoped(&sub, app_id)
+            .await?
+            .execute()
+            .await?)
     } else {
         let credentials = state.master_credentials().await?;
         Ok(credentials.to_db(app_id).await?.execute().await?)

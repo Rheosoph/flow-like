@@ -131,7 +131,10 @@ impl KubernetesScheduler {
             let time_parts: Vec<&str> = scheduled.time.split(':').collect();
             let date_parts: Vec<&str> = scheduled.date.split('-').collect();
             if time_parts.len() >= 2 && date_parts.len() >= 3 {
-                format!("{} {} {} {} *", time_parts[1], time_parts[0], date_parts[2], date_parts[1])
+                format!(
+                    "{} {} {} {} *",
+                    time_parts[1], time_parts[0], date_parts[2], date_parts[1]
+                )
             } else {
                 cron_expr.to_string()
             }
@@ -203,7 +206,11 @@ impl KubernetesScheduler {
             },
             spec: Some(CronJobSpec {
                 schedule: effective_cron,
-                time_zone: if config.timezone != "UTC" { Some(config.timezone.clone()) } else { None },
+                time_zone: if config.timezone != "UTC" {
+                    Some(config.timezone.clone())
+                } else {
+                    None
+                },
                 concurrency_policy: Some("Forbid".to_string()),
                 successful_jobs_history_limit: Some(3),
                 failed_jobs_history_limit: Some(1),

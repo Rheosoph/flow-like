@@ -162,7 +162,7 @@ pub struct DeletePackageResponse {
 /// DELETE /registry/package/{id}
 /// Soft-delete a package by setting its status to Disabled.
 /// The package no longer appears in search results but WASM artifacts are
-/// preserved so offline or already-linked projects keep working.
+/// preserved so existing installs keep working.
 #[utoipa::path(
     delete,
     path = "/registry/package/{id}",
@@ -173,7 +173,6 @@ pub struct DeletePackageResponse {
         (status = 200, description = "Package disabled", body = DeletePackageResponse),
         (status = 403, description = "Forbidden – owner permission required"),
         (status = 404, description = "Package not found"),
-        (status = 503, description = "WASM registry not configured")
     ),
     security(("bearer_auth" = []))
 )]
@@ -203,5 +202,54 @@ pub async fn delete_package(
 
     Ok(Json(DeletePackageResponse {
         message: "Package disabled. Artifacts preserved for existing installs.".to_string(),
+    }))
+}
+
+/// POST /registry/package/{id}/restore
+/// Re-enable a previously disabled package.
+#[utoipa::path(
+    post,
+    path = "/registry/package/{id}/restore",
+    tag = "registry",
+    description = "Restore a disabled package back to active status.",
+    params(("id" = String, Path, description = "Package ID")),
+    responses(
+        (status = 200, description = "Package restored", body = DeletePackageResponse),
+        (status = 403, description = "Forbidden – owner permission required"),
+        (status = 404, description = "Package not found"),
+        (status = 409, description = "Package is not disabled"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn restore_package(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(id): Path<String>,
+) -> Result<Json<DeletePackageResponse>, ApiError> {
+    let uid = user.sub().map_err(|_| ApiError::UNAUTHORIZED)?;
+
+    crate::ensure_wasm_permission!(state, &uid, &id, WasmPackagePermission::Owner);
+
+    let pkg = wasm_package::Entity::find_by_id(&id)
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
+
+    if pkg.status != WasmPackageStatus::Disabled {
+        return Err(ApiError::conflict("Package is not disabled"));
+    }
+
+    let mut model: wasm_package::ActiveModel = Default::default();
+    model.id = Set(id.clone());
+    model.status = Set(WasmPackageStatus::Active);
+    model.updated_at = Set(chrono::Utc::now().naive_utc());
+    model
+        .update(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to restore package: {}", e)))?;
+
+    Ok(Json(DeletePackageResponse {
+        message: "Package restored and active again.".to_string(),
     }))
 }

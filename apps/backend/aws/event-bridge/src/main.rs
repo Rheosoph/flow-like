@@ -58,9 +58,7 @@ async fn main() -> Result<(), Error> {
     run(service_fn(event_bridge_handler)).await
 }
 
-async fn event_bridge_handler(
-    event: LambdaEvent<EventDetail>,
-) -> Result<(), Error> {
+async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Error> {
     let api_base_url = get_api_base_url()?;
     let sink_jwt = get_sink_jwt()?;
 

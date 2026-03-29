@@ -36,9 +36,18 @@ pub struct AwsRuntimeCredentials {
 impl std::fmt::Debug for AwsRuntimeCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AwsRuntimeCredentials")
-            .field("access_key_id", &self.access_key_id.as_ref().map(|_| "[REDACTED]"))
-            .field("secret_access_key", &self.secret_access_key.as_ref().map(|_| "[REDACTED]"))
-            .field("session_token", &self.session_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "access_key_id",
+                &self.access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_bucket", &self.meta_bucket)
             .field("content_bucket", &self.content_bucket)
             .field("logs_bucket", &self.logs_bucket)
@@ -163,7 +172,16 @@ impl AwsRuntimeCredentials {
         let raw_session = format!("{}-{}", sub, app_id);
         let session_name: String = raw_session
             .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == '@' || *c == '+' || *c == '=' || *c == ',')
+            .filter(|c| {
+                c.is_alphanumeric()
+                    || *c == '-'
+                    || *c == '_'
+                    || *c == '.'
+                    || *c == '@'
+                    || *c == '+'
+                    || *c == '='
+                    || *c == ','
+            })
             .take(64)
             .collect();
         let session_name = if session_name.len() < 2 {
@@ -304,7 +322,9 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(sub, app_id).await
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

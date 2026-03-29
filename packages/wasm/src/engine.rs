@@ -359,9 +359,8 @@ impl WasmEngine {
                 "No native precompiled artifact — compiling with Pulley interpreter",
             );
 
-            let module = wasmtime::Module::new(pulley_engine, bytes).map_err(|e| {
-                WasmError::compilation(format!("Pulley compilation failed: {}", e))
-            })?;
+            let module = wasmtime::Module::new(pulley_engine, bytes)
+                .map_err(|e| WasmError::compilation(format!("Pulley compilation failed: {}", e)))?;
             let module = Arc::new(WasmModule::from_precompiled(module, hash.clone())?);
             self.module_cache.insert(hash, module.clone());
             return Ok(module);
@@ -414,7 +413,11 @@ impl WasmEngine {
         // 1. Try native AOT cache
         if let Some(aot) = &self.aot_cache {
             if let Some(precompiled) = aot.load_component(&self.engine, &hash) {
-                let component = Arc::new(WasmComponent::from_precompiled(precompiled, bytes, hash.clone())?);
+                let component = Arc::new(WasmComponent::from_precompiled(
+                    precompiled,
+                    bytes,
+                    hash.clone(),
+                )?);
                 self.component_cache.insert(hash, component.clone());
                 return Ok(component);
             }
@@ -427,10 +430,15 @@ impl WasmEngine {
                 "No native precompiled component — compiling with Pulley interpreter",
             );
 
-            let component = wasmtime::component::Component::new(pulley_engine, bytes).map_err(|e| {
-                WasmError::compilation(format!("Pulley component compilation failed: {}", e))
-            })?;
-            let component = Arc::new(WasmComponent::from_precompiled(component, bytes, hash.clone())?);
+            let component =
+                wasmtime::component::Component::new(pulley_engine, bytes).map_err(|e| {
+                    WasmError::compilation(format!("Pulley component compilation failed: {}", e))
+                })?;
+            let component = Arc::new(WasmComponent::from_precompiled(
+                component,
+                bytes,
+                hash.clone(),
+            )?);
             self.component_cache.insert(hash, component.clone());
             return Ok(component);
         }

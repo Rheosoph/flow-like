@@ -41,15 +41,30 @@ pub struct AzureRuntimeCredentials {
 impl std::fmt::Debug for AzureRuntimeCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AzureRuntimeCredentials")
-            .field("meta_sas_token", &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("content_sas_token", &self.content_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("user_content_sas_token", &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"))
-            .field("logs_sas_token", &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "meta_sas_token",
+                &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "content_sas_token",
+                &self.content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "user_content_sas_token",
+                &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "logs_sas_token",
+                &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_container", &self.meta_container)
             .field("content_container", &self.content_container)
             .field("logs_container", &self.logs_container)
             .field("account_name", &self.account_name)
-            .field("account_key", &self.account_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "account_key",
+                &self.account_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("expiration", &self.expiration)
             .finish()
     }
@@ -740,7 +755,9 @@ impl RuntimeCredentialsTrait for AzureRuntimeCredentials {
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(sub, app_id).await
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

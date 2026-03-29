@@ -4,7 +4,9 @@
 //! by the current teloxide version (0.14). Implementations return errors until
 //! teloxide is updated to support these methods.
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -143,6 +145,7 @@ impl NodeLogic for PostStoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let _business_connection_id: String =
@@ -156,6 +159,13 @@ impl NodeLogic for PostStoryNode {
         Err(flow_like_types::anyhow!(
             "postStory is not yet supported in the current teloxide version. \
              This API requires Telegram Bot API 7.3+ support."
+        ))
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
         ))
     }
 }
@@ -269,6 +279,7 @@ impl NodeLogic for EditStoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let _business_connection_id: String =
@@ -283,6 +294,13 @@ impl NodeLogic for EditStoryNode {
         Err(flow_like_types::anyhow!(
             "editStory is not yet supported in the current teloxide version. \
              This API requires Telegram Bot API 7.3+ support."
+        ))
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
         ))
     }
 }
@@ -355,6 +373,7 @@ impl NodeLogic for DeleteStoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let _business_connection_id: String =
@@ -369,6 +388,13 @@ impl NodeLogic for DeleteStoryNode {
         Err(flow_like_types::anyhow!(
             "deleteStory is not yet supported in the current teloxide version. \
              This API requires Telegram Bot API 7.3+ support."
+        ))
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
         ))
     }
 }

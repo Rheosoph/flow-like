@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 pub use flow_like_catalog_core::{CachedDB, NodeDBConnection};
 
-pub mod count;
 pub mod add_column;
+pub mod count;
 pub mod delete;
 pub mod drop_column;
 pub mod filter;
@@ -115,7 +115,9 @@ impl NodeLogic for CreateLocalDatabaseNode {
 
             let db = if let Some(credentials) = &context.credentials {
                 if user_scoped {
-                    credentials.to_db_scoped(&context_cache.sub, &app_id).await?
+                    credentials
+                        .to_db_scoped(&context_cache.sub, &app_id)
+                        .await?
                 } else {
                     credentials.to_db(&app_id).await?
                 }

@@ -1,7 +1,5 @@
 use crate::{
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::global_permission::GlobalPermission,
+    error::ApiError, middleware::jwt::AppUser, permission::global_permission::GlobalPermission,
     state::AppState,
 };
 use axum::{
@@ -26,7 +24,10 @@ use flow_like::flow::board::Board;
         (status = 404, description = "Board not found")
     )
 )]
-#[tracing::instrument(name = "GET /admin/publication/apps/{app_id}/board/{board_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /admin/publication/apps/{app_id}/board/{board_id}",
+    skip(state, user)
+)]
 pub async fn get_board(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

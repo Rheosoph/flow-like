@@ -1,7 +1,7 @@
 use crate::credentials::{LogsDbBuilder, SharedCredentialsTrait, StoreType, db_path_from_base};
 use flow_like_storage::lancedb::connection::ConnectBuilder;
-use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_storage::object_store;
+use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_storage::{files::store::FlowLikeStore, lancedb};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -51,9 +51,18 @@ pub struct AwsSharedCredentials {
 impl std::fmt::Debug for AwsSharedCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AwsSharedCredentials")
-            .field("access_key_id", &self.access_key_id.as_ref().map(|_| "[REDACTED]"))
-            .field("secret_access_key", &self.secret_access_key.as_ref().map(|_| "[REDACTED]"))
-            .field("session_token", &self.session_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "access_key_id",
+                &self.access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_bucket", &self.meta_bucket)
             .field("content_bucket", &self.content_bucket)
             .field("logs_bucket", &self.logs_bucket)

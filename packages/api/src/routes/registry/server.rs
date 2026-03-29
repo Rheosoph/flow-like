@@ -20,8 +20,8 @@ use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
 use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use sea_orm::{
-    sea_query::Expr, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1148,11 +1148,13 @@ impl ServerRegistry {
                     .map(|r| r.package_id)
                     .collect();
 
-                // Show all owned packages regardless of status (except deprecated unless requested)
                 let mut cond =
                     Condition::all().add(wasm_package::Column::Id.is_in(user_package_ids));
                 if !filters.include_deprecated {
                     cond = cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Deprecated));
+                }
+                if !filters.include_disabled {
+                    cond = cond.add(wasm_package::Column::Status.ne(WasmPackageStatus::Disabled));
                 }
                 query = query.filter(cond);
             } else {

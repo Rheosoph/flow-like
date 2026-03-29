@@ -238,9 +238,7 @@ pub async fn get_requests(
             author_id: log.author_id,
             author,
             message: log.message,
-            visibility: log
-                .visibility
-                .map(|v| format!("{:?}", v).to_uppercase()),
+            visibility: log.visibility.map(|v| format!("{:?}", v).to_uppercase()),
             created_at: log.created_at.to_string(),
         });
     }
@@ -258,17 +256,14 @@ pub async fn get_requests(
         let mut app_thumbnail = meta_record.and_then(|m| m.thumbnail.clone());
 
         // Presign icon/thumbnail if they are storage keys (not already URLs)
-        let prefix =
-            flow_like_storage::Path::from("media").child("apps").child(r.app_id.clone());
+        let prefix = flow_like_storage::Path::from("media")
+            .child("apps")
+            .child(r.app_id.clone());
         if let Some(ref icon) = app_icon {
             if !icon.starts_with("http://") && !icon.starts_with("https://") {
                 let icon_path = prefix.child(format!("{icon}.webp"));
                 if let Ok(url) = store
-                    .sign(
-                        "GET",
-                        &icon_path,
-                        std::time::Duration::from_secs(60 * 60),
-                    )
+                    .sign("GET", &icon_path, std::time::Duration::from_secs(60 * 60))
                     .await
                 {
                     app_icon = Some(url.to_string());
@@ -279,11 +274,7 @@ pub async fn get_requests(
             if !thumb.starts_with("http://") && !thumb.starts_with("https://") {
                 let thumb_path = prefix.child(format!("{thumb}.webp"));
                 if let Ok(url) = store
-                    .sign(
-                        "GET",
-                        &thumb_path,
-                        std::time::Duration::from_secs(60 * 60),
-                    )
+                    .sign("GET", &thumb_path, std::time::Duration::from_secs(60 * 60))
                     .await
                 {
                     app_thumbnail = Some(url.to_string());
@@ -304,8 +295,7 @@ pub async fn get_requests(
             app_icon,
             app_thumbnail,
             app_tags: meta_record.and_then(|m| m.tags.clone()),
-            current_visibility: app_record
-                .map(|a| format!("{:?}", a.visibility).to_uppercase()),
+            current_visibility: app_record.map(|a| format!("{:?}", a.visibility).to_uppercase()),
             download_count: app_record.map(|a| a.download_count),
             rating_count: app_record.map(|a| a.rating_count),
             avg_rating: app_record.and_then(|a| a.avg_rating),

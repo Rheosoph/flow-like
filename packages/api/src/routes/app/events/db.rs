@@ -435,7 +435,9 @@ fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::ScheduledLoca
     }
 
     let value: serde_json::Value = serde_json::from_slice(config).ok()?;
-    let sf = value.get("scheduled_for").or_else(|| value.get("scheduledFor"))?;
+    let sf = value
+        .get("scheduled_for")
+        .or_else(|| value.get("scheduledFor"))?;
 
     let date = sf.get("date").and_then(|v| v.as_str())?.to_string();
     let time = sf.get("time").and_then(|v| v.as_str())?.to_string();

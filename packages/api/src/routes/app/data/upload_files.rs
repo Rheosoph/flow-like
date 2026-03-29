@@ -151,7 +151,9 @@ pub async fn upload_user_files(
     let mut urls = Vec::with_capacity(payload.prefixes.len());
 
     for prefix in payload.prefixes.iter().take(MAX_PREFIXES) {
-        let upload_dir = project_dir.construct_user_upload(&sub, &app_id, prefix).await?;
+        let upload_dir = project_dir
+            .construct_user_upload(&sub, &app_id, prefix)
+            .await?;
         let signed_url = match project_dir
             .sign("PUT", &upload_dir, Duration::from_secs(60 * 60 * 24))
             .await

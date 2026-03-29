@@ -58,7 +58,10 @@ pub struct AppContentResponse {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/publication/apps/{app_id}/content", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /admin/publication/apps/{app_id}/content",
+    skip(state, user)
+)]
 pub async fn get_app_content(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -12,10 +12,14 @@ use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
+#[cfg(feature = "execute")]
 use teloxide::types::{BotCommand, BotCommandScope, Recipient};
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 
 // =============================================================================
 // DATA STRUCTURES
@@ -1133,6 +1137,7 @@ impl NodeLogic for SetChatMenuButtonNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+#[cfg(feature = "execute")]
         use teloxide::types::{MenuButton, WebAppInfo};
 
         let menu_button = match menu_type.as_str() {
@@ -1265,6 +1270,7 @@ impl NodeLogic for GetChatMenuButtonNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+#[cfg(feature = "execute")]
         use teloxide::types::MenuButton;
 
         let mut request = cached_bot.bot.get_chat_menu_button();
@@ -1497,6 +1503,7 @@ impl NodeLogic for SetMyDefaultAdminRightsNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+#[cfg(feature = "execute")]
         use teloxide::types::ChatAdministratorRights;
 
         let rights = ChatAdministratorRights {

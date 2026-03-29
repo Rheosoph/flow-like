@@ -14,15 +14,27 @@ fn parse_scheduled_local(
     timezone: &str,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     use chrono::TimeZone;
-    let date_parts: Vec<u32> = scheduled.date.split('-').filter_map(|s| s.parse().ok()).collect();
-    let time_parts: Vec<u32> = scheduled.time.split(':').filter_map(|s| s.parse().ok()).collect();
+    let date_parts: Vec<u32> = scheduled
+        .date
+        .split('-')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let time_parts: Vec<u32> = scheduled
+        .time
+        .split(':')
+        .filter_map(|s| s.parse().ok())
+        .collect();
     if date_parts.len() < 3 || time_parts.len() < 2 {
         return None;
     }
     let tz: chrono_tz::Tz = timezone.parse().ok()?;
     tz.with_ymd_and_hms(
-        date_parts[0] as i32, date_parts[1], date_parts[2],
-        time_parts[0], time_parts[1], 0,
+        date_parts[0] as i32,
+        date_parts[1],
+        date_parts[2],
+        time_parts[0],
+        time_parts[1],
+        0,
     )
     .single()
     .map(|dt| dt.with_timezone(&chrono::Utc))

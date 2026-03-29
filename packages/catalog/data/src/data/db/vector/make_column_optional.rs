@@ -56,8 +56,18 @@ impl NodeLogic for MakeColumnOptionalLocalDatabaseNode {
         )
         .set_default_value(Some(json!(true)));
 
-        node.add_output_pin("exec_out", "Done", "Done altering schema", VariableType::Execution);
-        node.add_output_pin("schema", "Schema", "Updated database schema", VariableType::Struct);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Done altering schema",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "schema",
+            "Schema",
+            "Updated database schema",
+            VariableType::Struct,
+        );
 
         node
     }

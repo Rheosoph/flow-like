@@ -182,13 +182,13 @@ pub async fn presign_user_data_access(
     let upload_path = build_user_upload_path(&sub, &app_id, payload.prefix.as_deref());
     let path_str = upload_path.to_string();
 
-    let shared_credentials =
-        serde_json::to_value(scoped_credentials.clone().into_shared_credentials()).map_err(
-            |e| {
-                tracing::error!("Failed to serialize shared credentials: {}", e);
-                ApiError::internal("Failed to serialize shared credentials")
-            },
-        )?;
+    let shared_credentials = serde_json::to_value(
+        scoped_credentials.clone().into_shared_credentials(),
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to serialize shared credentials: {}", e);
+        ApiError::internal("Failed to serialize shared credentials")
+    })?;
 
     let expiration = get_credentials_expiration(&scoped_credentials);
 
@@ -229,7 +229,10 @@ fn build_upload_path(app_id: &str, prefix: Option<&str>) -> FlowPath {
 }
 
 fn build_user_upload_path(sub: &str, app_id: &str, prefix: Option<&str>) -> FlowPath {
-    let mut base = FlowPath::from("users").child(sub).child("apps").child(app_id);
+    let mut base = FlowPath::from("users")
+        .child(sub)
+        .child("apps")
+        .child(app_id);
 
     let Some(prefix) = prefix else {
         return base;

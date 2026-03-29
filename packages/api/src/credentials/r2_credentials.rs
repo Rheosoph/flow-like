@@ -55,9 +55,18 @@ pub struct R2RuntimeCredentials {
 impl std::fmt::Debug for R2RuntimeCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("R2RuntimeCredentials")
-            .field("access_key_id", &self.access_key_id.as_ref().map(|_| "[REDACTED]"))
-            .field("secret_access_key", &self.secret_access_key.as_ref().map(|_| "[REDACTED]"))
-            .field("session_token", &self.session_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "access_key_id",
+                &self.access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_bucket", &self.meta_bucket)
             .field("content_bucket", &self.content_bucket)
             .field("logs_bucket", &self.logs_bucket)
@@ -166,11 +175,7 @@ impl R2RuntimeCredentials {
             CredentialsAccess::ReadUser => ("object-read-only", vec![user_prefix]),
             CredentialsAccess::InvokeNone => (
                 "object-read-write",
-                vec![
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                ],
+                vec![user_prefix, log_prefix, temporary_user_prefix],
             ),
             CredentialsAccess::InvokeRead => (
                 "object-read-only",
@@ -309,7 +314,9 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(sub, app_id).await
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

@@ -1,7 +1,10 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
     routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -45,13 +48,26 @@ pub async fn drop_index(
 
     // Validate index_name with the same rules as table names
     if index_name.is_empty() || index_name.len() > 256 {
-        return Err(ApiError::bad_request("Index name must be 1-256 characters".to_string()));
+        return Err(ApiError::bad_request(
+            "Index name must be 1-256 characters".to_string(),
+        ));
     }
-    if index_name.contains("..") || index_name.contains('/') || index_name.contains('\\') || index_name.contains('\0') {
-        return Err(ApiError::bad_request("Index name contains forbidden characters".to_string()));
+    if index_name.contains("..")
+        || index_name.contains('/')
+        || index_name.contains('\\')
+        || index_name.contains('\0')
+    {
+        return Err(ApiError::bad_request(
+            "Index name contains forbidden characters".to_string(),
+        ));
     }
-    if !index_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
-        return Err(ApiError::bad_request("Index name contains invalid characters".to_string()));
+    if !index_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(ApiError::bad_request(
+            "Index name contains invalid characters".to_string(),
+        ));
     }
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;

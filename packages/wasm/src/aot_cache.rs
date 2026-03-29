@@ -67,7 +67,11 @@ impl AotCache {
         std::fs::create_dir_all(dir)?;
         let path = Self::artifact_path(dir, wasm_hash);
         std::fs::write(&path, serialized)?;
-        tracing::info!("Saved AOT cache: {} ({} bytes)", path.display(), serialized.len());
+        tracing::info!(
+            "Saved AOT cache: {} ({} bytes)",
+            path.display(),
+            serialized.len()
+        );
         Ok(())
     }
 

@@ -606,30 +606,50 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         .host_state
                         .has_capability(WasmCapabilities::STORAGE_WRITE)
                     {
+                        tracing::warn!("[wasm write-file] rejected: no STORAGE_WRITE capability");
                         return Ok((false,));
                     }
                     if data.len() > crate::host_functions::storage::MAX_STORAGE_FILE_SIZE {
+                        tracing::warn!("[wasm write-file] rejected: data too large ({})", data.len());
                         return Ok((false,));
                     }
                     let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
                         Ok(p) => p,
-                        Err(_) => return Ok((false,)),
+                        Err(e) => {
+                            tracing::warn!("[wasm write-file] rejected: bad JSON {e}: {flow_path_json}");
+                            return Ok((false,));
+                        }
                     };
                     let ctx = match &store.data().host_state.storage_context {
                         Some(c) => c,
-                        None => return Ok((false,)),
+                        None => {
+                            tracing::warn!("[wasm write-file] rejected: no storage context");
+                            return Ok((false,));
+                        }
                     };
                     let obj_store = match ctx.resolve_store(&flow_path.store_ref) {
                         Some(s) => s,
-                        None => return Ok((false,)),
+                        None => {
+                            tracing::warn!(
+                                "[wasm write-file] rejected: unresolved store_ref={}",
+                                flow_path.store_ref
+                            );
+                            return Ok((false,));
+                        }
                     };
-                    let path = flow_like_storage::object_store::path::Path::from(flow_path.path);
+                    let path = flow_like_storage::object_store::path::Path::from(flow_path.path.clone());
                     let payload = flow_like_storage::object_store::PutPayload::from_bytes(
                         flow_like_types::Bytes::from(data),
                     );
                     match obj_store.as_generic().put(&path, payload).await {
                         Ok(_) => Ok((true,)),
-                        Err(_) => Ok((false,)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "[wasm write-file] put failed for path={} store_ref={}: {e}",
+                                flow_path.path, flow_path.store_ref
+                            );
+                            Ok((false,))
+                        }
                     }
                 })
             },
@@ -1314,10 +1334,8 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     })
                     .collect();
                 let body_bytes = resp.bytes().await.unwrap_or_default();
-                let body_b64 = base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &body_bytes,
-                );
+                let body_b64 =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_bytes);
 
                 let result = serde_json::json!({
                     "status": status,

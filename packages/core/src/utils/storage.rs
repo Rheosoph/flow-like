@@ -39,7 +39,9 @@ pub async fn construct_user_storage(
         .clone()
         .ok_or(anyhow!("Project store not found"))?;
 
-    let base_path = project_store.construct_user_upload(sub, app_id, prefix).await?;
+    let base_path = project_store
+        .construct_user_upload(sub, app_id, prefix)
+        .await?;
 
     Ok((project_store, base_path))
 }

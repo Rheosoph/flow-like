@@ -1,4 +1,7 @@
-use std::{collections::{BTreeMap, HashSet}, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use flow_like::flow::{
     board::{Board, Layer, LayerType},
@@ -344,10 +347,7 @@ impl NodeLogic for CallFunctionNode {
                     fn_context.push_sub_context(&mut sub);
                     if let Err(error) = result {
                         context.log_message(
-                            &format!(
-                                "Error resolving output '{}': {:?}",
-                                layer_pin.name, error
-                            ),
+                            &format!("Error resolving output '{}': {:?}", layer_pin.name, error),
                             LogLevel::Error,
                         );
                     }

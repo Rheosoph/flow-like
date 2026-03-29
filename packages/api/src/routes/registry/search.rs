@@ -27,6 +27,8 @@ pub struct SearchQuery {
     #[serde(default)]
     pub include_deprecated: bool,
     #[serde(default)]
+    pub include_disabled: bool,
+    #[serde(default)]
     pub offset: usize,
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -51,6 +53,7 @@ impl SearchQuery {
             author: self.author,
             verified_only: self.verified_only,
             include_deprecated: self.include_deprecated,
+            include_disabled: self.include_disabled,
             offset: self.offset,
             limit: self.limit,
             sort_by: self.sort_by,
@@ -75,6 +78,7 @@ impl SearchQuery {
         ("author" = Option<String>, Query, description = "Filter by author"),
         ("verified_only" = Option<bool>, Query, description = "Only show verified packages"),
         ("include_deprecated" = Option<bool>, Query, description = "Include deprecated packages"),
+        ("include_disabled" = Option<bool>, Query, description = "Include disabled (soft-deleted) packages"),
         ("offset" = Option<usize>, Query, description = "Pagination offset"),
         ("limit" = Option<usize>, Query, description = "Pagination limit"),
         ("sort_by" = Option<String>, Query, description = "Sort field: relevance, name, downloads, updated_at, created_at"),

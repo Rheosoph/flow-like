@@ -1,7 +1,10 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
     routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    state::AppState,
 };
 use axum::{
     Extension, Json,

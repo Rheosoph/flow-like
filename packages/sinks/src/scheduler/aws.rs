@@ -100,9 +100,7 @@ impl AwsEventBridgeScheduler {
             .input(serde_json::json!({ "event_id": event_id }).to_string());
 
         if let Some(dlq_arn) = &self.config.dlq_arn {
-            builder = builder.dead_letter_config(
-                DeadLetterConfig::builder().arn(dlq_arn).build(),
-            );
+            builder = builder.dead_letter_config(DeadLetterConfig::builder().arn(dlq_arn).build());
         }
 
         builder
@@ -166,14 +164,17 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
 
         let (schedule_expression, action_after) = if config.is_one_time() {
             let at_expr = config.effective_expression().ok_or_else(|| {
-                SchedulerError::InvalidCronExpression("Missing scheduled_for for one-time schedule".into())
+                SchedulerError::InvalidCronExpression(
+                    "Missing scheduled_for for one-time schedule".into(),
+                )
             })?;
             (at_expr, Some(ActionAfterCompletion::Delete))
         } else {
             (self.to_aws_cron(cron_expr), None)
         };
 
-        let mut req = self.client
+        let mut req = self
+            .client
             .create_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)
@@ -227,14 +228,17 @@ impl SchedulerBackend for AwsEventBridgeScheduler {
 
         let (schedule_expression, action_after) = if config.is_one_time() {
             let at_expr = config.effective_expression().ok_or_else(|| {
-                SchedulerError::InvalidCronExpression("Missing scheduled_for for one-time schedule".into())
+                SchedulerError::InvalidCronExpression(
+                    "Missing scheduled_for for one-time schedule".into(),
+                )
             })?;
             (at_expr, Some(ActionAfterCompletion::Delete))
         } else {
             (self.to_aws_cron(cron_expr), None)
         };
 
-        let mut req = self.client
+        let mut req = self
+            .client
             .update_schedule()
             .name(&schedule_name)
             .group_name(&self.config.group_name)

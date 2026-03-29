@@ -1,7 +1,7 @@
 use super::{CredentialsAccess, RuntimeCredentials, RuntimeCredentialsTrait};
 use crate::state::{AppState, State};
-use flow_like::credentials::mixed_credentials::MixedSharedCredentials;
 use flow_like::credentials::SharedCredentials;
+use flow_like::credentials::mixed_credentials::MixedSharedCredentials;
 use flow_like::state::FlowLikeState;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::{Result, anyhow, async_trait};
@@ -157,33 +157,23 @@ async fn scope_inner(
         RuntimeCredentials::R2(r2) => Ok(RuntimeCredentials::R2(
             r2.scoped_credentials(sub, app_id, state, mode).await?,
         )),
-        RuntimeCredentials::Mixed(_) => {
-            Err(anyhow!("Nested mixed credentials are not supported"))
-        }
+        RuntimeCredentials::Mixed(_) => Err(anyhow!("Nested mixed credentials are not supported")),
     }
 }
 
 async fn master_inner(creds: &RuntimeCredentials) -> Result<RuntimeCredentials> {
     match creds {
         #[cfg(feature = "aws")]
-        RuntimeCredentials::Aws(aws) => {
-            Ok(RuntimeCredentials::Aws(aws.master_credentials().await))
-        }
+        RuntimeCredentials::Aws(aws) => Ok(RuntimeCredentials::Aws(aws.master_credentials().await)),
         #[cfg(feature = "azure")]
         RuntimeCredentials::Azure(azure) => {
             Ok(RuntimeCredentials::Azure(azure.master_credentials().await))
         }
         #[cfg(feature = "gcp")]
-        RuntimeCredentials::Gcp(gcp) => {
-            Ok(RuntimeCredentials::Gcp(gcp.master_credentials().await))
-        }
+        RuntimeCredentials::Gcp(gcp) => Ok(RuntimeCredentials::Gcp(gcp.master_credentials().await)),
         #[cfg(feature = "r2")]
-        RuntimeCredentials::R2(r2) => {
-            Ok(RuntimeCredentials::R2(r2.master_credentials().await))
-        }
-        RuntimeCredentials::Mixed(_) => {
-            Err(anyhow!("Nested mixed credentials are not supported"))
-        }
+        RuntimeCredentials::R2(r2) => Ok(RuntimeCredentials::R2(r2.master_credentials().await)),
+        RuntimeCredentials::Mixed(_) => Err(anyhow!("Nested mixed credentials are not supported")),
     }
 }
 

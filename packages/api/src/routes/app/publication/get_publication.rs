@@ -80,7 +80,10 @@ pub async fn get_publication_requests(
         .all(&state.db)
         .await?;
 
-    let request_ids = requests.iter().map(|request| request.id.clone()).collect::<Vec<_>>();
+    let request_ids = requests
+        .iter()
+        .map(|request| request.id.clone())
+        .collect::<Vec<_>>();
 
     let logs = if request_ids.is_empty() {
         Vec::new()
@@ -95,7 +98,11 @@ pub async fn get_publication_requests(
     let author_ids = logs
         .iter()
         .filter_map(|log| log.author_id.clone())
-        .chain(requests.iter().filter_map(|request| request.approver_id.clone()))
+        .chain(
+            requests
+                .iter()
+                .filter_map(|request| request.approver_id.clone()),
+        )
         .collect::<HashSet<_>>();
 
     let user_records = if author_ids.is_empty() {
@@ -141,7 +148,9 @@ pub async fn get_publication_requests(
                 author_id: log.author_id,
                 author,
                 message: log.message,
-                visibility: log.visibility.map(|visibility| format!("{:?}", visibility).to_uppercase()),
+                visibility: log
+                    .visibility
+                    .map(|visibility| format!("{:?}", visibility).to_uppercase()),
                 created_at: log.created_at.to_string(),
                 updated_at: log.updated_at.to_string(),
             });

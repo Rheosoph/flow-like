@@ -11,16 +11,31 @@ static KEY_ID: OnceLock<String> = OnceLock::new();
 /// Initialize the audit signing keys from pre-resolved secret values.
 /// Must be called once during State construction. Subsequent calls are no-ops.
 pub fn init(backend_key_b64: Option<&str>, kid: Option<String>) {
-    if let Some(b64) = backend_key_b64 {
-        if let Ok(pem_bytes) = STANDARD.decode(b64) {
-            if let Ok(pem_str) = String::from_utf8(pem_bytes) {
-                if let Ok(sk) = SigningKey::from_pkcs8_pem(&pem_str) {
-                    let vk = *sk.verifying_key();
-                    let _ = SIGNING_KEY.set(sk);
-                    let _ = VERIFYING_KEY.set(vk);
-                }
-            }
+    match backend_key_b64 {
+        None => {
+            tracing::warn!("audit::sign::init called with no BACKEND_KEY value");
         }
+        Some(b64) => match STANDARD.decode(b64) {
+            Err(e) => {
+                tracing::error!("BACKEND_KEY base64 decode failed: {e}");
+            }
+            Ok(pem_bytes) => match String::from_utf8(pem_bytes) {
+                Err(e) => {
+                    tracing::error!("BACKEND_KEY is not valid UTF-8 after decode: {e}");
+                }
+                Ok(pem_str) => match SigningKey::from_pkcs8_pem(&pem_str) {
+                    Err(e) => {
+                        tracing::error!("BACKEND_KEY PKCS#8 parse failed: {e}");
+                    }
+                    Ok(sk) => {
+                        let vk = *sk.verifying_key();
+                        let _ = SIGNING_KEY.set(sk);
+                        let _ = VERIFYING_KEY.set(vk);
+                        tracing::info!("Audit signing key initialized successfully");
+                    }
+                },
+            },
+        },
     }
     let _ = KEY_ID.set(kid.unwrap_or_else(|| "backend-es256-v1".to_string()));
 }

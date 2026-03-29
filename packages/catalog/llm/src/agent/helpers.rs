@@ -184,7 +184,11 @@ async fn summarize_history_to_budget(
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, Vec<rig::message::Message>, Option<ResponseUsage>)> {
+) -> flow_like_types::Result<(
+    Vec<rig::message::Message>,
+    Vec<rig::message::Message>,
+    Option<ResponseUsage>,
+)> {
     if history.is_empty() {
         return Ok((history, vec![], None));
     }
@@ -349,7 +353,11 @@ async fn manage_context_budget(
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, Vec<rig::message::Message>, Option<ResponseUsage>)> {
+) -> flow_like_types::Result<(
+    Vec<rig::message::Message>,
+    Vec<rig::message::Message>,
+    Option<ResponseUsage>,
+)> {
     match agent.context_management_mode {
         ContextManagementMode::Summarize => {
             summarize_history_to_budget(context, agent, history, max_tokens).await
@@ -367,7 +375,13 @@ fn sanitize_tool_description(value: &str) -> String {
         .replace('"', "'")
         .replace('`', "'")
         .chars()
-        .map(|ch| if ch.is_control() && ch != '\n' && ch != '\t' { ' ' } else { ch })
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -440,7 +454,9 @@ fn assign_sanitized_argument_names(names: Vec<(u16, String)>) -> HashMap<String,
             format!("{}_{}", base_name, entry)
         };
 
-        sanitized_names.entry(original_name).or_insert(sanitized_name);
+        sanitized_names
+            .entry(original_name)
+            .or_insert(sanitized_name);
     }
 
     sanitized_names
@@ -472,7 +488,8 @@ pub async fn generate_tool_from_function(
     ) -> Option<HistoryJSONSchemaDefine> {
         let resolved_schema = resolve_ref(schema_str, refs);
 
-        let Ok(mut schema_value) = flow_like_types::json::from_str::<Value>(&resolved_schema) else {
+        let Ok(mut schema_value) = flow_like_types::json::from_str::<Value>(&resolved_schema)
+        else {
             return None;
         };
 
@@ -600,7 +617,12 @@ pub async fn generate_tool_from_function(
             .options
             .as_ref()
             .and_then(|opts| opts.valid_values.as_ref())
-            .map(|values| values.iter().map(|value| sanitize_tool_description(value)).collect());
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| sanitize_tool_description(value))
+                    .collect()
+            });
 
         // Build base definition
         let base_def = HistoryJSONSchemaDefine {
@@ -663,10 +685,7 @@ pub async fn generate_tool_from_function(
             .get(&payload.name)
             .cloned()
             .unwrap_or_else(|| sanitize_tool_identifier(&payload.name));
-        properties.insert(
-            payload_name,
-            Box::new(pin_to_schema_define(payload, refs)),
-        );
+        properties.insert(payload_name, Box::new(pin_to_schema_define(payload, refs)));
     }
 
     let parameters = HistoryFunctionParameters {
@@ -737,7 +756,10 @@ pub async fn execute_tool_call(
             .cloned()
             .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
 
-        if let Some(value) = args_obj.get(&sanitized_name).or_else(|| args_obj.get(&pin.name)) {
+        if let Some(value) = args_obj
+            .get(&sanitized_name)
+            .or_else(|| args_obj.get(&pin.name))
+        {
             pin.set_value(value.clone()).await;
         }
     }
@@ -1388,7 +1410,10 @@ pub async fn execute_agent_streaming(
             if agent.memory.is_some() {
                 if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
                     context.log_message(
-                        &format!("Failed to store evicted messages to memory (non-fatal): {}", e),
+                        &format!(
+                            "Failed to store evicted messages to memory (non-fatal): {}",
+                            e
+                        ),
                         LogLevel::Warn,
                     );
                 }
@@ -1749,7 +1774,13 @@ pub async fn execute_agent_streaming(
                     }
                 }
 
-                tool_results.push((id.clone(), call_id.clone(), name.clone(), arguments.clone(), tool_output));
+                tool_results.push((
+                    id.clone(),
+                    call_id.clone(),
+                    name.clone(),
+                    arguments.clone(),
+                    tool_output,
+                ));
             }
         }
 
@@ -2001,7 +2032,10 @@ pub async fn execute_agent_streaming(
                 if agent.memory.is_some() {
                     if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
                         context.log_message(
-                            &format!("Failed to store evicted messages to memory (non-fatal): {}", e),
+                            &format!(
+                                "Failed to store evicted messages to memory (non-fatal): {}",
+                                e
+                            ),
                             LogLevel::Warn,
                         );
                     }
@@ -2255,8 +2289,7 @@ async fn handle_memory_tool_call(
                         "user" | "assistant" | "observation" | "summary" | "context"
                     )
                 });
-            let filter_expr: Option<String> =
-                role_filter.map(|r| format!("role = '{}'", r));
+            let filter_expr: Option<String> = role_filter.map(|r| format!("role = '{}'", r));
             let filter_opt: Option<&str> = filter_expr.as_deref();
             let top_k = memory.recall_top_k as usize;
 
@@ -2378,7 +2411,10 @@ async fn handle_memory_tool_call(
 
             let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
             db.insert(vec![record]).await?;
-            let count = db.count(Some("role != 'summary'".to_string())).await.unwrap_or(0);
+            let count = db
+                .count(Some("role != 'summary'".to_string()))
+                .await
+                .unwrap_or(0);
             drop(db);
 
             context.log_message(
@@ -2547,7 +2583,9 @@ async fn run_memory_compress(
 
     let count = {
         let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
-        db.count(Some("role != 'summary'".to_string())).await.unwrap_or(0)
+        db.count(Some("role != 'summary'".to_string()))
+            .await
+            .unwrap_or(0)
     };
 
     let threshold = memory.compress_threshold as usize;

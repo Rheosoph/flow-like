@@ -138,6 +138,7 @@ pub fn routes() -> Router<AppState> {
             "/package/{id}",
             get(index::get_package).delete(index::delete_package),
         )
+        .route("/package/{id}/restore", post(index::restore_package))
         .route("/package/{id}/versions", get(index::get_versions))
         .route(
             "/package/{package_id}/readme",

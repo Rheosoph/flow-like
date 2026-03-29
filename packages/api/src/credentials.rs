@@ -34,14 +34,24 @@ pub mod r2_credentials;
 /// Validates that a path component (sub, app_id) does not contain path traversal
 /// or injection characters. Allows alphanumeric, hyphens, underscores, and dots.
 pub fn validate_path_component(value: &str, name: &str) -> Result<()> {
-    if value.contains("..") || value.contains('/') || value.contains('\\') || value.contains('\0') || value.contains('*') {
+    if value.contains("..")
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+        || value.contains('*')
+    {
         return Err(flow_like_types::anyhow!(
-            "Invalid {}: contains forbidden characters (path traversal or wildcards)", name
+            "Invalid {}: contains forbidden characters (path traversal or wildcards)",
+            name
         ));
     }
-    if !value.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '|' || c == ':') {
+    if !value
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '|' || c == ':')
+    {
         return Err(flow_like_types::anyhow!(
-            "Invalid {}: contains forbidden characters", name
+            "Invalid {}: contains forbidden characters",
+            name
         ));
     }
     Ok(())
@@ -166,9 +176,7 @@ impl RuntimeCredentials {
     pub async fn master_credentials() -> Result<Self> {
         // Check for mixed-provider configuration first.
         if let Some(mixed) = mixed_credentials::MixedRuntimeCredentials::detect_from_env() {
-            return Ok(RuntimeCredentials::Mixed(
-                mixed.master_credentials().await?,
-            ));
+            return Ok(RuntimeCredentials::Mixed(mixed.master_credentials().await?));
         }
 
         #[cfg(feature = "r2")]

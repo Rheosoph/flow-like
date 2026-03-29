@@ -49,7 +49,43 @@ impl std::fmt::Debug for StorageContext {
 
 impl StorageContext {
     pub fn resolve_store(&self, store_ref: &str) -> Option<FlowLikeStore> {
-        self.store_cache.read().get(store_ref).cloned()
+        if let Some(store) = self.store_cache.read().get(store_ref).cloned() {
+            return Some(store);
+        }
+
+        // Foreign store_ref from native catalog nodes (e.g. "dirs__upload_..." without
+        // "wasm_" prefix). Try to match the pattern and auto-register the backing store.
+        let store = self.resolve_foreign_store(store_ref)?;
+        self.register_store(store_ref, store.clone());
+        Some(store)
+    }
+
+    fn resolve_foreign_store(&self, store_ref: &str) -> Option<FlowLikeStore> {
+        let key = store_ref.strip_prefix("wasm_").unwrap_or(store_ref);
+
+        if key.starts_with("dirs__upload_") || key.starts_with("dirs__storage_") {
+            let store = self.stores.app_storage_store.clone();
+            if store.is_none() {
+                tracing::warn!("[wasm] resolve_foreign_store: app_storage_store is None for {store_ref}");
+            }
+            return store;
+        }
+        if key.starts_with("dirs__cache_") {
+            let store = self.stores.temporary_store.clone();
+            if store.is_none() {
+                tracing::warn!("[wasm] resolve_foreign_store: temporary_store is None for {store_ref}");
+            }
+            return store;
+        }
+        if key.starts_with("dirs__user_") {
+            let store = self.stores.user_store.clone();
+            if store.is_none() {
+                tracing::warn!("[wasm] resolve_foreign_store: user_store is None for {store_ref}");
+            }
+            return store;
+        }
+        tracing::warn!("[wasm] resolve_foreign_store: no pattern matched for {store_ref}");
+        None
     }
 
     pub fn register_store(&self, store_ref: &str, store: FlowLikeStore) {

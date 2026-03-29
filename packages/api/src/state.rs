@@ -117,7 +117,9 @@ impl State {
             .map(|s| s.expose_secret().to_string());
 
         if sink_secret.is_none() {
-            tracing::warn!("SINK_SECRET not configured — sink trigger endpoints will be unavailable");
+            tracing::warn!(
+                "SINK_SECRET not configured — sink trigger endpoints will be unavailable"
+            );
         }
 
         let encryption_key = {
@@ -137,11 +139,20 @@ impl State {
 
         // Initialize backend JWT keys from the secret store
         {
-            let backend_key = secrets
+           let backend_key = secrets
                 .get_secret_string(&SecretRef::new("BACKEND_KEY"))
-                .await
+                .await;
+            if let Err(ref e) = backend_key {
+                tracing::error!("Failed to fetch BACKEND_KEY from secret store: {e}");
+            }
+            let backend_key = backend_key
                 .ok()
                 .map(|s| s.expose_secret().to_string());
+            tracing::info!(
+                "BACKEND_KEY resolved: {}",
+                if backend_key.is_some() { "yes" } else { "no" }
+            );
+
             let backend_pub = secrets
                 .get_secret_string(&SecretRef::new("BACKEND_PUB"))
                 .await

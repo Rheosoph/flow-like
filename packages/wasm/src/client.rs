@@ -111,6 +111,9 @@ impl RegistryClient {
             if filters.include_deprecated {
                 params.append_pair("include_deprecated", "true");
             }
+            if filters.include_disabled {
+                params.append_pair("include_disabled", "true");
+            }
             params.append_pair("offset", &filters.offset.to_string());
             params.append_pair("limit", &filters.limit.to_string());
             let sort_str = match filters.sort_by {
@@ -253,9 +256,18 @@ impl RegistryClient {
         // If the server provided a precompiled .cwasm, download and store it
         // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
         if let Some(cwasm_url) = &download.cwasm_download_url {
-            match self.download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path).await {
-                Ok(()) => tracing::info!("Downloaded precompiled cwasm for {}", download.package_id),
-                Err(e) => tracing::error!("Failed to download cwasm for {}: {}", download.package_id, e),
+            match self
+                .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
+                }
+                Err(e) => tracing::error!(
+                    "Failed to download cwasm for {}: {}",
+                    download.package_id,
+                    e
+                ),
             }
         }
 
@@ -877,7 +889,10 @@ impl RegistryClient {
             if let Err(e) = aot.inject_module(&wasm_hash, &cwasm_bytes) {
                 tracing::warn!("Failed to inject cwasm into AOT cache: {}", e);
             } else {
-                tracing::info!("Injected precompiled cwasm into AOT cache for {}", wasm_hash);
+                tracing::info!(
+                    "Injected precompiled cwasm into AOT cache for {}",
+                    wasm_hash
+                );
             }
         }
     }

@@ -229,6 +229,9 @@ pub struct SearchFilters {
     /// Include deprecated packages
     #[serde(default)]
     pub include_deprecated: bool,
+    /// Include disabled (soft-deleted) packages
+    #[serde(default)]
+    pub include_disabled: bool,
     /// Pagination offset
     #[serde(default)]
     pub offset: usize,
@@ -252,6 +255,7 @@ impl Default for SearchFilters {
             author: None,
             verified_only: false,
             include_deprecated: false,
+            include_disabled: false,
             offset: 0,
             limit: default_limit(),
             sort_by: SortField::default(),

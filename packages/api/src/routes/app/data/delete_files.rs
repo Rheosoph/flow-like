@@ -118,7 +118,9 @@ pub async fn delete_user_files(
     let generic = project_dir.as_generic();
 
     for prefix in payload.prefixes.iter() {
-        let upload_dir = project_dir.construct_user_upload(&sub, &app_id, prefix).await?;
+        let upload_dir = project_dir
+            .construct_user_upload(&sub, &app_id, prefix)
+            .await?;
         let locations = generic
             .list(Some(&upload_dir))
             .map_ok(|m| m.location)

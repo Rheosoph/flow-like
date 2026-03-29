@@ -103,11 +103,20 @@ pub async fn sync_sink(
         if config.sink_type == sink_types::CRON {
             let cron_changed = old_cron != config.cron_expression;
             let type_changed = old_sink_type != config.sink_type;
-            let has_schedule = config.cron_expression.is_some() || config.cron_scheduled_for.is_some();
+            let has_schedule =
+                config.cron_expression.is_some() || config.cron_scheduled_for.is_some();
 
             if (cron_changed || type_changed) && has_schedule {
                 let cron_expr = config.cron_expression.as_deref().unwrap_or("");
-                update_external_scheduler(state, &config.event_id, cron_expr, config.cron_timezone.as_deref(), config.cron_scheduled_for.as_ref(), old_active).await?;
+                update_external_scheduler(
+                    state,
+                    &config.event_id,
+                    cron_expr,
+                    config.cron_timezone.as_deref(),
+                    config.cron_scheduled_for.as_ref(),
+                    old_active,
+                )
+                .await?;
             }
 
             // Sync active state with external scheduler
@@ -154,7 +163,14 @@ pub async fn sync_sink(
             && (config.cron_expression.is_some() || config.cron_scheduled_for.is_some())
         {
             let cron_expr = config.cron_expression.as_deref().unwrap_or("");
-            create_external_schedule(state, &config.event_id, cron_expr, config.cron_timezone.as_deref(), config.cron_scheduled_for.as_ref()).await?;
+            create_external_schedule(
+                state,
+                &config.event_id,
+                cron_expr,
+                config.cron_timezone.as_deref(),
+                config.cron_scheduled_for.as_ref(),
+            )
+            .await?;
             if !initial_active {
                 disable_external_schedule(state, &config.event_id).await?;
             }

@@ -33,10 +33,11 @@ async fn main() {
             .init();
         None
     } else {
-        let sentry_layer = sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
-            tracing::Level::ERROR => EventFilter::Breadcrumb,
-            _ => default_event_filter(metadata),
-        });
+        let sentry_layer =
+            sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
+                tracing::Level::ERROR => EventFilter::Breadcrumb,
+                _ => default_event_filter(metadata),
+            });
         let guard = sentry::init((
             sentry_endpoint,
             sentry::ClientOptions {
