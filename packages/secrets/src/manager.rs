@@ -5,7 +5,11 @@ use crate::providers::{self, SecretProvider};
 use crate::{SecretProviderKind, SecretRef, SecretString, SecretValue};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::OnceCell;
+
+const MAX_RETRIES: u32 = 3;
+const INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 
 struct ProviderSlot {
     config: ProviderConfig,
@@ -84,9 +88,10 @@ impl SecretStore {
         }
 
         let resolved = match reference.provider {
-            Some(provider) => {
-                let provider = self.provider_for(provider)?;
-                provider.get_or_init().await?.get(reference).await
+            Some(kind) => {
+                let slot = self.provider_for(kind)?;
+                let provider = slot.get_or_init().await?;
+                Self::get_with_retry(&provider, reference).await
             }
             None => self.resolve_with_fallback(reference).await,
         };
@@ -128,21 +133,58 @@ impl SecretStore {
             .ok_or(SecretError::ProviderNotConfigured(kind))
     }
 
-    async fn resolve_with_fallback(&self, reference: &SecretRef) -> Result<SecretValue> {
-        let mut last_not_found = None;
+    async fn get_with_retry(
+        provider: &Arc<dyn SecretProvider>,
+        reference: &SecretRef,
+    ) -> Result<SecretValue> {
+        let mut last_error = None;
 
-        for kind in &self.provider_order {
-            let provider = self.provider_for(*kind)?;
-            match provider.get_or_init().await?.get(reference).await {
+        for attempt in 0..MAX_RETRIES {
+            match provider.get(reference).await {
                 Ok(value) => return Ok(value),
-                Err(error) if error.is_not_found() => {
-                    last_not_found = Some(error);
+                Err(error) if error.is_retryable() && attempt + 1 < MAX_RETRIES => {
+                    let backoff = INITIAL_BACKOFF * 2u32.saturating_pow(attempt);
+                    tracing::warn!(
+                        provider = %provider.kind(),
+                        key = %reference.key,
+                        attempt = attempt + 1,
+                        backoff_ms = backoff.as_millis() as u64,
+                        error = %error,
+                        "transient provider failure, retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    last_error = Some(error);
                 }
                 Err(error) => return Err(error),
             }
         }
 
-        Err(last_not_found.unwrap_or(SecretError::SecretNotFound(SecretProviderKind::Env)))
+        Err(last_error.unwrap_or(SecretError::SecretNotFound(provider.kind())))
+    }
+
+    async fn resolve_with_fallback(&self, reference: &SecretRef) -> Result<SecretValue> {
+        let mut last_error = None;
+
+        for kind in &self.provider_order {
+            let provider = self.provider_for(*kind)?;
+            let provider = provider.get_or_init().await?;
+            match Self::get_with_retry(&provider, reference).await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if !error.is_not_found() {
+                        tracing::warn!(
+                            provider = %kind,
+                            key = %reference.key,
+                            error = %error,
+                            "secret provider failed after retries, falling through to next provider"
+                        );
+                    }
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(SecretError::SecretNotFound(SecretProviderKind::Env)))
     }
 }
 

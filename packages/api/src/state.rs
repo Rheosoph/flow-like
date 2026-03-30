@@ -218,7 +218,10 @@ impl State {
                 .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))
                 .await
                 .expect("STRIPE_SECRET_KEY must be set");
-            let stripe_client = stripe::Client::new(stripe_key.expose_secret().clone());
+            let exposed = stripe_key.expose_secret();
+            let preview: String = exposed.chars().take(8).collect();
+            tracing::info!("Stripe client initialized (key starts with: {preview}…)");
+            let stripe_client = stripe::Client::new(exposed.clone());
             Some(stripe_client)
         } else {
             None

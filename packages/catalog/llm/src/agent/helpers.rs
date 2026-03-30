@@ -495,39 +495,110 @@ pub async fn generate_tool_from_function(
 
         normalize_json_schema_strings(&mut schema_value);
 
-        let props = schema_value.get("properties").and_then(|p| p.as_object())?;
+        // Collect $defs for resolving $ref pointers (Pydantic pattern)
+        let defs = schema_value
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .cloned()
+            .unwrap_or_default();
 
-        let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
-        for (prop_name, prop_schema) in props {
-            let sanitized_prop_name = sanitize_tool_identifier(prop_name);
-            let prop_type = match prop_schema.get("type").and_then(|t| t.as_str()) {
+        fn resolve_schema_value<'a>(
+            schema: &'a Value,
+            defs: &'a flow_like_types::json::Map<String, Value>,
+        ) -> Option<&'a Value> {
+            if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
+                let def_name = ref_path.strip_prefix("#/$defs/")?;
+                defs.get(def_name)
+            } else {
+                Some(schema)
+            }
+        }
+
+        fn parse_property(
+            prop_schema: &Value,
+            defs: &flow_like_types::json::Map<String, Value>,
+        ) -> HistoryJSONSchemaDefine {
+            let resolved = resolve_schema_value(prop_schema, defs).unwrap_or(prop_schema);
+
+            let prop_type = match resolved.get("type").and_then(|t| t.as_str()) {
                 Some("string") => HistoryJSONSchemaType::String,
                 Some("number") | Some("integer") => HistoryJSONSchemaType::Number,
                 Some("boolean") => HistoryJSONSchemaType::Boolean,
                 Some("array") => HistoryJSONSchemaType::Array,
                 _ => HistoryJSONSchemaType::Object,
             };
-            let prop_desc = prop_schema
+
+            let prop_desc = resolved
                 .get("description")
                 .and_then(|d| d.as_str())
                 .map(sanitize_tool_description);
-            let prop_enum = prop_schema.get("enum").and_then(|e| {
+
+            let prop_enum = resolved.get("enum").and_then(|e| {
                 e.as_array().map(|arr| {
                     arr.iter()
                         .filter_map(|v| v.as_str().map(sanitize_tool_description))
                         .collect()
                 })
             });
+
+            // Parse items for array types
+            let items = if matches!(prop_type, HistoryJSONSchemaType::Array) {
+                resolved
+                    .get("items")
+                    .map(|items_schema| Box::new(parse_property(items_schema, defs)))
+            } else {
+                None
+            };
+
+            // Recurse into nested object properties
+            let (nested_props, nested_required) =
+                if matches!(prop_type, HistoryJSONSchemaType::Object) {
+                    let props = resolved
+                        .get("properties")
+                        .and_then(|p| p.as_object())
+                        .map(|obj| {
+                            obj.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        sanitize_tool_identifier(k),
+                                        Box::new(parse_property(v, defs)),
+                                    )
+                                })
+                                .collect::<HashMap<String, Box<HistoryJSONSchemaDefine>>>()
+                        });
+                    let req = resolved
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(sanitize_tool_identifier))
+                                .collect()
+                        });
+                    (props, req)
+                } else {
+                    (None, None)
+                };
+
+            HistoryJSONSchemaDefine {
+                schema_type: Some(prop_type),
+                description: prop_desc,
+                enum_values: prop_enum,
+                properties: nested_props,
+                required: nested_required,
+                items,
+            }
+        }
+
+        let props = schema_value
+            .get("properties")
+            .and_then(|p| p.as_object())?;
+
+        let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
+        for (prop_name, prop_schema) in props {
+            let sanitized_prop_name = sanitize_tool_identifier(prop_name);
             nested_props.insert(
                 sanitized_prop_name,
-                Box::new(HistoryJSONSchemaDefine {
-                    schema_type: Some(prop_type),
-                    description: prop_desc,
-                    enum_values: prop_enum,
-                    properties: None,
-                    required: None,
-                    items: None,
-                }),
+                Box::new(parse_property(prop_schema, &defs)),
             );
         }
 

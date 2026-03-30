@@ -39,4 +39,8 @@ impl SecretError {
     pub fn is_not_found(&self) -> bool {
         matches!(self, Self::SecretNotFound(_))
     }
+
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::ProviderFailure { .. })
+    }
 }
