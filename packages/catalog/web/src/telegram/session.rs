@@ -6,25 +6,22 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "execute")]
-use std::any::Any;
-#[cfg(feature = "execute")]
-use std::collections::HashMap;
-#[cfg(feature = "execute")]
-use std::sync::{Arc, OnceLock};
-#[cfg(not(feature = "execute"))]
-use std::sync::Arc;
-#[cfg(feature = "execute")]
-use flow_like_types::Cacheable;
-#[cfg(feature = "execute")]
-use teloxide::prelude::*;
-#[cfg(feature = "execute")]
-use teloxide::types::ChatId;
-#[cfg(feature = "execute")]
-use tokio::sync::{RwLock, broadcast};
+use {
+    flow_like_types::{Cacheable, json::json},
+    std::{
+        any::Any,
+        collections::HashMap,
+        sync::{Arc, OnceLock},
+    },
+    teloxide::prelude::*,
+    teloxide::types::ChatId,
+    tokio::sync::{RwLock, broadcast},
+};
 
 // ============================================================================
 // Telegram Update Broadcaster
@@ -33,8 +30,8 @@ use tokio::sync::{RwLock, broadcast};
 // owns the single `getUpdates` long-poll connection) can fan out incoming
 // updates to any interaction nodes that are waiting for replies or callbacks.
 
-#[cfg(feature = "execute")]
 /// Events broadcast from the dispatcher to interaction node subscribers.
+#[cfg(feature = "execute")]
 #[derive(Clone, Debug)]
 pub enum TelegramBroadcastEvent {
     Message(Box<teloxide::types::Message>),
@@ -50,8 +47,8 @@ fn tg_broadcasters() -> &'static RwLock<HashMap<String, broadcast::Sender<Telegr
     INSTANCE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-#[cfg(feature = "execute")]
 /// Subscribe to Telegram updates for a specific bot (keyed by token).
+#[cfg(feature = "execute")]
 pub async fn subscribe_tg_updates(
     bot_token: &str,
 ) -> broadcast::Receiver<TelegramBroadcastEvent> {
@@ -68,8 +65,8 @@ pub async fn subscribe_tg_updates(
     sender.subscribe()
 }
 
-#[cfg(feature = "execute")]
 /// Publish a Telegram update so that all interaction node subscribers receive it.
+#[cfg(feature = "execute")]
 pub async fn broadcast_tg_event(bot_token: &str, event: TelegramBroadcastEvent) {
     {
         let read = tg_broadcasters().read().await;
@@ -121,20 +118,19 @@ pub struct TelegramSession {
     pub user: Option<TelegramUser>,
 }
 
+#[cfg(feature = "execute")]
 impl TelegramSession {
-    #[cfg(feature = "execute")]
     pub fn chat_id(&self) -> flow_like_types::Result<ChatId> {
         Ok(ChatId(self.chat_id.parse()?))
     }
 
-    #[cfg(feature = "execute")]
     pub fn message_id(&self) -> flow_like_types::Result<teloxide::types::MessageId> {
         Ok(teloxide::types::MessageId(self.message_id.parse()?))
     }
 }
 
-#[cfg(feature = "execute")]
 /// Cached Telegram bot for making API calls
+#[cfg(feature = "execute")]
 pub struct CachedTelegramBot {
     pub bot: Bot,
     pub bot_username: Option<String>,
@@ -171,8 +167,8 @@ impl CachedTelegramBot {
     }
 }
 
-#[cfg(feature = "execute")]
 /// Helper to get the cached Telegram bot from context
+#[cfg(feature = "execute")]
 pub async fn get_telegram_bot(
     context: &ExecutionContext,
     ref_id: &str,

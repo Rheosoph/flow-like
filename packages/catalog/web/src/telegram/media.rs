@@ -18,6 +18,7 @@ use teloxide::prelude::*;
 use teloxide::types::{FileId, InputFile, ParseMode, ReplyParameters};
 
 /// Helper to convert FlowPath to InputFile by reading bytes
+#[cfg(feature = "execute")]
 async fn flow_path_to_input_file(
     context: &mut ExecutionContext,
     flow_path: &FlowPath,

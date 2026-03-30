@@ -52,7 +52,8 @@ pub use flow_like_catalog_data::{data, events};
 // Re-export web modules
 pub use flow_like_catalog_web::{http, mail, web};
 
-// Re-export Telegram module
+// Re-export Telegram and Discord modules
+pub use flow_like_catalog_web::discord;
 pub use flow_like_catalog_web::telegram;
 
 // Re-export media modules

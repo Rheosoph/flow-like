@@ -58,6 +58,7 @@ pub struct MaskPositionInfo {
     pub scale: f64,
 }
 
+#[cfg(feature = "execute")]
 impl From<&MaskPositionInfo> for TgMaskPosition {
     fn from(info: &MaskPositionInfo) -> Self {
         let point = match info.point.as_str() {
@@ -76,6 +77,7 @@ impl From<&MaskPositionInfo> for TgMaskPosition {
     }
 }
 
+#[cfg(feature = "execute")]
 fn sticker_type_to_string(st: &StickerType) -> String {
     match st {
         StickerType::Regular => "regular".to_string(),

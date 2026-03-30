@@ -22,6 +22,7 @@ pub struct DiscordUser {
     pub avatar_url: Option<String>,
 }
 
+#[cfg(feature = "execute")]
 impl DiscordUser {
     pub fn user_id(&self) -> flow_like_types::Result<UserId> {
         Ok(UserId::new(self.id.parse()?))

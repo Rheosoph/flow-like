@@ -44,6 +44,7 @@ pub struct UserReply {
     pub has_audio: bool,
 }
 
+#[cfg(feature = "execute")]
 impl From<&TgMessage> for UserReply {
     fn from(msg: &TgMessage) -> Self {
         Self {

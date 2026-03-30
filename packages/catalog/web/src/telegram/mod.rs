@@ -42,10 +42,9 @@ pub use invite::ChatInviteLink;
 pub use member::{AdminInfo, ChatMemberInfo};
 pub use payments::{InvoiceLink, LabeledPrice, StarTransaction};
 pub use poll::{PollReference, PollResults};
-pub use session::TelegramSession;
 #[cfg(feature = "execute")]
 pub use session::CachedTelegramBot;
+pub use session::TelegramSession;
 pub use stickers::{MaskPositionInfo, StickerInfo as StickerInfoFull, StickerSetInfo};
 pub use stories::StoryInfo;
-#[cfg(feature = "execute")]
 pub use user::TelegramUser;

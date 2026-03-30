@@ -20,7 +20,7 @@ pub mod user;
 pub use interaction::{ButtonResponse, SelectMenuResponse, UserReply};
 pub use media::SentAttachment;
 pub use poll::{PollAnswerResult, PollReference, PollResults};
-pub use session::DiscordSession;
 #[cfg(feature = "execute")]
 pub use session::CachedDiscordClient;
+pub use session::DiscordSession;
 pub use user::DiscordUser;

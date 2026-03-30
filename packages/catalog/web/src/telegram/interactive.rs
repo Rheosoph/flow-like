@@ -30,6 +30,7 @@ pub enum DiceEmoji {
 }
 
 impl DiceEmoji {
+    #[cfg(feature = "execute")]
     fn to_teloxide(&self) -> teloxide::types::DiceEmoji {
         match self {
             DiceEmoji::Dice => teloxide::types::DiceEmoji::Dice,

@@ -30,6 +30,7 @@ pub struct SentAttachment {
 }
 
 /// Helper to convert FlowPath to CreateAttachment
+#[cfg(feature = "execute")]
 async fn flow_path_to_attachment(
     context: &mut ExecutionContext,
     flow_path: &FlowPath,

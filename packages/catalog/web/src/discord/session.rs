@@ -6,16 +6,16 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "execute")]
-use serenity::all::{ChannelId, GuildId, Http, MessageId, UserId};
-#[cfg(feature = "execute")]
-use std::any::Any;
-use std::sync::Arc;
-#[cfg(feature = "execute")]
-use flow_like_types::Cacheable;
+use {
+    flow_like_types::{Cacheable, json::json},
+    serenity::all::{ChannelId, GuildId, Http, MessageId, UserId},
+    std::{any::Any, sync::Arc},
+};
 
 /// Discord user information
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -69,8 +69,8 @@ impl DiscordSession {
     }
 }
 
-#[cfg(feature = "execute")]
 /// Cached Discord HTTP client for making API calls
+#[cfg(feature = "execute")]
 pub struct CachedDiscordClient {
     pub http: Arc<Http>,
     pub bot_user_id: Option<UserId>,
@@ -107,8 +107,8 @@ impl CachedDiscordClient {
     }
 }
 
-#[cfg(feature = "execute")]
 /// Helper to get the cached Discord client from context
+#[cfg(feature = "execute")]
 pub async fn get_discord_client(
     context: &ExecutionContext,
     ref_id: &str,
