@@ -25,6 +25,9 @@ from wit_world.imports import storage as wit_storage
 from wit_world.imports import models as wit_models
 from wit_world.imports import auth as wit_auth
 from wit_world.imports import http as wit_http
+from wit_world.imports import image as wit_image
+from wit_world.imports import db as wit_db
+from wit_world.imports import schema as wit_schema
 
 
 def _make_bridge():
@@ -103,7 +106,7 @@ def _make_bridge():
             return bytes(result) if result is not None else None
 
         def storage_write(self, flow_path: dict, data: bytes) -> bool:
-            return wit_storage.write_file(json.dumps(flow_path), list(data))
+            return wit_storage.write_file(json.dumps(flow_path), data)
 
         def storage_list(self, flow_path: dict) -> list[dict] | None:
             result = wit_storage.list_files(json.dumps(flow_path))
@@ -121,7 +124,37 @@ def _make_bridge():
             return wit_auth.has_oauth_token(provider)
 
         def http_request(self, method: int, url: str, headers: str, body: bytes | None = None) -> str | None:
-            body_list = list(body) if body is not None else None
-            return wit_http.request(method, url, headers, body_list)
+            return wit_http.request(method, url, headers, body)
+
+        def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
+            return wit_models.llm_prompt(bit_json, messages_json, do_stream)
+
+        def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
+            return wit_models.embed_text_query(model_json, texts_json)
+
+        def embed_text_document(self, model_json: str, texts_json: str) -> str | None:
+            return wit_models.embed_text_document(model_json, texts_json)
+
+        def embed_image(self, model_json: str, image_data: bytes) -> str | None:
+            return wit_models.embed_image(model_json, image_data)
+
+        def image_from_bytes(self, data: bytes, fmt: str) -> str | None:
+            return wit_image.from_bytes(data, fmt)
+
+        def image_to_bytes(self, image_ref: str, fmt: str) -> bytes | None:
+            result = wit_image.to_bytes(image_ref, fmt)
+            return bytes(result) if result is not None else None
+
+        def db_query(self, op: int, connection_json: str, payload_json: str) -> str | None:
+            return wit_db.query(op, connection_json, payload_json)
+
+        def get_type_schema(self, type_name: str) -> str | None:
+            return wit_schema.get_type_schema(type_name)
+
+        def list_types(self) -> list[str] | None:
+            result = wit_schema.list_types()
+            if result is not None:
+                return json.loads(result)
+            return None
 
     return WitHostBridge()

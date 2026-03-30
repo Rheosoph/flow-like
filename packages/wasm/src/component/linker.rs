@@ -6,7 +6,8 @@ use serde_json::Value;
 use std::pin::Pin;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
@@ -79,12 +80,12 @@ impl WasiView for ComponentStoreData {
 }
 
 impl WasiHttpView for ComponentStoreData {
-    fn ctx(&mut self) -> &mut WasiHttpCtx {
-        &mut self.http_ctx
-    }
-
-    fn table(&mut self) -> &mut wasmtime::component::ResourceTable {
-        &mut self.resource_table
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http_ctx,
+            table: &mut self.resource_table,
+            hooks: Default::default(),
+        }
     }
 }
 
@@ -94,7 +95,7 @@ pub fn register_component_host_functions(
     wasmtime_wasi::p2::add_to_linker_async(linker).map_err(|e| {
         WasmError::Initialization(format!("Failed to register WASI functions: {}", e))
     })?;
-    wasmtime_wasi_http::add_only_http_to_linker_async(linker).map_err(|e| {
+    wasmtime_wasi_http::p2::add_only_http_to_linker_async(linker).map_err(|e| {
         WasmError::Initialization(format!("Failed to register WASI HTTP functions: {}", e))
     })?;
     register_logging(linker)?;

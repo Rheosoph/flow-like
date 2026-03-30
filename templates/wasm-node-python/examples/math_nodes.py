@@ -6,126 +6,88 @@ divide, power, and clamp operations.
 """
 
 from sdk import (
-    Context,
     ExecutionResult,
-    NodeDefinition,
-    PinDefinition,
-    PinType,
+    Input,
+    Output,
+    WasmNode,
 )
 
 
-def _base_math_node(name: str, friendly_name: str, description: str) -> NodeDefinition:
-    nd = NodeDefinition(name, friendly_name, description, "Math/Arithmetic")
-    nd.add_pin(PinDefinition.input_exec("exec"))
-    nd.add_pin(PinDefinition.input_pin("a", PinType.F64, default=0.0))
-    nd.add_pin(PinDefinition.input_pin("b", PinType.F64, default=0.0))
-    nd.add_pin(PinDefinition.output_exec("exec_out"))
-    nd.add_pin(PinDefinition.output_pin("result", PinType.F64))
-    return nd
+class Add(WasmNode, name="math_add_py", title="Add", category="Math/Arithmetic"):
+    """Adds two numbers together"""
+
+    a: float = Input(default=0.0)
+    b: float = Input(default=0.0)
+    result: float = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.a + ctx.b
+        return ctx.success()
 
 
-def get_definitions() -> list[NodeDefinition]:
-    nodes: list[NodeDefinition] = []
+class Subtract(WasmNode, name="math_subtract_py", title="Subtract", category="Math/Arithmetic"):
+    """Subtracts B from A"""
 
-    nodes.append(_base_math_node("math_add_py", "Add", "Adds two numbers together"))
-    nodes.append(_base_math_node("math_subtract_py", "Subtract", "Subtracts B from A"))
-    nodes.append(_base_math_node("math_multiply_py", "Multiply", "Multiplies two numbers"))
+    a: float = Input(default=0.0)
+    b: float = Input(default=0.0)
+    result: float = Output()
 
-    # Divide has an extra output
-    divide = NodeDefinition("math_divide_py", "Divide", "Divides A by B", "Math/Arithmetic")
-    divide.add_pin(PinDefinition.input_exec("exec"))
-    divide.add_pin(PinDefinition.input_pin("a", PinType.F64, default=0.0))
-    divide.add_pin(PinDefinition.input_pin("b", PinType.F64, default=1.0))
-    divide.add_pin(PinDefinition.output_exec("exec_out"))
-    divide.add_pin(PinDefinition.output_pin("result", PinType.F64))
-    divide.add_pin(PinDefinition.output_pin("is_valid", PinType.BOOL))
-    nodes.append(divide)
-
-    # Power
-    power = NodeDefinition("math_power_py", "Power", "Raises A to the power of B", "Math/Arithmetic")
-    power.add_pin(PinDefinition.input_exec("exec"))
-    power.add_pin(PinDefinition.input_pin("base", PinType.F64, default=0.0))
-    power.add_pin(PinDefinition.input_pin("exponent", PinType.F64, default=1.0))
-    power.add_pin(PinDefinition.output_exec("exec_out"))
-    power.add_pin(PinDefinition.output_pin("result", PinType.F64))
-    nodes.append(power)
-
-    # Clamp
-    clamp = NodeDefinition("math_clamp_py", "Clamp", "Clamps a value between min and max", "Math/Utility")
-    clamp.add_pin(PinDefinition.input_exec("exec"))
-    clamp.add_pin(PinDefinition.input_pin("value", PinType.F64, default=0.0))
-    clamp.add_pin(PinDefinition.input_pin("min", PinType.F64, default=0.0))
-    clamp.add_pin(PinDefinition.input_pin("max", PinType.F64, default=1.0))
-    clamp.add_pin(PinDefinition.output_exec("exec_out"))
-    clamp.add_pin(PinDefinition.output_pin("result", PinType.F64))
-    nodes.append(clamp)
-
-    return nodes
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.a - ctx.b
+        return ctx.success()
 
 
-def run_add(ctx: Context) -> ExecutionResult:
-    a = ctx.get_f64("a", 0.0)
-    b = ctx.get_f64("b", 0.0)
-    ctx.set_output("result", a + b)
-    return ctx.success()
+class Multiply(WasmNode, name="math_multiply_py", title="Multiply", category="Math/Arithmetic"):
+    """Multiplies two numbers"""
+
+    a: float = Input(default=0.0)
+    b: float = Input(default=0.0)
+    result: float = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.a * ctx.b
+        return ctx.success()
 
 
-def run_subtract(ctx: Context) -> ExecutionResult:
-    a = ctx.get_f64("a", 0.0)
-    b = ctx.get_f64("b", 0.0)
-    ctx.set_output("result", a - b)
-    return ctx.success()
+class Divide(WasmNode, name="math_divide_py", title="Divide", category="Math/Arithmetic"):
+    """Divides A by B"""
+
+    a: float = Input(default=0.0)
+    b: float = Input(default=1.0)
+    result: float = Output()
+    is_valid: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        if ctx.b == 0.0:
+            ctx.result = 0.0
+            ctx.is_valid = False
+            ctx.warn("Division by zero")
+        else:
+            ctx.result = ctx.a / ctx.b
+            ctx.is_valid = True
+        return ctx.success()
 
 
-def run_multiply(ctx: Context) -> ExecutionResult:
-    a = ctx.get_f64("a", 0.0)
-    b = ctx.get_f64("b", 0.0)
-    ctx.set_output("result", a * b)
-    return ctx.success()
+class Power(WasmNode, name="math_power_py", title="Power", category="Math/Arithmetic"):
+    """Raises base to the power of exponent"""
+
+    base: float = Input(default=0.0)
+    exponent: float = Input(default=1.0)
+    result: float = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.base ** ctx.exponent
+        return ctx.success()
 
 
-def run_divide(ctx: Context) -> ExecutionResult:
-    a = ctx.get_f64("a", 0.0)
-    b = ctx.get_f64("b", 1.0)
+class Clamp(WasmNode, name="math_clamp_py", title="Clamp", category="Math/Utility"):
+    """Clamps a value between min and max"""
 
-    if b == 0.0:
-        ctx.set_output("result", 0.0)
-        ctx.set_output("is_valid", False)
-        ctx.warn("Division by zero")
-    else:
-        ctx.set_output("result", a / b)
-        ctx.set_output("is_valid", True)
+    value: float = Input(default=0.0)
+    min: float = Input(default=0.0, pin_name="min")
+    max: float = Input(default=1.0, pin_name="max")
+    result: float = Output()
 
-    return ctx.success()
-
-
-def run_power(ctx: Context) -> ExecutionResult:
-    base = ctx.get_f64("base", 0.0)
-    exponent = ctx.get_f64("exponent", 1.0)
-    ctx.set_output("result", base**exponent)
-    return ctx.success()
-
-
-def run_clamp(ctx: Context) -> ExecutionResult:
-    value = ctx.get_f64("value", 0.0)
-    min_val = ctx.get_f64("min", 0.0)
-    max_val = ctx.get_f64("max", 1.0)
-    ctx.set_output("result", max(min_val, min(max_val, value)))
-    return ctx.success()
-
-
-DISPATCH = {
-    "math_add_py": run_add,
-    "math_subtract_py": run_subtract,
-    "math_multiply_py": run_multiply,
-    "math_divide_py": run_divide,
-    "math_power_py": run_power,
-    "math_clamp_py": run_clamp,
-}
-
-
-def run(node_name: str, ctx: Context) -> ExecutionResult:
-    handler = DISPATCH.get(node_name)
-    if handler is None:
-        return ctx.fail(f"Unknown node: {node_name}")
-    return handler(ctx)
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = max(ctx.min, min(ctx.max, ctx.value))
+        return ctx.success()

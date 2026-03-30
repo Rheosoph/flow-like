@@ -11,6 +11,8 @@ keywords = ["flow-like", "wasm", "sdk", "component-model"]
 [project.optional-dependencies]
 # Install with: pip install flow-like-wasm-sdk[schema]
 schema = ["pydantic>=2.0"]
+# Install with: pip install flow-like-wasm-sdk[langchain]
+langchain = ["langchain-core>=0.3.0"]
 
 [build-system]
 requires = ["hatchling"]

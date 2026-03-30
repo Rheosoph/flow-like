@@ -1,0 +1,37 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.wit-copy]
+description = "Copy canonical WIT from packages/wasm/wit/"
+run = "mkdir -p wit && cp ../../../../packages/wasm/wit/flow-like-node.wit wit/flow-like-node.wit"
+
+[tasks.wit-clean]
+description = "Remove local WIT copy"
+run = "rm -rf wit"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "uv sync --group dev --group build"
+
+[tasks.build]
+description = "Build the WASM component with pre-bundled packages"
+depends = ["wit-copy"]
+run = "uv run python build.py"
+
+[tasks."build:slim"]
+description = "Build without pre-bundled packages"
+depends = ["wit-copy"]
+run = "uv run python build.py --no-bundle"
+
+[tasks."build:definition"]
+description = "Extract node definitions only"
+run = "uv run python build.py --definition-only"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest -v"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf build vendor wit __pycache__ src/__pycache__"

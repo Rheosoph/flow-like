@@ -15,9 +15,10 @@ use wasmtime::Module;
 #[cfg(feature = "component-model")]
 use wasmtime::component::Component;
 
-const WASMTIME_VERSION: &str = "42";
+/// Wasmtime major version, extracted automatically from the workspace Cargo.toml at build time.
+pub const WASMTIME_VERSION: &str = env!("WASMTIME_VERSION");
 
-/// Build the platform key for the current host (e.g. `ios-aarch64-wt42`).
+/// Build the platform key for the current host (e.g. `ios-aarch64-wt43`).
 /// This always returns the native platform key so the client can request
 /// native precompiled artifacts from the server.
 pub fn host_platform_key() -> String {

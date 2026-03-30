@@ -6,145 +6,101 @@ conditional pass-through, and sequencing.
 """
 
 from sdk import (
-    Context,
+    Exec,
+    ExecOutput,
     ExecutionResult,
-    NodeDefinition,
-    PinDefinition,
-    PinType,
+    Input,
+    Output,
+    WasmNode,
 )
 
 
-def get_definitions() -> list[NodeDefinition]:
-    nodes: list[NodeDefinition] = []
+class IfBranch(WasmNode, name="if_branch_py", title="If Branch", category="Control/Branch"):
+    """Branches based on boolean condition"""
 
-    # If Branch
-    if_branch = NodeDefinition("if_branch_py", "If Branch", "Branches based on boolean condition", "Control/Branch")
-    if_branch.add_pin(PinDefinition.input_exec("exec"))
-    if_branch.add_pin(PinDefinition.input_pin("condition", PinType.BOOL, default=False))
-    if_branch.add_pin(PinDefinition.output_exec("true"))
-    if_branch.add_pin(PinDefinition.output_exec("false"))
-    nodes.append(if_branch)
+    condition: bool = Input(default=False)
+    true: Exec = ExecOutput()
+    false: Exec = ExecOutput()
 
-    # Compare
-    compare = NodeDefinition("compare_py", "Compare", "Compares two values", "Control/Logic")
-    compare.add_pin(PinDefinition.input_exec("exec"))
-    compare.add_pin(PinDefinition.input_pin("a", PinType.F64, default=0.0))
-    compare.add_pin(PinDefinition.input_pin("b", PinType.F64, default=0.0))
-    compare.add_pin(PinDefinition.output_exec("exec_out"))
-    compare.add_pin(PinDefinition.output_pin("equal", PinType.BOOL))
-    compare.add_pin(PinDefinition.output_pin("less_than", PinType.BOOL))
-    compare.add_pin(PinDefinition.output_pin("greater_than", PinType.BOOL))
-    nodes.append(compare)
-
-    # AND Gate
-    and_gate = NodeDefinition("and_gate_py", "AND Gate", "Logical AND of two booleans", "Control/Logic")
-    and_gate.add_pin(PinDefinition.input_exec("exec"))
-    and_gate.add_pin(PinDefinition.input_pin("a", PinType.BOOL, default=False))
-    and_gate.add_pin(PinDefinition.input_pin("b", PinType.BOOL, default=False))
-    and_gate.add_pin(PinDefinition.output_exec("exec_out"))
-    and_gate.add_pin(PinDefinition.output_pin("result", PinType.BOOL))
-    nodes.append(and_gate)
-
-    # OR Gate
-    or_gate = NodeDefinition("or_gate_py", "OR Gate", "Logical OR of two booleans", "Control/Logic")
-    or_gate.add_pin(PinDefinition.input_exec("exec"))
-    or_gate.add_pin(PinDefinition.input_pin("a", PinType.BOOL, default=False))
-    or_gate.add_pin(PinDefinition.input_pin("b", PinType.BOOL, default=False))
-    or_gate.add_pin(PinDefinition.output_exec("exec_out"))
-    or_gate.add_pin(PinDefinition.output_pin("result", PinType.BOOL))
-    nodes.append(or_gate)
-
-    # NOT Gate
-    not_gate = NodeDefinition("not_gate_py", "NOT Gate", "Logical NOT", "Control/Logic")
-    not_gate.add_pin(PinDefinition.input_exec("exec"))
-    not_gate.add_pin(PinDefinition.input_pin("value", PinType.BOOL, default=False))
-    not_gate.add_pin(PinDefinition.output_exec("exec_out"))
-    not_gate.add_pin(PinDefinition.output_pin("result", PinType.BOOL))
-    nodes.append(not_gate)
-
-    # Gate (conditional pass-through)
-    gate = NodeDefinition("gate_py", "Gate", "Passes execution only if condition is true", "Control/Branch")
-    gate.add_pin(PinDefinition.input_exec("exec"))
-    gate.add_pin(PinDefinition.input_pin("condition", PinType.BOOL, default=True))
-    gate.add_pin(PinDefinition.output_exec("exec_out"))
-    nodes.append(gate)
-
-    # Sequence
-    sequence = NodeDefinition("sequence_py", "Sequence", "Activates multiple outputs in order", "Control/Flow")
-    sequence.add_pin(PinDefinition.input_exec("exec"))
-    sequence.add_pin(PinDefinition.output_exec("out_1"))
-    sequence.add_pin(PinDefinition.output_exec("out_2"))
-    sequence.add_pin(PinDefinition.output_exec("out_3"))
-    nodes.append(sequence)
-
-    return nodes
+    def run(self, ctx) -> ExecutionResult:
+        if ctx.condition:
+            ctx.activate_exec("true")
+        else:
+            ctx.activate_exec("false")
+        return ctx.finish()
 
 
-def run_if_branch(ctx: Context) -> ExecutionResult:
-    condition = ctx.get_bool("condition", False)
-    if condition:
-        ctx.activate_exec("true")
-    else:
-        ctx.activate_exec("false")
-    return ctx.finish()
+class Compare(WasmNode, name="compare_py", title="Compare", category="Control/Logic"):
+    """Compares two values"""
 
+    a: float = Input(default=0.0)
+    b: float = Input(default=0.0)
+    equal: bool = Output()
+    less_than: bool = Output()
+    greater_than: bool = Output()
 
-def run_compare(ctx: Context) -> ExecutionResult:
-    a = ctx.get_f64("a", 0.0)
-    b = ctx.get_f64("b", 0.0)
-    ctx.set_output("equal", a == b)
-    ctx.set_output("less_than", a < b)
-    ctx.set_output("greater_than", a > b)
-    return ctx.success()
-
-
-def run_and_gate(ctx: Context) -> ExecutionResult:
-    a = ctx.get_bool("a", False)
-    b = ctx.get_bool("b", False)
-    ctx.set_output("result", a and b)
-    return ctx.success()
-
-
-def run_or_gate(ctx: Context) -> ExecutionResult:
-    a = ctx.get_bool("a", False)
-    b = ctx.get_bool("b", False)
-    ctx.set_output("result", a or b)
-    return ctx.success()
-
-
-def run_not_gate(ctx: Context) -> ExecutionResult:
-    value = ctx.get_bool("value", False)
-    ctx.set_output("result", not value)
-    return ctx.success()
-
-
-def run_gate(ctx: Context) -> ExecutionResult:
-    condition = ctx.get_bool("condition", True)
-    if condition:
+    def run(self, ctx) -> ExecutionResult:
+        ctx.equal = ctx.a == ctx.b
+        ctx.less_than = ctx.a < ctx.b
+        ctx.greater_than = ctx.a > ctx.b
         return ctx.success()
-    return ctx.finish()
 
 
-def run_sequence(ctx: Context) -> ExecutionResult:
-    ctx.activate_exec("out_1")
-    ctx.activate_exec("out_2")
-    ctx.activate_exec("out_3")
-    return ctx.finish()
+class AndGate(WasmNode, name="and_gate_py", title="AND Gate", category="Control/Logic"):
+    """Logical AND of two booleans"""
+
+    a: bool = Input(default=False)
+    b: bool = Input(default=False)
+    result: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.a and ctx.b
+        return ctx.success()
 
 
-DISPATCH = {
-    "if_branch_py": run_if_branch,
-    "compare_py": run_compare,
-    "and_gate_py": run_and_gate,
-    "or_gate_py": run_or_gate,
-    "not_gate_py": run_not_gate,
-    "gate_py": run_gate,
-    "sequence_py": run_sequence,
-}
+class OrGate(WasmNode, name="or_gate_py", title="OR Gate", category="Control/Logic"):
+    """Logical OR of two booleans"""
+
+    a: bool = Input(default=False)
+    b: bool = Input(default=False)
+    result: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.a or ctx.b
+        return ctx.success()
 
 
-def run(node_name: str, ctx: Context) -> ExecutionResult:
-    handler = DISPATCH.get(node_name)
-    if handler is None:
-        return ctx.fail(f"Unknown node: {node_name}")
-    return handler(ctx)
+class NotGate(WasmNode, name="not_gate_py", title="NOT Gate", category="Control/Logic"):
+    """Logical NOT"""
+
+    value: bool = Input(default=False)
+    result: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = not ctx.value
+        return ctx.success()
+
+
+class Gate(WasmNode, name="gate_py", title="Gate", category="Control/Branch"):
+    """Passes execution only if condition is true"""
+
+    condition: bool = Input(default=True)
+
+    def run(self, ctx) -> ExecutionResult:
+        if ctx.condition:
+            return ctx.success()
+        return ctx.finish()
+
+
+class Sequence(WasmNode, name="sequence_py", title="Sequence", category="Control/Flow"):
+    """Activates multiple outputs in order"""
+
+    out_1: Exec = ExecOutput()
+    out_2: Exec = ExecOutput()
+    out_3: Exec = ExecOutput()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.activate_exec("out_1")
+        ctx.activate_exec("out_2")
+        ctx.activate_exec("out_3")
+        return ctx.finish()

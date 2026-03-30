@@ -37,6 +37,7 @@ members = [
     "packages/catalog/processing",
     "packages/catalog/geo",
     "packages/catalog/automation",
+    "libs/nodes/code-interpreter",
     "packages/catalog-macros",
     "packages/storage",
     "packages/api",
@@ -67,6 +68,7 @@ flow-like-catalog-llm = { path = "packages/catalog/llm" }
 flow-like-catalog-processing = { path = "packages/catalog/processing" }
 flow-like-catalog-geo = { path = "packages/catalog/geo" }
 flow-like-catalog-automation = { path = "packages/catalog/automation" }
+flow-like-catalog-code-interpreter = { path = "libs/nodes/code-interpreter" }
 flow-like-catalog-macros = { path = "packages/catalog-macros" }
 flow-like-storage = { path = "packages/storage" }
 flow-like-sinks = { path = "packages/sinks" }
@@ -153,9 +155,9 @@ dashmap = "6"
 
 rdev = { git = "https://github.com/TM9657/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "42", features = ["async", "cranelift", "parallel-compilation", "gc"] }
-wasmtime-wasi = "42"
-wasmtime-wasi-http = "42"
+wasmtime = { version = "43", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "43"
+wasmtime-wasi-http = "43"
 
 # Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)

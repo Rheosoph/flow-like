@@ -13,3 +13,5 @@ from componentize_py_types import Result, Ok, Err, Some
 
 def emit(event_type: str, data: str) -> None:
     raise NotImplementedError
+def text(content: str) -> None:
+    raise NotImplementedError

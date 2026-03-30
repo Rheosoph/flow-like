@@ -1,9 +1,10 @@
 import componentize_py_runtime
+import componentize_py_async_support
 import weakref
 
 from typing import TypeVar, Generic, cast, Self, Any, Callable
 from types import TracebackType
-from componentize_py_async_support import _ReturnCode, await_result, spawn
+from componentize_py_async_support import _ReturnCode
 
 T = TypeVar('T')
 
@@ -18,7 +19,7 @@ class FutureReader(Generic[T]):
         handle = self.handle
         self.handle = None
         if handle is not None:
-            result = await await_result(
+            result = await componentize_py_async_support.await_result(
                 componentize_py_runtime.future_read(self.type_, handle)
             )
             componentize_py_runtime.future_drop_readable(self.type_, handle)
@@ -42,13 +43,13 @@ class FutureReader(Generic[T]):
         return None
 
 async def write(type_: int, handle: int, value: Any) -> None:
-    await await_result(
+    await componentize_py_async_support.await_result(
         componentize_py_runtime.future_write(type_, handle, value)
     )
     componentize_py_runtime.future_drop_writable(type_, handle)
 
 def write_default(type_: int, handle: int, default: Callable[[], Any]) -> None:
-    spawn(write(type_, handle, default()))
+    componentize_py_async_support.spawn(write(type_, handle, default()))
 
 class FutureWriter(Generic[T]):
     def __init__(self, type_: int, handle: int, default: Callable[[], T]):
@@ -62,7 +63,7 @@ class FutureWriter(Generic[T]):
         handle = self.handle
         self.handle = None
         if handle is not None:
-            code, _ = await await_result(
+            code, _ = await componentize_py_async_support.await_result(
                 componentize_py_runtime.future_write(self.type_, handle, value)
             )
             componentize_py_runtime.future_drop_writable(self.type_, handle)
@@ -78,7 +79,6 @@ class FutureWriter(Generic[T]):
                     raise AssertionError
         else:
             raise AssertionError
-        return False
 
     def __enter__(self) -> Self:
         return self
@@ -88,6 +88,6 @@ class FutureWriter(Generic[T]):
                  exc_value: BaseException | None,
                  traceback: TracebackType | None) -> bool | None:
         if self.handle is not None:
-            spawn(self.write(self.default()))
+            componentize_py_async_support.spawn(self.write(self.default()))
 
         return None

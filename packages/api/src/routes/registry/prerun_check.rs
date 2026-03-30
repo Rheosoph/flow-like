@@ -126,7 +126,7 @@ pub async fn prerun_check(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    let platform_key = format!("{}-{}-wt42", std::env::consts::OS, std::env::consts::ARCH);
+    let platform_key = super::server::host_platform_key();
     let mut results = Vec::with_capacity(request.packages.len());
 
     for (package_id, version) in &request.packages {

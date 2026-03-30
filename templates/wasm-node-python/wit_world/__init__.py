@@ -18,6 +18,10 @@ class WitWorld(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    def get_nodes(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
     def run(self, input: str) -> str:
         raise NotImplementedError
 

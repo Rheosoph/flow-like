@@ -28,10 +28,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use utoipa::ToSchema;
 
+use flow_like_wasm::aot_cache::WASMTIME_VERSION;
+
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
 const WASM_COMPILED_PATH: &str = "wasm-compiled";
-const WASMTIME_VERSION: &str = "42";
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {
@@ -39,7 +40,7 @@ fn platform_key_for(os: &str, arch: &str) -> String {
 }
 
 /// Platform key for the current host process.
-fn host_platform_key() -> String {
+pub fn host_platform_key() -> String {
     platform_key_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
@@ -104,7 +105,7 @@ pub fn compilation_targets() -> Vec<TargetSpec> {
 
 /// The platform key the executor expects.
 ///
-/// Read from `EXECUTOR_PLATFORM` (e.g. `linux-x86_64-wt40`).
+/// Read from `EXECUTOR_PLATFORM` (e.g. `linux-x86_64-wt43`).
 /// Falls back to the host platform key when unset.
 pub fn executor_target_platform() -> String {
     std::env::var("EXECUTOR_PLATFORM").unwrap_or_else(|_| host_platform_key())

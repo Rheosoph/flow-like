@@ -9,10 +9,15 @@ dependencies = [
     "flow-like-wasm-sdk",
 ]
 
+[tool.uv.sources]
+flow-like-wasm-sdk = { path = "../../libs/wasm-sdk/wasm-sdk-python", editable = true }
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "pydantic>=2.0",
+    "langchain-core>=0.3.0",
 ]
 build = [
     "componentize-py>=0.16",

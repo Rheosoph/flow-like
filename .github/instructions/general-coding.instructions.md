@@ -4,7 +4,7 @@ applyTo: "**"
 # Project general coding standards
 
 ## GIT OPERATIONS
-- NEVER GIT DIFF; STASH ETC. I AM ALSO WORKING IN THIS CODE BASE. NO GIT OPERATIONS IF NOT ASKED FOR EXPLICITLY AND CONFIRMED
+- `git diff` is fine. NEVER stash, reset, or run any other destructive/state-mutating git command without explicit confirmation — the user is actively working in the same codebase.
 
 ## Comments and Verbosity
 - Do not comment code that is self-explanatory.

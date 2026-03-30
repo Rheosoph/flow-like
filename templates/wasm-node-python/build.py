@@ -25,11 +25,12 @@ BUILD_DIR = ROOT / "build"
 SRC_DIR = ROOT / "src"
 
 # WIT file: prefer the SDK-shipped copy, fall back to local wit/ directory
+_LOCAL_WIT = ROOT / "wit" / "flow-like-node.wit"
 try:
     from flow_like_wasm_sdk import WIT_PATH as _SDK_WIT
-    WIT_PATH = _SDK_WIT
+    WIT_PATH = _SDK_WIT if _SDK_WIT.exists() else _LOCAL_WIT
 except ImportError:
-    WIT_PATH = ROOT / "wit" / "flow-like-node.wit"
+    WIT_PATH = _LOCAL_WIT
 
 
 def load_module(path: Path):
@@ -44,17 +45,32 @@ def load_module(path: Path):
 
 
 def extract_definition(module_path: Path) -> str:
-    """Extract the node definition JSON from a Python node module."""
+    """Extract the node definition JSON from a Python node module.
+
+    Supports both the class-based pattern (WasmNode subclasses with
+    auto-registration) and the legacy function-based pattern
+    (get_definition / get_definitions).
+    """
     mod = load_module(module_path)
 
+    # Class-based: importing the module registers WasmNode subclasses
+    try:
+        from flow_like_wasm_sdk import get_all_definitions
+        defs = get_all_definitions()
+        if defs:
+            return json.dumps([d.to_dict() for d in defs], indent=2)
+    except ImportError:
+        pass
+
+    # Legacy function-based fallback
     if hasattr(mod, "get_definition"):
         nd = mod.get_definition()
         return json.dumps(nd.to_dict(), indent=2)
     elif hasattr(mod, "get_definitions"):
         defs = mod.get_definitions()
         return json.dumps([d.to_dict() for d in defs], indent=2)
-    else:
-        raise RuntimeError(f"Module {module_path} must export get_definition() or get_definitions()")
+
+    raise RuntimeError(f"Module {module_path} must define WasmNode subclasses or export get_definition()/get_definitions()")
 
 
 def build_wasm(source: Path, output: Path | None = None):
