@@ -17,6 +17,16 @@ pub enum InternalNodeError {
     PinNotReady(String),
 }
 
+impl InternalNodeError {
+    fn into_message(self) -> String {
+        match self {
+            InternalNodeError::DependencyFailed(message)
+            | InternalNodeError::ExecutionFailed(message)
+            | InternalNodeError::PinNotReady(message) => message,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutionTarget {
     pub node: Arc<InternalNode>,
@@ -196,7 +206,7 @@ async fn run_node_logic_only(
         ctx.log(log_message);
         ctx.end_trace();
         ctx.set_state(NodeState::Error).await;
-        return Err(InternalNodeError::ExecutionFailed(node.id));
+        return Err(InternalNodeError::ExecutionFailed(err_string));
     }
 
     ctx.set_state(NodeState::Success).await;
@@ -828,11 +838,12 @@ impl InternalNode {
             .get_error_handled_nodes(context)
             .await
             .map_err(|err| {
+                let err_string = format!("Failed to get error handling nodes: {}", err);
                 context.log_message(
-                    &format!("Failed to get error handling nodes: {}", err),
+                    &err_string,
                     LogLevel::Error,
                 );
-                InternalNodeError::ExecutionFailed(context.id.clone())
+                InternalNodeError::ExecutionFailed(error.to_string())
             })?;
 
         if connected.is_empty() {
@@ -840,7 +851,7 @@ impl InternalNode {
                 &format!("No error handling nodes found for: {}", &context.id),
                 LogLevel::Error,
             );
-            return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+            return Err(InternalNodeError::ExecutionFailed(error.to_string()));
         }
 
         // Iterate each error handler and walk its successors iteratively (DFS).
@@ -852,22 +863,22 @@ impl InternalNode {
                 let err_string =
                     "Failed to trigger missing dependencies for error handler".to_string();
                 let _ = sub
-                    .set_pin_value("auto_handle_error_string", json!(err_string))
+                    .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                     .await;
                 sub.end_trace();
                 context.push_sub_context(&mut sub);
-                return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                return Err(InternalNodeError::ExecutionFailed(err_string));
             }
 
             // run handler node
             if let Err(e) = run_node_logic_only(&mut sub, recursion_guard).await {
-                let err_string = format!("{:?}", e);
+                let err_string = e.into_message();
                 let _ = sub
-                    .set_pin_value("auto_handle_error_string", json!(err_string))
+                    .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                     .await;
                 sub.end_trace();
                 context.push_sub_context(&mut sub);
-                return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                return Err(InternalNodeError::ExecutionFailed(err_string));
             }
 
             // walk successors of the error handler (still using the same guard)
@@ -877,11 +888,11 @@ impl InternalNode {
                     Err(err) => {
                         let err_string = format!("{:?}", err);
                         let _ = sub
-                            .set_pin_value("auto_handle_error_string", json!(err_string))
+                            .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                             .await;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
-                        return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                        return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 };
 
@@ -902,7 +913,7 @@ impl InternalNode {
                     let err_string =
                         "Failed to trigger successor dependencies (error chain)".to_string();
                     let _ = sub2
-                        .set_pin_value("auto_handle_error_string", json!(err_string))
+                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                         .await;
                     sub2.end_trace();
                     context.push_sub_context(&mut sub2);
@@ -911,13 +922,13 @@ impl InternalNode {
                         .await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 if let Err(e) = run_node_logic_only(&mut sub2, recursion_guard).await {
-                    let err_string = format!("{:?}", e);
+                    let err_string = e.into_message();
                     let _ = sub2
-                        .set_pin_value("auto_handle_error_string", json!(err_string))
+                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                         .await;
                     sub2.end_trace();
                     context.push_sub_context(&mut sub2);
@@ -926,7 +937,7 @@ impl InternalNode {
                         .await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 match next.node.get_connected_exec(true, context).await {
@@ -938,7 +949,7 @@ impl InternalNode {
                     Err(err) => {
                         let err_string = format!("{:?}", err);
                         let _ = sub2
-                            .set_pin_value("auto_handle_error_string", json!(err_string))
+                            .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                             .await;
                         sub2.end_trace();
                         context.push_sub_context(&mut sub2);
@@ -947,7 +958,7 @@ impl InternalNode {
                             .await;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
-                        return Err(InternalNodeError::ExecutionFailed(context.id.clone()));
+                        return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 }
 
@@ -984,14 +995,13 @@ impl InternalNode {
 
         // this node
         if let Err(e) = run_node_logic_only(context, recursion_guard).await {
-            let err_string = format!("{:?}", e);
+            let err_string = e.into_message();
             context.log_message(
                 &format!("Failed to execute node: {}", err_string),
                 LogLevel::Error,
             );
             InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-            let node = context.read_node().await;
-            return Err(InternalNodeError::ExecutionFailed(node.id));
+            return Err(InternalNodeError::ExecutionFailed(err_string));
         }
 
         // successors (DFS; fresh guard per successor to mirror old semantics)
@@ -1005,8 +1015,7 @@ impl InternalNode {
                         LogLevel::Error,
                     );
                     InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-                    let node = context.read_node().await;
-                    return Err(InternalNodeError::ExecutionFailed(node.id));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
             };
 
@@ -1032,20 +1041,18 @@ impl InternalNode {
                     InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    let node = context.read_node().await;
-                    return Err(InternalNodeError::ExecutionFailed(node.id));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 if let Err(e) = run_node_logic_only(&mut sub, &mut local_guard).await {
-                    let err_string = format!("{:?}", e);
+                    let err_string = e.into_message();
                     let _ = sub.activate_exec_pin("auto_handle_error").await;
                     let _ = sub
-                        .set_pin_value("auto_handle_error_string", json!(err_string))
+                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                         .await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    let node = context.read_node().await;
-                    return Err(InternalNodeError::ExecutionFailed(node.id));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 match next.node.get_connected_exec(true, context).await {
@@ -1059,8 +1066,7 @@ impl InternalNode {
                         InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
-                        let node = context.read_node().await;
-                        return Err(InternalNodeError::ExecutionFailed(node.id));
+                        return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 }
 
@@ -1124,7 +1130,7 @@ impl InternalNode {
             context.end_trace();
             context.set_state(NodeState::Error).await;
             InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-            return Err(InternalNodeError::ExecutionFailed(node.id.clone()));
+            return Err(InternalNodeError::ExecutionFailed(err_string));
         }
 
         context.set_state(NodeState::Success).await;
@@ -1143,7 +1149,7 @@ impl InternalNode {
                         LogLevel::Error,
                     );
                     InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-                    return Err(InternalNodeError::ExecutionFailed(node.id.clone()));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
             };
 
@@ -1170,19 +1176,19 @@ impl InternalNode {
                     InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(node.id.clone()));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 // Run successor node
                 if let Err(e) = run_node_logic_only(&mut sub, &mut local_guard).await {
-                    let err_string = format!("{:?}", e);
+                    let err_string = e.into_message();
                     let _ = sub.activate_exec_pin("auto_handle_error").await;
                     let _ = sub
-                        .set_pin_value("auto_handle_error_string", json!(err_string))
+                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                         .await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(node.id.clone()));
+                    return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
                 // Enqueue its successors (DFS)
@@ -1197,7 +1203,7 @@ impl InternalNode {
                         InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
-                        return Err(InternalNodeError::ExecutionFailed(node.id.clone()));
+                        return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 }
 

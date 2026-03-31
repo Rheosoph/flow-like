@@ -1492,10 +1492,6 @@ pub async fn execute_agent_streaming(
         }
     }
 
-    // Track repeated identical tool calls: (name::result) → invocation count
-    let mut repeated_call_tracker: HashMap<String, usize> = HashMap::new();
-    const MAX_IDENTICAL_CALLS: usize = 1;
-
     // Proven-deterministic cache:
     // - call_prior_result: last result seen for (name::args) — used to detect consistency
     // - call_result_cache: only populated after 2 consecutive identical results (proven deterministic)
@@ -1505,6 +1501,12 @@ pub async fn execute_agent_streaming(
     let mut call_cache_blacklist: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
+    // Follow rig's pattern: prompt is always the last message in current_history,
+    // and everything before it is the chat history. This ensures that after tool
+    // results are appended, the tool result becomes the new "prompt" and the
+    // original user message stays in history rather than being re-appended at the end.
+    current_history.push(prompt);
+
     loop {
         if iteration >= agent.max_iterations {
             return Err(anyhow!(
@@ -1513,11 +1515,19 @@ pub async fn execute_agent_streaming(
             ));
         }
 
+        // Split: last message = prompt, everything before = history
+        let current_prompt = current_history
+            .last()
+            .cloned()
+            .expect("current_history should always have at least one message");
+        let history_slice = current_history[..current_history.len() - 1].to_vec();
+
         {
             let mut iter_summary = format!(
-                "=== Iteration {} === current_history: {} messages",
+                "=== Iteration {} === current_history: {} messages (history: {}, prompt: 1)",
                 iteration,
-                current_history.len()
+                current_history.len(),
+                history_slice.len()
             );
             for (i, msg) in current_history.iter().enumerate() {
                 match msg {
@@ -1567,7 +1577,7 @@ pub async fn execute_agent_streaming(
         }
 
         let mut request = rig_agent
-            .completion(prompt.clone(), current_history.clone())
+            .completion(current_prompt, history_slice)
             .await
             .map_err(|e| anyhow!("Agent completion failed: {}", e))?;
 
@@ -1926,32 +1936,6 @@ pub async fn execute_agent_streaming(
                 None => json::to_string(tool_output).unwrap_or_default(),
             };
 
-            // Detect repeated identical calls: same tool name + same result
-            let repeat_key = format!("{}::{}", tool_name, tool_result_str);
-            let call_count = repeated_call_tracker
-                .entry(repeat_key)
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
-
-            let tool_result_str = if *call_count > MAX_IDENTICAL_CALLS {
-                context.log_message(
-                    &format!(
-                        "Repeated call detected: '{}' returned identical result {} times",
-                        tool_name, call_count
-                    ),
-                    LogLevel::Warn,
-                );
-                format!(
-                    "{}\n\n[SYSTEM NOTE: You have called '{}' {} times and received the same result. \
-                     Do NOT call this tool again with the same or similar parameters. \
-                     Use the result you already have, try a completely different approach, \
-                     or respond to the user with what you know.]",
-                    tool_result_str, tool_name, call_count
-                )
-            } else {
-                tool_result_str
-            };
-
             tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                 id: tool_id.clone(),
                 call_id: tool_call_id.clone().or_else(|| Some(tool_id.clone())),
@@ -1987,96 +1971,6 @@ pub async fn execute_agent_streaming(
                 content: combined_tool_results,
             };
             current_history.push(tool_result_msg);
-        }
-
-        // Hard stop: if any tool has been called too many times with identical results, bail out
-        const HARD_STOP_THRESHOLD: usize = MAX_IDENTICAL_CALLS + 2;
-        let worst_repeat = repeated_call_tracker.values().max().copied().unwrap_or(0);
-        if worst_repeat >= HARD_STOP_THRESHOLD {
-            context.log_message(
-                &format!(
-                    "Hard stop at iteration {}: a tool was called {} times with identical results (threshold {})",
-                    iteration, worst_repeat, HARD_STOP_THRESHOLD
-                ),
-                LogLevel::Warn,
-            );
-            context.log_message(
-                &format!(
-                    "Agent loop stopped: a tool was called {} times with identical results",
-                    worst_repeat
-                ),
-                LogLevel::Warn,
-            );
-
-            // Build a meaningful response from the tool results gathered in this session.
-            // response_obj.content() is often empty here because the model's last output
-            // was a tool call, not text. Falling back to empty would cause parent agents
-            // to retry this tool endlessly.
-            let mut final_response = response_obj.content().unwrap_or_default();
-            if final_response.trim().is_empty() {
-                let mut gathered: Vec<String> = Vec::new();
-                for msg in full_history.messages.iter().rev() {
-                    if msg.role == Role::Tool {
-                        let text = match &msg.content {
-                            MessageContent::String(s) => s.clone(),
-                            MessageContent::Contents(cs) => cs
-                                .iter()
-                                .filter_map(|c| match c {
-                                    Content::Text { text, .. } => Some(text.as_str()),
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                        };
-                        // Skip system notes we injected
-                        let clean = text
-                            .split("\n\n[SYSTEM NOTE:")
-                            .next()
-                            .unwrap_or(&text)
-                            .trim();
-                        if !clean.is_empty() && clean != "[]" && clean != "\"\"" {
-                            gathered.push(clean.to_string());
-                        }
-                        if gathered.len() >= 3 {
-                            break;
-                        }
-                    }
-                }
-                gathered.reverse();
-                final_response = if gathered.is_empty() {
-                    "I was unable to find the requested information after multiple search attempts."
-                        .to_string()
-                } else {
-                    format!(
-                        "After multiple search attempts, here is what I found:\n\n{}",
-                        gathered.join("\n\n")
-                    )
-                };
-                // Also set this on the response object so the caller gets it
-                response_obj.push_chunk(ResponseChunk::from_text(
-                    &final_response,
-                    &model_display_name,
-                ));
-            }
-
-            let stop_msg = HistoryMessage {
-                role: Role::Assistant,
-                content: MessageContent::String(final_response),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                annotations: None,
-            };
-            full_history.push_message(stop_msg);
-
-            accumulated_stats.set_duration_ms(agent_start.elapsed().as_millis() as u64);
-            accumulated_stats.set_iterations(iteration as u32 + 1);
-
-            return Ok(AgentExecutionResult {
-                response: response_obj,
-                history: full_history,
-                stats: accumulated_stats,
-            });
         }
 
         // Apply context management after adding tool results if infinite context is enabled

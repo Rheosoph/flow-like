@@ -1,22 +1,23 @@
 "use client";
 import {
+	Badge,
 	Button,
 	Card,
-	CardHeader,
-	CardTitle,
 	IIndexType,
 	Input,
 	ScrollArea,
+	cn,
 	useBackend,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
-import LanceDBExplorer from "@tm9657/flow-like-ui/components/ui/lance-viewer";
+import LanceDBExplorer, {
+	type ArrowSchemaJSON,
+	arrowToLanceSchema,
+} from "@tm9657/flow-like-ui/components/ui/lance-viewer";
 import {
 	ArrowDownAZ,
 	ArrowLeftIcon,
 	ArrowUpAZ,
-	ChevronRight,
-	Columns,
 	Database,
 	Globe,
 	RefreshCw,
@@ -202,49 +203,45 @@ function TableView({
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
-	const isLoadingData = schema.isLoading || list.isLoading;
-
-	if (isLoadingData && !schema.data) {
-		return <TableViewLoadingState />;
+	if (!schema.data || !list.data) {
+		return <TableViewLoadingState onBack={onBack} tableName={table} />;
 	}
 
 	return (
 		<div className="flex flex-col h-full flex-grow max-h-full min-w-0">
-			{schema.data && list.data && (
-				<LanceDBExplorer
-					total={count.data}
-					tableName={table}
-					arrowSchema={schema.data}
-					rows={list.data}
-					initialPage={page}
-					initialPageSize={pageSize}
-					onPageRequest={(args) => {
-						updateUrlParams(args.page, args.pageSize);
+			<LanceDBExplorer
+				total={count.data}
+				tableName={table}
+				arrowSchema={schema.data}
+				rows={list.data}
+				initialPage={page}
+				initialPageSize={pageSize}
+				onPageRequest={(args) => {
+					updateUrlParams(args.page, args.pageSize);
+				}}
+				loading={list.isLoading}
+				error={list.error?.message}
+				onRefresh={handleRefresh}
+				onOptimize={handleOptimize}
+				onUpdateItem={handleUpdateItem}
+				onDropColumns={handleDropColumns}
+				onAddColumn={handleAddColumn}
+				onAlterColumn={handleAlterColumn}
+				onGetIndices={handleGetIndices}
+				onDropIndex={handleDropIndex}
+				onBuildIndex={handleBuildIndex}
+			>
+				<Button
+					variant={"default"}
+					size={"sm"}
+					onClick={() => {
+						onBack();
 					}}
-					loading={list.isLoading}
-					error={list.error?.message}
-					onRefresh={handleRefresh}
-					onOptimize={handleOptimize}
-					onUpdateItem={handleUpdateItem}
-					onDropColumns={handleDropColumns}
-					onAddColumn={handleAddColumn}
-					onAlterColumn={handleAlterColumn}
-					onGetIndices={handleGetIndices}
-					onDropIndex={handleDropIndex}
-					onBuildIndex={handleBuildIndex}
 				>
-					<Button
-						variant={"default"}
-						size={"sm"}
-						onClick={() => {
-							onBack();
-						}}
-					>
-						<ArrowLeftIcon />
-						Back
-					</Button>
-				</LanceDBExplorer>
-			)}
+					<ArrowLeftIcon />
+					Back
+				</Button>
+			</LanceDBExplorer>
 		</div>
 	);
 }
@@ -327,15 +324,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		setSortAsc((prev) => !prev);
 	}, []);
 
-	if (tables.isLoading && userTables.isLoading) {
+	const isLoading = tables.isLoading || userTables.isLoading;
+
+	if (isLoading && !processedTables.length) {
 		return <LoadingState />;
 	}
 
-	if (tables.error && userTables.error) {
+	if (!isLoading && tables.error && userTables.error) {
 		return <ErrorState onRetry={refreshTables} />;
 	}
 
-	if (!processedTables.length) {
+	if (!isLoading && !processedTables.length) {
 		return <EmptyState onRetry={refreshTables} />;
 	}
 
@@ -463,7 +462,7 @@ const TableGrid: React.FC<TableGridProps> = ({
 
 	return (
 		<ScrollArea className="max-h-[calc(100vh-16rem)]">
-			<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pr-2 py-1">
+			<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 pr-2 py-1">
 				{tables.map((table) => (
 					<TableCard
 						appId={appId}
@@ -483,6 +482,32 @@ interface TableCardProps {
 	onSelect: () => void;
 }
 
+const formatCount = (n: number | undefined): string => {
+	if (n === undefined) return "—";
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+	return n.toLocaleString();
+};
+
+const vectorDtLabel = (raw: ArrowSchemaJSON | undefined, fieldName: string): string | null => {
+	if (!raw) return null;
+	const f = raw.fields?.find((f: any) => f.name === fieldName);
+	if (!f?.data_type?.FixedSizeList) return null;
+	const [child] = f.data_type.FixedSizeList;
+	const dt = child?.data_type;
+	if (dt === "Float16") return "f16";
+	if (dt === "Float32") return "f32";
+	if (dt === "Float64") return "f64";
+	return null;
+};
+
+const StatBlock: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+	<div className="rounded-lg bg-muted/50 px-3 py-2">
+		<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+		<p className="text-lg font-semibold leading-tight mt-0.5">{value}</p>
+	</div>
+);
+
 const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 	const backend = useBackend();
 	const count = useInvoke(backend.dbState.countItems, backend.dbState, [
@@ -490,52 +515,132 @@ const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 		table.name,
 		table.userScoped,
 	]);
+	const rawSchema = useInvoke(backend.dbState.getSchema, backend.dbState, [
+		appId,
+		table.name,
+		table.userScoped,
+	]);
+	const indices = useInvoke(backend.dbState.getIndices, backend.dbState, [
+		appId,
+		table.name,
+		table.userScoped,
+	]);
+
+	const parsedSchema = useMemo(() => {
+		if (!rawSchema.data) return null;
+		return arrowToLanceSchema(rawSchema.data);
+	}, [rawSchema.data]);
+
+	const vectorField = useMemo(
+		() => parsedSchema?.fields.find((f) => f.kind === "vector"),
+		[parsedSchema],
+	);
+
+	const hasVectors = !!vectorField;
+	const columnCount = parsedSchema?.fields.length;
+	const dimensions = vectorField?.dims;
+	const dtLabel = vectorField ? vectorDtLabel(rawSchema.data, vectorField.name) : null;
+
+	const indexTags = useMemo(() => {
+		if (!indices.data?.length) return [];
+		return indices.data.map((idx) => idx.index_type);
+	}, [indices.data]);
 
 	return (
-		<Card className="group cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-1 hover:bg-accent/50 border">
+		<Card className="group cursor-pointer transition-all duration-200 hover:shadow-lg hover:bg-accent/50 border overflow-hidden">
 			<button
 				onClick={onSelect}
 				className="w-full h-full p-0 text-left"
 				title={`Open table: ${table.name}`}
 			>
-				<CardHeader className="py-2 px-6">
-					<div className="flex items-start justify-between gap-4 mb-4">
-						<div className={`shrink-0 rounded-xl p-3 transition-colors ${table.userScoped ? "bg-amber-500/10 group-hover:bg-amber-500/20" : "bg-primary/10 group-hover:bg-primary/20"}`}>
-							{table.userScoped ? (
-								<User className="h-5 w-5 text-amber-500" />
-							) : (
-								<Columns className="h-5 w-5 text-primary" />
-							)}
+				<div className="p-5 space-y-4">
+					<div className="flex items-start justify-between gap-3">
+						<div className="flex items-center gap-3 min-w-0">
+							<div className={cn(
+								"shrink-0 rounded-xl p-2.5 transition-colors",
+								table.userScoped
+									? "bg-amber-500/10 group-hover:bg-amber-500/20"
+									: "bg-primary/10 group-hover:bg-primary/20",
+							)}>
+								<Database className={cn("h-5 w-5", table.userScoped ? "text-amber-500" : "text-primary")} />
+							</div>
+							<div className="min-w-0">
+								<h3 className="font-semibold text-sm leading-tight truncate">{table.name}</h3>
+							</div>
 						</div>
-						<ChevronRight className="h-5 w-5 text-muted-foreground transition-all group-hover:translate-x-1 group-hover:text-primary shrink-0 mt-0.5" />
-					</div>
-
-					<div className="space-y-2">
-						<CardTitle className="text-base font-semibold leading-tight">
-							{table.name}
-						</CardTitle>
-						<div className="flex items-center gap-2">
 						{table.userScoped ? (
-							<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
+							<Badge variant="outline" className="shrink-0 bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] gap-1">
 								<User className="h-3 w-3" />
-								User Scoped
-							</span>
+								User scoped
+							</Badge>
 						) : (
-							<span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+							<Badge variant="outline" className="shrink-0 bg-primary/10 text-primary border-primary/20 text-[10px] gap-1">
 								<Globe className="h-3 w-3" />
 								Shared
-								</span>
-							)}
-							<p className="text-sm text-muted-foreground">
-								{count.error
-									? "Error loading count"
-									: count.data !== undefined
-										? `${count.data.toLocaleString()} items`
-										: "Loading..."}
-							</p>
-						</div>
+							</Badge>
+						)}
 					</div>
-				</CardHeader>
+
+					<div className={cn("grid gap-2", hasVectors ? "grid-cols-3" : "grid-cols-2")}>
+						<StatBlock label="Rows" value={formatCount(count.data)} />
+						{hasVectors && <StatBlock label="Dimensions" value={formatCount(dimensions)} />}
+						<StatBlock label="Columns" value={formatCount(columnCount)} />
+					</div>
+
+					<div className="flex flex-wrap gap-1.5">
+						{hasVectors ? (
+							<>
+								{indexTags.length > 0
+									? indexTags.map((tag) => (
+											<Badge key={tag} variant="secondary" className="text-[10px] font-medium">
+												{tag}
+											</Badge>
+										))
+									: (
+										<Badge variant="secondary" className="text-[10px] font-medium">
+											no index
+										</Badge>
+									)}
+								{dtLabel && (
+									<Badge variant="secondary" className="text-[10px] font-medium">
+										{dtLabel}
+									</Badge>
+								)}
+							</>
+						) : (
+							<span className="text-xs text-muted-foreground italic">
+								Tabular — no vectors
+							</span>
+						)}
+					</div>
+
+					{parsedSchema && parsedSchema.fields.length > 0 && (
+						<>
+							<div className="border-t" />
+							<div className="space-y-2">
+								<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Schema Preview
+								</p>
+								<div className="flex flex-wrap gap-1.5">
+									{parsedSchema.fields.slice(0, 6).map((field) => (
+										<Badge
+											key={field.name}
+											variant={field.kind === "vector" ? "default" : "secondary"}
+											className="text-[10px] font-medium"
+										>
+											{field.name}
+										</Badge>
+									))}
+									{parsedSchema.fields.length > 6 && (
+										<Badge variant="secondary" className="text-[10px] font-medium">
+											+{parsedSchema.fields.length - 6}
+										</Badge>
+									)}
+								</div>
+							</div>
+						</>
+					)}
+				</div>
 			</button>
 		</Card>
 	);
@@ -550,28 +655,66 @@ const LoadingState: React.FC = () => (
 				<div className="h-4 w-72 bg-muted animate-pulse rounded" />
 			</div>
 		</div>
-		<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-			{Array.from({ length: 8 }).map((_, i) => (
-				<Card key={i} className="h-20 animate-pulse bg-muted/50" />
+		<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+			{Array.from({ length: 6 }).map((_, i) => (
+				<Card key={i} className="animate-pulse bg-muted/50 p-5 space-y-4">
+					<div className="flex items-center gap-3">
+						<div className="h-10 w-10 rounded-xl bg-muted" />
+						<div className="h-4 w-32 bg-muted rounded" />
+					</div>
+					<div className="grid grid-cols-3 gap-2">
+						<div className="h-12 bg-muted rounded-lg" />
+						<div className="h-12 bg-muted rounded-lg" />
+						<div className="h-12 bg-muted rounded-lg" />
+					</div>
+					<div className="flex gap-1.5">
+						<div className="h-5 w-14 bg-muted rounded" />
+						<div className="h-5 w-12 bg-muted rounded" />
+					</div>
+				</Card>
 			))}
 		</div>
 	</div>
 );
 
-const TableViewLoadingState: React.FC = () => (
-	<div className="flex flex-col h-full flex-grow max-h-full min-w-0 p-4 gap-4">
-		<div className="flex items-center gap-4">
-			<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-			<div className="flex-1">
-				<div className="h-6 w-48 bg-muted animate-pulse rounded mb-2" />
-				<div className="h-4 w-32 bg-muted animate-pulse rounded" />
+const TableViewLoadingState: React.FC<{ onBack: () => void; tableName: string }> = ({ onBack, tableName }) => (
+	<div className="flex flex-col h-full grow max-h-full min-w-0 p-4 gap-4">
+		<div className="flex items-center gap-3">
+			<Button variant="default" size="sm" onClick={onBack}>
+				<ArrowLeftIcon />
+				Back
+			</Button>
+			<div className="flex items-center gap-2 min-w-0">
+				<Database className="h-5 w-5 text-muted-foreground animate-pulse shrink-0" />
+				<span className="text-sm font-medium truncate">{tableName}</span>
 			</div>
 		</div>
 		<div className="flex items-center gap-2">
 			<div className="h-9 w-24 bg-muted animate-pulse rounded" />
 			<div className="h-9 flex-1 bg-muted animate-pulse rounded" />
+			<div className="h-9 w-20 bg-muted animate-pulse rounded" />
 		</div>
-		<div className="flex-1 bg-muted/30 animate-pulse rounded border" />
+		<div className="flex-1 rounded border overflow-hidden">
+			<div className="h-10 bg-muted/60 border-b flex items-center gap-4 px-4">
+				{Array.from({ length: 5 }).map((_, i) => (
+					<div key={i} className="h-4 bg-muted animate-pulse rounded" style={{ width: `${60 + i * 20}px` }} />
+				))}
+			</div>
+			{Array.from({ length: 8 }).map((_, i) => (
+				<div key={i} className="h-10 border-b flex items-center gap-4 px-4">
+					{Array.from({ length: 5 }).map((_, j) => (
+						<div key={j} className="h-3.5 bg-muted/50 animate-pulse rounded" style={{ width: `${40 + ((i + j) % 4) * 25}px` }} />
+					))}
+				</div>
+			))}
+		</div>
+		<div className="flex items-center justify-between shrink-0">
+			<div className="h-4 w-32 bg-muted animate-pulse rounded" />
+			<div className="flex gap-1">
+				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
+				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
+			</div>
+		</div>
 	</div>
 );
 
