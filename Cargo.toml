@@ -39,6 +39,7 @@ members = [
     "packages/catalog/automation",
     "libs/nodes/code-interpreter",
     "packages/catalog-macros",
+    "packages/catalog-build-helper",
     "packages/storage",
     "packages/api",
     "packages/sinks",
@@ -70,6 +71,7 @@ flow-like-catalog-geo = { path = "packages/catalog/geo" }
 flow-like-catalog-automation = { path = "packages/catalog/automation" }
 flow-like-catalog-code-interpreter = { path = "libs/nodes/code-interpreter" }
 flow-like-catalog-macros = { path = "packages/catalog-macros" }
+flow-like-catalog-build-helper = { path = "packages/catalog-build-helper" }
 flow-like-storage = { path = "packages/storage" }
 flow-like-sinks = { path = "packages/sinks" }
 flow-like-executor = { path = "packages/executor" }

@@ -132,6 +132,7 @@ dependencies = [
 name = "flow-like-wasm-sdk"
 version = "0.3.3"
 dependencies = [
+ "base64",
  "flow-like-wasm-sdk-macros",
  "futures",
  "inventory",

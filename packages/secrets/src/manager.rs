@@ -127,6 +127,41 @@ impl SecretStore {
         self.cache.invalidate(&CacheKey::from(reference)).await;
     }
 
+    /// Pre-fetch all secrets from providers that support bulk listing
+    /// (e.g. AWS SSM `GetParametersByPath`). Populates the cache so that
+    /// subsequent [`get_secret`] calls are instant cache hits.
+    pub async fn warmup(&self) {
+        for kind in &self.provider_order {
+            let slot = match self.provider_for(*kind) {
+                Ok(slot) => slot,
+                Err(_) => continue,
+            };
+            let provider = match slot.get_or_init().await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(provider = %kind, error = %e, "skipping warmup for provider");
+                    continue;
+                }
+            };
+
+            match provider.prefetch().await {
+                Ok(entries) => {
+                    for (key, value) in entries {
+                        let cache_key = CacheKey {
+                            provider: None,
+                            key,
+                            version: None,
+                        };
+                        self.cache.insert_success(cache_key, value).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(provider = %kind, error = %e, "prefetch failed, falling back to individual gets");
+                }
+            }
+        }
+    }
+
     fn provider_for(&self, kind: SecretProviderKind) -> Result<&ProviderSlot> {
         self.providers
             .get(&kind)

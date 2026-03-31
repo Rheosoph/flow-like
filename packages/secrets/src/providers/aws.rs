@@ -51,6 +51,58 @@ impl SecretProvider for AwsParameterStoreProvider {
 
         Ok(SecretValue::from_string(value))
     }
+
+    async fn prefetch(&self) -> Result<Vec<(String, SecretValue)>> {
+        let Some(prefix) = &self.config.prefix else {
+            return Ok(Vec::new());
+        };
+        let path = format!("/{}/", prefix.trim_matches('/'));
+        let mut results = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let mut request = self
+                .client
+                .get_parameters_by_path()
+                .path(&path)
+                .recursive(true)
+                .set_with_decryption(Some(self.config.with_decryption))
+                .max_results(10);
+
+            if let Some(token) = next_token.take() {
+                request = request.next_token(token);
+            }
+
+            let output = request.send().await.map_err(|error| {
+                SecretError::provider_failure(self.kind(), error.to_string())
+            })?;
+
+            if let Some(parameters) = output.parameters {
+                for param in parameters {
+                    let Some(name) = param.name else { continue };
+                    let Some(value) = param.value else { continue };
+                    // Strip the prefix path to get the bare key
+                    let bare_key = name
+                        .strip_prefix(&path)
+                        .unwrap_or(&name)
+                        .to_string();
+                    results.push((bare_key, SecretValue::from_string(value)));
+                }
+            }
+
+            next_token = output.next_token;
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        tracing::info!(
+            path = %path,
+            count = results.len(),
+            "SSM GetParametersByPath prefetch complete"
+        );
+        Ok(results)
+    }
 }
 
 pub struct AwsSecretsManagerProvider {

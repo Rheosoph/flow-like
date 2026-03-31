@@ -26,7 +26,6 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -47,3 +46,6 @@ zip = { version = "8.2.0", default-features = false, features = ["deflate"], opt
 quick-xml = { version = "0.39.2", features = ["serialize"], optional = true }
 lopdf = { version = "0.39.0", optional = true }
 pulldown-cmark = { version = "0.13.1", optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

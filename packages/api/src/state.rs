@@ -110,6 +110,10 @@ impl State {
             Arc::new(SecretStore::new(config).expect("Failed to create secret store"))
         };
 
+        // Batch-fetch all secrets under the prefix (e.g. SSM GetParametersByPath)
+        // so individual get_secret() calls below hit the warm cache.
+        secrets.warmup().await;
+
         let sink_secret = secrets
             .get_secret_string(&SecretRef::new("SINK_SECRET"))
             .await

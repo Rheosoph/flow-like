@@ -31,7 +31,6 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -66,3 +65,6 @@ tokio-tungstenite = { workspace = true, optional = true }
 
 # MQTT support
 rumqttc = { workspace = true, optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

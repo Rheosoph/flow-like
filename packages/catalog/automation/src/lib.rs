@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, inventory, register_node};
+pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod types;
@@ -32,10 +32,13 @@ pub mod session;
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod vision;
 
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
+
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
-        flow_like_catalog_core::get_catalog()
+        collect_nodes()
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {

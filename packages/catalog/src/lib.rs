@@ -40,7 +40,7 @@ pub use flow_like_catalog_core::NodeLogic;
 // Re-export core types and utilities
 pub use flow_like_catalog_core::{
     Attachment, BoundingBox, CachedDB, FlowPath, FlowPathRuntime, FlowPathStore, NodeDBConnection,
-    NodeImage, NodeImageWrapper, get_catalog as get_core_catalog, inventory, register_node,
+    NodeImage, NodeImageWrapper, register_node,
 };
 
 // Re-export standard library
@@ -113,7 +113,7 @@ impl CatalogPackage {
 
     fn get_nodes(&self) -> Vec<Arc<dyn NodeLogic>> {
         match self {
-            CatalogPackage::Core => flow_like_catalog_core::get_catalog(),
+            CatalogPackage::Core => Vec::new(),
             CatalogPackage::Std => flow_like_catalog_std::get_catalog(),
             CatalogPackage::Data => flow_like_catalog_data::get_catalog(),
             CatalogPackage::Web => flow_like_catalog_web::get_catalog(),

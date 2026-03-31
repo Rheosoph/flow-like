@@ -335,8 +335,8 @@ impl WasmNode for WeatherAgentNode {
                     None => return Ok(format!("Could not geocode location: {location}")),
                 };
 
-                let body_str = geo_json.get("body").and_then(|b| b.as_str()).unwrap_or("");
-                let body: serde_json::Value = serde_json::from_str(body_str).unwrap_or_default();
+                let body_str = flow_like_wasm_sdk::http_ns::decode_response_body(&geo_json);
+                let body: serde_json::Value = serde_json::from_str(&body_str).unwrap_or_default();
                 let results = body.get("results").and_then(|r| r.as_array());
                 let (lat, lon, resolved_name) = match results.and_then(|r| r.first()) {
                     Some(hit) => {
@@ -360,8 +360,8 @@ impl WasmNode for WeatherAgentNode {
                     None => return Ok(format!("Weather API request failed for {resolved_name}")),
                 };
 
-                let wx_body_str = wx_json.get("body").and_then(|b| b.as_str()).unwrap_or("");
-                let wx: serde_json::Value = serde_json::from_str(wx_body_str).unwrap_or_default();
+                let wx_body_str = flow_like_wasm_sdk::http_ns::decode_response_body(&wx_json);
+                let wx: serde_json::Value = serde_json::from_str(&wx_body_str).unwrap_or_default();
                 let current = wx.get("current").unwrap_or(&serde_json::Value::Null);
 
                 let temp = current.get("temperature_2m").and_then(|v| v.as_f64()).unwrap_or(0.0);

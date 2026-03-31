@@ -28,6 +28,14 @@ pub use gcp::GcpSecretManagerProvider;
 pub trait SecretProvider: Send + Sync {
     fn kind(&self) -> SecretProviderKind;
     async fn get(&self, reference: &SecretRef) -> Result<SecretValue>;
+
+    /// Batch-fetch all secrets under the configured prefix.
+    /// Providers that support bulk listing (e.g. SSM `GetParametersByPath`)
+    /// override this to reduce cold-start API calls.
+    /// Returns `(bare_key, value)` pairs with the prefix stripped.
+    async fn prefetch(&self) -> Result<Vec<(String, SecretValue)>> {
+        Ok(Vec::new())
+    }
 }
 
 pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn SecretProvider>> {
