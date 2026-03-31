@@ -6,11 +6,8 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [
-    "flow-like-wasm-sdk",
+    "flow-like-wasm-sdk>=0.1.1",
 ]
-
-[tool.uv.sources]
-flow-like-wasm-sdk = { path = "../../libs/wasm-sdk/wasm-sdk-python", editable = true }
 
 [dependency-groups]
 dev = [

@@ -256,6 +256,23 @@ pub mod storage_ns {
 
 pub mod http_ns {
     pub use crate::host::http_request;
+
+    /// Parse an HTTP response JSON string and decode the body from base64.
+    /// The WASM host returns `{ "status": N, "headers": {...}, "body_base64": "..." }`.
+    /// This helper decodes `body_base64` into a UTF-8 string.
+    pub fn decode_response_body(response_json: &serde_json::Value) -> String {
+        if let Some(b64) = response_json.get("body_base64").and_then(|v| v.as_str()) {
+            use base64::Engine;
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                return String::from_utf8(bytes).unwrap_or_default();
+            }
+        }
+        response_json
+            .get("body")
+            .and_then(|b| b.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
 }
 
 pub mod auth_ns {

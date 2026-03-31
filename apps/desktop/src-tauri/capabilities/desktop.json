@@ -124,6 +124,7 @@
     "fs:write-all",
     "fs:read-all",
     "opener:default",
+    "opener:allow-open-path",
     "updater:default",
     "notification:default",
     "flow-like-dexie-blob-offload:default",

@@ -106,6 +106,8 @@ pub struct SearchFiltersInput {
     #[serde(default)]
     pub include_deprecated: Option<bool>,
     #[serde(default)]
+    pub include_disabled: Option<bool>,
+    #[serde(default)]
     pub sort_by: Option<String>,
     #[serde(default)]
     pub sort_desc: Option<bool>,
@@ -135,6 +137,7 @@ impl From<SearchFiltersInput> for SearchFilters {
             author: input.author,
             verified_only: input.verified_only.unwrap_or(false),
             include_deprecated: input.include_deprecated.unwrap_or(false),
+            include_disabled: input.include_disabled.unwrap_or(false),
             sort_by: sort_by.unwrap_or_default(),
             sort_desc: input.sort_desc.unwrap_or(true),
             offset: input.offset.unwrap_or(0),

@@ -1,25 +1,24 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatDistanceToNow } from "date-fns";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	CheckCircle,
+	ArrowRight,
 	ChevronLeft,
 	ChevronRight,
-	Clock,
 	Download,
 	Eye,
-	Loader2,
+	LayoutGrid,
 	Package,
 	RefreshCw,
-	XCircle,
+	Star,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
-import type { AdminPackageListResponse } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
 import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
 	Badge,
 	Button,
 	Card,
@@ -27,7 +26,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-	Input,
+	RelativeTime,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -46,7 +45,24 @@ import {
 	TabsTrigger,
 } from "../../ui";
 
-type RequestStatus = "pending" | "accepted" | "rejected";
+type RequestStatus = "pending" | "on_hold" | "accepted" | "rejected";
+
+interface PublicationActor {
+	userId: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	email?: string;
+}
+
+interface PublicationLogItem {
+	id: string;
+	authorId?: string;
+	author?: PublicationActor;
+	message?: string;
+	visibility?: string;
+	createdAt: string;
+}
 
 interface AppPublicationRequest {
 	id: string;
@@ -56,6 +72,18 @@ interface AppPublicationRequest {
 	approverId?: string;
 	createdAt: string;
 	updatedAt: string;
+	appName?: string;
+	appDescription?: string;
+	appIcon?: string;
+	appThumbnail?: string;
+	appTags?: string[];
+	currentVisibility?: string;
+	downloadCount?: number;
+	ratingCount?: number;
+	avgRating?: number;
+	boardCount?: number;
+	packageCount?: number;
+	logs: PublicationLogItem[];
 }
 
 interface AppPublicationListResponse {
@@ -66,20 +94,134 @@ interface AppPublicationListResponse {
 	hasMore: boolean;
 }
 
+interface RawPublicationActor {
+	userId?: string;
+	user_id?: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	email?: string;
+}
+
+interface RawPublicationLogItem {
+	id: string;
+	authorId?: string;
+	author_id?: string;
+	author?: RawPublicationActor;
+	message?: string;
+	visibility?: string;
+	createdAt?: string;
+	created_at?: string;
+}
+
+interface RawAppPublicationRequest {
+	id: string;
+	appId?: string;
+	app_id?: string;
+	targetVisibility?: string;
+	target_visibility?: string;
+	status: string;
+	approverId?: string;
+	approver_id?: string;
+	createdAt?: string;
+	created_at?: string;
+	updatedAt?: string;
+	updated_at?: string;
+	appName?: string;
+	app_name?: string;
+	appDescription?: string;
+	app_description?: string;
+	appIcon?: string;
+	app_icon?: string;
+	appThumbnail?: string;
+	app_thumbnail?: string;
+	appTags?: string[];
+	app_tags?: string[];
+	currentVisibility?: string;
+	current_visibility?: string;
+	downloadCount?: number;
+	download_count?: number;
+	ratingCount?: number;
+	rating_count?: number;
+	avgRating?: number;
+	avg_rating?: number;
+	boardCount?: number;
+	board_count?: number;
+	packageCount?: number;
+	package_count?: number;
+	logs?: RawPublicationLogItem[];
+}
+
+interface RawAppPublicationListResponse {
+	requests: RawAppPublicationRequest[];
+	total: number;
+	page: number;
+	limit: number;
+	hasMore?: boolean;
+	has_more?: boolean;
+}
+
+interface PackageRequestItem {
+	id: string;
+	name: string;
+	version: string;
+	status: string;
+	downloadCount: number;
+}
+
+interface PackageRequestListResponse {
+	packages: PackageRequestItem[];
+	totalCount: number;
+	offset: number;
+	limit: number;
+}
+
+interface RawPackageRequestItem {
+	id: string;
+	name: string;
+	version: string;
+	status: string;
+	downloadCount?: number;
+	download_count?: number;
+}
+
+interface RawPackageRequestListResponse {
+	packages: RawPackageRequestItem[];
+	totalCount?: number;
+	total_count?: number;
+	offset: number;
+	limit: number;
+}
+
 export interface AdminPublicationsPageProps {
 	onNavigateToPackage?: (packageId: string) => void;
+	onSelectRequest?: (requestId: string) => void;
 }
+
+type AppStatusFilter = "all" | RequestStatus;
+type PackageStatusFilter =
+	| "all"
+	| "pending_review"
+	| "active"
+	| "rejected"
+	| "deprecated"
+	| "disabled";
 
 const STATUS_BADGE_VARIANT: Record<
 	string,
 	"default" | "secondary" | "destructive"
 > = {
 	pending: "secondary",
+	on_hold: "secondary",
 	pending_review: "secondary",
 	accepted: "default",
 	active: "default",
 	rejected: "destructive",
 };
+
+function formatDownloadCount(count: number | null | undefined) {
+	return (count ?? 0).toLocaleString();
+}
 
 function statusVariant(
 	status: string,
@@ -87,12 +229,110 @@ function statusVariant(
 	return STATUS_BADGE_VARIANT[status] ?? "secondary";
 }
 
+function normalizeRequestStatus(status: string): RequestStatus {
+	switch (status.toLowerCase()) {
+		case "pending":
+			return "pending";
+		case "on_hold":
+			return "on_hold";
+		case "accepted":
+			return "accepted";
+		case "rejected":
+			return "rejected";
+		default:
+			return "pending";
+	}
+}
+
+function formatStatusLabel(status: string) {
+	return status.replaceAll("_", " ");
+}
+
+function normalizeActor(
+	raw?: RawPublicationActor,
+): PublicationActor | undefined {
+	if (!raw) return undefined;
+	return {
+		userId: raw.userId ?? raw.user_id ?? "",
+		username: raw.username,
+		name: raw.name,
+		avatar: raw.avatar,
+		email: raw.email,
+	};
+}
+
+function normalizeAppPublicationResponse(
+	response: RawAppPublicationListResponse,
+): AppPublicationListResponse {
+	return {
+		requests: response.requests.map((request) => ({
+			id: request.id,
+			appId: request.appId ?? request.app_id ?? "",
+			targetVisibility: (
+				request.targetVisibility ??
+				request.target_visibility ??
+				""
+			).toLowerCase(),
+			status: normalizeRequestStatus(request.status),
+			approverId: request.approverId ?? request.approver_id,
+			createdAt: request.createdAt ?? request.created_at ?? "",
+			updatedAt: request.updatedAt ?? request.updated_at ?? "",
+			appName: request.appName ?? request.app_name,
+			appDescription: request.appDescription ?? request.app_description,
+			appIcon: request.appIcon ?? request.app_icon,
+			appThumbnail: request.appThumbnail ?? request.app_thumbnail,
+			appTags: request.appTags ?? request.app_tags,
+			currentVisibility: (
+				request.currentVisibility ??
+				request.current_visibility ??
+				""
+			).toLowerCase(),
+			downloadCount: request.downloadCount ?? request.download_count ?? 0,
+			ratingCount: request.ratingCount ?? request.rating_count ?? 0,
+			avgRating: request.avgRating ?? request.avg_rating,
+			boardCount: request.boardCount ?? request.board_count ?? 0,
+			packageCount: request.packageCount ?? request.package_count ?? 0,
+			logs: (request.logs ?? []).map((log) => ({
+				id: log.id,
+				authorId: log.authorId ?? log.author_id,
+				author: normalizeActor(log.author),
+				message: log.message,
+				visibility: log.visibility,
+				createdAt: log.createdAt ?? log.created_at ?? "",
+			})),
+		})),
+		total: response.total,
+		page: response.page,
+		limit: response.limit,
+		hasMore: response.hasMore ?? response.has_more ?? false,
+	};
+}
+
+function normalizePackageRequestResponse(
+	response: RawPackageRequestListResponse,
+): PackageRequestListResponse {
+	return {
+		packages: response.packages.map((pkg) => ({
+			id: pkg.id,
+			name: pkg.name,
+			version: pkg.version,
+			status: pkg.status.toLowerCase(),
+			downloadCount: pkg.downloadCount ?? pkg.download_count ?? 0,
+		})),
+		totalCount: response.totalCount ?? response.total_count ?? 0,
+		offset: response.offset,
+		limit: response.limit,
+	};
+}
+
 function TableSkeleton({ rows = 5 }: { rows?: number }) {
 	return (
 		<>
 			{Array.from({ length: rows }).map((_, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
 				<TableRow key={`skeleton-${i}`}>
 					{Array.from({ length: 5 }).map((_, j) => (
+						// biome-ignore lint/suspicious/noArrayIndexKey: static skeleton cells
 						<TableCell key={`skeleton-${i}-${j}`}>
 							<Skeleton className="h-4 w-full" />
 						</TableCell>
@@ -140,11 +380,12 @@ function PaginationControls({
 
 function AppRequestsTab({
 	statusFilter,
+	onSelectRequest,
 }: {
-	statusFilter: string;
+	statusFilter: AppStatusFilter;
+	onSelectRequest?: (requestId: string) => void;
 }) {
 	const backend = useBackend();
-	const queryClient = useQueryClient();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -152,66 +393,33 @@ function AppRequestsTab({
 	);
 
 	const [page, setPage] = useState(1);
-	const [reviewMessage, setReviewMessage] = useState<Record<string, string>>(
-		{},
-	);
 	const limit = 20;
 
 	const queryParams = useMemo(() => {
 		const params: Record<string, string | number> = { page, limit };
 		if (statusFilter !== "all") params.status = statusFilter;
 		return params;
-	}, [page, limit, statusFilter]);
+	}, [page, statusFilter]);
 
-	const requests = useQuery<AppPublicationListResponse>({
+	const requests = useQuery<
+		RawAppPublicationListResponse,
+		Error,
+		AppPublicationListResponse
+	>({
 		queryKey: ["admin", "publication", "requests", queryParams],
 		queryFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
 			const qs = new URLSearchParams(
 				Object.entries(queryParams).map(([k, v]) => [k, String(v)]),
 			).toString();
-			return backend.apiState.get<AppPublicationListResponse>(
+			return backend.apiState.get<RawAppPublicationListResponse>(
 				profile.data,
 				`admin/publication/requests?${qs}`,
 			);
 		},
 		enabled: !!profile.data,
+		select: normalizeAppPublicationResponse,
 	});
-
-	const reviewMutation = useMutation({
-		mutationFn: async ({
-			id,
-			action,
-			message,
-		}: {
-			id: string;
-			action: "approve" | "reject" | "hold";
-			message?: string;
-		}) => {
-			if (!profile.data) throw new Error("Profile not loaded");
-			return backend.apiState.patch(
-				profile.data,
-				`admin/publication/requests/${id}`,
-				{ action, message },
-			);
-		},
-		onSuccess: () => {
-			toast.success("Request updated");
-			queryClient.invalidateQueries({
-				queryKey: ["admin", "publication", "requests"],
-			});
-		},
-		onError: () => {
-			toast.error("Failed to update request");
-		},
-	});
-
-	const handleReview = useCallback(
-		(id: string, action: "approve" | "reject" | "hold") => {
-			reviewMutation.mutate({ id, action, message: reviewMessage[id] });
-		},
-		[reviewMutation, reviewMessage],
-	);
 
 	const totalPages = Math.ceil((requests.data?.total ?? 0) / limit);
 
@@ -222,10 +430,11 @@ function AppRequestsTab({
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>App ID</TableHead>
-								<TableHead>Target Visibility</TableHead>
+								<TableHead>App</TableHead>
+								<TableHead>Visibility</TableHead>
 								<TableHead>Status</TableHead>
-								<TableHead>Created</TableHead>
+								<TableHead>Stats</TableHead>
+								<TableHead>Submitted</TableHead>
 								<TableHead className="text-right">Actions</TableHead>
 							</TableRow>
 						</TableHeader>
@@ -235,7 +444,7 @@ function AppRequestsTab({
 								(!requests.data?.requests?.length ? (
 									<TableRow>
 										<TableCell
-											colSpan={5}
+											colSpan={6}
 											className="text-center text-muted-foreground py-8"
 										>
 											No publication requests found.
@@ -244,58 +453,87 @@ function AppRequestsTab({
 								) : (
 									requests.data.requests.map((req) => (
 										<TableRow key={req.id}>
-											<TableCell className="font-medium">{req.appId}</TableCell>
 											<TableCell>
-												<Badge variant="outline">{req.targetVisibility}</Badge>
+												<div className="flex items-center gap-3">
+													<Avatar className="h-8 w-8 rounded-lg shrink-0">
+														<AvatarImage
+															src={req.appIcon ?? undefined}
+															className="rounded-lg"
+														/>
+														<AvatarFallback className="rounded-lg text-xs font-semibold bg-primary/10">
+															{(req.appName ?? req.appId)
+																.substring(0, 2)
+																.toUpperCase()}
+														</AvatarFallback>
+													</Avatar>
+													<div className="min-w-0">
+														<p className="font-medium text-sm truncate">
+															{req.appName ?? req.appId}
+														</p>
+														{req.appDescription && (
+															<p className="text-xs text-muted-foreground truncate max-w-xs">
+																{req.appDescription}
+															</p>
+														)}
+													</div>
+												</div>
+											</TableCell>
+											<TableCell>
+												<div className="flex items-center gap-1.5 text-xs">
+													<span className="capitalize">
+														{req.currentVisibility ?? "?"}
+													</span>
+													<ArrowRight className="h-3 w-3 text-muted-foreground" />
+													<Badge
+														variant="outline"
+														className="capitalize text-[10px]"
+													>
+														{req.targetVisibility}
+													</Badge>
+												</div>
 											</TableCell>
 											<TableCell>
 												<Badge variant={statusVariant(req.status)}>
-													{req.status}
+													{formatStatusLabel(req.status)}
 												</Badge>
 											</TableCell>
-											<TableCell className="text-sm text-muted-foreground">
-												{formatDistanceToNow(new Date(req.createdAt), {
-													addSuffix: true,
-												})}
+											<TableCell>
+												<div className="flex items-center gap-3 text-xs text-muted-foreground">
+													<span className="flex items-center gap-1">
+														<Download className="h-3 w-3" />
+														{formatDownloadCount(req.downloadCount)}
+													</span>
+													{(req.ratingCount ?? 0) > 0 && (
+														<span className="flex items-center gap-1">
+															<Star className="h-3 w-3" />
+															{(req.avgRating ?? 0).toFixed(1)}
+														</span>
+													)}
+													<span className="flex items-center gap-1">
+														<LayoutGrid className="h-3 w-3" />
+														{req.boardCount ?? 0}
+													</span>
+													<span className="flex items-center gap-1">
+														<Package className="h-3 w-3" />
+														{req.packageCount ?? 0}
+													</span>
+												</div>
+											</TableCell>
+											<TableCell className="text-xs text-muted-foreground">
+												<RelativeTime
+													value={req.createdAt}
+													fallback={req.createdAt || "Unknown"}
+												/>
 											</TableCell>
 											<TableCell className="text-right">
-												{req.status === "pending" ? (
-													<div className="flex items-center justify-end gap-2">
-														<Input
-															placeholder="Message (optional)"
-															className="max-w-[180px] h-8 text-xs"
-															value={reviewMessage[req.id] ?? ""}
-															onChange={(e) =>
-																setReviewMessage((prev) => ({
-																	...prev,
-																	[req.id]: e.target.value,
-																}))
-															}
-														/>
-														<Button
-															size="sm"
-															variant="outline"
-															onClick={() => handleReview(req.id, "approve")}
-															disabled={reviewMutation.isPending}
-														>
-															<CheckCircle className="h-3 w-3 mr-1" />
-															Approve
-														</Button>
-														<Button
-															size="sm"
-															variant="destructive"
-															onClick={() => handleReview(req.id, "reject")}
-															disabled={reviewMutation.isPending}
-														>
-															<XCircle className="h-3 w-3 mr-1" />
-															Reject
-														</Button>
-													</div>
-												) : (
-													<span className="text-xs text-muted-foreground">
-														Reviewed
-													</span>
-												)}
+												<Button
+													size="sm"
+													variant="outline"
+													onClick={() => onSelectRequest?.(req.id)}
+												>
+													<Eye className="h-3 w-3 mr-1" />
+													Review
+												</Button>
 											</TableCell>
 										</TableRow>
 									))
@@ -317,7 +555,7 @@ function PackageRequestsTab({
 	statusFilter,
 	onNavigateToPackage,
 }: {
-	statusFilter: string;
+	statusFilter: PackageStatusFilter;
 	onNavigateToPackage?: (packageId: string) => void;
 }) {
 	const backend = useBackend();
@@ -330,8 +568,7 @@ function PackageRequestsTab({
 	const [page, setPage] = useState(1);
 	const limit = 20;
 
-	const status =
-		statusFilter === "all" ? "pending_review" : statusFilter;
+	const status = statusFilter === "all" ? "pending_review" : statusFilter;
 
 	const queryParams = useMemo(() => {
 		const params: Record<string, string | number> = {
@@ -340,21 +577,26 @@ function PackageRequestsTab({
 			status,
 		};
 		return params;
-	}, [page, limit, status]);
+	}, [page, status]);
 
-	const packages = useQuery<AdminPackageListResponse>({
+	const packages = useQuery<
+		RawPackageRequestListResponse,
+		Error,
+		PackageRequestListResponse
+	>({
 		queryKey: ["admin", "packages", "publications", queryParams],
 		queryFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
 			const qs = new URLSearchParams(
 				Object.entries(queryParams).map(([k, v]) => [k, String(v)]),
 			).toString();
-			return backend.apiState.get<AdminPackageListResponse>(
+			return backend.apiState.get<RawPackageRequestListResponse>(
 				profile.data,
 				`admin/packages?${qs}`,
 			);
 		},
 		enabled: !!profile.data,
+		select: normalizePackageRequestResponse,
 	});
 
 	const totalPages = Math.ceil((packages.data?.totalCount ?? 0) / limit);
@@ -399,13 +641,13 @@ function PackageRequestsTab({
 											</TableCell>
 											<TableCell>
 												<Badge variant={statusVariant(pkg.status)}>
-													{pkg.status.replace("_", " ")}
+													{formatStatusLabel(pkg.status)}
 												</Badge>
 											</TableCell>
 											<TableCell>
 												<span className="flex items-center gap-1">
 													<Download className="h-3 w-3" />
-													{pkg.downloadCount.toLocaleString()}
+													{formatDownloadCount(pkg.downloadCount)}
 												</span>
 											</TableCell>
 											<TableCell className="text-right">
@@ -436,8 +678,13 @@ function PackageRequestsTab({
 
 export function AdminPublicationsPage({
 	onNavigateToPackage,
+	onSelectRequest,
 }: AdminPublicationsPageProps) {
-	const [statusFilter, setStatusFilter] = useState("all");
+	const [activeTab, setActiveTab] = useState<"apps" | "packages">("apps");
+	const [appStatusFilter, setAppStatusFilter] =
+		useState<AppStatusFilter>("all");
+	const [packageStatusFilter, setPackageStatusFilter] =
+		useState<PackageStatusFilter>("all");
 	const queryClient = useQueryClient();
 
 	const handleRefresh = useCallback(() => {
@@ -450,46 +697,83 @@ export function AdminPublicationsPage({
 	}, [queryClient]);
 
 	return (
-		<div className="container mx-auto py-6 space-y-6">
-			<div className="flex items-center justify-between">
-				<div>
-					<h1 className="text-3xl font-bold">Publication Requests</h1>
-					<p className="text-muted-foreground">
-						Review and manage app and package publication requests
-					</p>
-				</div>
-				<div className="flex items-center gap-3">
-					<Select value={statusFilter} onValueChange={setStatusFilter}>
-						<SelectTrigger className="w-36">
-							<SelectValue placeholder="Status" />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">All</SelectItem>
-							<SelectItem value="pending">Pending</SelectItem>
-							<SelectItem value="accepted">Accepted</SelectItem>
-							<SelectItem value="rejected">Rejected</SelectItem>
-						</SelectContent>
-					</Select>
-					<Button variant="outline" size="sm" onClick={handleRefresh}>
-						<RefreshCw className="h-4 w-4 mr-2" />
-						Refresh
-					</Button>
-				</div>
-			</div>
+		<div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+			<Card className="border-border/60 shadow-sm">
+				<CardHeader className="gap-4 sm:flex-row sm:items-end sm:justify-between">
+					<div className="space-y-2">
+						<CardTitle className="text-3xl">Publication Requests</CardTitle>
+						<CardDescription className="max-w-3xl text-sm leading-6">
+							Review app publication requests and package submissions from one
+							place. Package requests use the package review queue and app
+							requests use the publication request workflow.
+						</CardDescription>
+					</div>
+					<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+						{activeTab === "apps" ? (
+							<Select
+								value={appStatusFilter}
+								onValueChange={(value) =>
+									setAppStatusFilter(value as AppStatusFilter)
+								}
+							>
+								<SelectTrigger className="w-full sm:w-40">
+									<SelectValue placeholder="App status" />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="all">All app statuses</SelectItem>
+									<SelectItem value="pending">Pending</SelectItem>
+									<SelectItem value="on_hold">On hold</SelectItem>
+									<SelectItem value="accepted">Accepted</SelectItem>
+									<SelectItem value="rejected">Rejected</SelectItem>
+								</SelectContent>
+							</Select>
+						) : (
+							<Select
+								value={packageStatusFilter}
+								onValueChange={(value) =>
+									setPackageStatusFilter(value as PackageStatusFilter)
+								}
+							>
+								<SelectTrigger className="w-full sm:w-48">
+									<SelectValue placeholder="Package status" />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="all">Pending review</SelectItem>
+									<SelectItem value="pending_review">Pending review</SelectItem>
+									<SelectItem value="active">Approved</SelectItem>
+									<SelectItem value="rejected">Rejected</SelectItem>
+									<SelectItem value="deprecated">Deprecated</SelectItem>
+									<SelectItem value="disabled">Disabled</SelectItem>
+								</SelectContent>
+							</Select>
+						)}
+						<Button variant="outline" size="sm" onClick={handleRefresh}>
+							<RefreshCw className="mr-2 h-4 w-4" />
+							Refresh
+						</Button>
+					</div>
+				</CardHeader>
+			</Card>
 
-			<Tabs defaultValue="apps">
-				<TabsList>
+			<Tabs
+				value={activeTab}
+				onValueChange={(value) => setActiveTab(value as "apps" | "packages")}
+			>
+				<TabsList className="w-full justify-start gap-2 rounded-xl border border-border/60 bg-background p-1">
 					<TabsTrigger value="apps">App Requests</TabsTrigger>
 					<TabsTrigger value="packages">Package Requests</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="apps" className="mt-4">
-					<AppRequestsTab statusFilter={statusFilter} />
+					<AppRequestsTab
+						statusFilter={appStatusFilter}
+						onSelectRequest={onSelectRequest}
+					/>
 				</TabsContent>
 
 				<TabsContent value="packages" className="mt-4">
 					<PackageRequestsTab
-						statusFilter={statusFilter}
+						statusFilter={packageStatusFilter}
 						onNavigateToPackage={onNavigateToPackage}
 					/>
 				</TabsContent>

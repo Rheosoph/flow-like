@@ -8,14 +8,12 @@ import {
 	AnimatedDocsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
-	AnimatedKeyIcon,
 	AnimatedLibraryIcon,
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSparklesIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedThemeIcon,
-	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -140,89 +138,11 @@ const data = {
 			items: [],
 		},
 		{
-			title: "User Actions",
-			url: "/admin/user",
-			icon: AnimatedUsersIcon,
-			permission: true,
-			items: [
-				{
-					title: "Find",
-					url: "/admin/user",
-					permission: GlobalPermission.ReadProfile,
-				},
-				{
-					title: "Manage",
-					url: "/admin/user/edit",
-					permission: GlobalPermission.WriteProfile,
-				},
-			],
-		},
-		{
-			title: "Governance",
-			url: "/admin/governance",
+			title: "Admin",
+			url: "/admin",
 			icon: AnimatedDashboardIcon,
 			permission: true,
-			items: [
-				{
-					title: "Dashboard",
-					url: "/admin/governance",
-					permission: GlobalPermission.ReadPublishing,
-				},
-				{
-					title: "Your Requests",
-					url: "/admin/governance/requests",
-					permission: GlobalPermission.WritePublishing,
-				},
-			],
-		},
-		{
-			title: "Bits",
-			url: "/admin/bits",
-			icon: AnimatedPackageIcon,
-			permission: true,
-			items: [
-				{
-					title: "Add Bits",
-					url: "/admin/bits/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Add Profile",
-					url: "/admin/profiles/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Edit Bits",
-					url: "/admin/bits/edit",
-					permission: GlobalPermission.WriteBits,
-				},
-			],
-		},
-		{
-			title: "Solutions",
-			url: "/admin/solutions",
-			icon: AnimatedSparklesIcon,
-			permission: true,
-			items: [
-				{
-					title: "Manage Requests",
-					url: "/admin/solutions",
-					permission: GlobalPermission.WriteSolutions,
-				},
-			],
-		},
-		{
-			title: "Sinks",
-			url: "/admin/sinks",
-			icon: AnimatedKeyIcon,
-			permission: true,
-			items: [
-				{
-					title: "Service Tokens",
-					url: "/admin/sinks",
-					permission: GlobalPermission.Admin,
-				},
-			],
+			items: [],
 		},
 	],
 	navDev: [
@@ -926,13 +846,14 @@ function NavMain({
 							.filter(
 								(item) =>
 									item.permission &&
-									typeof item.items?.find((subitem) =>
-										new GlobalPermission(
-											info.data?.permission ?? 0,
-										).hasPermission(
-											subitem.permission ?? GlobalPermission.Admin,
-										),
-									) !== "undefined",
+									(!item.items?.length ||
+										typeof item.items.find((subitem) =>
+											new GlobalPermission(
+												info.data?.permission ?? 0,
+											).hasPermission(
+												subitem.permission ?? GlobalPermission.Admin,
+											),
+										) !== "undefined"),
 							)
 							.map((item) =>
 								item.items && item.items.length > 0 ? (

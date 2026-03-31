@@ -24,6 +24,7 @@ export type OnlineProfile = {
 	hubs?: string[];
 	created_at: string;
 	updated_at: string;
+	deleted_at?: string | null;
 };
 
 export const toLocalProfile = (onlineProfile: OnlineProfile) => ({

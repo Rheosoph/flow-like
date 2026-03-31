@@ -5,7 +5,7 @@ import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.
 import { useRouter } from "next/navigation";
 import { useInvoke } from "../../../hooks";
 import type { IApp, IAppCategory, IMetadata } from "../../../lib";
-import type { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
+import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import { type IBackendState, useBackend } from "../../../state/backend-state";
 import {
 	Alert,
@@ -81,8 +81,26 @@ function useSwimlanes() {
 export function HomeSwimlanes() {
 	const backend = useBackend();
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
+	const latestApps = useInvoke(backend.appState.searchApps, backend.appState, [
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		IAppSearchSort.NewestCreated,
+		undefined,
+		undefined,
+		6,
+	]);
 	const router = useRouter();
 	const { data, error } = useSwimlanes();
+	const recentLibraryApps = (apps.data ?? [])
+		.toSorted(
+			([leftApp], [rightApp]) =>
+				(rightApp.updated_at?.secs_since_epoch ?? 0) -
+				(leftApp.updated_at?.secs_since_epoch ?? 0),
+		)
+		.slice(0, 6);
 
 	if (error) {
 		return (
@@ -131,7 +149,7 @@ export function HomeSwimlanes() {
 
 	return (
 		<div className="flex-1 min-h-0 w-full overflow-auto bg-background flex flex-col items-center">
-			<div className="w-full space-y-8 p-6 max-w-[1800px]">
+			<div className="w-full space-y-8 p-6 max-w-450">
 				{data?.map((swimlane) => (
 					<SwimlaneSection
 						key={swimlane.id}
@@ -140,8 +158,136 @@ export function HomeSwimlanes() {
 						router={router}
 					/>
 				))}
+				<LibraryAppsSection recentLibraryApps={recentLibraryApps} router={router} />
+				<LatestUserAppsSection
+					apps={apps}
+					latestApps={latestApps}
+					router={router}
+				/>
 			</div>
 		</div>
+	);
+}
+
+function LibraryAppsSection({
+	recentLibraryApps,
+	router,
+}: Readonly<{
+	recentLibraryApps: [IApp, IMetadata | undefined][];
+	router: AppRouterInstance;
+}>) {
+	if (recentLibraryApps.length === 0) {
+		return null;
+	}
+
+	return (
+		<section className="space-y-4">
+			<div className="flex items-center justify-between gap-4">
+				<div className="space-y-1">
+					<h2 className="text-2xl font-bold text-foreground">From Your Library</h2>
+					<p className="text-muted-foreground">
+						Jump back into the apps you updated most recently.
+					</p>
+				</div>
+				<a href="/library">
+					<button
+						type="button"
+						className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+					>
+						Open Library
+						<ArrowRight className="w-4 h-4" />
+					</button>
+				</a>
+			</div>
+			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+				{recentLibraryApps.map(([app, metadata]) => (
+					<AppCard
+						key={app.id}
+						isOwned
+						app={app}
+						metadata={metadata}
+						variant="extended"
+						className="w-full h-full"
+						onClick={() => router.push(`/use?id=${app.id}`)}
+						href={`/use?id=${app.id}`}
+					/>
+				))}
+			</div>
+		</section>
+	);
+}
+
+function LatestUserAppsSection({
+	apps,
+	latestApps,
+	router,
+}: Readonly<{
+	apps: IAppQuery;
+	latestApps: IAppQuery;
+	router: AppRouterInstance;
+}>) {
+	if (!latestApps.data?.length) {
+		if (!latestApps.isFetching) {
+			return null;
+		}
+
+		return (
+			<section className="space-y-4">
+				<div className="space-y-1">
+					<h2 className="text-2xl font-bold text-foreground">Latest Community Apps</h2>
+					<p className="text-muted-foreground">
+						Freshly published apps from the community.
+					</p>
+				</div>
+				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+					{Array.from({ length: 6 }).map((_, index) => (
+						<Skeleton key={`latest-app-skeleton-${index}`} className="h-93.75 w-full rounded-lg" />
+					))}
+				</div>
+			</section>
+		);
+	}
+
+	return (
+		<section className="space-y-4">
+			<div className="flex items-center justify-between gap-4">
+				<div className="space-y-1">
+					<h2 className="text-2xl font-bold text-foreground">Latest Community Apps</h2>
+					<p className="text-muted-foreground">
+						Freshly published apps from the community.
+					</p>
+				</div>
+				<a href="/store?sort=newest">
+					<button
+						type="button"
+						className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+					>
+						View All
+						<ArrowRight className="w-4 h-4" />
+					</button>
+				</a>
+			</div>
+			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+				{latestApps.data.map(([app, metadata]) => {
+					const isOwned = apps.data?.some(([ownedApp]) => ownedApp.id === app.id) ?? false;
+
+					return (
+						<AppCard
+							key={app.id}
+							isOwned={isOwned}
+							app={app}
+							metadata={metadata}
+							variant="extended"
+							className="w-full h-full"
+							onClick={() =>
+								router.push(isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`)
+							}
+							href={isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`}
+						/>
+					);
+				})}
+			</div>
+		</section>
 	);
 }
 
@@ -546,7 +692,7 @@ function AppCardLoading({
 	if (!app.data || (app.data?.length ?? 0) <= 0) {
 		return (
 			<Skeleton
-				className={`w-full h-full rounded-lg ${variant === "extended" ? "min-w-72 h-[375px]" : "h-[60px] min-w-1/3 w-full"}`}
+				className={`w-full h-full rounded-lg ${variant === "extended" ? "min-w-72 h-93.75" : "h-15 min-w-1/3 w-full"}`}
 			/>
 		);
 	}
@@ -566,6 +712,7 @@ function AppCardLoading({
 				if (isOwned) return router.push(`/use?id=${data.id}`);
 				return router.push(`/store?id=${data.id}`);
 			}}
+			href={isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`}
 		/>
 	);
 }

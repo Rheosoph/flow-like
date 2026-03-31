@@ -10,6 +10,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Slider,
+	Textarea,
 	humanFileSize,
 } from "@tm9657/flow-like-ui";
 import {
@@ -21,14 +22,51 @@ import {
 } from "@tm9657/flow-like-ui";
 import { Label } from "@tm9657/flow-like-ui";
 import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useState } from "react";
+
+const PROVIDER_OPTIONS = [
+	"Local",
+	"Premium",
+	"Hosted",
+	"hosted:openrouter",
+	"hosted:openai",
+	"hosted:anthropic",
+	"hosted:azure",
+	"hosted:vertex",
+] as const;
+
+function isHostedProviderName(providerName?: null | string) {
+	const normalized = providerName?.trim().toLowerCase() ?? "";
+	return normalized === "hosted" || normalized.startsWith("hosted:");
+}
+
+function getProviderParams(provider: IModelProvider | undefined) {
+	const params = provider?.params;
+	if (!params || typeof params !== "object" || Array.isArray(params)) {
+		return {} as Record<string, unknown>;
+	}
+	return params as Record<string, unknown>;
+}
 
 export function LLMConfiguration({
 	bit,
 	setBit,
-}: { bit: IBit; setBit: Dispatch<SetStateAction<IBit>> }) {
+	isHosted = false,
+}: { bit: IBit; setBit: Dispatch<SetStateAction<IBit>>; isHosted?: boolean }) {
 	const parameters = bit.parameters as ILlmParameters;
+	const providerParams = getProviderParams(parameters?.provider);
+	const isHostedProvider = isHostedProviderName(parameters?.provider?.provider_name);
+	const [providerParamsText, setProviderParamsText] = useState(
+		JSON.stringify(providerParams, null, 2),
+	);
+	const [providerParamsError, setProviderParamsError] = useState<string | null>(null);
 
-	const updateParameter = (key: keyof ILlmParameters, value: any) => {
+	useEffect(() => {
+		setProviderParamsText(JSON.stringify(providerParams, null, 2));
+		setProviderParamsError(null);
+	}, [parameters?.provider]);
+
+	const updateParameter = (key: keyof ILlmParameters, value: unknown) => {
 		setBit((old) => ({
 			...old,
 			parameters: {
@@ -38,10 +76,7 @@ export function LLMConfiguration({
 		}));
 	};
 
-	const updateClassification = (
-		key: keyof IBitModelClassification,
-		value: number,
-	) => {
+	const updateClassification = (key: keyof IBitModelClassification, value: number) => {
 		updateParameter("model_classification", {
 			...parameters.model_classification,
 			[key]: value,
@@ -55,21 +90,47 @@ export function LLMConfiguration({
 		});
 	};
 
+	const updateProviderParams = (nextParams: Record<string, unknown>) => {
+		updateParameter("provider", {
+			...parameters.provider,
+			params: nextParams,
+		});
+	};
+
+	const handleProviderParamsBlur = () => {
+		const trimmed = providerParamsText.trim();
+		if (!trimmed) {
+			updateProviderParams({});
+			setProviderParamsError(null);
+			return;
+		}
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				throw new Error("Provider params must be a JSON object");
+			}
+			updateProviderParams(parsed as Record<string, unknown>);
+			setProviderParamsError(null);
+		} catch (error) {
+			setProviderParamsError(
+				error instanceof Error ? error.message : "Provider params must be valid JSON",
+			);
+		}
+	};
+
 	return (
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader className="w-full">
 					<CardTitle className="flex items-center justify-between w-full">
 						<p>LLM Configuration</p>
-						{bit.size && (
+						{bit.size ? (
 							<small className="font-normal text-muted-foreground">
 								{humanFileSize(bit.size)}
 							</small>
-						)}
+						) : null}
 					</CardTitle>
-					<CardDescription>
-						Configure model context and processing capabilities
-					</CardDescription>
+					<CardDescription>Configure model context and processing capabilities</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
@@ -79,10 +140,7 @@ export function LLMConfiguration({
 							type="number"
 							value={parameters?.context_length || 2048}
 							onChange={(e) =>
-								updateParameter(
-									"context_length",
-									Number.parseInt(e.target.value) || 2048,
-								)
+								updateParameter("context_length", Number.parseInt(e.target.value) || 2048)
 							}
 							placeholder="2048"
 							min="1"
@@ -98,9 +156,7 @@ export function LLMConfiguration({
 			<Card>
 				<CardHeader>
 					<CardTitle>Provider Settings</CardTitle>
-					<CardDescription>
-						Configure the model provider and identification
-					</CardDescription>
+					<CardDescription>Configure the model provider and identification</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -109,15 +165,22 @@ export function LLMConfiguration({
 							<Select
 								value={parameters?.provider?.provider_name || "Local"}
 								onValueChange={(value) =>
-									updateProvider("provider_name", value)
+									updateParameter("provider", {
+										...parameters.provider,
+										provider_name: value,
+										params: getProviderParams(parameters?.provider),
+									})
 								}
 							>
 								<SelectTrigger id="provider-name">
 									<SelectValue placeholder="Select provider" />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="Local">Local</SelectItem>
-									<SelectItem value="Premium">Premium</SelectItem>
+									{PROVIDER_OPTIONS.map((providerName) => (
+										<SelectItem key={providerName} value={providerName}>
+											{providerName}
+										</SelectItem>
+									))}
 								</SelectContent>
 							</Select>
 						</div>
@@ -125,12 +188,9 @@ export function LLMConfiguration({
 						<div className="space-y-2">
 							<Label htmlFor="model-id">Model ID</Label>
 							<Input
-								disabled={parameters?.provider?.provider_name === "Local"}
 								id="model-id"
 								value={parameters?.provider?.model_id || ""}
-								onChange={(e) =>
-									updateProvider("model_id", e.target.value || null)
-								}
+								onChange={(e) => updateProvider("model_id", e.target.value || null)}
 								placeholder="Optional model identifier"
 							/>
 						</div>
@@ -138,36 +198,107 @@ export function LLMConfiguration({
 						<div className="space-y-2">
 							<Label htmlFor="version">Version</Label>
 							<Input
-								disabled={parameters?.provider?.provider_name === "Local"}
 								id="version"
 								value={parameters?.provider?.version || ""}
-								onChange={(e) =>
-									updateProvider("version", e.target.value || null)
-								}
+								onChange={(e) => updateProvider("version", e.target.value || null)}
 								placeholder="Optional version"
 							/>
 						</div>
 					</div>
+
+					{isHostedProvider ? (
+						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+							<div className="space-y-2">
+								<Label htmlFor="provider-endpoint">Endpoint</Label>
+								<Input
+									id="provider-endpoint"
+									value={
+										typeof providerParams.endpoint === "string"
+											? providerParams.endpoint
+											: ""
+									}
+									onChange={(e) =>
+										updateProviderParams({
+											...providerParams,
+											endpoint: e.target.value.trim(),
+										})
+									}
+									placeholder="Optional custom API endpoint"
+								/>
+								<p className="text-xs text-muted-foreground">
+									Hosted providers use provider metadata plus model id and optional
+									endpoint overrides.
+								</p>
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="provider-tier">Tier</Label>
+								<Input
+									id="provider-tier"
+									value={
+										typeof providerParams.tier === "string" ? providerParams.tier : ""
+									}
+									onChange={(e) =>
+										updateProviderParams({
+											...providerParams,
+											tier: e.target.value.trim(),
+										})
+									}
+									placeholder="Optional access tier"
+								/>
+								<p className="text-xs text-muted-foreground">
+									Optional routing or entitlement metadata stored under provider params.
+								</p>
+							</div>
+							<div className="space-y-2 md:col-span-2">
+								<Label htmlFor="provider-params-json">Provider Params JSON</Label>
+								<Textarea
+									id="provider-params-json"
+									rows={8}
+									value={providerParamsText}
+									onChange={(e) => {
+										setProviderParamsText(e.target.value);
+										setProviderParamsError(null);
+									}}
+									onBlur={handleProviderParamsBlur}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Use this for provider-specific options such as headers, deployment
+									names, or routing metadata.
+								</p>
+								{providerParamsError ? (
+									<p className="text-xs text-destructive">{providerParamsError}</p>
+								) : null}
+							</div>
+						</div>
+					) : null}
 				</CardContent>
 			</Card>
 
-			<Card>
-				<CardHeader>
-					<CardTitle>Model Classification</CardTitle>
-					<CardDescription>
-						Rate each capability from 0.0 (poor) to 1.0 (excellent)
-					</CardDescription>
-				</CardHeader>
-				<CardContent className="space-y-4">
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-						{Object.entries(parameters?.model_classification || {}).map(
-							([key, value]) => {
+			{isHosted ? (
+				<Card>
+					<CardHeader>
+						<CardTitle>Model Classification</CardTitle>
+						<CardDescription>
+							Capability scores are automatically computed from the model slug — no manual
+							configuration needed.
+						</CardDescription>
+					</CardHeader>
+				</Card>
+			) : (
+				<Card>
+					<CardHeader>
+						<CardTitle>Model Classification</CardTitle>
+						<CardDescription>
+							Rate each capability from 0.0 (poor) to 1.0 (excellent)
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+							{Object.entries(parameters?.model_classification || {}).map(([key, value]) => {
 								if (typeof value !== "number") return null;
-
 								const label = key
 									.replace(/_/g, " ")
 									.replace(/\b\w/g, (l) => l.toUpperCase());
-
 								return (
 									<div key={key} className="space-y-2">
 										<div className="flex justify-between items-center">
@@ -195,11 +326,11 @@ export function LLMConfiguration({
 										</div>
 									</div>
 								);
-							},
-						)}
-					</div>
-				</CardContent>
-			</Card>
+							})}
+						</div>
+					</CardContent>
+				</Card>
+			)}
 		</div>
 	);
 }

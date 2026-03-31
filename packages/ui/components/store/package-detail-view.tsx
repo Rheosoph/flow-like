@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatDistanceToNow } from "date-fns";
 import {
 	ArrowLeft,
 	BookOpen,
@@ -16,6 +15,7 @@ import {
 	Loader2,
 	Package,
 	RefreshCw,
+	RotateCcw,
 	Send,
 	Settings,
 	Shield,
@@ -25,12 +25,21 @@ import {
 	Trash2,
 	User,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import type { PackageMeta, RegistryEntry } from "../../lib/schema/wasm";
 import { useInvoke } from "../../hooks/use-invoke";
-import { isOwner, isMaintainer } from "../../lib/permission/wasm-package-permission";
+import {
+	isMaintainer,
+	isOwner,
+} from "../../lib/permission/wasm-package-permission";
+import {
+	type PackageMeta,
+	type PackageReview,
+	PackageStatus,
+	type RegistryEntry,
+} from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
+import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -51,7 +60,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-	Separator,
+	RelativeTime,
 	Skeleton,
 	Tabs,
 	TabsContent,
@@ -67,14 +76,6 @@ import { PackageAccessTab } from "./package-access-tab";
 import { PackageMetaTab } from "./package-meta-tab";
 import { PackageReviewsTab } from "./package-reviews-tab";
 import { PackageUsersContainer } from "./package-users-container";
-import type { GenericFetcher } from "../pages/store/store-package-detail";
-
-function safeFormatDistance(dateStr?: string | null): string {
-	if (!dateStr) return "Unknown";
-	const d = new Date(dateStr);
-	if (Number.isNaN(d.getTime())) return "Unknown";
-	return formatDistanceToNow(d, { addSuffix: true });
-}
 
 function PermissionBadge({
 	label,
@@ -129,10 +130,135 @@ function VersionRow({
 				{isLatest && <Badge variant="secondary">Latest</Badge>}
 				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
 			</div>
-			<span className="text-sm text-muted-foreground">
-				{safeFormatDistance(version.publishedAt)}
-			</span>
+			<RelativeTime
+				className="text-sm text-muted-foreground"
+				value={version.publishedAt}
+			/>
 		</div>
+	);
+}
+
+function formatReviewAction(action: PackageReview["action"]) {
+	return action.replaceAll("_", " ");
+}
+
+function getReviewerLabel(review: PackageReview) {
+	return (
+		review.reviewer?.name ?? review.reviewer?.username ?? review.reviewerId
+	);
+}
+
+function PublicationReviewCard({
+	packageId,
+	status,
+	fetcher,
+	auth,
+}: {
+	packageId: string;
+	status: RegistryEntry["status"];
+	fetcher: GenericFetcher;
+	auth?: unknown;
+}) {
+	const backend = useBackend();
+	const profile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const reviewQuery = useQuery({
+		queryKey: ["package-publication-reviews", packageId],
+		queryFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return fetcher<PackageReview[]>(
+				profile.data.hub_profile,
+				`registry/package/${packageId}/publication-reviews`,
+				{ method: "GET" },
+				auth,
+			);
+		},
+		enabled: !!profile.data,
+		retry: false,
+	});
+
+	const reviews = reviewQuery.data ?? [];
+	const statusLabel =
+		status === PackageStatus.PendingReview
+			? "Pending review"
+			: status === PackageStatus.Disabled
+				? "Review outcome available"
+				: "Review history";
+
+	return (
+		<Card className="border-amber-500/30 bg-amber-500/5">
+			<CardHeader>
+				<CardTitle className="text-base flex items-center gap-2">
+					<RefreshCw className="h-4 w-4" />
+					Publication Review
+				</CardTitle>
+				<CardDescription>
+					Current status: {statusLabel}. Submission events and auditor comments
+					appear here for package maintainers.
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="space-y-4">
+				{reviewQuery.isLoading ? (
+					<Skeleton className="h-24 w-full" />
+				) : reviewQuery.isError ? (
+					<p className="text-sm text-destructive">
+						{reviewQuery.error?.message ?? "Failed to load review history"}
+					</p>
+				) : reviews.length === 0 ? (
+					<p className="text-sm text-muted-foreground">
+						No publication review events recorded yet.
+					</p>
+				) : (
+					<div className="space-y-3">
+						{reviews.map((review) => {
+							const reviewerLabel = getReviewerLabel(review);
+							const reviewerInitial = reviewerLabel.charAt(0).toUpperCase();
+
+							return (
+								<div
+									key={review.id}
+									className="rounded-lg border bg-background/80 p-4"
+								>
+									<div className="flex items-start gap-3">
+										<Avatar className="h-9 w-9">
+											{review.reviewer?.avatar ? (
+												<AvatarImage
+													src={review.reviewer.avatar}
+													alt={reviewerLabel}
+												/>
+											) : null}
+											<AvatarFallback>{reviewerInitial}</AvatarFallback>
+										</Avatar>
+										<div className="min-w-0 flex-1 space-y-1">
+											<div className="flex flex-wrap items-center gap-2">
+												<span className="font-medium capitalize">
+													{formatReviewAction(review.action)}
+												</span>
+												<span className="text-sm text-muted-foreground">
+													by {reviewerLabel}
+												</span>
+												<span className="text-sm text-muted-foreground">
+													<RelativeTime value={review.createdAt} />
+												</span>
+											</div>
+											{review.comment && (
+												<p className="text-sm text-muted-foreground">
+													{review.comment}
+												</p>
+											)}
+										</div>
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				)}
+			</CardContent>
+		</Card>
 	);
 }
 
@@ -167,6 +293,12 @@ function PublicationRequestCard({
 			queryClient.invalidateQueries({
 				queryKey: ["registry-package", packageId],
 			});
+			queryClient.invalidateQueries({
+				queryKey: ["admin", "packages"],
+			});
+			queryClient.invalidateQueries({
+				queryKey: ["admin", "packages", "publications"],
+			});
 		},
 	});
 
@@ -186,7 +318,8 @@ function PublicationRequestCard({
 				{requestMutation.isSuccess ? (
 					<div className="flex items-center gap-2 text-sm text-green-600">
 						<Check className="h-4 w-4" />
-						Publication review requested. An admin will review your package.
+						Publication review requested. We will review your package and notify
+						you once a decision has been made.
 					</div>
 				) : (
 					<div className="flex items-center gap-3">
@@ -203,7 +336,8 @@ function PublicationRequestCard({
 						</Button>
 						{requestMutation.isError && (
 							<p className="text-sm text-destructive">
-								{requestMutation.error?.message ?? "Failed to request publication"}
+								{requestMutation.error?.message ??
+									"Failed to request publication"}
 							</p>
 						)}
 					</div>
@@ -263,6 +397,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	} = props;
 
 	const backend = useBackend();
+	const queryClient = useQueryClient();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -273,7 +408,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 	const deleteMutation = useMutation({
 		mutationFn: async () => {
-			if (!profile.data || !pkg?.id || !fetcher) throw new Error("Missing context");
+			if (!profile.data || !pkg?.id || !fetcher)
+				throw new Error("Missing context");
 			return fetcher<{ message: string }>(
 				profile.data.hub_profile,
 				`registry/package/${pkg.id}`,
@@ -285,7 +421,30 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 			toast.success(data.message);
 			onDeleteSuccess?.();
 		},
-		onError: (err: Error) => toast.error(`Failed to delete package: ${err.message}`),
+		onError: (err: Error) =>
+			toast.error(`Failed to delete package: ${err.message}`),
+	});
+
+	const restoreMutation = useMutation({
+		mutationFn: async () => {
+			if (!profile.data || !pkg?.id || !fetcher)
+				throw new Error("Missing context");
+			return fetcher<{ message: string }>(
+				profile.data.hub_profile,
+				`registry/package/${pkg.id}/restore`,
+				{ method: "POST" },
+				auth,
+			);
+		},
+		onSuccess: (data) => {
+			toast.success(data.message);
+			queryClient.invalidateQueries({
+				queryKey: ["registry-package", pkg?.id],
+			});
+			onDeleteSuccess?.();
+		},
+		onError: (err: Error) =>
+			toast.error(`Failed to restore package: ${err.message}`),
 	});
 
 	const { data: meta } = useQuery<PackageMeta | null>({
@@ -325,6 +484,20 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
 	const isInstalled = !!installedVersion;
 	const hasUpdate = isInstalled && installedVersion !== latestVersion;
+	const canManagePublication =
+		currentUserPermission != null &&
+		isMaintainer(currentUserPermission) &&
+		!!fetcher;
+	const showPublicationAudit =
+		canManagePublication &&
+		visibility === "private" &&
+		pkg.status !== PackageStatus.Active;
+	const showPublicationRequest =
+		currentUserPermission != null &&
+		isOwner(currentUserPermission) &&
+		visibility === "private" &&
+		pkg.status === PackageStatus.Active &&
+		!!fetcher;
 
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -357,6 +530,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										<CardTitle className="text-2xl">
 											{meta?.name || manifest.name}
 										</CardTitle>
+										{pkg.status === PackageStatus.Disabled && (
+											<Badge variant="destructive" className="gap-1">
+												Disabled
+											</Badge>
+										)}
 										{pkg.verified && (
 											<Badge variant="secondary" className="gap-1">
 												<Shield className="h-3 w-3" />
@@ -437,7 +615,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</>
 										)}
 									</Button>
-								) : hasAccess === false && visibility === "public_request_access" ? (
+								) : hasAccess === false &&
+									visibility === "public_request_access" ? (
 									<Button onClick={onGetOrBuy} disabled={isRequesting}>
 										{isRequesting ? (
 											"Requesting..."
@@ -479,11 +658,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 				{/* Main Content */}
 				<Tabs defaultValue="overview" className="w-full">
-					<TabsList>
+					<TabsList className="h-auto flex-wrap justify-start">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">
-								Nodes ({pkg.nodes?.length ?? 0})
-							</TabsTrigger>
+							Nodes ({pkg.nodes?.length ?? 0})
+						</TabsTrigger>
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
@@ -526,7 +705,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						{meta?.useCase && (
 							<Card className="border-primary/20 bg-primary/5">
 								<CardContent className="pt-6">
-									<p className="text-sm font-medium text-primary mb-1">Use Case</p>
+									<p className="text-sm font-medium text-primary mb-1">
+										Use Case
+									</p>
 									<div className="text-sm text-muted-foreground">
 										<TextEditor
 											initialContent={meta.useCase}
@@ -548,7 +729,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								</CardHeader>
 								<CardContent className="space-y-4">
 									{(() => {
-										const tags = meta?.tags?.length ? meta.tags : manifest.keywords;
+										const tags = meta?.tags?.length
+											? meta.tags
+											: manifest.keywords;
 										if (!tags.length) return null;
 										return (
 											<div>
@@ -677,7 +860,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
 									<div>
 										<p className="text-2xl font-bold">
-										{(pkg.downloadCount ?? 0).toLocaleString()}
+											{(pkg.downloadCount ?? 0).toLocaleString()}
 										</p>
 										<p className="text-sm text-muted-foreground">
 											Total Downloads
@@ -700,43 +883,101 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												: "N/A"}
 										</p>
 										<p className="text-sm text-muted-foreground">
-											Avg Rating{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
+											Avg Rating
+											{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
 										</p>
 									</div>
 								</div>
 							</CardContent>
 						</Card>
 
-						{/* Request Publication - visible to owners of private packages */}
+						{/* Publication review state for maintainers */}
+						{showPublicationAudit && fetcher && (
+							<PublicationReviewCard
+								packageId={pkg.id}
+								status={pkg.status}
+								fetcher={fetcher}
+								auth={auth}
+							/>
+						)}
+
+						{/* Request Publication - visible to owners of eligible private packages */}
+						{showPublicationRequest && fetcher && (
+							<PublicationRequestCard
+								packageId={pkg.id}
+								fetcher={fetcher}
+								auth={auth}
+							/>
+						)}
+
+						{/* Package Management - visible to owners */}
 						{currentUserPermission != null &&
 							isOwner(currentUserPermission) &&
-							visibility === "private" &&
-							fetcher && (
-								<PublicationRequestCard
-									packageId={pkg.id}
-									fetcher={fetcher}
-									auth={auth}
-								/>
+							fetcher &&
+							pkg.status === PackageStatus.Disabled && (
+								<Card className="border-primary/30">
+									<CardHeader>
+										<CardTitle className="text-base flex items-center gap-2">
+											<RotateCcw className="h-4 w-4" />
+											Package Disabled
+										</CardTitle>
+									</CardHeader>
+									<CardContent className="flex items-center justify-between">
+										<div>
+											<p className="text-sm font-medium">
+												Restore this package
+											</p>
+											<p className="text-sm text-muted-foreground">
+												This package is currently disabled and hidden from
+												search. Restore it to make it active again.
+											</p>
+										</div>
+										<Button
+											size="sm"
+											className="gap-1.5 shrink-0 ml-4"
+											onClick={() => restoreMutation.mutate()}
+											disabled={restoreMutation.isPending}
+										>
+											{restoreMutation.isPending ? (
+												<Loader2 className="h-4 w-4 animate-spin" />
+											) : (
+												<RotateCcw className="h-4 w-4" />
+											)}
+											Restore
+										</Button>
+									</CardContent>
+								</Card>
 							)}
 
-						{/* Delete Package - visible to owners */}
+						{/* Delete Package - visible to owners, only when not already disabled */}
 						{currentUserPermission != null &&
 							isOwner(currentUserPermission) &&
-							fetcher && (
+							fetcher &&
+							pkg.status !== PackageStatus.Disabled && (
 								<Card className="border-destructive/30">
 									<CardHeader>
-										<CardTitle className="text-base text-destructive">Danger Zone</CardTitle>
+										<CardTitle className="text-base text-destructive">
+											Danger Zone
+										</CardTitle>
 									</CardHeader>
 									<CardContent className="flex items-center justify-between">
 										<div>
 											<p className="text-sm font-medium">Delete this package</p>
 											<p className="text-sm text-muted-foreground">
-												The package will be disabled and hidden from search. Existing installs will keep working.
+												The package will be disabled and hidden from search.
+												Existing installs will keep working.
 											</p>
 										</div>
-										<AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+										<AlertDialog
+											open={showDeleteDialog}
+											onOpenChange={setShowDeleteDialog}
+										>
 											<AlertDialogTrigger asChild>
-												<Button variant="destructive" size="sm" className="gap-1.5 shrink-0 ml-4">
+												<Button
+													variant="destructive"
+													size="sm"
+													className="gap-1.5 shrink-0 ml-4"
+												>
 													<Trash2 className="h-4 w-4" />
 													Delete
 												</Button>
@@ -745,9 +986,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												<AlertDialogHeader>
 													<AlertDialogTitle>Delete package?</AlertDialogTitle>
 													<AlertDialogDescription>
-														This will disable <strong>{meta?.name || manifest.name}</strong> and
-														remove it from search results. Existing installs and offline projects
-														will continue to work.
+														This will disable{" "}
+														<strong>{meta?.name || manifest.name}</strong> and
+														remove it from search results. Existing installs and
+														offline projects will continue to work.
 													</AlertDialogDescription>
 												</AlertDialogHeader>
 												<AlertDialogFooter>
@@ -858,7 +1100,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								</div>
 
 								{manifest.permissions?.network?.httpEnabled &&
-									(manifest.permissions?.network?.allowedHosts?.length ?? 0) > 0 && (
+									(manifest.permissions?.network?.allowedHosts?.length ?? 0) >
+										0 && (
 										<div className="mt-4">
 											<p className="text-sm font-medium mb-2">Allowed Hosts</p>
 											<div className="flex flex-wrap gap-1">

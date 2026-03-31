@@ -241,7 +241,7 @@ export function ModelDetailSheet({
 	const meta = displayBit.meta.en;
 	const isInProfile =
 		(currentProfile.data?.hub_profile.bits || []).findIndex(
-			(id) => id.split(":")[1] === displayBit.id,
+			(id) => id.split(":").pop() === displayBit.id,
 		) > -1;
 
 	const params = displayBit.parameters as

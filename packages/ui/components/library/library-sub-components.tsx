@@ -44,10 +44,12 @@ export function SortableFavoriteCard({
 	item,
 	onAppClick,
 	onSettingsClick,
+	appHref,
 }: Readonly<{
 	item: LibraryItem;
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
+	appHref?: (id: string) => string;
 }>) {
 	const {
 		attributes,
@@ -74,6 +76,7 @@ export function SortableFavoriteCard({
 				variant="extended"
 				onClick={() => onAppClick(item.id)}
 				onSettingsClick={() => onSettingsClick(item.id)}
+				href={appHref?.(item.id)}
 				className="w-full"
 			/>
 		</div>
@@ -93,6 +96,7 @@ export function Section({
 	categoryColor,
 	isMobile = false,
 	showSeeAll = false,
+	appHref,
 }: Readonly<{
 	title: string;
 	icon?: React.ReactNode;
@@ -106,6 +110,7 @@ export function Section({
 	categoryColor?: string;
 	isMobile?: boolean;
 	showSeeAll?: boolean;
+	appHref?: (id: string) => string;
 }>) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const cardMin = isMobile ? CARD_MIN_W_MOBILE : CARD_MIN_W_DESKTOP;
@@ -174,6 +179,7 @@ export function Section({
 									onSettingsClick={
 										visibilityMode ? undefined : () => onSettingsClick(meta.id)
 									}
+									href={!visibilityMode ? appHref?.(meta.id) : undefined}
 									className="w-full rounded-none border-0 shadow-none bg-transparent"
 								/>
 							</div>
@@ -245,6 +251,7 @@ export function Section({
 								onSettingsClick={
 									visibilityMode ? undefined : () => onSettingsClick(meta.id)
 								}
+								href={!visibilityMode ? appHref?.(meta.id) : undefined}
 								className="w-full"
 							/>
 						</div>
@@ -280,12 +287,14 @@ export function FavoritesSection({
 	onAppClick,
 	onSettingsClick,
 	onReorder,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
 	onReorder: (orderedIds: string[]) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	const sensors = useSensors(
@@ -340,6 +349,7 @@ export function FavoritesSection({
 						<AppCard
 							key={item.id}
 							isOwned
+							href={appHref?.(item.id)}
 							app={item.app}
 							metadata={item}
 							variant="small"
@@ -370,8 +380,7 @@ export function FavoritesSection({
 									key={item.id}
 									item={item}
 									onAppClick={onAppClick}
-									onSettingsClick={onSettingsClick}
-								/>
+									onSettingsClick={onSettingsClick}								appHref={appHref}								/>
 							))}
 						</div>
 					</SortableContext>
@@ -385,11 +394,13 @@ export function PinnedHero({
 	items,
 	onAppClick,
 	onSettingsClick,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	if (items.length === 0) return null;
@@ -414,6 +425,7 @@ export function PinnedHero({
 						<div key={`pinned-${meta.id}`}>
 							<AppCard
 								isOwned
+								href={appHref?.(meta.id)}
 								app={meta.app}
 								metadata={meta}
 								variant="small"
@@ -438,6 +450,7 @@ export function PinnedHero({
 						>
 							<AppCard
 								isOwned
+								href={appHref?.(meta.id)}
 								app={meta.app}
 								metadata={meta}
 								variant="extended"
@@ -461,6 +474,7 @@ export function SearchResults({
 	visibilityMode,
 	activeAppIds,
 	onToggleVisibility,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
@@ -470,6 +484,7 @@ export function SearchResults({
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
 	onToggleVisibility?: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	const handleClick = (id: string) => {
@@ -513,8 +528,7 @@ export function SearchResults({
 								}`}
 							>
 								<AppCard
-									isOwned
-									app={meta.app}
+									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
 									metadata={meta}
 									variant="small"
 									onClick={() => handleClick(meta.id)}
@@ -546,8 +560,7 @@ export function SearchResults({
 								}`}
 							>
 								<AppCard
-									isOwned
-									app={meta.app}
+									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
 									metadata={meta}
 									variant="extended"
 									onClick={() => handleClick(meta.id)}

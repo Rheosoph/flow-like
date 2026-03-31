@@ -20,7 +20,11 @@ import { get } from "../lib/api";
 import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
-const PUBLIC_PATHS = ["/thirdparty/callback"];
+const PUBLIC_PATHS = [
+	"/thirdparty/callback",
+	"/store",
+	"/store/explore",
+];
 
 const DEFAULT_PROFILE: IProfile = {
 	name: "default",
@@ -174,9 +178,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		};
 	}, [auth]);
 
-	// Push auth context to backend when authenticated
+	// Push auth context to backend (always, so unsigned users can trigger signinRedirect)
 	useEffect(() => {
 		if (!auth) return;
+
+		if (backend instanceof WebBackend) {
+			backend.pushAuthContext(auth);
+		}
 
 		if (!auth.isAuthenticated) {
 			setAuthPushed(false);
@@ -188,11 +196,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			return;
 		}
 
-		if (backend instanceof WebBackend) {
-			console.log("Pushing auth context to backend:", auth);
-			backend.pushAuthContext(auth);
-			setAuthPushed(true);
-		}
+		setAuthPushed(true);
 	}, [
 		auth?.isAuthenticated,
 		auth?.isLoading,

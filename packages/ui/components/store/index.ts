@@ -19,6 +19,7 @@ export {
 
 export { StoreHero } from "./store-hero";
 export { AboutSection } from "./about-section";
+export { AppReviewsSection, type AppReviewsSectionProps } from "./app-reviews-section";
 export { StoreRecommendations } from "./store-recommendations";
 export { StoreEmptyState, HeroSkeleton } from "./store-skeletons";
 export { visibilityLabel, visibilityIcon } from "./visibility";

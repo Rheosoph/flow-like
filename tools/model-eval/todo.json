@@ -179,6 +179,15 @@
     ]
   },
   {
+    "modelSlug": "gemini-3-1-pro-preview",
+    "modelName": "Gemini 3.1 Pro Preview",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
     "modelSlug": "gpt-4o-mini",
     "modelName": "GPT-4o mini",
     "missingFields": [

@@ -114,6 +114,11 @@
     "fs:write-all",
     "fs:read-all",
     "opener:default",
+    "notification:default",
+    "notification:allow-notify",
+    "notification:allow-request-permission",
+    "notification:allow-is-permission-granted",
+    "remote-push:default",
     "flow-like-dexie-blob-offload:default",
     {
       "identifier": "fs:scope",

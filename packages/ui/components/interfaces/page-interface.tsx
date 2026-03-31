@@ -81,11 +81,19 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						return prevSurface;
 					}
 
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+
 					return {
 						...prevSurface,
 						canvasSettings: {
 							...prevSurface.canvasSettings,
-							...message.canvasSettings,
+							...filtered,
 						},
 					};
 				});
@@ -1088,11 +1096,24 @@ function PageInterfaceInner({
 		backgroundImage: runtimeCanvasSettings?.backgroundImage
 			? `url(${runtimeCanvasSettings.backgroundImage})`
 			: undefined,
-		backgroundSize: "cover",
-		backgroundPosition: "center",
+		backgroundSize: runtimeCanvasSettings?.backgroundImage
+			? "cover"
+			: undefined,
+		backgroundPosition: runtimeCanvasSettings?.backgroundImage
+			? "center"
+			: undefined,
 	};
 
 	const customCss = runtimeCanvasSettings?.customCss;
+
+	// Strip canvasSettings from the surface for A2UIRenderer — this component
+	// already handles CSS injection and canvas styling at the outer level.
+	// Passing it again would cause double CSS scoping and inline-style conflicts.
+	const surfaceForRenderer = useMemo(() => {
+		if (!surface) return null;
+		if (!surface.canvasSettings) return surface;
+		return { ...surface, canvasSettings: undefined };
+	}, [surface]);
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
@@ -1110,7 +1131,7 @@ function PageInterfaceInner({
 			>
 				<DataProvider initialData={[]}>
 					<A2UIRenderer
-						surface={surface}
+						surface={surfaceForRenderer!}
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}

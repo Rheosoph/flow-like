@@ -187,9 +187,14 @@ export function useStoreData(
 	const isLoading = app.isLoading || meta.isLoading;
 	const isError = app.isError || meta.isError;
 	const notFound = !isLoading && !isError && !appData;
+	const refetchAppData = useCallback(async () => {
+		await Promise.all([app.refetch?.(), meta.refetch?.(), apps.refetch?.()]);
+	}, [app, meta, apps]);
 
 	return {
 		apps,
+		app,
+		meta,
 		appData,
 		metaData,
 		isMember,
@@ -207,5 +212,6 @@ export function useStoreData(
 		onSettings,
 		onBuy,
 		onJoinOrRequest,
+		refetchAppData,
 	} as const;
 }

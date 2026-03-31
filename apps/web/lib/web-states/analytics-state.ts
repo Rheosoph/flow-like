@@ -1,4 +1,5 @@
 import type {
+	IAnalyticsDashboard,
 	IAnalyticsOverview,
 	IAnalyticsState,
 	IAnalyticsStats,
@@ -11,9 +12,27 @@ export class WebAnalyticsState implements IAnalyticsState {
 
 	async getAnalyticsOverview(appId: string): Promise<IAnalyticsOverview> {
 		return await apiGet<IAnalyticsOverview>(
-			`apps/${appId}/analytics`,
+			`apps/${appId}/analytics/`,
 			this.backend.auth,
 		);
+	}
+
+	async getAnalyticsDashboard(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		period?: "day" | "week" | "month",
+	): Promise<IAnalyticsDashboard> {
+		const params = new URLSearchParams();
+		if (startDate) params.set("start_date", startDate);
+		if (endDate) params.set("end_date", endDate);
+		if (period) params.set("period", period);
+
+		const query = params.toString();
+		const url = query
+			? `apps/${appId}/analytics/dashboard?${query}`
+			: `apps/${appId}/analytics/dashboard`;
+		return await apiGet<IAnalyticsDashboard>(url, this.backend.auth);
 	}
 
 	async getAnalyticsStats(

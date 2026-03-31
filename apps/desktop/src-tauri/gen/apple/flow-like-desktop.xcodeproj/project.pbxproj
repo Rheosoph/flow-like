@@ -390,7 +390,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				DEVELOPMENT_TEAM = "VVT9DYMA6M";
 				ENABLE_BITCODE = NO;
 				EXCLUDED_ARCHS = "";
 				FRAMEWORK_SEARCH_PATHS = (
@@ -419,8 +419,10 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 0.0.6;
-				OTHER_LDFLAGS = "-lz";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app";
+				OTHER_LDFLAGS = (
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
@@ -440,7 +442,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = "flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				DEVELOPMENT_TEAM = "VVT9DYMA6M";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -469,8 +471,10 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 0.0.6;
-				OTHER_LDFLAGS = "-lz";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app";
+				OTHER_LDFLAGS = (
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";

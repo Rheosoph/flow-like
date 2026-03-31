@@ -36,7 +36,6 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../../ui/card";
-import { ScrollArea } from "../../ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -81,6 +80,12 @@ function formatCost(cost: number): string {
 	return `$${cost.toFixed(2)}`;
 }
 
+const analyticsCardClassName =
+	"border-border/60 bg-card/90 shadow-sm shadow-black/5 dark:bg-card/70 dark:shadow-black/20";
+
+const analyticsInsetClassName =
+	"rounded-xl border border-border/50 bg-background/40 dark:bg-background/20";
+
 function StatCard({
 	title,
 	value,
@@ -95,7 +100,7 @@ function StatCard({
 	subtitle?: string;
 }) {
 	return (
-		<Card>
+		<Card className={analyticsCardClassName}>
 			<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 				<CardTitle className="text-sm font-medium">{title}</CardTitle>
 				<Icon className="h-4 w-4 text-muted-foreground" />
@@ -138,14 +143,14 @@ function ExecutionsChart({ data }: { data: IDailyAnalyticsStat[] }) {
 
 	if (data.length === 0) {
 		return (
-			<div className="h-[300px] flex items-center justify-center text-muted-foreground">
+			<div className="flex h-75 items-center justify-center text-muted-foreground">
 				No execution data available
 			</div>
 		);
 	}
 
 	return (
-		<div className="h-[300px]">
+		<div className="h-75">
 			<ResponsiveBar
 				data={chartData}
 				keys={["executions", "uniqueUsers"]}
@@ -210,14 +215,14 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 
 	if (chartData[0].data.length === 0) {
 		return (
-			<div className="h-[300px] flex items-center justify-center text-muted-foreground">
+			<div className="flex h-75 items-center justify-center text-muted-foreground">
 				No latency data available
 			</div>
 		);
 	}
 
 	return (
-		<div className="h-[300px]">
+		<div className="h-75">
 			<ResponsiveLine
 				data={chartData}
 				margin={{ top: 20, right: 20, bottom: 50, left: 60 }}
@@ -274,14 +279,14 @@ function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
 
 	if (chartData.length === 0) {
 		return (
-			<div className="h-[300px] flex items-center justify-center text-muted-foreground">
+			<div className="flex h-75 items-center justify-center text-muted-foreground">
 				No feedback data available
 			</div>
 		);
 	}
 
 	return (
-		<div className="h-[300px]">
+		<div className="h-75">
 			<ResponsiveBar
 				data={chartData}
 				keys={["positive", "negative"]}
@@ -345,14 +350,14 @@ function CostBreakdownChart({ overview }: { overview: IAnalyticsOverview }) {
 
 	if (chartData.length === 0) {
 		return (
-			<div className="h-[250px] flex items-center justify-center text-muted-foreground">
+			<div className="flex h-62.5 items-center justify-center text-muted-foreground">
 				No cost data available
 			</div>
 		);
 	}
 
 	return (
-		<div className="h-[250px]">
+		<div className="h-62.5">
 			<ResponsivePie
 				data={chartData}
 				margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
@@ -444,9 +449,8 @@ export function AnalyticsDashboard() {
 						? undefined
 						: undefined;
 
-			const [overviewData, statsData, feedbackData] = await Promise.all([
-				analyticsState.getAnalyticsOverview(appId),
-				analyticsState.getAnalyticsStats(appId, startDate, endDate),
+			const [dashboardData, feedbackData] = await Promise.all([
+				analyticsState.getAnalyticsDashboard(appId, startDate, endDate),
 				analyticsState.listFeedback(
 					appId,
 					feedbackPage * FEEDBACK_LIMIT,
@@ -456,14 +460,14 @@ export function AnalyticsDashboard() {
 				),
 			]);
 
-			setOverview(overviewData);
-			setDailyStats(statsData.dailyStats);
+			setOverview(dashboardData.overview);
+			setDailyStats(dashboardData.stats.dailyStats);
 			setFeedbackItems(feedbackData.items);
 			setFeedbackTotal(feedbackData.total);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
-					? error.message
+					? `Failed to load analytics: ${error.message}`
 					: "Failed to load analytics data",
 			);
 		} finally {
@@ -503,14 +507,13 @@ export function AnalyticsDashboard() {
 						<Skeleton key={`skeleton-stat-${i}`} className="h-32" />
 					))}
 				</div>
-				<Skeleton className="h-[300px]" />
+				<Skeleton className="h-75" />
 			</div>
 		);
 	}
 
 	return (
-		<ScrollArea className="h-full">
-			<div className="p-6 space-y-6">
+		<div className="space-y-6 text-foreground">
 				{/* Header */}
 				<div className="flex items-center justify-between">
 					<div>
@@ -523,7 +526,7 @@ export function AnalyticsDashboard() {
 						value={dateRange}
 						onValueChange={(v) => setDateRange(v as typeof dateRange)}
 					>
-						<SelectTrigger className="w-32">
+						<SelectTrigger className="w-32 bg-background/70 dark:bg-background/30">
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
@@ -570,7 +573,7 @@ export function AnalyticsDashboard() {
 
 				{/* Secondary Stats */}
 				<div className="grid gap-4 md:grid-cols-3">
-					<Card>
+					<Card className={analyticsCardClassName}>
 						<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 							<CardTitle className="text-sm font-medium">
 								Feedback Sentiment
@@ -593,9 +596,9 @@ export function AnalyticsDashboard() {
 								</div>
 							</div>
 							{overview && overview.totalFeedback > 0 && (
-								<div className="mt-2 w-full bg-muted rounded-full h-2 overflow-hidden">
+								<div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted/80 dark:bg-muted/50">
 									<div
-										className="bg-green-600 h-full"
+										className="h-full bg-green-600 dark:bg-green-500"
 										style={{
 											width: `${(overview.positiveFeedback / overview.totalFeedback) * 100}%`,
 										}}
@@ -605,7 +608,7 @@ export function AnalyticsDashboard() {
 						</CardContent>
 					</Card>
 
-					<Card>
+					<Card className={analyticsCardClassName}>
 						<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 							<CardTitle className="text-sm font-medium">
 								Success Rate
@@ -631,7 +634,7 @@ export function AnalyticsDashboard() {
 						</CardContent>
 					</Card>
 
-					<Card>
+					<Card className={analyticsCardClassName}>
 						<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 							<CardTitle className="text-sm font-medium">AI Costs</CardTitle>
 							<BrainIcon className="h-4 w-4 text-muted-foreground" />
@@ -655,7 +658,7 @@ export function AnalyticsDashboard() {
 
 				{/* Charts */}
 				<Tabs defaultValue="executions" className="space-y-4">
-					<TabsList>
+					<TabsList className="bg-muted/80 dark:bg-muted/40">
 						<TabsTrigger value="executions">Executions</TabsTrigger>
 						<TabsTrigger value="latency">Latency</TabsTrigger>
 						<TabsTrigger value="feedback">Feedback</TabsTrigger>
@@ -663,56 +666,56 @@ export function AnalyticsDashboard() {
 					</TabsList>
 
 					<TabsContent value="executions">
-						<Card>
+						<Card className={analyticsCardClassName}>
 							<CardHeader>
 								<CardTitle>Executions Over Time</CardTitle>
 								<CardDescription>
 									Daily executions and unique users
 								</CardDescription>
 							</CardHeader>
-							<CardContent>
+							<CardContent className={analyticsInsetClassName}>
 								<ExecutionsChart data={dailyStats} />
 							</CardContent>
 						</Card>
 					</TabsContent>
 
 					<TabsContent value="latency">
-						<Card>
+						<Card className={analyticsCardClassName}>
 							<CardHeader>
 								<CardTitle>Average Latency</CardTitle>
 								<CardDescription>
 									Response time trends over the selected period
 								</CardDescription>
 							</CardHeader>
-							<CardContent>
+							<CardContent className={analyticsInsetClassName}>
 								<LatencyChart data={dailyStats} />
 							</CardContent>
 						</Card>
 					</TabsContent>
 
 					<TabsContent value="feedback">
-						<Card>
+						<Card className={analyticsCardClassName}>
 							<CardHeader>
 								<CardTitle>Feedback Over Time</CardTitle>
 								<CardDescription>
 									Positive vs negative feedback distribution
 								</CardDescription>
 							</CardHeader>
-							<CardContent>
+							<CardContent className={analyticsInsetClassName}>
 								<FeedbackChart data={dailyStats} />
 							</CardContent>
 						</Card>
 					</TabsContent>
 
 					<TabsContent value="costs">
-						<Card>
+						<Card className={analyticsCardClassName}>
 							<CardHeader>
 								<CardTitle>Cost Breakdown</CardTitle>
 								<CardDescription>
 									LLM and embedding costs for the selected period
 								</CardDescription>
 							</CardHeader>
-							<CardContent>
+							<CardContent className={analyticsInsetClassName}>
 								{overview && <CostBreakdownChart overview={overview} />}
 							</CardContent>
 						</Card>
@@ -737,7 +740,7 @@ export function AnalyticsDashboard() {
 								setFeedbackPage(0);
 							}}
 						>
-							<SelectTrigger className="w-32">
+							<SelectTrigger className="w-32 bg-background/70 dark:bg-background/30">
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
@@ -749,7 +752,7 @@ export function AnalyticsDashboard() {
 					</div>
 
 					{feedbackItems.length === 0 ? (
-						<Card>
+						<Card className={analyticsCardClassName}>
 							<CardContent className="flex flex-col items-center justify-center py-12">
 								<MessageSquareIcon className="h-12 w-12 text-muted-foreground mb-4" />
 								<p className="text-muted-foreground">No feedback yet</p>
@@ -757,7 +760,7 @@ export function AnalyticsDashboard() {
 						</Card>
 					) : (
 						<>
-							<Card>
+							<Card className={analyticsCardClassName}>
 								<Table>
 									<TableHeader>
 										<TableRow>
@@ -816,7 +819,6 @@ export function AnalyticsDashboard() {
 						</>
 					)}
 				</div>
-			</div>
-		</ScrollArea>
+		</div>
 	);
 }

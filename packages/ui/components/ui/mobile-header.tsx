@@ -102,6 +102,15 @@ export function useMobileHeader(
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, deps);
 
+	// Always clean up on unmount (covers update/set calls without initial controls)
+	useEffect(() => {
+		return () => {
+			if (idRef.current) {
+				unregister(idRef.current);
+			}
+		};
+	}, [unregister]);
+
 	const set = useCallback(
 		(next: MobileHeaderControls) => {
 			const id = ensureId();

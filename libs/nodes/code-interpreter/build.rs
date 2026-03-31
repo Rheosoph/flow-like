@@ -21,6 +21,8 @@
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(has_bundled_python)");
 
+    flow_like_catalog_build_helper::generate("src");
+
     #[cfg(feature = "bundled-python")]
     bundled_python::compile();
 }

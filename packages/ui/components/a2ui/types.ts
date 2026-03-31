@@ -1458,6 +1458,7 @@ export interface SurfaceComponent {
 	id: string;
 	style?: Style;
 	component: A2UIComponent;
+	eventRelevant?: boolean;
 }
 
 export interface Surface {

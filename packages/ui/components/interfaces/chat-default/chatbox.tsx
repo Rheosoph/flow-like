@@ -95,7 +95,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 		const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 		const audioChunksRef = useRef<Blob[]>([]);
-		const recognitionRef = useRef<SpeechRecognition | null>(null);
+		const recognitionRef = useRef<any>(null);
 
 		useImperativeHandle(
 			ref,
@@ -259,7 +259,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			if (!audioInput) return;
 			const SpeechRecognitionApi =
 				typeof window !== "undefined"
-					? window.SpeechRecognition || window.webkitSpeechRecognition
+					? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
 					: null;
 			if (!SpeechRecognitionApi) return;
 
@@ -270,7 +270,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 			let finalTranscript = "";
 
-			recognition.onresult = (event: SpeechRecognitionEvent) => {
+			recognition.onresult = (event: any) => {
 				let interim = "";
 				for (let i = event.resultIndex; i < event.results.length; i++) {
 					const result = event.results[i];
@@ -745,8 +745,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								{/* Voice-to-text transcription button */}
 								{audioInput &&
 									typeof window !== "undefined" &&
-									(window.SpeechRecognition ||
-										window.webkitSpeechRecognition) && (
+									((window as any).SpeechRecognition ||
+										(window as any).webkitSpeechRecognition) && (
 										<Button
 											type="button"
 											size="sm"

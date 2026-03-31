@@ -47,6 +47,7 @@ export class WebRegistryState implements IRegistryState {
 		if (filters?.author) params.set("author", filters.author);
 		if (filters?.verifiedOnly) params.set("verified_only", "true");
 		if (filters?.includeDeprecated) params.set("include_deprecated", "true");
+		if (filters?.includeDisabled) params.set("include_disabled", "true");
 		if (filters?.sortBy) params.set("sort_by", filters.sortBy);
 		if (filters?.sortDesc !== undefined) params.set("sort_desc", String(filters.sortDesc));
 		if (filters?.offset) params.set("offset", String(filters.offset));

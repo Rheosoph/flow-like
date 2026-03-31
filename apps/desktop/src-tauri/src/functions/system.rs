@@ -95,7 +95,9 @@ for (let i = 0; i < apps.count; i++) {
         .env("FILE_PATH", file_path)
         .output()
     {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).to_string(),
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
         _ => return Vec::new(),
     };
 
@@ -113,11 +115,17 @@ fn get_apps_for_path(file_path: &str) -> Vec<AppEntry> {
         return Vec::new();
     };
 
-    let assoc_line = run_command("cmd", &["/C", "assoc", &extension])
-        .and_then(|s| s.lines().find(|line| line.contains('=')) .map(|line| line.to_string()));
+    let assoc_line = run_command("cmd", &["/C", "assoc", &extension]).and_then(|s| {
+        s.lines()
+            .find(|line| line.contains('='))
+            .map(|line| line.to_string())
+    });
 
     let prog_id = assoc_line
-        .and_then(|line| line.split_once('=').map(|(_, prog)| prog.trim().to_string()))
+        .and_then(|line| {
+            line.split_once('=')
+                .map(|(_, prog)| prog.trim().to_string())
+        })
         .unwrap_or_default();
 
     let default_command = if prog_id.is_empty() {
@@ -154,7 +162,10 @@ fn get_apps_for_path(file_path: &str) -> Vec<AppEntry> {
         }
     }
 
-    let open_with_key = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{}\OpenWithList", extension);
+    let open_with_key = format!(
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{}\OpenWithList",
+        extension
+    );
     if let Some(output) = run_command("reg", &["query", &open_with_key]) {
         for line in output.lines() {
             if !line.contains("REG_SZ") {
@@ -297,7 +308,9 @@ pub fn open_file_with_app(file_path: String, app_path: String) -> Result<(), Tau
         if run_status("open", &["-a", &app_path, &file_path]) {
             return Ok(());
         }
-        return Err(TauriFunctionError::new("Failed to open file with selected app"));
+        return Err(TauriFunctionError::new(
+            "Failed to open file with selected app",
+        ));
     }
 
     #[cfg(target_os = "windows")]
@@ -305,7 +318,9 @@ pub fn open_file_with_app(file_path: String, app_path: String) -> Result<(), Tau
         if run_status("cmd", &["/C", "start", "", &app_path, &file_path]) {
             return Ok(());
         }
-        return Err(TauriFunctionError::new("Failed to open file with selected app"));
+        return Err(TauriFunctionError::new(
+            "Failed to open file with selected app",
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -313,12 +328,16 @@ pub fn open_file_with_app(file_path: String, app_path: String) -> Result<(), Tau
         if run_status(&app_path, &[&file_path]) {
             return Ok(());
         }
-        return Err(TauriFunctionError::new("Failed to open file with selected app"));
+        return Err(TauriFunctionError::new(
+            "Failed to open file with selected app",
+        ));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (file_path, app_path);
-        Err(TauriFunctionError::new("Open with selected app is not supported on this platform"))
+        Err(TauriFunctionError::new(
+            "Open with selected app is not supported on this platform",
+        ))
     }
 }

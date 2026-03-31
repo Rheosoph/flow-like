@@ -11,6 +11,26 @@ if TYPE_CHECKING:
         Bit, CachedEmbeddingModel, ChatMessage, FlowImage,
     )
 
+_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_B64_INV = {c: i for i, c in enumerate(_B64)}
+
+
+def _b64decode(s: str) -> str:
+    s = s.rstrip("=")
+    out = bytearray()
+    buf = 0
+    bits = 0
+    for ch in s:
+        val = _B64_INV.get(ch)
+        if val is None:
+            continue
+        buf = (buf << 6) | val
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            out.append((buf >> bits) & 0xFF)
+    return out.decode("utf-8")
+
 
 class Context:
     """Execution context providing typed input access, output setting, logging, and streaming."""
@@ -183,7 +203,13 @@ class Context:
         result = self._host.http_request(method, url, json.dumps(headers or {}), body)
         if result is None:
             return None
-        return json.loads(result)
+        parsed = json.loads(result)
+        if isinstance(parsed, dict) and "body_base64" in parsed:
+            try:
+                parsed["body"] = _b64decode(parsed["body_base64"])
+            except Exception:
+                parsed["body"] = ""
+        return parsed
 
     def http_get(self, url: str, headers: dict[str, str] | None = None) -> dict | None:
         return self.http_request(0, url, headers)

@@ -289,7 +289,7 @@ const FlowRunsComponent = ({
 							<small className="text-muted-foreground leading-none">
 								{formatRelativeTime(
 									{
-										nanos_since_epoch: run.start * 1000,
+										nanos_since_epoch: (run.start % 1_000_000) * 1000,
 										secs_since_epoch: Math.floor(run.start / 1_000_000),
 									},
 									"narrow",

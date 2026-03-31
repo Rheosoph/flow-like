@@ -37,14 +37,16 @@ export interface IDatabaseState {
 		column: string,
 		indexType: IIndexType,
 		optimize?: boolean,
+		userScoped?: boolean,
 	): Promise<void>;
-	addItems(appId: string, tableName: string, items: any[]): Promise<void>;
-	removeItems(appId: string, tableName: string, query: string): Promise<void>;
+	addItems(appId: string, tableName: string, items: any[], userScoped?: boolean): Promise<void>;
+	removeItems(appId: string, tableName: string, query: string, userScoped?: boolean): Promise<void>;
 	listItems(
 		appId: string,
 		tableName: string,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]>;
 	queryItems(
 		appId: string,
@@ -52,37 +54,44 @@ export interface IDatabaseState {
 		query: IQueryTablePayload,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]>;
-	countItems(appId: string, tableName: string): Promise<number>;
-	getSchema(appId: string, tableName: string): Promise<any>;
-	getIndices(appId: string, tableName: string): Promise<IIndexConfig[]>;
-	dropIndex(appId: string, tableName: string, indexName: string): Promise<void>;
+	countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number>;
+	getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any>;
+	getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]>;
+	dropIndex(appId: string, tableName: string, indexName: string, userScoped?: boolean): Promise<void>;
 	listTables(appId: string): Promise<string[]>;
+	listTablesUser(appId: string): Promise<string[]>;
 	optimize(
 		appId: string,
 		tableName: string,
 		keepVersions?: boolean,
+		userScoped?: boolean,
 	): Promise<void>;
 	updateItem(
 		appId: string,
 		tableName: string,
 		filter: string,
 		updates: Record<string, any>,
+		userScoped?: boolean,
 	): Promise<void>;
 	dropColumns(
 		appId: string,
 		tableName: string,
 		columns: string[],
+		userScoped?: boolean,
 	): Promise<void>;
 	addColumn(
 		appId: string,
 		tableName: string,
 		column: IAddColumnPayload,
+		userScoped?: boolean,
 	): Promise<void>;
 	alterColumn(
 		appId: string,
 		tableName: string,
 		column: string,
 		nullable: boolean,
+		userScoped?: boolean,
 	): Promise<void>;
 }

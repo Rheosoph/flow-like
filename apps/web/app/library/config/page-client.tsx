@@ -1,5 +1,6 @@
 "use client";
 import {
+	AppReviewsSection,
 	Badge,
 	Button,
 	Card,
@@ -205,6 +206,14 @@ export default function LibraryConfigPage() {
 			icon: <RotateCcwIcon className="w-4 h-4" />,
 		});
 	}, [app.data, metadata.data]);
+
+	const refreshReviews = useCallback(async () => {
+		const result = await app.refetch();
+		if (result.data) {
+			setLocalApp(result.data);
+		}
+		await invalidate(backend.appState.getApps, []);
+	}, [app, backend.appState, invalidate]);
 
 	async function deleteApp() {
 		await backend.appState.deleteApp(id ?? "");
@@ -1012,6 +1021,8 @@ export default function LibraryConfigPage() {
 					</div>
 				</CardContent>
 			</Card>
+
+			<AppReviewsSection appId={id ?? ""} onReviewChanged={refreshReviews} />
 
 			{/* Danger Zone */}
 			{canEdit && (

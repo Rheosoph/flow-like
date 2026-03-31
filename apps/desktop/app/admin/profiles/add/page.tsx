@@ -8,6 +8,7 @@ import {
 	IConnectionMode,
 	type IProfile,
 	useBackend,
+	useInvoke,
 } from "@tm9657/flow-like-ui";
 import { Button } from "@tm9657/flow-like-ui";
 import { Input } from "@tm9657/flow-like-ui";
@@ -31,10 +32,12 @@ import { Badge } from "@tm9657/flow-like-ui";
 import { Avatar, AvatarFallback, AvatarImage } from "@tm9657/flow-like-ui";
 import { Separator } from "@tm9657/flow-like-ui";
 import { Image, Monitor, Plus, Save, Upload, User, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useApi } from "../../../../lib/useApi";
 
-const DEFAULT_PROFILE: IProfile = {
+const createDefaultProfile = (): IProfile => ({
 	apps: [],
 	bits: [],
 	created: new Date().toISOString(),
@@ -51,10 +54,14 @@ const DEFAULT_PROFILE: IProfile = {
 	updated: new Date().toISOString(),
 	tags: [],
 	thumbnail: null,
-};
+});
 
 export default function AddProfilePage() {
-	const [profile, setProfile] = useState<IProfile>(DEFAULT_PROFILE);
+	const router = useRouter();
+	const searchParams = useSearchParams();
+	const templateId = searchParams.get("id");
+	const isEditing = templateId !== null;
+	const [profile, setProfile] = useState<IProfile>(createDefaultProfile());
 	const [newTag, setNewTag] = useState("");
 	const [newInterest, setNewInterest] = useState("");
 	const [newHub, setNewHub] = useState("");
@@ -62,6 +69,11 @@ export default function AddProfilePage() {
 	const iconInputRef = useRef<HTMLInputElement>(null);
 	const thumbnailInputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const authProfile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+	);
 
 	const bits = useApi<IBit[]>(
 		"POST",
@@ -76,6 +88,25 @@ export default function AddProfilePage() {
 		},
 		true,
 	);
+
+	const templates = useApi<IProfile[]>("GET", "info/profiles", undefined, isEditing);
+
+	useEffect(() => {
+		if (!templateId || !templates.data) return;
+		const template = templates.data.find((item) => item.id === templateId);
+		if (!template) return;
+		setProfile({
+			...template,
+			apps: template.apps ?? [],
+			bits: template.bits ?? [],
+			hubs: template.hubs ?? [],
+			interests: template.interests ?? [],
+			tags: template.tags ?? [],
+			settings: template.settings ?? {
+				connection_mode: IConnectionMode.Simplebezier,
+			},
+		});
+	}, [templateId, templates.data]);
 
 	const updateProfile = (field: keyof IProfile, value: any) => {
 		setProfile((prev) => ({
@@ -160,14 +191,25 @@ export default function AddProfilePage() {
 	};
 
 	const handleSave = useCallback(async () => {
-		await backend.apiState.put(
-			profile,
-			`admin/profiles/${profile.id}`,
-			profile,
-		);
+		if (!authProfile.data) {
+			toast.error("Profile not loaded");
+			return;
+		}
 
-		setProfile(DEFAULT_PROFILE);
-	}, [profile, backend.apiState]);
+		try {
+			const targetId = templateId ?? profile.id;
+			await backend.apiState.put(authProfile.data, `admin/profiles/${targetId}`, profile);
+			toast.success(isEditing ? "Profile template updated" : "Profile template created");
+			if (isEditing) {
+				router.push("/admin/user/edit");
+				return;
+			}
+			setProfile(createDefaultProfile());
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			toast.error(`Failed to save template: ${message}`);
+		}
+	}, [authProfile.data, backend.apiState, isEditing, profile, router, templateId]);
 
 	const handleImageUpload = useCallback(
 		async (
@@ -175,11 +217,15 @@ export default function AddProfilePage() {
 			type: "icon" | "thumbnail",
 		) => {
 			const file = event.target.files?.[0];
+			if (!authProfile.data) {
+				toast.error("Profile not loaded");
+				return;
+			}
 			if (file && file.type === "image/webp") {
 				const signedUrl = await backend.apiState.get<{
 					url: string;
 					final_url?: string;
-				}>(profile, "admin/profiles/media");
+				}>(authProfile.data, "admin/profiles/media");
 				if (signedUrl?.url) {
 					const response = await fetch(signedUrl.url, {
 						method: "PUT",
@@ -206,15 +252,17 @@ export default function AddProfilePage() {
 				}
 			}
 		},
-		[backend.apiState, profile],
+		[authProfile.data, backend.apiState],
 	);
 
 	return (
 		<div className="container mx-auto p-6 max-w-4xl">
 			<div className="mb-6">
-				<h1 className="text-3xl font-bold">Create New Profile</h1>
+				<h1 className="text-3xl font-bold">
+					{isEditing ? "Edit Profile Template" : "Create New Profile Template"}
+				</h1>
 				<p className="text-muted-foreground">
-					Configure a new user profile with custom settings and preferences.
+					Configure reusable profile templates, including default bits, hubs, and metadata.
 				</p>
 			</div>
 
@@ -626,10 +674,12 @@ export default function AddProfilePage() {
 
 			{/* Actions */}
 			<div className="flex justify-end gap-2">
-				<Button variant="outline">Cancel</Button>
+				<Button variant="outline" onClick={() => router.push("/admin/user/edit")}>
+					Cancel
+				</Button>
 				<Button onClick={handleSave} className="flex items-center gap-2">
 					<Save className="h-4 w-4" />
-					Create Profile
+					{isEditing ? "Update Template" : "Create Template"}
 				</Button>
 			</div>
 		</div>

@@ -2,6 +2,7 @@
 
 import {
 	AboutSection,
+	AppReviewsSection,
 	HeroSkeleton,
 	StoreEmptyState,
 	StoreHero,
@@ -38,6 +39,7 @@ export default function Page() {
 		onSettings,
 		onBuy,
 		onJoinOrRequest,
+		refetchAppData,
 	} = useStoreData(id, router, EVENT_CONFIG);
 
 	useEffect(() => {
@@ -130,6 +132,8 @@ export default function Page() {
 						/>
 					</div>
 				)}
+
+				<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
 
 				<StoreRecommendations />
 			</div>

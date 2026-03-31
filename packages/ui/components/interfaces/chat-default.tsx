@@ -1,6 +1,7 @@
 "use client";
 
 import { createId } from "@paralleldrive/cuid2";
+import * as Sentry from "@sentry/nextjs";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChevronDownIcon,
@@ -63,6 +64,22 @@ import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
+
+function extractErrorMessage(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (typeof err === "string") return err;
+	if (err && typeof err === "object") {
+		const obj = err as Record<string, unknown>;
+		if (typeof obj.message === "string") return obj.message;
+		if (typeof obj.error === "string") return obj.error;
+		try {
+			return JSON.stringify(err);
+		} catch {
+			return Object.prototype.toString.call(err);
+		}
+	}
+	return String(err);
+}
 
 async function prepareAttachments(
 	filesAttached: File[] | undefined,
@@ -386,10 +403,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	// Keep interaction cache in sync with current session
 	useEffect(() => {
 		if (sessionIdParameter) {
-			interactionsBySession.current.set(
-				sessionIdParameter,
-				activeInteractions,
-			);
+			interactionsBySession.current.set(sessionIdParameter, activeInteractions);
 		}
 	}, [sessionIdParameter, activeInteractions]);
 
@@ -478,7 +492,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			} catch (err) {
 				console.error("[Chat] Failed to respond to interaction:", err);
-				toast.error("Failed to submit response. Please try again.");
+				Sentry.captureException(err, {
+					tags: { component: "chat", action: "respond_to_interaction" },
+					extra: { interactionId, appId },
+				});
+				toast.error(`Failed to submit response: ${extractErrorMessage(err)}`);
 			}
 		},
 		[backend.profile],
@@ -577,8 +595,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	// Cleanup active subscriptions and restore cached interactions on session change
 	useEffect(() => {
-		const cached =
-			interactionsBySession.current.get(sessionIdParameter) ?? [];
+		const cached = interactionsBySession.current.get(sessionIdParameter) ?? [];
 		setActiveInteractions(cached);
 		processedCompletedStreams.current.clear();
 		return () => {
@@ -594,6 +611,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [sessionIdParameter, executionEngine]);
 
 	const messagesQuery = useLiveQuery(async () => {
+		if (!sessionIdParameter) return [];
 		const rawMessages = await chatDb.messages
 			.where("sessionId")
 			.equals(sessionIdParameter)
@@ -610,14 +628,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		messagesRef.current = messages;
 	}, [messages]);
 
-	const localState = useLiveQuery(
-		() =>
-			chatDb.localStage
-				.where("[sessionId+eventId]")
-				.equals([sessionIdParameter, event.id])
-				.first(),
-		[sessionIdParameter, event.id],
-	);
+	const localState = useLiveQuery(() => {
+		if (!sessionIdParameter) return undefined;
+		return chatDb.localStage
+			.where("[sessionId+eventId]")
+			.equals([sessionIdParameter, event.id])
+			.first();
+	}, [sessionIdParameter, event.id]);
 
 	const globalState = useLiveQuery(
 		() =>
@@ -1273,7 +1290,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				true, // skipConsentCheck
 			).catch((err) => {
 				console.error("Failed to retry chat message after OAuth:", err);
-				toast.error("Failed to send message. Please try again.");
+				Sentry.captureException(err, {
+					tags: { component: "chat", action: "oauth_retry_send" },
+					extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+				});
+				toast.error(`Failed to send message: ${extractErrorMessage(err)}`);
 			});
 		};
 
@@ -1317,7 +1338,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					// Already shown a toast in executeChatMessage guard
 				} else if (!(error as any)?.isOAuthError) {
 					console.error("Error sending message:", error);
-					toast.error("Failed to send message. Please try again.");
+					Sentry.captureException(error, {
+						tags: { component: "chat", action: "send_message" },
+						extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+					});
+					toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
 				}
 			} finally {
 				setIsSendingFromWelcome(false);
@@ -1332,7 +1357,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				...updates,
 			});
 
-			if (updates.rating !== undefined || updates.ratingSettings !== undefined) {
+			if (
+				updates.rating !== undefined ||
+				updates.ratingSettings !== undefined
+			) {
 				const msg = await chatDb.messages.get(messageId);
 				if (msg && msg.rating !== undefined && msg.rating !== 0) {
 					const feedbackRating = msg.rating > 0 ? 5 : 1;
@@ -1345,7 +1373,12 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								rating: feedbackRating,
 								comment: msg.ratingSettings?.comment ?? "",
 								history: msg.ratingSettings?.includeChatHistory
-									? (await chatDb.messages.where("sessionId").equals(msg.sessionId).toArray()).map(m => m.inner)
+									? (
+											await chatDb.messages
+												.where("sessionId")
+												.equals(msg.sessionId)
+												.toArray()
+										).map((m) => m.inner)
 									: undefined,
 							},
 						);
@@ -1365,11 +1398,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	// Show verification dialog when prefilled message is present and no history yet
 	useEffect(() => {
-		if (
-			prefilledMessage &&
-			showWelcome &&
-			!prefilledConsumed.current
-		) {
+		if (prefilledMessage && showWelcome && !prefilledConsumed.current) {
 			setShowPrefilledConfirm(true);
 		}
 	}, [prefilledMessage, showWelcome]);
@@ -1416,14 +1445,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					onRespondToInteraction={handleRespondToInteraction}
 				/>
 			)}
-			<AlertDialog open={showPrefilledConfirm} onOpenChange={(open) => {
-				if (!open) handlePrefilledCancel();
-			}}>
+			<AlertDialog
+				open={showPrefilledConfirm}
+				onOpenChange={(open) => {
+					if (!open) handlePrefilledCancel();
+				}}
+			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>Send prefilled message?</AlertDialogTitle>
 						<AlertDialogDescription>
-							This chat was opened with a prefilled message. Please review it before sending:
+							This chat was opened with a prefilled message. Please review it
+							before sending:
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto break-words whitespace-pre-wrap">
@@ -1431,7 +1464,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					</div>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction onClick={handlePrefilledConfirm}>Send</AlertDialogAction>
+						<AlertDialogAction onClick={handlePrefilledConfirm}>
+							Send
+						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>

@@ -494,6 +494,33 @@ export function useOnAction() {
 	return context?.onAction;
 }
 
+/**
+ * Hook to access element values and components for building _input_values maps.
+ * Used by WidgetActionHandler to collect event-relevant input values.
+ */
+export function useEventRelevantValues() {
+	const context = useContext(ActionContext);
+	const getElementValues = context?.getElementValues;
+	const components = context?.components;
+	const surfaceId = context?.surfaceId;
+
+	const collectInputValues = useCallback((): Record<string, unknown> => {
+		if (!getElementValues || !components || !surfaceId) return {};
+		const storedValues = getElementValues();
+		const inputValues: Record<string, unknown> = {};
+		for (const [compId, comp] of Object.entries(components)) {
+			if (!comp.eventRelevant) continue;
+			const elementId = `${surfaceId}/${compId}`;
+			if (storedValues[elementId] !== undefined) {
+				inputValues[compId] = storedValues[elementId];
+			}
+		}
+		return inputValues;
+	}, [getElementValues, components, surfaceId]);
+
+	return collectInputValues;
+}
+
 export function useActions() {
 	const context = useContext(ActionContext);
 	if (!context) {
@@ -905,6 +932,18 @@ export function useExecuteAction() {
 								surfaceId || "",
 							);
 
+							// Build _input_values from event-relevant components
+							const inputValues: Record<string, unknown> = {};
+							if (components && surfaceId) {
+								for (const [compId, comp] of Object.entries(components)) {
+									if (!comp.eventRelevant) continue;
+									const elementId = `${surfaceId}/${compId}`;
+									if (storedValues[elementId] !== undefined) {
+										inputValues[compId] = storedValues[elementId];
+									}
+								}
+							}
+
 							const currentPageId = pathname || "default";
 
 							// Extract query params from the current URL
@@ -922,6 +961,7 @@ export function useExecuteAction() {
 								id: nodeId,
 								payload: {
 									_elements: mergedElements,
+									_input_values: inputValues,
 									_route:
 										typeof window !== "undefined"
 											? window.location.pathname
@@ -1034,10 +1074,23 @@ export function useExecuteAction() {
 								surfaceId || "",
 							);
 
+							// Build _input_values from event-relevant components
+							const inputValues: Record<string, unknown> = {};
+							if (components && surfaceId) {
+								for (const [compId, comp] of Object.entries(components)) {
+									if (!comp.eventRelevant) continue;
+									const elementId = `${surfaceId}/${compId}`;
+									if (storedValues[elementId] !== undefined) {
+										inputValues[compId] = storedValues[elementId];
+									}
+								}
+							}
+
 							const payload = {
 								id: nodeId,
 								payload: {
 									_elements: mergedElements,
+									_input_values: inputValues,
 									_widget_instance_id: widgetInstance?.instanceId ?? "",
 									_action_id: actionId,
 									_action_context: context,

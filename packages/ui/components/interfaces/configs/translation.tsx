@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */
 const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
+	api: "http",
 	http: "http",
 	webhook: "webhook",
 	cron: "cron",
@@ -42,30 +43,46 @@ const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
  * Determines sink availability based on hub configuration and local capabilities.
  * If hub has supported_sinks, use that to determine remote availability.
  * Local availability is always true if canExecuteLocally is true.
+ * When hub hasn't loaded yet, falls back to the static config from EVENT_CONFIG.
  */
 function computeSinkAvailability(
 	eventType: string,
 	hub?: IHub | null,
 	canExecuteLocally?: boolean,
+	staticConfig?: { availability: "local" | "remote" | "both"; description?: string } | null,
 ): { availability: "local" | "remote" | "both"; description?: string } | null {
 	const sinkType = EVENT_TYPE_TO_SINK_MAP[eventType];
-	if (!sinkType) return null;
-
-	const supportsRemote = hub?.supported_sinks?.[sinkType] === true;
 	const supportsLocal = canExecuteLocally ?? false;
 
-	if (supportsRemote && supportsLocal) {
-		return {
-			availability: "both",
-			description: "Can run locally or on remote server",
-		};
+	// If hub config is available, use dynamic computation
+	if (hub) {
+		const supportsRemote =
+			sinkType != null && hub.supported_sinks?.[sinkType] === true;
+
+		if (supportsRemote && supportsLocal) {
+			return {
+				availability: "both",
+				description: "Can run locally or on remote server",
+			};
+		}
+		if (supportsRemote) {
+			return {
+				availability: "remote",
+				description: "Runs on remote server only",
+			};
+		}
+		if (supportsLocal) {
+			return {
+				availability: "local",
+				description: "Runs locally only (desktop app)",
+			};
+		}
+		return null;
 	}
-	if (supportsRemote) {
-		return {
-			availability: "remote",
-			description: "Runs on remote server only",
-		};
-	}
+
+	// Hub not loaded yet — fall back to static config
+	if (staticConfig) return staticConfig;
+
 	if (supportsLocal) {
 		return {
 			availability: "local",
@@ -73,7 +90,6 @@ function computeSinkAvailability(
 		};
 	}
 
-	// If neither is available, this sink type is not supported
 	return null;
 }
 
@@ -169,7 +185,8 @@ export function EventTypeConfiguration({
 	const availableEventTypes = foundConfig?.eventTypes.filter((type) => {
 		// If this event type has a sink requirement, check availability
 		if (foundConfig?.withSink?.includes(type)) {
-			const sinkConfig = computeSinkAvailability(type, hub, canExecuteLocally);
+			const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
+			const sinkConfig = computeSinkAvailability(type, hub, canExecuteLocally, staticCfg);
 			return sinkConfig !== null;
 		}
 		// Event types without sinks are always available
@@ -178,8 +195,8 @@ export function EventTypeConfiguration({
 
 	const getSinkAvailability = (type: string) => {
 		if (!foundConfig?.withSink?.includes(type)) return null;
-		// Use dynamic computation based on hub config instead of static mapping
-		return computeSinkAvailability(type, hub, canExecuteLocally);
+		const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
+		return computeSinkAvailability(type, hub, canExecuteLocally, staticCfg);
 	};
 
 	return (
@@ -231,6 +248,7 @@ export function EventTranslation({
 	onUpdate,
 	hub,
 	eventId,
+	canExecuteLocally,
 }: Readonly<{
 	appId: string;
 	eventConfig: IEventMapping;
@@ -242,6 +260,7 @@ export function EventTranslation({
 	onUpdate: (payload: Partial<IEventPayload>) => void;
 	hub?: IHub | null;
 	eventId?: string;
+	canExecuteLocally?: boolean;
 }>) {
 	const [intermediateConfig, setIntermediateConfig] =
 		useState<Partial<IEventPayload>>(config);
@@ -266,6 +285,7 @@ export function EventTranslation({
 			nodeId: nodeId ?? "",
 			hub,
 			eventId,
+			canExecuteLocally,
 			onConfigUpdate: (payload: Partial<IEventPayload>) => {
 				setIntermediateConfig(payload);
 				if (onUpdate) {
@@ -283,6 +303,7 @@ export function EventTranslation({
 			onUpdate,
 			hub,
 			eventId,
+			canExecuteLocally,
 		],
 	);
 

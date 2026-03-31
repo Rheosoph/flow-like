@@ -75,19 +75,75 @@ async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 	}
 }
 
-function getPushDeviceId(): string {
+const DEVICE_ID_STORAGE_KEY = "flow-like-push-device-id";
+const DEVICE_ID_FILE = "push-device-id.txt";
+
+async function loadPersistentDeviceId(): Promise<string | null> {
+	try {
+		const { readTextFile, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+		const id = await readTextFile(DEVICE_ID_FILE, {
+			baseDir: BaseDirectory.AppData,
+		});
+		return id?.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+async function savePersistentDeviceId(id: string): Promise<void> {
+	try {
+		const { writeTextFile, mkdir, BaseDirectory } = await import(
+			"@tauri-apps/plugin-fs"
+		);
+		await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(
+			() => {},
+		);
+		await writeTextFile(DEVICE_ID_FILE, id, {
+			baseDir: BaseDirectory.AppData,
+		});
+	} catch {
+		// FS not available — fall through to localStorage only
+	}
+}
+
+function getPushDeviceIdSync(): string {
 	if (typeof window === "undefined") {
 		return "server-device";
 	}
 
-	const storageKey = "flow-like-push-device-id";
-	const existing = window.localStorage.getItem(storageKey);
+	const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
 	if (existing) {
 		return existing;
 	}
 
 	const created = crypto.randomUUID();
-	window.localStorage.setItem(storageKey, created);
+	window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
+	return created;
+}
+
+async function getPushDeviceId(): Promise<string> {
+	if (typeof window === "undefined") {
+		return "server-device";
+	}
+
+	// Try persistent FS first (survives localStorage wipes on iOS)
+	const persisted = await loadPersistentDeviceId();
+	if (persisted) {
+		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, persisted);
+		return persisted;
+	}
+
+	// Fall back to localStorage
+	const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+	if (existing) {
+		await savePersistentDeviceId(existing);
+		return existing;
+	}
+
+	// Generate new and persist everywhere
+	const created = crypto.randomUUID();
+	window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
+	await savePersistentDeviceId(created);
 	return created;
 }
 
@@ -215,7 +271,7 @@ export default function NotificationProvider({
 		}
 
 		if (!deviceId.current) {
-			deviceId.current = getPushDeviceId();
+			deviceId.current = await getPushDeviceId();
 		}
 
 		await fetcher<{ id: string; success: boolean }>(
@@ -267,7 +323,7 @@ export default function NotificationProvider({
 
 	useEffect(() => {
 		const initNotifications = async () => {
-			deviceId.current = getPushDeviceId();
+			deviceId.current = await getPushDeviceId();
 
 			try {
 				const api = await loadNotificationPlugin();

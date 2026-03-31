@@ -1024,20 +1024,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const activeComponents =
 		presignedComponents ?? previewComponents ?? components;
 
+	// Don't pass canvasSettings to A2UIRenderer — BuilderPreview handles
+	// CSS injection and canvas styling at the outer level to avoid double
+	// scoping and inline-style conflicts.
 	const surface: Surface = useMemo(
 		() => ({
 			id: effectiveSurfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(activeComponents),
-			canvasSettings: presignedCanvasSettings.customCss
-				? { customCss: presignedCanvasSettings.customCss }
-				: undefined,
 		}),
-		[
-			effectiveSurfaceId,
-			activeComponents,
-			presignedCanvasSettings.customCss,
-		],
+		[effectiveSurfaceId, activeComponents],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1049,10 +1045,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			if (message.type === "setCanvasSettings") {
 				if (message.surfaceId !== effectiveSurfaceId) return;
 
-				setPresignedCanvasSettings((prev) => ({
-					...prev,
-					...message.canvasSettings,
-				}));
+				setPresignedCanvasSettings((prev) => {
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+					return { ...prev, ...filtered };
+				});
 				return;
 			}
 

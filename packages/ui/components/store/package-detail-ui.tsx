@@ -1,6 +1,5 @@
 "use client";
 
-import { formatDistanceToNow } from "date-fns";
 import {
 	ArrowLeft,
 	Check,
@@ -24,6 +23,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../ui/card";
+import { RelativeTime } from "../ui/relative-time";
 import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 
@@ -122,11 +122,10 @@ function VersionRow({
 				{isLatest && <Badge variant="secondary">Latest</Badge>}
 				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
 			</div>
-			<span className="text-sm text-muted-foreground">
-				{formatDistanceToNow(new Date(version.publishedAt), {
-					addSuffix: true,
-				})}
-			</span>
+			<RelativeTime
+				className="text-sm text-muted-foreground"
+				value={version.publishedAt}
+			/>
 		</div>
 	);
 }
@@ -148,7 +147,7 @@ export function PackageDetailUI({
 	const hasUpdate = isInstalled && installedVersion !== latestVersion;
 
 	return (
-		<main className="flex-col flex flex-grow max-h-full p-6 overflow-auto min-h-0 w-full">
+		<main className="flex flex-col grow max-h-full min-h-0 overflow-auto p-6 w-full">
 			<div className="mx-auto w-full max-w-5xl space-y-6">
 				{/* Back Button */}
 				<Button variant="ghost" onClick={onBack} className="gap-2">
@@ -238,7 +237,7 @@ export function PackageDetailUI({
 
 				{/* Main Content */}
 				<Tabs defaultValue="overview" className="w-full">
-					<TabsList>
+					<TabsList className="h-auto flex-wrap justify-start">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">
 							Nodes ({pkg.nodes.length})
@@ -436,7 +435,7 @@ export function PackageDetailUI({
 
 export function PackageDetailSkeleton() {
 	return (
-		<main className="flex-col flex flex-grow max-h-full p-6 overflow-auto min-h-0 w-full">
+		<main className="flex flex-col grow max-h-full min-h-0 overflow-auto p-6 w-full">
 			<div className="mx-auto w-full max-w-5xl space-y-6">
 				<div className="flex items-center gap-4">
 					<Skeleton className="h-9 w-24" />

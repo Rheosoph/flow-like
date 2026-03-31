@@ -18,8 +18,10 @@ import {
 	ChevronRight,
 	Columns,
 	Database,
+	Globe,
 	RefreshCw,
 	Search,
+	User,
 	X,
 } from "lucide-react";
 import {
@@ -49,15 +51,19 @@ export default function Page(): React.ReactElement {
 		}
 	}, [tableParam]);
 
+	const userScoped = searchParams?.get("scope") === "user";
+
 	if (!id) return <NotFound />;
 
 	return table ? (
 		<TableView
 			table={table}
 			appId={id}
+			userScoped={userScoped}
 			onBack={() => {
 				const params = new URLSearchParams(searchParams?.toString() ?? "");
 				params.delete("table");
+				params.delete("scope");
 				router.push(`${pathname}?${params.toString()}`);
 			}}
 		/>
@@ -69,8 +75,9 @@ export default function Page(): React.ReactElement {
 function TableView({
 	table,
 	appId,
+	userScoped,
 	onBack,
-}: Readonly<{ table: string; appId: string; onBack: () => void }>) {
+}: Readonly<{ table: string; appId: string; userScoped?: boolean; onBack: () => void }>) {
 	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -88,16 +95,19 @@ function TableView({
 	const schema = useInvoke(backend.dbState.getSchema, backend.dbState, [
 		appId,
 		table,
+		userScoped,
 	]);
 	const count = useInvoke(backend.dbState.countItems, backend.dbState, [
 		appId,
 		table,
+		userScoped,
 	]);
 	const list = useInvoke(backend.dbState.listItems, backend.dbState, [
 		appId,
 		table,
 		offset,
 		pageSize,
+		userScoped,
 	]);
 
 	const updateUrlParams = useCallback(
@@ -125,24 +135,24 @@ function TableView({
 	}, [schema, count, list]);
 
 	const handleOptimize = useCallback(async () => {
-		await backend.dbState.optimize(appId, table);
+		await backend.dbState.optimize(appId, table, undefined, userScoped);
 		handleRefresh();
-	}, [backend.dbState, appId, table, handleRefresh]);
+	}, [backend.dbState, appId, table, userScoped, handleRefresh]);
 
 	const handleUpdateItem = useCallback(
 		async (filter: string, updates: Record<string, unknown>) => {
-			await backend.dbState.updateItem(appId, table, filter, updates);
+			await backend.dbState.updateItem(appId, table, filter, updates, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleDropColumns = useCallback(
 		async (columns: string[]) => {
-			await backend.dbState.dropColumns(appId, table, columns);
+			await backend.dbState.dropColumns(appId, table, columns, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleAddColumn = useCallback(
@@ -150,30 +160,30 @@ function TableView({
 			await backend.dbState.addColumn(appId, table, {
 				name,
 				sql_expression: sqlExpression,
-			});
+			}, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleAlterColumn = useCallback(
 		async (column: string, nullable: boolean) => {
-			await backend.dbState.alterColumn(appId, table, column, nullable);
+			await backend.dbState.alterColumn(appId, table, column, nullable, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleGetIndices = useCallback(async () => {
-		return backend.dbState.getIndices(appId, table);
-	}, [backend.dbState, appId, table]);
+		return backend.dbState.getIndices(appId, table, userScoped);
+	}, [backend.dbState, appId, table, userScoped]);
 
 	const handleDropIndex = useCallback(
 		async (indexName: string) => {
-			await backend.dbState.dropIndex(appId, table, indexName);
+			await backend.dbState.dropIndex(appId, table, indexName, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleBuildIndex = useCallback(
@@ -186,10 +196,10 @@ function TableView({
 				auto: IIndexType.Auto,
 			};
 			const enumType = typeMap[indexType.toLowerCase()] ?? IIndexType.Auto;
-			await backend.dbState.buildIndex(appId, table, column, enumType);
+			await backend.dbState.buildIndex(appId, table, column, enumType, undefined, userScoped);
 			handleRefresh();
 		},
-		[backend.dbState, appId, table, handleRefresh],
+		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const isLoadingData = schema.isLoading || list.isLoading;
@@ -247,6 +257,7 @@ interface DatabaseOverviewProps {
 interface Table {
 	name: string;
 	rowCount?: number;
+	userScoped?: boolean;
 }
 
 const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
@@ -259,13 +270,18 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,
 	]);
+	const userTables = useInvoke(backend.dbState.listTablesUser, backend.dbState, [
+		appId,
+	]);
 
 	const [query, setQuery] = useState<string>("");
 	const [sortAsc, setSortAsc] = useState<boolean>(true);
 
 	const processedTables = useMemo(() => {
-		return (tables.data ?? []).map((name): Table => ({ name }));
-	}, [tables.data]);
+		const projectTables = (tables.data ?? []).map((name): Table => ({ name }));
+		const userScopedTables = (userTables.data ?? []).map((name): Table => ({ name, userScoped: true }));
+		return [...projectTables, ...userScopedTables];
+	}, [tables.data, userTables.data]);
 
 	const filteredAndSortedTables = useMemo(() => {
 		const collator = new Intl.Collator(undefined, {
@@ -287,9 +303,12 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	}, [processedTables, query, sortAsc]);
 
 	const navigateToTable = useCallback(
-		(tableName: string) => {
+		(tableName: string, userScoped?: boolean) => {
 			const params = new URLSearchParams(searchParams?.toString() ?? "");
 			params.set("table", encodeURIComponent(tableName));
+			if (userScoped) {
+				params.set("scope", "user");
+			}
 			router.push(`${pathname}?${params.toString()}`);
 		},
 		[router, pathname, searchParams],
@@ -297,7 +316,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 
 	const refreshTables = useCallback(() => {
 		tables.refetch();
-	}, [tables.refetch]);
+		userTables.refetch();
+	}, [tables.refetch, userTables.refetch]);
 
 	const clearSearch = useCallback(() => {
 		setQuery("");
@@ -307,11 +327,11 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		setSortAsc((prev) => !prev);
 	}, []);
 
-	if (tables.isLoading) {
+	if (tables.isLoading && userTables.isLoading) {
 		return <LoadingState />;
 	}
 
-	if (tables.error) {
+	if (tables.error && userTables.error) {
 		return <ErrorState onRetry={refreshTables} />;
 	}
 
@@ -418,7 +438,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
 interface TableGridProps {
 	appId: string;
 	tables: Table[];
-	onSelectTable: (tableName: string) => void;
+	onSelectTable: (tableName: string, userScoped?: boolean) => void;
 	searchQuery: string;
 }
 
@@ -447,9 +467,9 @@ const TableGrid: React.FC<TableGridProps> = ({
 				{tables.map((table) => (
 					<TableCard
 						appId={appId}
-						key={table.name}
+						key={`${table.userScoped ? "user:" : ""}${table.name}`}
 						table={table}
-						onSelect={() => onSelectTable(table.name)}
+						onSelect={() => onSelectTable(table.name, table.userScoped)}
 					/>
 				))}
 			</div>
@@ -468,6 +488,7 @@ const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 	const count = useInvoke(backend.dbState.countItems, backend.dbState, [
 		appId,
 		table.name,
+		table.userScoped,
 	]);
 
 	return (
@@ -479,23 +500,40 @@ const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 			>
 				<CardHeader className="py-2 px-6">
 					<div className="flex items-start justify-between gap-4 mb-4">
-						<div className="flex-shrink-0 rounded-xl bg-primary/10 p-3 transition-colors group-hover:bg-primary/20">
-							<Columns className="h-5 w-5 text-primary" />
+						<div className={`shrink-0 rounded-xl p-3 transition-colors ${table.userScoped ? "bg-amber-500/10 group-hover:bg-amber-500/20" : "bg-primary/10 group-hover:bg-primary/20"}`}>
+							{table.userScoped ? (
+								<User className="h-5 w-5 text-amber-500" />
+							) : (
+								<Columns className="h-5 w-5 text-primary" />
+							)}
 						</div>
-						<ChevronRight className="h-5 w-5 text-muted-foreground transition-all group-hover:translate-x-1 group-hover:text-primary flex-shrink-0 mt-0.5" />
+						<ChevronRight className="h-5 w-5 text-muted-foreground transition-all group-hover:translate-x-1 group-hover:text-primary shrink-0 mt-0.5" />
 					</div>
 
 					<div className="space-y-2">
 						<CardTitle className="text-base font-semibold leading-tight">
 							{table.name}
 						</CardTitle>
-						<p className="text-sm text-muted-foreground">
-							{count.error
-								? "Error loading count"
-								: count.data !== undefined
-									? `${count.data.toLocaleString()} items`
-									: "Loading..."}
-						</p>
+						<div className="flex items-center gap-2">
+						{table.userScoped ? (
+							<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
+								<User className="h-3 w-3" />
+								User Scoped
+							</span>
+						) : (
+							<span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+								<Globe className="h-3 w-3" />
+								Shared
+								</span>
+							)}
+							<p className="text-sm text-muted-foreground">
+								{count.error
+									? "Error loading count"
+									: count.data !== undefined
+										? `${count.data.toLocaleString()} items`
+										: "Loading..."}
+							</p>
+						</div>
 					</div>
 				</CardHeader>
 			</button>

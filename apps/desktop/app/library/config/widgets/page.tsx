@@ -137,7 +137,7 @@ export default function WidgetsPage() {
 				<div className="space-y-1">
 					<h1 className="text-2xl font-bold">Widgets</h1>
 					<p className="text-muted-foreground text-sm">
-						Create, manage, and customize reusable UI components
+						Build reusable UI blocks that users interact with when using your app
 					</p>
 				</div>
 				<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -331,18 +331,20 @@ export default function WidgetsPage() {
 					</div>
 				</div>
 			) : (
-				<div className="text-center py-12">
-					<LayoutGridIcon className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-					<h3 className="text-lg font-medium text-foreground mb-2">
-						No widgets found
+				<div className="flex flex-col items-center text-center py-12 max-w-md mx-auto space-y-4">
+					<div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+						<LayoutGridIcon className="w-8 h-8 text-primary" />
+					</div>
+					<h3 className="text-lg font-medium">
+						{searchTerm ? "No widgets found" : "No widgets yet"}
 					</h3>
-					<p className="text-muted-foreground mb-6">
+					<p className="text-sm text-muted-foreground">
 						{searchTerm
-							? "Try adjusting your search terms"
-							: "Create your first widget to get started"}
+							? "Try adjusting your search terms."
+							: "Widgets are the visual building blocks of your app — forms, dashboards, chat interfaces, and more. Create one to start designing."}
 					</p>
 					{!searchTerm && (
-						<Button onClick={() => setIsCreateDialogOpen(true)}>
+						<Button onClick={() => setIsCreateDialogOpen(true)} className="mt-2">
 							<Plus className="w-4 h-4 mr-2" />
 							Create Your First Widget
 						</Button>
@@ -558,7 +560,7 @@ function WidgetPreview({
 					</CardContent>
 				</Card>
 
-				<div className="flex flex-col gap-6 overflow-auto">
+				<div className="flex flex-col gap-6 overflow-auto md:overflow-visible">
 					<Card>
 						<CardHeader>
 							<CardTitle className="text-base">Metadata</CardTitle>

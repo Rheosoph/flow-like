@@ -2,14 +2,6 @@
 
 import {
 	type AdminPackageListResponse,
-	type PackageAdminStatus,
-	type PackageDetails,
-	useBackend,
-	useInvoke,
-	useQuery,
-	useQueryClient,
-} from "@tm9657/flow-like-ui";
-import {
 	AdminPackageDetail,
 	Badge,
 	Button,
@@ -18,6 +10,9 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	type PackageAdminStatus,
+	type PackageDetails,
+	type PackageVisibility,
 	Input,
 	Select,
 	SelectContent,
@@ -31,7 +26,11 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "@tm9657/flow-like-ui/components";
+	useBackend,
+	useInvoke,
+	useQuery,
+	useQueryClient,
+} from "@tm9657/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -68,6 +67,29 @@ const statusIcon: Record<PackageAdminStatus, React.ReactNode> = {
 	deprecated: <Clock className="h-3 w-3" />,
 	disabled: <XCircle className="h-3 w-3" />,
 };
+
+const visibilityVariant: Record<PackageVisibility, "default" | "secondary" | "outline"> = {
+	public: "default",
+	private: "secondary",
+	public_request_access: "outline",
+};
+
+const visibilityLabel: Record<PackageVisibility, string> = {
+	public: "Public",
+	private: "Private",
+	public_request_access: "Request Access",
+};
+
+function formatDownloadCount(count: number | null | undefined) {
+	return (count ?? 0).toLocaleString();
+}
+
+function formatRelativeDate(value: string | null | undefined) {
+	if (!value) return "Unknown";
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return "Unknown";
+	return formatDistanceToNow(date, { addSuffix: true });
+}
 
 function StatsCard({
 	title,
@@ -118,16 +140,21 @@ function PackageRow({ pkg }: { pkg: PackageDetails }) {
 				</Badge>
 			</TableCell>
 			<TableCell>
+				<Badge variant={visibilityVariant[pkg.visibility]} className="gap-1">
+					{visibilityLabel[pkg.visibility]}
+				</Badge>
+			</TableCell>
+			<TableCell>
 				{pkg.verified && <Shield className="h-4 w-4 text-blue-500" />}
 			</TableCell>
 			<TableCell className="text-right">
 				<span className="flex items-center gap-1 justify-end">
 					<Download className="h-3 w-3" />
-					{pkg.downloadCount.toLocaleString()}
+					{formatDownloadCount(pkg.downloadCount)}
 				</span>
 			</TableCell>
 			<TableCell>
-				{formatDistanceToNow(new Date(pkg.createdAt), { addSuffix: true })}
+				{formatRelativeDate(pkg.createdAt)}
 			</TableCell>
 			<TableCell>
 				{pkg.repository && (
@@ -222,7 +249,9 @@ function AdminPackageListContent() {
 	const totalPages = Math.ceil((packages.data?.totalCount ?? 0) / limit);
 
 	return (
-		<div className="container mx-auto py-6 space-y-6">
+		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
+			<div className="flex-1 overflow-y-auto p-6">
+				<div className="mx-auto max-w-6xl space-y-6">
 			<div className="flex items-center justify-between">
 				<div>
 					<h1 className="text-3xl font-bold">Package Registry</h1>
@@ -236,7 +265,7 @@ function AdminPackageListContent() {
 				</Button>
 			</div>
 
-			<div className="grid gap-4 md:grid-cols-4">
+			<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 				<StatsCard
 					title="Pending Review"
 					value={stats.data?.pendingReview ?? 0}
@@ -262,6 +291,18 @@ function AdminPackageListContent() {
 					loading={stats.isLoading}
 				/>
 			</div>
+
+			{(stats.data?.pendingReview ?? 0) > 0 && (
+				<Card className="border-yellow-500/50 bg-yellow-500/5">
+					<CardHeader className="py-3">
+						<CardTitle className="flex items-center gap-2 text-sm font-medium text-yellow-700 dark:text-yellow-400">
+							<Clock className="h-4 w-4" />
+							{stats.data?.pendingReview} package
+							{(stats.data?.pendingReview ?? 0) > 1 ? "s" : ""} waiting for review
+						</CardTitle>
+					</CardHeader>
+				</Card>
+			)}
 
 			<Card>
 				<CardHeader>
@@ -315,6 +356,7 @@ function AdminPackageListContent() {
 									<TableHead>Description</TableHead>
 									<TableHead>Version</TableHead>
 									<TableHead>Status</TableHead>
+									<TableHead>Visibility</TableHead>
 									<TableHead>Verified</TableHead>
 									<TableHead className="text-right">Downloads</TableHead>
 									<TableHead>Created</TableHead>
@@ -327,7 +369,7 @@ function AdminPackageListContent() {
 								))}
 								{filteredPackages.length === 0 && (
 									<TableRow>
-										<TableCell colSpan={8} className="text-center py-8">
+										<TableCell colSpan={9} className="text-center py-8">
 											No packages found
 										</TableCell>
 									</TableRow>
@@ -363,7 +405,9 @@ function AdminPackageListContent() {
 					)}
 				</CardContent>
 			</Card>
-		</div>
+				</div>
+			</div>
+		</main>
 	);
 }
 

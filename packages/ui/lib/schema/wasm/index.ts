@@ -173,7 +173,17 @@ export interface PackageManifest {
 export enum PackageStatus {
 	Active = "active",
 	Deprecated = "deprecated",
+	PendingReview = "pending_review",
+	Disabled = "disabled",
 	Yanked = "yanked",
+}
+
+export interface PackageReviewer {
+	userId: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	role?: string;
 }
 
 export interface PackageSource {
@@ -263,6 +273,7 @@ export interface SearchFilters {
 	author?: string;
 	verifiedOnly?: boolean;
 	includeDeprecated?: boolean;
+	includeDisabled?: boolean;
 	sortBy?: "relevance" | "name" | "downloads" | "updated_at" | "created_at";
 	sortDesc?: boolean;
 	offset?: number;
@@ -328,6 +339,7 @@ export interface PackageReview {
 	id: string;
 	packageId: string;
 	reviewerId: string;
+	reviewer?: PackageReviewer;
 	action: ReviewAction;
 	comment?: string;
 	securityScore?: number;

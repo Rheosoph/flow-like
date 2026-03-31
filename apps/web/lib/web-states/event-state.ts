@@ -477,8 +477,15 @@ export class WebEventState implements IEventState {
 	}
 
 	async isEventSinkActive(eventId: string): Promise<boolean> {
-		// Event sinks are server-side in web mode
-		return false;
+		try {
+			const result = await apiGet<{ active: boolean }>(
+				`sinks/${eventId}/status`,
+				this.backend.auth,
+			);
+			return result?.active ?? false;
+		} catch {
+			return false;
+		}
 	}
 
 	async prerunEvent(

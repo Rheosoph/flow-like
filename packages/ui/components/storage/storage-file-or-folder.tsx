@@ -3,6 +3,7 @@ import {
 	BracesIcon,
 	Database,
 	EllipsisVerticalIcon,
+	ExternalLinkIcon,
 	FileArchive,
 	FileAudioIcon,
 	FileIcon,
@@ -11,12 +12,13 @@ import {
 	FileTextIcon,
 	FileVideoIcon,
 	FolderIcon,
+	FolderOpenIcon,
 	Music,
 	PresentationIcon,
 	Settings,
 	Zap,
 } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { type INode, type IStorageItem, humanFileSize } from "../../lib";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -28,6 +30,9 @@ import {
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
 	DropdownMenuTrigger,
 	canPreview,
 	isAudio,
@@ -36,6 +41,12 @@ import {
 	isText,
 	isVideo,
 } from "../ui";
+
+export interface AppEntry {
+	name: string;
+	path: string;
+	is_default: boolean;
+}
 
 const TEMPLATE = JSON.parse(`{
   "nodes": [
@@ -137,6 +148,9 @@ export function FileOrFolder({
 	shareFile,
 	deleteFile,
 	downloadFile,
+	revealInExplorer,
+	openWithApp,
+	listAppsForFile,
 }: Readonly<{
 	file: IStorageItem;
 	highlight: boolean;
@@ -145,17 +159,32 @@ export function FileOrFolder({
 	shareFile?: (file: string, e: any) => void;
 	deleteFile?: (file: string) => void;
 	downloadFile?: (file: string) => void;
+	revealInExplorer?: (location: string) => void;
+	openWithApp?: (location: string, appPath?: string) => void;
+	listAppsForFile?: (location: string) => Promise<AppEntry[]>;
 }>) {
+	const relativeSegments = useCallback(() => {
+		const segments = file.location.split("/").filter(Boolean);
+		if (segments[0] === "apps" && segments.length >= 3) {
+			return segments.slice(3);
+		}
+		if (segments[0] === "users" && segments.length >= 4) {
+			return segments.slice(4);
+		}
+		return segments;
+	}, [file.location]);
+
 	const copyPath = useCallback(
 		(isFolder: boolean) => {
 			const childNode = (TEMPLATE.nodes as INode[]).findIndex(
 				(node) => node.name === "child",
 			);
 			if (childNode === -1) return;
+			const segments = relativeSegments();
 
 			if (isFolder) {
 				const location = file.location.split("/").pop()?.slice(1, -7) ?? "";
-				const parentPath = file.location.split("/").slice(3, -1).join("/");
+				const parentPath = segments.slice(0, -1).join("/");
 				TEMPLATE.nodes[childNode].pins.w8k4qi9sq7265ium4c3l6qg8.default_value =
 					convertJsonToUint8Array(`${parentPath}/${location}`);
 				navigator.clipboard.writeText(JSON.stringify(TEMPLATE));
@@ -164,11 +193,11 @@ export function FileOrFolder({
 			}
 
 			TEMPLATE.nodes[childNode].pins.x56ex8kn2uoq37rd8xitawbh.default_value =
-				convertJsonToUint8Array(file.location.split("/").slice(3).join("/"));
+				convertJsonToUint8Array(segments.join("/"));
 			navigator.clipboard.writeText(JSON.stringify(TEMPLATE));
 			toast.success("Path copied to clipboard");
 		},
-		[file.location],
+		[file.location, relativeSegments],
 	);
 
 	if (file.is_dir) {
@@ -217,6 +246,18 @@ export function FileOrFolder({
 						<DropdownMenuContent align="end">
 							<DropdownMenuLabel>Folder Actions</DropdownMenuLabel>
 							<DropdownMenuSeparator />
+							{typeof revealInExplorer !== "undefined" && (
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.preventDefault();
+										e.stopPropagation();
+										revealInExplorer(file.location);
+									}}
+								>
+									<FolderOpenIcon className="h-4 w-4 mr-2" />
+									Show in File Manager
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onClick={(e) => {
 									e.preventDefault();
@@ -306,6 +347,25 @@ export function FileOrFolder({
 					<DropdownMenuContent align="end">
 						<DropdownMenuLabel>File Actions</DropdownMenuLabel>
 						<DropdownMenuSeparator />
+						{typeof openWithApp !== "undefined" && (
+							<OpenWithMenu
+								location={file.location}
+								openWithApp={openWithApp}
+								listAppsForFile={listAppsForFile}
+							/>
+						)}
+						{typeof revealInExplorer !== "undefined" && (
+							<DropdownMenuItem
+								onClick={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									revealInExplorer(file.location);
+								}}
+							>
+								<FolderOpenIcon className="h-4 w-4 mr-2" />
+								Show in File Manager
+							</DropdownMenuItem>
+						)}
 						<DropdownMenuItem
 							onClick={(e) => {
 								e.preventDefault();
@@ -357,6 +417,91 @@ export function FileOrFolder({
 				</DropdownMenu>
 			</button>
 		</div>
+	);
+}
+
+function OpenWithMenu({
+	location,
+	openWithApp,
+	listAppsForFile,
+}: {
+	location: string;
+	openWithApp: (location: string, appPath?: string) => void;
+	listAppsForFile?: (location: string) => Promise<AppEntry[]>;
+}) {
+	const [apps, setApps] = useState<AppEntry[]>([]);
+	const [loaded, setLoaded] = useState(false);
+
+	const loadApps = useCallback(async () => {
+		if (loaded || !listAppsForFile) return;
+		try {
+			const result = await listAppsForFile(location);
+			setApps(result);
+		} catch {
+			// ignore — fallback to simple open
+		}
+		setLoaded(true);
+	}, [loaded, listAppsForFile, location]);
+
+	const defaultApp = apps.find((a) => a.is_default);
+
+	if (!listAppsForFile) {
+		return (
+			<DropdownMenuItem
+				onClick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					openWithApp(location);
+				}}
+			>
+				<ExternalLinkIcon className="h-4 w-4 mr-2" />
+				Open with Default App
+			</DropdownMenuItem>
+		);
+	}
+
+	return (
+		<DropdownMenuSub onOpenChange={(open) => open && loadApps()}>
+			<DropdownMenuSubTrigger
+				onClick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					if (defaultApp) {
+						openWithApp(location, defaultApp.path);
+					} else {
+						openWithApp(location);
+					}
+				}}
+			>
+				<ExternalLinkIcon className="h-4 w-4 mr-2" />
+				{defaultApp ? `Open with ${defaultApp.name}` : "Open File"}
+			</DropdownMenuSubTrigger>
+			<DropdownMenuSubContent>
+				{!loaded && (
+					<DropdownMenuItem disabled>Loading apps...</DropdownMenuItem>
+				)}
+				{loaded && apps.length === 0 && (
+					<DropdownMenuItem disabled>No apps found</DropdownMenuItem>
+				)}
+				{apps.map((app) => (
+					<DropdownMenuItem
+						key={app.path}
+						onClick={(e) => {
+							e.preventDefault();
+							e.stopPropagation();
+							openWithApp(location, app.path);
+						}}
+					>
+						{app.name}
+						{app.is_default && (
+							<Badge variant="secondary" className="ml-2 text-[10px] px-1 py-0 h-4">
+								Default
+							</Badge>
+						)}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuSubContent>
+		</DropdownMenuSub>
 	);
 }
 

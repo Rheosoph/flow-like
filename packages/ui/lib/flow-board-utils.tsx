@@ -21,7 +21,7 @@ import {
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
 import type { IFnRefs, INode } from "./schema/flow/node";
-import { type IPin, IPinType } from "./schema/flow/pin";
+import { type IPinOptions, type IPin, IPinType } from "./schema/flow/pin";
 import { parseUint8ArrayToJson } from "./uint8";
 
 export function hexToRgba(hex: string, alpha = 0.3): string {
@@ -52,6 +52,8 @@ interface ISerializedPin {
 	connected_to: string[];
 	default_value?: number[];
 	index: number;
+	schema?: string | null;
+	options?: IPinOptions | null;
 }
 interface ISerializedNode {
 	id: string;
@@ -83,6 +85,8 @@ function serializeNode(node: INode): ISerializedNode {
 			connected_to: pin.connected_to,
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
+			schema: pin.schema ?? undefined,
+			options: pin.options ?? undefined,
 		};
 	}
 
@@ -116,7 +120,8 @@ function deserializeNode(node: ISerializedNode): INode {
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
 			description: "",
-			schema: "",
+			schema: pin.schema ?? "",
+			options: pin.options ?? undefined,
 		};
 	}
 
@@ -187,19 +192,7 @@ function stripCallFunctionRef(node: INode): { node: INode; functionLayerId: stri
 	const functionLayerId = layerPin?.default_value
 		? parseUint8ArrayToJson(layerPin.default_value)
 		: undefined;
-	const filteredPins: Record<string, IPin> = {};
-	let inputIdx = 0;
-	for (const pin of Object.values(node.pins)
-		.filter((p) => p.name !== "function_layer_id")
-		.sort((a, b) => a.index - b.index)) {
-		if (pin.pin_type === IPinType.Input) {
-			inputIdx++;
-			filteredPins[pin.id] = { ...pin, index: inputIdx };
-		} else {
-			filteredPins[pin.id] = pin;
-		}
-	}
-	return { node: { ...node, pins: filteredPins }, functionLayerId };
+	return { node, functionLayerId };
 }
 
 /** Prefix for break struct field pins */

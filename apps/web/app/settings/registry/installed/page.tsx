@@ -13,16 +13,19 @@ import {
 	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
-import type {
-	InstalledPackage,
-	PackageSummary,
-	PackageUpdate,
+import {
+	type InstalledPackage,
+	PackageStatus,
+	type PackageSummary,
+	type PackageUpdate,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import { motion } from "framer-motion";
 import {
 	AlertTriangle,
 	Check,
 	Download,
+	Eye,
+	EyeOff,
 	FolderOpen,
 	Loader2,
 	Package,
@@ -102,7 +105,10 @@ function InstalledPackageCard({
 								<Button
 									size="sm"
 									variant="secondary"
-								onClick={(e) => { e.stopPropagation(); onUpdate(pkg.id); }}
+									onClick={(e) => {
+										e.stopPropagation();
+										onUpdate(pkg.id);
+									}}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -176,7 +182,10 @@ function LocalPackageCard({
 						<Button
 							size="sm"
 							variant="destructive"
-							onClick={(e) => { e.stopPropagation(); onRemove(pkg.id); }}
+							onClick={(e) => {
+								e.stopPropagation();
+								onRemove(pkg.id);
+							}}
 							disabled={isLoading}
 						>
 							{isLoading ? (
@@ -223,7 +232,10 @@ export default function InstalledPackagesPage() {
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
-	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+	const [showDisabled, setShowDisabled] = useState(false);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+		null,
+	);
 
 	const [installedPackages, setInstalledPackages] = useState<
 		InstalledPackage[]
@@ -258,7 +270,9 @@ export default function InstalledPackagesPage() {
 			const [packages, updateList, ownedResults] = await Promise.all([
 				backend.registryState.getInstalledPackages(),
 				backend.registryState.checkForUpdates(),
-				backend.registryState.getOwnedPackages(),
+				backend.registryState.getOwnedPackages({
+					includeDisabled: showDisabled,
+				}),
 			]);
 			const registry = packages.filter((p) => !p.id.startsWith("local."));
 			const local = packages.filter((p) => p.id.startsWith("local."));
@@ -275,7 +289,7 @@ export default function InstalledPackagesPage() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized]);
+	}, [backend?.registryState, isInitialized, showDisabled]);
 
 	useEffect(() => {
 		if (isInitialized) {
@@ -381,8 +395,12 @@ export default function InstalledPackagesPage() {
 					toast.success("Package uninstalled");
 					fetchInstalled();
 				}}
-				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
-				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onInstallError={(error) =>
+					toast.error(`Failed to install: ${error.message}`)
+				}
+				onUninstallError={(error) =>
+					toast.error(`Failed to uninstall: ${error.message}`)
+				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
 					fetchInstalled();
@@ -417,14 +435,29 @@ export default function InstalledPackagesPage() {
 				</div>
 			</div>
 
-			<div className="relative max-w-sm">
-				<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-				<Input
-					placeholder="Search installed packages..."
-					value={searchQuery}
-					onChange={(e) => setSearchQuery(e.target.value)}
-					className="pl-9"
-				/>
+			<div className="flex items-center gap-2">
+				<div className="relative max-w-sm flex-1">
+					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+					<Input
+						placeholder="Search installed packages..."
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						className="pl-9"
+					/>
+				</div>
+				<Button
+					variant={showDisabled ? "secondary" : "outline"}
+					size="sm"
+					onClick={() => setShowDisabled((v) => !v)}
+					className="gap-1.5 shrink-0"
+				>
+					{showDisabled ? (
+						<Eye className="h-4 w-4" />
+					) : (
+						<EyeOff className="h-4 w-4" />
+					)}
+					Disabled
+				</Button>
 			</div>
 
 			{updates.length > 0 && (
@@ -456,7 +489,6 @@ export default function InstalledPackagesPage() {
 						</div>
 					</div>
 				)}
-
 				{/* Registry Packages Section */}
 				<div className="space-y-3">
 					{localPackages.length > 0 && (
@@ -518,7 +550,9 @@ export default function InstalledPackagesPage() {
 									className="cursor-pointer"
 									onClick={() => setSelectedPackageId(pkg.id)}
 								>
-									<Card className="hover:shadow-md transition-shadow">
+									<Card
+										className={`hover:shadow-md transition-shadow ${pkg.status === PackageStatus.Disabled ? "opacity-60" : ""}`}
+									>
 										<CardHeader className="pb-2">
 											<div className="flex items-start justify-between gap-2">
 												<div className="flex items-center gap-2 min-w-0">
@@ -529,6 +563,9 @@ export default function InstalledPackagesPage() {
 												</div>
 												<div className="flex items-center gap-1 flex-shrink-0">
 													<Badge variant="outline">v{pkg.latestVersion}</Badge>
+													{pkg.status === PackageStatus.Disabled && (
+														<Badge variant="destructive">Disabled</Badge>
+													)}
 													{pkg.visibility && pkg.visibility !== "public" && (
 														<Badge variant="secondary">{pkg.visibility}</Badge>
 													)}
@@ -541,7 +578,11 @@ export default function InstalledPackagesPage() {
 										<CardContent>
 											<div className="flex flex-wrap gap-1 mb-3">
 												{pkg.keywords.slice(0, 3).map((keyword) => (
-													<Badge key={keyword} variant="outline" className="text-xs">
+													<Badge
+														key={keyword}
+														variant="outline"
+														className="text-xs"
+													>
 														{keyword}
 													</Badge>
 												))}
@@ -575,7 +616,8 @@ export default function InstalledPackagesPage() {
 							))}
 						</div>
 					</div>
-				)}			</div>
+				)}{" "}
+			</div>
 		</div>
 	);
 }

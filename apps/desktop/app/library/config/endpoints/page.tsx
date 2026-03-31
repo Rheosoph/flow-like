@@ -1,6 +1,6 @@
 "use client";
-import NotFound from "../not-found";
+import { EndpointsPage } from "@tm9657/flow-like-ui/components/settings/endpoints/endpoints-page";
 
 export default function Page() {
-	return <NotFound />;
+	return <EndpointsPage />;
 }

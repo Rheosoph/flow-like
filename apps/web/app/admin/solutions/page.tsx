@@ -6,6 +6,11 @@ import {
 	type ISolutionRequest,
 	type ISolutionUpdatePayload,
 	type SolutionStatus,
+	Card,
+	CardContent,
+	CardHeader,
+	CardTitle,
+	Skeleton,
 	SolutionsPage,
 	useBackend,
 	useInvoke,
@@ -13,6 +18,7 @@ import {
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
+import { AlertCircle, CheckCircle, Clock, Inbox } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -140,26 +146,113 @@ export default function AdminSolutionsPage() {
 		[profile.data, backend.apiState],
 	);
 
+	const openCount = useQuery<ISolutionListResponse, Error>({
+		queryKey: ["admin", "solutions", "open-count"],
+		queryFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return backend.apiState.get<ISolutionListResponse>(
+				profile.data,
+				"admin/solutions?page=1&limit=1&status=PENDING_REVIEW",
+			);
+		},
+		enabled: !!profile.data,
+	});
+
+	const inProgressCount = useQuery<ISolutionListResponse, Error>({
+		queryKey: ["admin", "solutions", "in-progress-count"],
+		queryFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return backend.apiState.get<ISolutionListResponse>(
+				profile.data,
+				"admin/solutions?page=1&limit=1&status=IN_PROGRESS",
+			);
+		},
+		enabled: !!profile.data,
+	});
+
 	return (
-		<main className="flex grow h-full bg-background max-h-full overflow-auto flex-col items-start w-full justify-start p-6">
-			<SolutionsPage
-				data={solutions.data}
-				isLoading={solutions.isLoading}
-				error={solutions.error}
-				page={page}
-				limit={limit}
-				statusFilter={statusFilter}
-				searchQuery={searchQuery}
-				onPageChange={handlePageChange}
-				onLimitChange={handleLimitChange}
-				onStatusFilterChange={handleStatusFilterChange}
-				onSearchChange={handleSearchChange}
-				onRefresh={handleRefresh}
-				onUpdateSolution={handleUpdateSolution}
-				onFetchSolution={handleFetchSolution}
-				onAddLog={handleAddLog}
-				trackingBaseUrl="https://www.flow-like.com"
-			/>
+		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
+			<div className="flex-1 overflow-y-auto p-6">
+				<div className="mx-auto max-w-6xl space-y-6">
+					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">Total Requests</CardTitle>
+								<Inbox className="h-4 w-4 text-muted-foreground" />
+							</CardHeader>
+							<CardContent>
+								{solutions.isLoading ? (
+									<Skeleton className="h-8 w-16" />
+								) : (
+									<div className="text-2xl font-bold">{solutions.data?.total ?? 0}</div>
+								)}
+							</CardContent>
+						</Card>
+						<Card className={
+							(openCount.data?.total ?? 0) > 0
+								? "border-yellow-500/50 bg-yellow-500/5"
+								: ""
+						}>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">Pending Review</CardTitle>
+								<Clock className="h-4 w-4 text-yellow-500" />
+							</CardHeader>
+							<CardContent>
+								{openCount.isLoading ? (
+									<Skeleton className="h-8 w-16" />
+								) : (
+									<div className="text-2xl font-bold">{openCount.data?.total ?? 0}</div>
+								)}
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">In Progress</CardTitle>
+								<AlertCircle className="h-4 w-4 text-blue-500" />
+							</CardHeader>
+							<CardContent>
+								{inProgressCount.isLoading ? (
+									<Skeleton className="h-8 w-16" />
+								) : (
+									<div className="text-2xl font-bold">{inProgressCount.data?.total ?? 0}</div>
+								)}
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">This Page</CardTitle>
+								<CheckCircle className="h-4 w-4 text-muted-foreground" />
+							</CardHeader>
+							<CardContent>
+								{solutions.isLoading ? (
+									<Skeleton className="h-8 w-16" />
+								) : (
+									<div className="text-2xl font-bold">{solutions.data?.solutions.length ?? 0}</div>
+								)}
+							</CardContent>
+						</Card>
+					</div>
+
+					<SolutionsPage
+						data={solutions.data}
+						isLoading={solutions.isLoading}
+						error={solutions.error}
+						page={page}
+						limit={limit}
+						statusFilter={statusFilter}
+						searchQuery={searchQuery}
+						onPageChange={handlePageChange}
+						onLimitChange={handleLimitChange}
+						onStatusFilterChange={handleStatusFilterChange}
+						onSearchChange={handleSearchChange}
+						onRefresh={handleRefresh}
+						onUpdateSolution={handleUpdateSolution}
+						onFetchSolution={handleFetchSolution}
+						onAddLog={handleAddLog}
+						trackingBaseUrl="https://www.flow-like.com"
+					/>
+				</div>
+			</div>
 		</main>
 	);
 }

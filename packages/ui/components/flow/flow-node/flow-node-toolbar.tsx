@@ -10,6 +10,8 @@ import {
 	CircleXIcon,
 	CopyIcon,
 	FoldVerticalIcon,
+	GripHorizontalIcon,
+	GripVerticalIcon,
 	MessageSquareIcon,
 	SlidersHorizontalIcon,
 	SparklesIcon,
@@ -44,7 +46,7 @@ interface FlowNodeToolbarProps {
 	onInfo: () => void;
 	onHandleError: () => void;
 	onCollapse: (x: number, y: number) => void;
-	onAlign: (type: "align" | "justify", dir: "start" | "end" | "center") => void;
+	onAlign: (type: "align" | "justify", dir: "start" | "end" | "center" | "distribute") => void;
 	onExplain: () => void;
 }
 
@@ -54,7 +56,7 @@ const AlignmentMenu = memo(
 	}: {
 		onAlign: (
 			type: "align" | "justify",
-			dir: "start" | "end" | "center",
+			dir: "start" | "end" | "center" | "distribute",
 		) => void;
 	}) => (
 		<DropdownMenu>
@@ -99,6 +101,13 @@ const AlignmentMenu = memo(
 							<AlignEndVerticalIcon className="h-3 w-3 mr-1.5" />
 							End
 						</DropdownMenuItem>
+						<DropdownMenuItem
+							className="text-xs"
+							onClick={() => onAlign("align", "distribute")}
+						>
+							<GripVerticalIcon className="h-3 w-3 mr-1.5" />
+							Distribute Evenly
+						</DropdownMenuItem>
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
 				<DropdownMenuSub>
@@ -127,6 +136,13 @@ const AlignmentMenu = memo(
 						>
 							<AlignVerticalJustifyEndIcon className="h-3 w-3 mr-1.5" />
 							End
+						</DropdownMenuItem>
+						<DropdownMenuItem
+							className="text-xs"
+							onClick={() => onAlign("justify", "distribute")}
+						>
+							<GripHorizontalIcon className="h-3 w-3 mr-1.5" />
+							Distribute Evenly
 						</DropdownMenuItem>
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>

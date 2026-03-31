@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import type { IBackendState } from "../state/backend-state";
 import type { ILogMetadata } from "./schema";
 import type { IRunPayload } from "./schema";
@@ -284,6 +285,15 @@ export class ExecutionEngineProvider {
 			})
 			.catch(async (error) => {
 				console.error("Execution error:", error);
+				Sentry.captureException(error, {
+					tags: { component: "execution-engine", action: "execute_event" },
+					extra: {
+						streamId,
+						appId: options.appId,
+						eventId: options.eventId,
+						accumulatedEvents: stream!.accumulatedEvents.length,
+					},
+				});
 				stream!.isComplete = true;
 
 				// Still do final save on error to preserve partial state

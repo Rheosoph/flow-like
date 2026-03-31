@@ -3,6 +3,7 @@ import {
 	type IOAuthProvider,
 	type IStoredOAuthToken,
 	useBackend,
+	useHub,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
 import EventsPage from "@tm9657/flow-like-ui/components/settings/events/events-page";
@@ -16,6 +17,7 @@ import {
 
 export default function Page() {
 	const backend = useBackend();
+	const { hub } = useHub();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -55,6 +57,7 @@ export default function Page() {
 			consentStore={oauthConsentStore}
 			onStartOAuth={handleStartOAuth}
 			onRefreshToken={handleRefreshToken}
+			hub={hub}
 		/>
 	);
 }

@@ -5,18 +5,42 @@ import type {
 import { del, get, set } from "idb-keyval";
 
 /**
- * Creates an Indexed DB persister
- * @see https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
+ * Creates an Indexed DB persister with write throttling.
+ * Writes are debounced so rapid cache mutations don't hammer IDB.
  */
-export function createIDBPersister(idbValidKey: IDBValidKey = "reactQuery") {
+export function createIDBPersister(
+	idbValidKey: IDBValidKey = "reactQuery",
+	throttleMs = 2000,
+) {
+	let pendingWrite: ReturnType<typeof setTimeout> | null = null;
+	let latestClient: PersistedClient | null = null;
+
+	const flush = async () => {
+		if (latestClient) {
+			const toWrite = latestClient;
+			latestClient = null;
+			await set(idbValidKey, toWrite);
+		}
+	};
+
 	return {
 		persistClient: async (client: PersistedClient) => {
-			await set(idbValidKey, client);
+			latestClient = client;
+			if (pendingWrite !== null) return;
+			pendingWrite = setTimeout(async () => {
+				pendingWrite = null;
+				await flush();
+			}, throttleMs);
 		},
 		restoreClient: async () => {
 			return await get<PersistedClient>(idbValidKey);
 		},
 		removeClient: async () => {
+			if (pendingWrite !== null) {
+				clearTimeout(pendingWrite);
+				pendingWrite = null;
+			}
+			latestClient = null;
 			await del(idbValidKey);
 		},
 	} as Persister;

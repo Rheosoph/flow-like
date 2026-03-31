@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../hooks/use-package-status";
 
@@ -186,6 +187,7 @@ function PackageCardSkeleton() {
 
 export default function InstalledPackagesPage() {
 	const queryClient = useQueryClient();
+	const auth = useAuth();
 	const [searchQuery, setSearchQuery] = useState("");
 	const packageStatusMap = usePackageStatusMap();
 	const [updatingPackages, setUpdatingPackages] = useState<Set<string>>(
@@ -215,7 +217,7 @@ export default function InstalledPackagesPage() {
 	const availableUpdates = useQuery({
 		queryKey: ["available-updates"],
 		queryFn: async () => {
-			return invoke<PackageUpdate[]>("registry_check_for_updates");
+			return invoke<PackageUpdate[]>("registry_check_for_updates", { token: auth.user?.access_token });
 		},
 		enabled: registryReady.data === true,
 	});
@@ -226,7 +228,7 @@ export default function InstalledPackagesPage() {
 			version,
 		}: { packageId: string; version?: string }) => {
 			setUpdatingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_update_package", { packageId, version });
+			await invoke("registry_update_package", { packageId, version, token: auth.user?.access_token });
 		},
 		onSuccess: (
 			_: void,
@@ -290,6 +292,7 @@ export default function InstalledPackagesPage() {
 				await invoke("registry_update_package", {
 					packageId: update.packageId,
 					version: update.latestVersion,
+					token: auth.user?.access_token,
 				});
 			}
 		},

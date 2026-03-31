@@ -241,11 +241,19 @@ function RouteDialogRenderer({
 					return prevSurface;
 				}
 
+				// Filter null/undefined values to avoid overwriting existing settings
+				// (Rust serializes Option::None as null)
+				const filtered = Object.fromEntries(
+					Object.entries(message.canvasSettings).filter(
+						([, v]) => v != null,
+					),
+				);
+
 				return {
 					...prevSurface,
 					canvasSettings: {
 						...prevSurface.canvasSettings,
-						...message.canvasSettings,
+						...filtered,
 					},
 				};
 			});

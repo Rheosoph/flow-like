@@ -25,3 +25,4 @@ export type {
 } from "./interfaces";
 export * from "./no-default";
 export * from "./page-interface";
+export * from "./use-page-content";

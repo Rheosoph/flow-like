@@ -1,12 +1,12 @@
 import { createId } from "@paralleldrive/cuid2";
 import {
-	ApiConfig,
 	ChatInterface,
 	CronJobConfig,
 	DeeplinkConfig,
 	DiscordConfig,
 	GenericEventFormInterface,
 	GenericFormConfig,
+	HttpConfig,
 	type IEventMapping,
 	SimpleChatConfig,
 	TelegramConfig,
@@ -98,7 +98,7 @@ export const EVENT_CONFIG: IEventMapping = {
 	events_generic: {
 		configInterfaces: {
 			generic_form: GenericFormConfig,
-			api: ApiConfig,
+			api: HttpConfig,
 			deeplink: DeeplinkConfig,
 		},
 		defaultEventType: "generic_form",
@@ -134,7 +134,7 @@ export const EVENT_CONFIG: IEventMapping = {
 	events_simple: {
 		configInterfaces: {
 			quick_action: GenericFormConfig,
-			api: ApiConfig,
+			api: HttpConfig,
 			cron: CronJobConfig,
 			deeplink: DeeplinkConfig,
 		},
@@ -167,7 +167,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 			cron: {
 				sink_type: "cron",
-				expression: "* */1 * * *",
+				expression: "0 */1 * * *",
 			},
 			deeplink: {
 				sink_type: "deeplink",

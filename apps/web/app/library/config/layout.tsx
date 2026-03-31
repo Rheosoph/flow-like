@@ -1,9 +1,6 @@
 "use client";
 
 import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
 	Badge,
 	Breadcrumb,
 	BreadcrumbItem,
@@ -65,13 +62,22 @@ import {
 	Minimize2Icon,
 	PackageIcon,
 	PlayCircleIcon,
+	SendIcon,
 	SparklesIcon,
 	SquarePenIcon,
 	UnlockIcon,
+	UserIcon,
 	UsersRoundIcon,
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+	normalizeAppPublicationRequests,
+	type AppPublicationRequestItem,
+	type RawAppPublicationRequestItem,
+} from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { AppPublicationBanner } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-banner";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
@@ -79,66 +85,95 @@ import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
 import { EVENT_CONFIG } from "../../../lib/event-config";
 
-const navigationItems = [
+const navigationItems: {
+	href: string;
+	label: string;
+	icon: React.ForwardRefExoticComponent<
+		Omit<import("lucide-react").LucideProps, "ref"> &
+			React.RefAttributes<SVGSVGElement>
+	>;
+	description: string;
+	group: string;
+	visibilities?: IAppVisibility[];
+	requiresPaid?: boolean;
+	disabled?: boolean;
+}[] = [
 	{
 		href: "/library/config",
-		label: "General",
+		label: "Dashboard",
 		icon: SquarePenIcon,
-		description: "Basic app information and settings",
+		description: "Overview, stats, and getting started",
+		group: "General",
 	},
 	{
 		href: "/library/config/configuration",
 		label: "Configuration",
 		icon: CogIcon,
 		description: "App configuration and environment variables",
+		group: "General",
 	},
 	{
 		href: "/library/config/runtime-vars",
 		label: "Runtime Variables",
 		icon: KeyIcon,
 		description: "User-specific runtime secrets and configurations",
+		group: "General",
 	},
 	{
 		href: "/library/config/flows",
 		label: "Flows",
 		icon: WorkflowIcon,
 		description: "Business logic and workflow definitions",
+		group: "Build",
 	},
 	{
 		href: "/library/config/pages",
 		label: "Events",
 		icon: SparklesIcon,
 		description: "Events, pages, and path-based navigation",
+		group: "Build",
 	},
 	{
 		href: "/library/config/templates",
 		label: "Templates",
 		icon: CopyIcon,
 		description: "Reusable Flow templates",
+		group: "Build",
 	},
 	{
 		href: "/library/config/widgets",
 		label: "Widgets",
 		icon: LayoutGridIcon,
 		description: "Reusable UI components and widgets",
+		group: "Build",
 	},
 	{
 		href: "/library/config/storage",
 		label: "Storage",
 		icon: FolderClosedIcon,
 		description: "Data storage and file management",
+		group: "Data",
+	},
+	{
+		href: "/library/config/user-storage",
+		label: "User Storage",
+		icon: UserIcon,
+		description: "Browse and search your private app files",
+		group: "Data",
 	},
 	{
 		href: "/library/config/explore",
 		label: "Explore Data",
 		icon: DatabaseIcon,
 		description: "Browse and query your data",
+		group: "Data",
 	},
 	{
 		href: "/library/config/packages",
 		label: "Packages",
 		icon: PackageIcon,
 		description: "Manage WASM packages for this app",
+		group: "Data",
 	},
 	{
 		href: "/library/config/team",
@@ -150,6 +185,7 @@ const navigationItems = [
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
 		],
+		group: "Collaborate",
 	},
 	{
 		href: "/library/config/roles",
@@ -161,6 +197,7 @@ const navigationItems = [
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
 		],
+		group: "Collaborate",
 	},
 	{
 		href: "/library/config/sales",
@@ -169,21 +206,37 @@ const navigationItems = [
 		description: "Track sales, manage pricing and discounts",
 		visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
 		requiresPaid: true,
+		group: "Insights",
 	},
 	{
 		href: "/library/config/analytics",
 		label: "Analytics",
 		icon: ChartAreaIcon,
 		description: "Performance metrics and insights",
+		group: "Insights",
 	},
 	{
 		href: "/library/config/endpoints",
 		label: "Endpoints",
 		icon: GlobeIcon,
 		description: "API endpoints and integrations",
-		disabled: true,
+		group: "Insights",
+	},
+	{
+		href: "/library/config/publication",
+		label: "Publication",
+		icon: SendIcon,
+		description: "Track publication review status and auditor feedback",
+		group: "Insights",
 	},
 ];
+
+function isRouteActive(itemHref: string, currentRoute: string): boolean {
+	if (itemHref === "/library/config") {
+		return currentRoute === "/library/config";
+	}
+	return currentRoute.startsWith(itemHref);
+}
 
 export default function Id({
 	children,
@@ -222,6 +275,37 @@ export default function Id({
 	const [showPassword, setShowPassword] = useState(false);
 	const [exporting, setExporting] = useState(false);
 	const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+	const settingsProfile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const publicationRequests = useQuery<
+		RawAppPublicationRequestItem[],
+		Error,
+		AppPublicationRequestItem[]
+	>({
+		queryKey: ["app-publication-requests", id],
+		queryFn: async () => {
+			if (!settingsProfile.data) throw new Error("Profile not loaded");
+			return backend.apiState.get<RawAppPublicationRequestItem[]>(
+				settingsProfile.data.hub_profile,
+				`apps/${id}/publication`,
+			);
+		},
+		enabled: !!settingsProfile.data && !!id,
+		select: normalizeAppPublicationRequests,
+	});
+
+	const hasActivePublicationRequest = useMemo(
+		() =>
+			(publicationRequests.data ?? []).some(
+				(r) => r.status === "pending" || r.status === "on_hold",
+			),
+		[publicationRequests.data],
+	);
 
 	// Use local visibility if available, otherwise fall back to app.data.visibility
 	const effectiveVisibility = useMemo(
@@ -380,7 +464,7 @@ export default function Id({
 					: []),
 			],
 		});
-	}, [metadata.data?.name, metadata.isFetching, useAppHref]);
+	}, [metadata.data?.name, metadata.isFetching, useAppHref, update]);
 
 	const strength = useMemo(() => {
 		if (!encrypt) return 0;
@@ -541,6 +625,10 @@ export default function Id({
 											>
 												<Icon className="w-4 h-4 flex-shrink-0" />
 												<span className="truncate">{item.label}</span>
+												{item.href === "/library/config/publication" &&
+													hasActivePublicationRequest && (
+														<span className="ml-auto w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+													)}
 											</Link>
 										);
 									})}
@@ -701,94 +789,14 @@ export default function Id({
 				>
 					{!isMaximized && (
 						<Card className="h-full max-h-full overflow-hidden py-2 hidden md:flex md:flex-col md:flex-grow order-2 md:order-1">
-							<CardHeader className="pb-2 pt-2 border-b relative h-fit">
-								<div className="flex flex-col gap-3">
-									<div className="flex items-center gap-2 w-full">
-										<div className="relative">
-											<Avatar className="w-9 h-9 border border-border/50 shadow-sm">
-												<AvatarImage
-													src={metadata.data?.icon ?? "/app-logo.webp"}
-													alt={`${metadata.data?.name ?? id} icon`}
-												/>
-												<AvatarFallback className="text-xs font-semibold">
-													{(metadata.data?.name ?? id ?? "Unknown")
-														.substring(0, 2)
-														.toUpperCase()}
-												</AvatarFallback>
-											</Avatar>
-										</div>
-										<div className="flex-1 min-w-0">
-											<CardTitle className="text-sm truncate">
-												{metadata.isFetching ? (
-													<Skeleton className="h-4 w-24" />
-												) : (
-													metadata.data?.name
-												)}
-											</CardTitle>
-										</div>
-									</div>
-
-									{metadata.data?.description && (
-										<p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
-											{metadata.data.description}
-										</p>
-									)}
-
-									<div className="flex flex-col gap-2">
-										{metadata.data?.tags && metadata.data.tags.length > 0 && (
-											<div className="flex flex-wrap gap-1 mb-2">
-												{metadata.data.tags.slice(0, 2).map((tag) => (
-													<Badge
-														key={tag}
-														variant="secondary"
-														className="text-xs px-2 py-0.5"
-													>
-														{tag}
-													</Badge>
-												))}
-												{metadata.data.tags.length > 2 && (
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<Badge
-																variant="outline"
-																className="text-xs px-2 py-0.5"
-															>
-																+{metadata.data.tags.length - 2}
-															</Badge>
-														</TooltipTrigger>
-														<TooltipContent side="right" className="max-w-xs">
-															<div className="space-y-1">
-																{metadata.data.tags.slice(2).map((tag) => (
-																	<Badge
-																		key={tag}
-																		variant="secondary"
-																		className="text-xs mr-1"
-																	>
-																		{tag}
-																	</Badge>
-																))}
-															</div>
-														</TooltipContent>
-													</Tooltip>
-												)}
-											</div>
-										)}
-									</div>
-								</div>
-							</CardHeader>
 							<CardContent className="flex-1 p-0 overflow-hidden">
 								<ScrollArea className="h-full px-3 flex-1">
-									<div className="pt-3">
-										<CardTitle className="text-sm font-medium text-muted-foreground mb-3">
-											Navigation
-										</CardTitle>
-									</div>
 									<nav
-										className="flex flex-col gap-1 pb-4"
+										className="flex flex-col gap-0.5 py-3"
 										key={id + (effectiveVisibility ?? "")}
 									>
-										{navigationItems
-											.filter(
+										{(() => {
+											const filtered = navigationItems.filter(
 												(item) =>
 													(!item.visibilities ||
 														item.visibilities.includes(
@@ -796,51 +804,83 @@ export default function Id({
 														)) &&
 													(!item.requiresPaid ||
 														(app.data?.price != null && app.data.price > 0)),
-											)
-											.map((item) => {
+											);
+											let lastGroup = "";
+											return filtered.map((item) => {
 												const Icon = item.icon;
-												if (item.disabled) {
-													return (
-														<Tooltip key={item.href} delayDuration={300}>
-															<TooltipTrigger asChild>
-																<div
-																	className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground bg-muted/50 opacity-60 cursor-not-allowed"
-																	tabIndex={-1}
-																	aria-disabled="true"
-																>
-																	<Icon className="w-4 h-4 flex-shrink-0" />
-																	<span className="truncate">{item.label}</span>
-																</div>
-															</TooltipTrigger>
-															<TooltipContent side="right" className="max-w-xs">
-																<p className="font-bold">
-																	{item.label} (Coming soon!)
-																</p>
-																<p className="text-xs mt-1">
-																	{item.description}
-																</p>
-															</TooltipContent>
-														</Tooltip>
-													);
-												}
+												const showGroupHeader = item.group !== lastGroup;
+												lastGroup = item.group;
+												const active = isRouteActive(item.href, currentRoute);
 												return (
-													<Tooltip key={item.href} delayDuration={300}>
-														<TooltipTrigger asChild>
-															<Link
-																href={`${item.href}?id=${id}`}
-																className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all hover:bg-muted text-muted-foreground hover:text-foreground"
-															>
-																<Icon className="w-4 h-4 flex-shrink-0" />
-																<span className="truncate">{item.label}</span>
-															</Link>
-														</TooltipTrigger>
-														<TooltipContent side="right" className="max-w-xs">
-															<p className="font-bold">{item.label}</p>
-															<p className="text-xs mt-1">{item.description}</p>
-														</TooltipContent>
-													</Tooltip>
+													<div key={item.href}>
+														{showGroupHeader && (
+															<div className="text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider px-3 pt-4 pb-1 first:pt-0">
+																{item.group}
+															</div>
+														)}
+														{item.disabled ? (
+															<Tooltip delayDuration={300}>
+																<TooltipTrigger asChild>
+																	<div
+																		className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground bg-muted/50 opacity-60 cursor-not-allowed"
+																		tabIndex={-1}
+																		aria-disabled="true"
+																	>
+																		<Icon className="w-4 h-4 shrink-0" />
+																		<span className="truncate">
+																			{item.label}
+																		</span>
+																	</div>
+																</TooltipTrigger>
+																<TooltipContent
+																	side="right"
+																	className="max-w-xs"
+																>
+																	<p className="font-bold">
+																		{item.label} (Coming soon!)
+																	</p>
+																	<p className="text-xs mt-1">
+																		{item.description}
+																	</p>
+																</TooltipContent>
+															</Tooltip>
+														) : (
+															<Tooltip delayDuration={300}>
+																<TooltipTrigger asChild>
+																	<Link
+																		href={`${item.href}?id=${id}`}
+																		className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
+																			active
+																				? "bg-primary/10 text-primary font-medium"
+																				: "text-muted-foreground hover:bg-muted hover:text-foreground"
+																		}`}
+																	>
+																		<Icon className="w-4 h-4 shrink-0" />
+																		<span className="truncate">
+																			{item.label}
+																		</span>
+																		{item.href ===
+																			"/library/config/publication" &&
+																			hasActivePublicationRequest && (
+																				<span className="ml-auto w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+																			)}
+																	</Link>
+																</TooltipTrigger>
+																<TooltipContent
+																	side="right"
+																	className="max-w-xs"
+																>
+																	<p className="font-bold">{item.label}</p>
+																	<p className="text-xs mt-1">
+																		{item.description}
+																	</p>
+																</TooltipContent>
+															</Tooltip>
+														)}
+													</div>
 												);
-											})}
+											});
+										})()}
 										{(effectiveVisibility ?? IAppVisibility.Private) ===
 											IAppVisibility.Offline && (
 											<Tooltip key="export" delayDuration={300}>
@@ -929,7 +969,7 @@ export default function Id({
 					)}
 
 					<Card
-						className={`h-full max-h-full flex-col flex-grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
+						className={`h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
 					>
 						<CardHeader className="pb-0 pt-4 px-4 hidden md:block">
 							<div className="flex items-center justify-between">
@@ -956,10 +996,21 @@ export default function Id({
 							</div>
 						</CardHeader>
 						<CardContent className="flex-1 p-0 overflow-hidden min-h-0">
+							{hasActivePublicationRequest &&
+								!currentRoute?.includes("/publication") && (
+									<div className="px-6 pt-4">
+										<AppPublicationBanner
+											requests={publicationRequests.data ?? []}
+											onNavigate={() => {
+												window.location.href = `/library/config/publication?id=${id}`;
+											}}
+										/>
+									</div>
+								)}
 							{currentRoute?.includes("/storage") ||
 							currentRoute?.includes("/explore") ? (
 								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 p-6 pb-0 pt-0 overflow-auto">
+									<div className="flex-1 min-h-0 p-6 overflow-auto">
 										<Suspense
 											fallback={
 												<div className="space-y-4">
@@ -974,8 +1025,8 @@ export default function Id({
 									</div>
 								</div>
 							) : (
-								<ScrollArea className="h-full">
-									<div className="p-6 pb-0 pt-0">
+								<ScrollArea className="h-full overflow-y-auto">
+									<div className="p-6">
 										<Suspense
 											fallback={
 												<div className="space-y-4">

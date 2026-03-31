@@ -1,6 +1,5 @@
 "use client";
 
-import { formatDistanceToNow } from "date-fns";
 import {
 	MoreHorizontal,
 	Shield,
@@ -34,6 +33,7 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
+	RelativeTime,
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
@@ -260,11 +260,7 @@ export function PackageUsersTab({
 									</Badge>
 								</TableCell>
 								<TableCell className="text-sm text-muted-foreground">
-									{user.grantedAt && !Number.isNaN(new Date(user.grantedAt).getTime())
-										? formatDistanceToNow(new Date(user.grantedAt), {
-												addSuffix: true,
-											})
-										: "—"}
+									<RelativeTime fallback="—" value={user.grantedAt} />
 								</TableCell>
 								<TableCell className="text-right">
 									<UserActions

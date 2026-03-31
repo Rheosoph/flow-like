@@ -44,7 +44,11 @@ pub async fn get_pages(
                             });
                         }
                     }
-                    Err(e) => tracing::error!("Failed to load pages for board {}: {:?}", board_id_filter, e),
+                    Err(e) => tracing::error!(
+                        "Failed to load pages for board {}: {:?}",
+                        board_id_filter,
+                        e
+                    ),
                 }
             }
             Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id_filter, e),
@@ -66,7 +70,9 @@ pub async fn get_pages(
                                 });
                             }
                         }
-                        Err(e) => tracing::error!("Failed to load pages for board {}: {:?}", board_id, e),
+                        Err(e) => {
+                            tracing::error!("Failed to load pages for board {}: {:?}", board_id, e)
+                        }
                     }
                 }
                 Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id, e),

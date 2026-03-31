@@ -14,14 +14,17 @@ import {
 	TooltipTrigger,
 	useBackend,
 } from "@tm9657/flow-like-ui";
-import type {
-	InstalledPackage,
-	PackageSummary,
-	PackageUpdate,
+import {
+	type InstalledPackage,
+	PackageStatus,
+	type PackageSummary,
+	type PackageUpdate,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import {
 	AlertTriangle,
 	Download,
+	Eye,
+	EyeOff,
 	FolderOpen,
 	Loader2,
 	Package,
@@ -58,7 +61,13 @@ function PackageItem({
 	onUpdate: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
+	compileStatus?:
+		| "idle"
+		| "downloading"
+		| "compiling"
+		| "ready"
+		| "error"
+		| "stale";
 }) {
 	return (
 		<div
@@ -128,7 +137,10 @@ function PackageItem({
 									variant="ghost"
 									size="icon"
 									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-								onClick={(e) => { e.stopPropagation(); onUpdate(pkg.id); }}
+									onClick={(e) => {
+										e.stopPropagation();
+										onUpdate(pkg.id);
+									}}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -147,7 +159,10 @@ function PackageItem({
 								variant="ghost"
 								size="icon"
 								className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-destructive/80 hover:bg-destructive/10"
-								onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
+								onClick={(e) => {
+									e.stopPropagation();
+									onUninstall(pkg.id);
+								}}
 								disabled={isLoading}
 							>
 								{isLoading && !hasUpdate ? (
@@ -193,11 +208,17 @@ function OwnedRegistryItem({
 	onInstall: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
+	compileStatus?:
+		| "idle"
+		| "downloading"
+		| "compiling"
+		| "ready"
+		| "error"
+		| "stale";
 }) {
 	return (
 		<div
-			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
+			className={`rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer ${pkg.status === PackageStatus.Disabled ? "opacity-60" : ""}`}
 			onClick={() => onSelect?.(pkg.id)}
 			onKeyDown={(e) => e.key === "Enter" && onSelect?.(pkg.id)}
 			role="button"
@@ -215,6 +236,14 @@ function OwnedRegistryItem({
 						</Badge>
 						{pkg.verified && (
 							<Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+						)}
+						{pkg.status === PackageStatus.Disabled && (
+							<Badge
+								variant="destructive"
+								className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
+							>
+								Disabled
+							</Badge>
 						)}
 						{pkg.visibility && pkg.visibility !== "public" && (
 							<Badge
@@ -253,7 +282,10 @@ function OwnedRegistryItem({
 								variant="ghost"
 								size="sm"
 								className="h-8 gap-1.5 rounded-full text-xs text-muted-foreground/70 hover:text-foreground/80 hover:bg-muted/30 px-3"
-								onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
+								onClick={(e) => {
+									e.stopPropagation();
+									onInstall(pkg.id);
+								}}
 								disabled={isLoading}
 							>
 								{isLoading ? (
@@ -280,7 +312,10 @@ export default function InstalledPackagesPage() {
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
-	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+	const [showDisabled, setShowDisabled] = useState(false);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+		null,
+	);
 
 	const [installedPackages, setInstalledPackages] = useState<
 		InstalledPackage[]
@@ -317,7 +352,9 @@ export default function InstalledPackagesPage() {
 			const [packages, updateList, ownedResults] = await Promise.all([
 				backend.registryState.getInstalledPackages(),
 				backend.registryState.checkForUpdates(),
-				backend.registryState.getOwnedPackages(),
+				backend.registryState.getOwnedPackages({
+					includeDisabled: showDisabled,
+				}),
 			]);
 			const registry = packages.filter((p) => !p.id.startsWith("local."));
 			const local = packages.filter((p) => p.id.startsWith("local."));
@@ -334,7 +371,7 @@ export default function InstalledPackagesPage() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized]);
+	}, [backend?.registryState, isInitialized, showDisabled]);
 
 	useEffect(() => {
 		if (isInitialized) {
@@ -455,7 +492,10 @@ export default function InstalledPackagesPage() {
 		);
 	}
 
-	const totalCount = filteredPackages.length + filteredLocalPackages.length + filteredOwnedPackages.length;
+	const totalCount =
+		filteredPackages.length +
+		filteredLocalPackages.length +
+		filteredOwnedPackages.length;
 
 	if (selectedPackageId) {
 		return (
@@ -470,8 +510,12 @@ export default function InstalledPackagesPage() {
 					toast.success("Package uninstalled");
 					fetchInstalled();
 				}}
-				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
-				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onInstallError={(error) =>
+					toast.error(`Failed to install: ${error.message}`)
+				}
+				onUninstallError={(error) =>
+					toast.error(`Failed to uninstall: ${error.message}`)
+				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
 					fetchInstalled();
@@ -507,6 +551,26 @@ export default function InstalledPackagesPage() {
 				</div>
 
 				<div className="flex items-center gap-1">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant={showDisabled ? "secondary" : "ghost"}
+								size="icon"
+								className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+								onClick={() => setShowDisabled((v) => !v)}
+							>
+								{showDisabled ? (
+									<Eye className="h-4 w-4" />
+								) : (
+									<EyeOff className="h-4 w-4" />
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>
+							{showDisabled ? "Hide disabled" : "Show disabled"}
+						</TooltipContent>
+					</Tooltip>
+
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button

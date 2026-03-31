@@ -1,6 +1,6 @@
 [package]
 name = "flow-like-wasm-sdk-macros"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "Proc macros for the Flow-Like WASM SDK"
 license = "MIT"

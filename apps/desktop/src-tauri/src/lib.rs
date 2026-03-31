@@ -232,7 +232,10 @@ pub fn run() {
         // is a broken pipe (e.g. the parent process that captured output has gone away).
         let _ = std::io::Write::write_fmt(
             &mut std::io::stderr(),
-            format_args!("PANIC: {info}\n{}\n", std::backtrace::Backtrace::force_capture()),
+            format_args!(
+                "PANIC: {info}\n{}\n",
+                std::backtrace::Backtrace::force_capture()
+            ),
         );
         if let Some(location) = info.location() {
             tracing::error!(

@@ -4,7 +4,14 @@ import type { IProfile } from "../types";
 import type { IAIState } from "./backend-state/ai-state";
 import type { IApiKeyState } from "./backend-state/api-key-state";
 import type { IApiState } from "./backend-state/api-state";
-import type { IAppState, IPurchaseResponse } from "./backend-state/app-state";
+import type {
+	AppCommentItem,
+	AppCommentsResponse,
+	IAppState,
+	IPurchaseResponse,
+	UpsertAppCommentRequest,
+	UpsertAppCommentResponse,
+} from "./backend-state/app-state";
 import type { IBitState } from "./backend-state/bit-state";
 import type { IBoardState } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
@@ -56,8 +63,12 @@ export type {
 	IAIState,
 	IApiKeyState,
 	IApiState,
+	AppCommentItem,
+	AppCommentsResponse,
 	IAppState,
 	IPurchaseResponse,
+	UpsertAppCommentRequest,
+	UpsertAppCommentResponse,
 	IAppRouteState,
 	IBitState,
 	IBoardState,

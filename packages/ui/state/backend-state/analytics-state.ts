@@ -33,6 +33,11 @@ export interface IAnalyticsStats {
 	summary: IAnalyticsOverview;
 }
 
+export interface IAnalyticsDashboard {
+	overview: IAnalyticsOverview;
+	stats: IAnalyticsStats;
+}
+
 export interface IFeedbackItem {
 	id: string;
 	userId: string | null;
@@ -51,6 +56,13 @@ export interface IPaginatedFeedback {
 
 export interface IAnalyticsState {
 	getAnalyticsOverview(appId: string): Promise<IAnalyticsOverview>;
+
+	getAnalyticsDashboard(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		period?: "day" | "week" | "month",
+	): Promise<IAnalyticsDashboard>;
 
 	getAnalyticsStats(
 		appId: string,

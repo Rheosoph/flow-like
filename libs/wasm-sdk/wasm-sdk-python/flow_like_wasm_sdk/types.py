@@ -557,16 +557,41 @@ def _scalar_data_type(annotation: Any) -> tuple[str, type | None]:
     return PinType.GENERIC, None
 
 
+def _is_union_origin(origin: Any) -> bool:
+    """Check if *origin* is a Union type (``typing.Union`` or Python 3.10+ ``X | Y``)."""
+    import typing
+    if origin is getattr(typing, "Union", None):
+        return True
+    try:
+        import types as _types
+        if origin is _types.UnionType:
+            return True
+    except AttributeError:
+        pass
+    return False
+
+
 def _resolve_type_info(annotation: Any) -> tuple[str, str, type | None]:
     """Resolve a type annotation to ``(data_type, value_type, model_class)``.
 
-    Handles scalars, BaseModel subclasses, and generic collections:
+    Handles scalars, BaseModel subclasses, generic collections, and
+    ``Optional`` / ``Union`` wrappers:
 
-    - ``list[X]``    \u2192 ``(resolve(X), Array, model_if_basemodel)``
-    - ``dict[K, V]`` \u2192 ``(resolve(V), HashMap, model_if_basemodel)``
-    - ``set[X]``     \u2192 ``(resolve(X), HashSet, model_if_basemodel)``
+    - ``list[X]``              → ``(resolve(X), Array, model_if_basemodel)``
+    - ``dict[K, V]``           → ``(resolve(V), HashMap, model_if_basemodel)``
+    - ``set[X]``               → ``(resolve(X), HashSet, model_if_basemodel)``
+    - ``tuple[X, ...]``        → ``(resolve(X), Array, model_if_basemodel)``
+    - ``Optional[list[X]]``    → ``(resolve(X), Array, model_if_basemodel)``
+    - ``X | None``             → unwraps to resolve(X)
     """
     origin = get_origin(annotation)
+
+    # Handle Optional / Union — unwrap Union[X, None] to X and recurse
+    if _is_union_origin(origin):
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return _resolve_type_info(args[0])
+
     if origin is list:
         args = get_args(annotation)
         inner = args[0] if args else None
@@ -582,6 +607,11 @@ def _resolve_type_info(annotation: Any) -> tuple[str, str, type | None]:
         inner = args[0] if args else None
         dt, model = _scalar_data_type(inner)
         return dt, ValueType.HASH_SET, model
+    if origin is tuple:
+        args = get_args(annotation)
+        inner = args[0] if args else None
+        dt, model = _scalar_data_type(inner)
+        return dt, ValueType.ARRAY, model
     dt, model = _scalar_data_type(annotation)
     return dt, ValueType.NORMAL, model
 

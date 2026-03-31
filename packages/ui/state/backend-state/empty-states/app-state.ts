@@ -7,7 +7,13 @@ import type {
 	IMetadata,
 } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
-import type { IMediaItem, IPurchaseResponse } from "../app-state";
+import type {
+	AppCommentsResponse,
+	IMediaItem,
+	IPurchaseResponse,
+	UpsertAppCommentRequest,
+	UpsertAppCommentResponse,
+} from "../app-state";
 
 export class EmptyAppState implements IAppState {
 	createApp(
@@ -73,6 +79,22 @@ export class EmptyAppState implements IAppState {
 	}
 
 	purchaseApp(appId: string): Promise<IPurchaseResponse> {
+		throw new Error("Method not implemented.");
+	}
+	getAppComments(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<AppCommentsResponse> {
+		throw new Error("Method not implemented.");
+	}
+	upsertAppComment(
+		appId: string,
+		body: UpsertAppCommentRequest,
+	): Promise<UpsertAppCommentResponse> {
+		throw new Error("Method not implemented.");
+	}
+	deleteAppComment(appId: string, commentId: string): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
 }

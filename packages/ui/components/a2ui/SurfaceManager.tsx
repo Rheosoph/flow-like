@@ -60,11 +60,19 @@ export function useSurfaceManager() {
 					const existing = next.get(message.surfaceId);
 					if (!existing) break;
 
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+
 					next.set(message.surfaceId, {
 						...existing,
 						canvasSettings: {
 							...existing.canvasSettings,
-							...message.canvasSettings,
+							...filtered,
 						},
 					});
 					break;

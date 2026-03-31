@@ -3,12 +3,20 @@
 import { CronExpressionParser } from "cron-parser";
 import { useEffect, useMemo, useState } from "react";
 
+import { CheckIcon, ChevronsUpDown, Clock } from "lucide-react";
+
 import {
 	Alert,
 	AlertDescription,
 	AlertTitle,
 	Badge,
 	Button,
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
 	Input,
 	Label,
 	Popover,
@@ -19,6 +27,7 @@ import {
 	Separator,
 } from "../../ui";
 import { Calendar } from "../../ui/calendar";
+import { cn } from "../../../lib/utils";
 import type { IConfigInterfaceProps } from "../interfaces";
 
 /* -----------------------------------------------------------------------------
@@ -350,6 +359,54 @@ function formatLocalDisplay(
 }
 
 /* -----------------------------------------------------------------------------
+   IANA timezone helpers
+----------------------------------------------------------------------------- */
+const IANA_TIMEZONES: string[] = (() => {
+	try {
+		return Intl.supportedValuesOf("timeZone");
+	} catch {
+		return ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+			"Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Tokyo", "Asia/Shanghai",
+			"Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland"];
+	}
+})();
+
+function isValidTimezone(tz: string): boolean {
+	if (!tz) return false;
+	try {
+		Intl.DateTimeFormat(undefined, { timeZone: tz });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function formatRelativeTime(iso: string): string {
+	try {
+		const d = new Date(iso);
+		if (Number.isNaN(d.getTime())) return iso;
+		const diff = Date.now() - d.getTime();
+		const absDiff = Math.abs(diff);
+		const isFuture = diff < 0;
+		const prefix = isFuture ? "in " : "";
+		const suffix = isFuture ? "" : " ago";
+		if (absDiff < 60_000) return "just now";
+		if (absDiff < 3_600_000) {
+			const m = Math.floor(absDiff / 60_000);
+			return `${prefix}${m}m${suffix}`;
+		}
+		if (absDiff < 86_400_000) {
+			const h = Math.floor(absDiff / 3_600_000);
+			return `${prefix}${h}h${suffix}`;
+		}
+		const days = Math.floor(absDiff / 86_400_000);
+		return `${prefix}${days}d${suffix}`;
+	} catch {
+		return iso;
+	}
+}
+
+/* -----------------------------------------------------------------------------
    Component
 ----------------------------------------------------------------------------- */
 export function CronJobConfig({
@@ -371,6 +428,10 @@ export function CronJobConfig({
 			: "one_time";
 
 	const [mode, setMode] = useState<Mode>(initialMode);
+
+	const [tzOpen, setTzOpen] = useState(false);
+	const [tzSearch, setTzSearch] = useState("");
+	const tzValid = isValidTimezone(timezone);
 
 	// One-time UI state
 	const [dateValue, setDateValue] = useState<Date | undefined>(() => {
@@ -527,13 +588,52 @@ export function CronJobConfig({
 			<div className="space-y-2">
 				<Label htmlFor="cron_tz">Timezone</Label>
 				<div className="flex gap-2">
-					<Input
-						id="cron_tz"
-						value={timezone}
-						onChange={(e) => setValue("timezone", e.target.value)}
-						placeholder="Europe/Berlin"
-						disabled={!isEditing}
-					/>
+					<Popover open={tzOpen} onOpenChange={setTzOpen}>
+						<PopoverTrigger asChild>
+							<Button
+								type="button"
+								variant="outline"
+								role="combobox"
+								aria-expanded={tzOpen}
+								className={cn("flex-1 justify-between", !tzValid && timezone && "border-destructive")}
+								disabled={!isEditing}
+							>
+								{timezone || "Select timezone..."}
+								<ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent className="w-75 p-0">
+							<Command shouldFilter={false}>
+								<CommandInput
+									placeholder="Search timezone..."
+									value={tzSearch}
+									onValueChange={setTzSearch}
+								/>
+								<CommandList>
+									<CommandEmpty>No timezone found.</CommandEmpty>
+									<CommandGroup>
+										{IANA_TIMEZONES
+											.filter((tz) => tz.toLowerCase().includes(tzSearch.toLowerCase()))
+											.slice(0, 50)
+											.map((tz) => (
+												<CommandItem
+													key={tz}
+													value={tz}
+													onSelect={() => {
+														setValue("timezone", tz);
+														setTzOpen(false);
+														setTzSearch("");
+													}}
+												>
+													<CheckIcon className={cn("mr-2 h-4 w-4", timezone === tz ? "opacity-100" : "opacity-0")} />
+													{tz}
+												</CommandItem>
+											))}
+									</CommandGroup>
+								</CommandList>
+							</Command>
+						</PopoverContent>
+					</Popover>
 					<Button
 						type="button"
 						variant="secondary"
@@ -548,10 +648,11 @@ export function CronJobConfig({
 						Use my timezone
 					</Button>
 				</div>
-				<p className="text-sm text-muted-foreground">
-					IANA zone (e.g., <code>Europe/Berlin</code>, <code>UTC</code>). Used
-					for comparisons and previews.
-				</p>
+				{!tzValid && timezone && (
+					<p className="text-sm text-destructive">
+						Unknown timezone. Please select a valid IANA timezone.
+					</p>
+				)}
 			</div>
 
 			<Separator />
@@ -711,6 +812,32 @@ export function CronJobConfig({
 						</div>
 					</div>
 				</div>
+			)}
+
+			{/* Last fired */}
+			{config?.last_fired && (
+				<>
+					<Separator />
+					<div className="flex items-center gap-2 text-sm text-muted-foreground">
+						<Clock className="h-4 w-4" />
+						<span>
+							Last ran{" "}
+							<strong>{formatRelativeTime(config.last_fired)}</strong>
+							{" — "}
+							{new Intl.DateTimeFormat("en-GB", {
+								timeZone: timezone,
+								year: "numeric",
+								month: "short",
+								day: "2-digit",
+								hour: "2-digit",
+								minute: "2-digit",
+								second: "2-digit",
+								hour12: false,
+								timeZoneName: "short",
+							}).format(new Date(config.last_fired))}
+						</span>
+					</div>
+				</>
 			)}
 		</div>
 	);

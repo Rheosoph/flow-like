@@ -43,6 +43,7 @@ export * from "./popover";
 export * from "./progress";
 export * from "./progress-toast";
 export * from "./radio-group";
+export * from "./relative-time";
 export * from "./resizable";
 export * from "./scroll-area";
 export * from "./select";

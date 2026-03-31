@@ -46,6 +46,7 @@ import type { IAnalyticsState } from "@tm9657/flow-like-ui/state/backend-state/a
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
+import { scheduleIDBCleanup } from "../lib/idb-maintenance";
 import { type OnlineProfile, toLocalProfile } from "../lib/profile-sync";
 import { AiState } from "./tauri-provider/ai-state";
 import { AnalyticsState } from "./tauri-provider/analytics-state";
@@ -358,10 +359,16 @@ export function TauriProvider({
 	// appear in the catalog without requiring the user to visit the store.
 	useEffect(() => {
 		if (!backend) return;
-		backend.registryState.init?.().catch((e: unknown) => {
-			console.warn("Registry init (eager):", e);
-		});
-	}, [backend]);
+		backend.registryState
+			.init?.()
+			.then(() => {
+				queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
+				queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
+			})
+			.catch((e: unknown) => {
+				console.warn("Registry init (eager):", e);
+			});
+	}, [backend, queryClient]);
 
 	useEffect(() => {
 		console.time("TauriProvider Initialization");
@@ -383,6 +390,8 @@ export function TauriProvider({
 		console.time("Setting Download Backend");
 		setDownloadBackend(backend);
 		console.timeEnd("Setting Download Backend");
+
+		scheduleIDBCleanup();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -567,6 +576,38 @@ export function ProfileSyncer({
 				);
 				return null;
 			}
+		};
+
+		/**
+		 * Delete a profile locally, handling the case where it may be the current profile.
+		 * Switches to another profile first if needed.
+		 * Returns true if the deleted profile was the current profile.
+		 */
+		const deleteProfileLocally = async (
+			profileId: string,
+		): Promise<boolean> => {
+			const currentId = await invoke<string>(
+				"get_current_profile_id",
+			).catch(() => null);
+			let wasCurrentProfile = false;
+
+			if (currentId === profileId) {
+				wasCurrentProfile = true;
+				const allProfiles =
+					await invoke<Record<string, { hub_profile: IProfile }>>(
+						"get_profiles_raw",
+					);
+				const otherId = allProfiles
+					? Object.keys(allProfiles).find((id) => id !== profileId)
+					: undefined;
+				if (otherId) {
+					await invoke("set_current_profile", { profileId: otherId });
+				}
+			}
+
+			await invoke("delete_profile", { profileId });
+			await appsDB.shortcuts.where("profileId").equals(profileId).delete();
+			return wasCurrentProfile;
 		};
 
 		const syncProfiles = async () => {
@@ -817,6 +858,7 @@ export function ProfileSyncer({
 						thumbnail_upload_url?: string;
 					}>;
 					skipped: string[];
+					deleted: string[];
 				};
 
 				let result: SyncResult = {
@@ -824,6 +866,7 @@ export function ProfileSyncer({
 					created: [],
 					updated: [],
 					skipped: [],
+					deleted: [],
 				};
 
 				if (!response.ok) {
@@ -840,6 +883,23 @@ export function ProfileSyncer({
 						"[ProfileSync] Sync result:",
 						JSON.stringify(result, null, 2),
 					);
+				}
+
+				// Delete local profiles that the server reports as soft-deleted (tombstones)
+				for (const deletedId of result.deleted) {
+					console.log(
+						"[ProfileSync] Server reports profile as deleted (tombstone):",
+						deletedId,
+					);
+					try {
+						await deleteProfileLocally(deletedId);
+					} catch (error) {
+						console.error(
+							"[ProfileSync] Failed to delete tombstoned profile locally:",
+							deletedId,
+							error,
+						);
+					}
 				}
 
 				for (const created of result.created) {
@@ -935,8 +995,16 @@ export function ProfileSyncer({
 						return;
 					}
 
-					const onlineProfiles =
-						(await profilesResponse.json()) as OnlineProfile[];
+const allOnlineProfiles =
+							(await profilesResponse.json()) as OnlineProfile[];
+						const tombstoneIds = new Set(
+							allOnlineProfiles
+								.filter((p) => p.deleted_at)
+								.map((p) => p.id),
+						);
+						const onlineProfiles = allOnlineProfiles.filter(
+							(p) => !p.deleted_at,
+						);
 					const onlineProfilesById = new Map(
 						onlineProfiles.map((p) => [p.id, p]),
 					);
@@ -997,32 +1065,37 @@ export function ProfileSyncer({
 						await invoke<Record<string, { hub_profile: IProfile }>>(
 							"get_profiles_raw",
 						);
-					const currentProfileId = await invoke<string>(
-						"get_current_profile_id",
-					).catch(() => null);
 					let deletedCurrentProfile = false;
 
 					if (currentLocalProfiles) {
 						for (const localProfileId of Object.keys(currentLocalProfiles)) {
 							const localProfile = currentLocalProfiles[localProfileId];
+
+							// Delete if the server reports this profile as tombstoned
+							const isTombstoned = tombstoneIds.has(localProfileId);
+							// Delete if this profile has online apps but no longer exists on the server
 							const hasOnlineApps = localProfile.hub_profile.apps?.some(
 								(app) => !offlineAppIds.has(app.app_id),
 							);
-							if (hasOnlineApps && !onlineProfileIds.has(localProfileId)) {
-								console.log("Deleting stale local profile:", localProfileId);
-								if (localProfileId === currentProfileId) {
-									deletedCurrentProfile = true;
-								}
+							const isStale =
+								hasOnlineApps && !onlineProfileIds.has(localProfileId);
+
+							if (isTombstoned || isStale) {
+								console.log(
+									"[ProfileSync] Deleting local profile:",
+									localProfileId,
+									isTombstoned ? "(tombstoned)" : "(stale)",
+								);
 								try {
-									await invoke("delete_profile", {
-										profileId: localProfileId,
-									});
-									await appsDB.shortcuts
-										.where("profileId")
-										.equals(localProfileId)
-										.delete();
+									const wasCurrent =
+										await deleteProfileLocally(localProfileId);
+									if (wasCurrent) deletedCurrentProfile = true;
 								} catch (error) {
-									console.error("Failed to delete local profile:", error);
+									console.error(
+										"[ProfileSync] Failed to delete local profile:",
+										localProfileId,
+										error,
+									);
 								}
 							}
 						}

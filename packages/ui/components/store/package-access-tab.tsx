@@ -1,13 +1,20 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatDistanceToNow } from "date-fns";
 import { Check, Clock, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import type { AccessRequest } from "../../lib/schema/wasm";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useBackend } from "../../state/backend-state";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "../ui";
+import {
+	Badge,
+	Button,
+	Card,
+	CardContent,
+	CardHeader,
+	CardTitle,
+	RelativeTime,
+} from "../ui";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 
 export interface PackageAccessTabProps {
@@ -121,11 +128,10 @@ export function PackageAccessTab({
 									)}
 								</div>
 
-								<span className="shrink-0 text-xs text-muted-foreground">
-									{formatDistanceToNow(new Date(req.createdAt), {
-										addSuffix: true,
-									})}
-								</span>
+								<RelativeTime
+									className="shrink-0 text-xs text-muted-foreground"
+									value={req.createdAt}
+								/>
 
 								<div className="flex shrink-0 gap-1">
 									<Button

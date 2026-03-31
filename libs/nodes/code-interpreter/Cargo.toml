@@ -27,7 +27,6 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 tracing.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
@@ -52,6 +51,7 @@ wat = "1"
 tempfile = "3"
 
 [build-dependencies]
+flow-like-catalog-build-helper.workspace = true
 # Only used when `bundled-python` feature is active (cfg-gated in build.rs).
 wasmtime = { workspace = true }
 dirs-next = "2"

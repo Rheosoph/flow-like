@@ -141,7 +141,7 @@ export default function TemplatesPage() {
 				<div className="space-y-1">
 					<h1 className="text-2xl font-bold">Flow Templates</h1>
 					<p className="text-muted-foreground text-sm">
-						Create, manage, and organize your workflow templates
+						Save versioned snapshots of your flows to share, reuse, or roll back
 					</p>
 				</div>
 				<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -401,18 +401,20 @@ export default function TemplatesPage() {
 			</div>
 
 			{filteredTemplates.length === 0 && (
-				<div className="text-center py-12">
-					<CopyIcon className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-					<h3 className="text-lg font-medium text-foreground mb-2">
-						No templates found
+				<div className="flex flex-col items-center text-center py-12 max-w-md mx-auto space-y-4">
+					<div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+						<CopyIcon className="w-8 h-8 text-primary" />
+					</div>
+					<h3 className="text-lg font-medium">
+						{searchTerm ? "No templates found" : "No templates yet"}
 					</h3>
-					<p className="text-muted-foreground mb-6">
+					<p className="text-sm text-muted-foreground">
 						{searchTerm
-							? "Try adjusting your search terms"
-							: "Create your first template to get started"}
+							? "Try adjusting your search terms."
+							: "Templates let you snapshot a flow at a specific version so you can share, reuse, or roll back to it later."}
 					</p>
 					{!searchTerm && (
-						<Button onClick={() => setIsCreateDialogOpen(true)}>
+						<Button onClick={() => setIsCreateDialogOpen(true)} className="mt-2">
 							<Plus className="w-4 h-4 mr-2" />
 							Create Your First Template
 						</Button>

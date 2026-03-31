@@ -240,11 +240,17 @@ const cloneBoard = (board: IBoard): IBoard => structuredClone(board);
 
 const systemTimeToNumber = (time?: SystemTimeLike): number => {
 	if (!time) return 0;
-	return (time.secs_since_epoch ?? 0) * 1_000_000_000 + (time.nanos_since_epoch ?? 0);
+	return (
+		(time.secs_since_epoch ?? 0) * 1_000_000_000 + (time.nanos_since_epoch ?? 0)
+	);
 };
 
-const hasIncompletePageIds = (remoteBoard: IBoard, localBoard?: IBoard): boolean =>
-	(remoteBoard.page_ids?.length ?? 0) === 0 && (localBoard?.page_ids?.length ?? 0) > 0;
+const hasIncompletePageIds = (
+	remoteBoard: IBoard,
+	localBoard?: IBoard,
+): boolean =>
+	(remoteBoard.page_ids?.length ?? 0) === 0 &&
+	(localBoard?.page_ids?.length ?? 0) > 0;
 
 const shouldApplyRemoteBoard = (
 	remoteBoard: IBoard,
@@ -400,7 +406,9 @@ export class BoardState implements IBoardState {
 					continue;
 				}
 
-				syncTasks.push(this.backend.appState.addPackage(appId, packageId, version));
+				syncTasks.push(
+					this.backend.appState.addPackage(appId, packageId, version),
+				);
 			}
 
 			for (const packageId of Object.keys(localPackages)) {
@@ -417,7 +425,10 @@ export class BoardState implements IBoardState {
 
 			return remotePackages;
 		} catch (error) {
-			console.warn("Failed to sync remote app packages into local catalog state:", error);
+			console.warn(
+				"Failed to sync remote app packages into local catalog state:",
+				error,
+			);
 			return [];
 		}
 	}
@@ -430,7 +441,8 @@ export class BoardState implements IBoardState {
 		}
 
 		try {
-			const installedPackages = await this.backend.registryState.getInstalledPackages();
+			const installedPackages =
+				await this.backend.registryState.getInstalledPackages();
 			const installedVersionMap = new Map(
 				installedPackages.map((pkg) => [pkg.id, pkg.version]),
 			);
@@ -445,7 +457,10 @@ export class BoardState implements IBoardState {
 				await Promise.all(installTasks);
 			}
 		} catch (error) {
-			console.warn("Failed to install remote app packages into local registry:", error);
+			console.warn(
+				"Failed to install remote app packages into local registry:",
+				error,
+			);
 		}
 	}
 
@@ -493,7 +508,7 @@ export class BoardState implements IBoardState {
 					const skipReason = getRemoteBoardSkipReason(board, localBoard);
 					const nextBoard = shouldApplyRemoteBoard(board, localBoard)
 						? mergeRemoteBoard(board, localBoard)
-						: localBoard ?? mergeRemoteBoard(board, localBoard);
+						: (localBoard ?? mergeRemoteBoard(board, localBoard));
 
 					if (localBoard && nextBoard === localBoard) {
 						console.warn(
@@ -552,7 +567,10 @@ export class BoardState implements IBoardState {
 					this.backend.auth,
 				);
 			} catch (error) {
-				console.warn("Failed to fetch remote app catalog, falling back to local catalog:", error);
+				console.warn(
+					"Failed to fetch remote app catalog, falling back to local catalog:",
+					error,
+				);
 			}
 		}
 
@@ -566,11 +584,42 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IBoard> {
-		const board: IBoard = await invoke("get_board", {
-			appId: appId,
-			boardId: boardId,
-			version: version,
-		});
+		let board: IBoard;
+		try {
+			board = await invoke("get_board", {
+				appId: appId,
+				boardId: boardId,
+				version: version,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			let url = `apps/${appId}/board/${boardId}`;
+			if (version) {
+				url += `?version=${version.join("_")}`;
+			}
+			const remoteData = await fetcher<IBoard>(
+				this.backend.profile,
+				url,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			await invoke("upsert_board", {
+				appId: appId,
+				boardId: boardId,
+				name: remoteData.name,
+				description: remoteData.description,
+				logLevel: remoteData.log_level,
+				stage: remoteData.stage,
+				executionMode: remoteData.execution_mode,
+				boardData: remoteData,
+			}).catch((e: unknown) => {
+				console.warn("[BoardState] Failed to persist remote board locally:", e);
+			});
+			return remoteData;
+		}
 
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -1644,12 +1693,15 @@ export class BoardState implements IBoardState {
 					{ method: "GET" },
 					this.backend.auth,
 				);
-				console.log("[BoardState] getExecutionElements remote fallback result:", {
-					boardId,
-					pageId,
-					wildcard,
-					remoteElementKeys: Object.keys(response.elements ?? {}),
-				});
+				console.log(
+					"[BoardState] getExecutionElements remote fallback result:",
+					{
+						boardId,
+						pageId,
+						wildcard,
+						remoteElementKeys: Object.keys(response.elements ?? {}),
+					},
+				);
 				return response.elements;
 			} catch (error) {
 				console.warn("Failed to fetch execution elements from API:", error);

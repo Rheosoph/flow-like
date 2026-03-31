@@ -194,7 +194,7 @@ class MockHostBridge(HostBridge):
 
     def http_request(self, method: int, url: str, headers: str, body: bytes | None) -> str | None:
         import json as _json
-        return _json.dumps({"status": 200, "headers": {}, "body": "{}"})
+        return _json.dumps({"status": 200, "headers": {}, "body_base64": "e30="})
 
     def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
         return '{"role": "assistant", "content": "Mock LLM response"}'

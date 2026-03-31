@@ -154,6 +154,12 @@ export function ExploreAppsPage() {
 		[router, userAppIds],
 	);
 
+	const appHref = useCallback(
+		(appId: string) =>
+			userAppIds.has(appId) ? `/use?id=${appId}` : `/store?id=${appId}`,
+		[userAppIds],
+	);
+
 	const hasActiveFilters =
 		!!debouncedQuery || !!selectedCategory || sortKey !== "popular";
 
@@ -350,6 +356,7 @@ export function ExploreAppsPage() {
 								apps={items}
 								userAppIds={userAppIds}
 								onAppClick={handleAppClick}
+								appHref={appHref}
 								isMobile={isMobile}
 								categoryColor={CATEGORY_COLORS[label]}
 								defaultExpanded={idx === 0}
@@ -377,6 +384,7 @@ export function ExploreAppsPage() {
 							apps={combinedApps}
 							userAppIds={userAppIds}
 							onAppClick={handleAppClick}
+							appHref={appHref}
 							isMobile={isMobile}
 						/>
 
@@ -398,6 +406,7 @@ function ExploreSection({
 	apps,
 	userAppIds,
 	onAppClick,
+	appHref,
 	isMobile,
 	categoryColor,
 	defaultExpanded = false,
@@ -406,6 +415,7 @@ function ExploreSection({
 	apps: [IApp, IMetadata | undefined][];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile: boolean;
 	categoryColor?: string;
 	defaultExpanded?: boolean;
@@ -535,11 +545,13 @@ function ExploreGrid({
 	apps,
 	userAppIds,
 	onAppClick,
+	appHref,
 	isMobile,
 }: Readonly<{
 	apps: [IApp, IMetadata | undefined][];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile: boolean;
 }>) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -556,6 +568,7 @@ function ExploreGrid({
 						metadata={metadata}
 						variant="small"
 						onClick={() => onAppClick(app.id)}
+						href={appHref?.(app.id)}
 						className="w-full rounded-none border-0 shadow-none bg-transparent"
 					/>
 				))}
@@ -579,6 +592,7 @@ function ExploreGrid({
 					metadata={metadata}
 					variant="extended"
 					onClick={() => onAppClick(app.id)}
+					href={appHref?.(app.id)}
 					className="w-full"
 				/>
 			))}

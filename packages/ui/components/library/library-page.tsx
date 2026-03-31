@@ -79,6 +79,11 @@ export function LibraryPage({
 		[onAppClickProp, queryClient, router],
 	);
 
+	const appHref = useCallback(
+		(appId: string) => `/use?id=${appId}`,
+		[],
+	);
+
 	const handleSettingsClick = useCallback(
 		(appId: string) => router.push(`/library/config?id=${appId}`),
 		[router],
@@ -442,6 +447,7 @@ export function LibraryPage({
 						visibilityMode={visibilityMode}
 						activeAppIds={activeAppIds}
 						onToggleVisibility={handleToggleVisibility}
+						appHref={appHref}
 						isMobile={isMobile}
 					/>
 				) : (
@@ -451,6 +457,7 @@ export function LibraryPage({
 								items={pinnedItems}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								appHref={appHref}
 								isMobile={isMobile}
 							/>
 						)}
@@ -461,6 +468,7 @@ export function LibraryPage({
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
 								onReorder={handleFavoriteReorder}
+								appHref={appHref}
 								isMobile={isMobile}
 							/>
 						)}
@@ -482,6 +490,7 @@ export function LibraryPage({
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}
+								appHref={appHref}
 								isMobile={isMobile}
 								showSeeAll={isMobile}
 							/>
@@ -501,6 +510,7 @@ export function LibraryPage({
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}
+								appHref={appHref}
 								categoryColor={isMobile ? undefined : CATEGORY_COLORS[label]}
 								isMobile={isMobile}
 								showSeeAll={isMobile}

@@ -17,9 +17,8 @@ use crate::{
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 
-async fn current_user_sub(app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
-    let profile = TauriSettingsState::current_profile(app_handle).await?;
-    Ok(profile.hub_profile.id)
+async fn current_user_sub(_app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
+    Ok("local".to_string())
 }
 
 #[tauri::command(async)]
@@ -179,7 +178,10 @@ pub async fn storage_user_list(
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let sub = current_user_sub(&app_handle).await?;
     let (store, path) = construct_user_storage(&state, &sub, &app_id, &prefix).await?;
-    println!("Listing user items in storage at path: {}, {:?}", path, store);
+    println!(
+        "Listing user items in storage at path: {}, {:?}",
+        path, store
+    );
     let items = store
         .as_generic()
         .list_with_delimiter(Some(&path))

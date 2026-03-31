@@ -865,6 +865,7 @@ function InstalledPackageCard({
 
 function InstalledContent() {
 	const queryClient = useQueryClient();
+	const auth = useAuth();
 	const [searchQuery, setSearchQuery] = useState("");
 	const packageStatusMap = usePackageStatusMap();
 	const [updatingPackages, setUpdatingPackages] = useState<Set<string>>(
@@ -894,7 +895,7 @@ function InstalledContent() {
 	const availableUpdates = useQuery({
 		queryKey: ["available-updates"],
 		queryFn: async () => {
-			return invoke<PackageUpdate[]>("registry_check_for_updates");
+			return invoke<PackageUpdate[]>("registry_check_for_updates", { token: auth.user?.access_token });
 		},
 		enabled: registryReady.data === true,
 	});
@@ -905,7 +906,7 @@ function InstalledContent() {
 			version,
 		}: { packageId: string; version?: string }) => {
 			setUpdatingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_update_package", { packageId, version });
+			await invoke("registry_update_package", { packageId, version, token: auth.user?.access_token });
 		},
 		onSuccess: (
 			_: void,
@@ -966,6 +967,7 @@ function InstalledContent() {
 				await invoke("registry_update_package", {
 					packageId: update.packageId,
 					version: update.latestVersion,
+					token: auth.user?.access_token,
 				});
 			}
 		},

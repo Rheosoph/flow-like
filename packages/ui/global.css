@@ -993,3 +993,15 @@
 		}
 	}
 }
+
+/* Shiki dual-theme support (defaultColor: false) */
+.shiki-wrapper .shiki,
+.shiki-wrapper .shiki span {
+	color: var(--shiki-light);
+	background-color: var(--shiki-light-bg);
+}
+.dark .shiki-wrapper .shiki,
+.dark .shiki-wrapper .shiki span {
+	color: var(--shiki-dark);
+	background-color: var(--shiki-dark-bg);
+}

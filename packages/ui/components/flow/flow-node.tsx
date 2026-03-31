@@ -37,13 +37,14 @@ import {
 import PuffLoader from "react-spinners/PuffLoader";
 import { useLogAggregation } from "../..";
 import { useInvalidateInvoke } from "../../hooks";
-import { colorFromSub } from "../../hooks/use-peer-users";
+import { type PeerUserInfo, colorFromSub } from "../../hooks/use-peer-users";
 import {
 	getActivityColorClasses,
 	useRunActivity,
 } from "../../hooks/use-run-activity";
 import {
 	IExecutionMode,
+	type IGenericCommand,
 	ILogLevel,
 	IPinType,
 	IValueType,
@@ -93,6 +94,8 @@ export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
 	sub?: string;
+	/** Whether this user just actively clicked this node */
+	isActive?: boolean;
 }
 
 export interface IPinAction {
@@ -116,12 +119,14 @@ export type FlowNode = Node<
 		isOffline?: boolean;
 		onCopy: () => Promise<void>;
 		remoteSelections?: RemoteSelectionParticipant[];
+		peerUsers?: Map<string, PeerUserInfo>;
 		onOpenInfo?: (node: INode) => void;
 		onExplain?: (nodeIds: string[]) => void;
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
 		functionLayerId?: string;
 		currentLayerId?: string;
+		remoteExecuting?: boolean;
 	},
 	"node"
 >;
@@ -455,11 +460,27 @@ const FlowNodeInner = memo(
 		);
 
 		// Parse pins when node pins change
+		const visiblePins = useMemo(() => {
+			const all = Object.values(props.data.node?.pins || []);
+			if (props.data.node?.name !== "control_call_function") return all;
+			let inputIdx = 0;
+			return all
+				.filter((p) => p.name !== "function_layer_id")
+				.sort(sortPins)
+				.map((p) => {
+					if (p.pin_type === "Input") {
+						inputIdx++;
+						return { ...p, index: inputIdx };
+					}
+					return p;
+				});
+		}, [props.data.node?.pins, props.data.node?.name]);
+
 		useEffect(() => {
-			parsePins(Object.values(props.data.node?.pins || []));
+			parsePins(visiblePins);
 			// Update React Flow internals when pins change (handles may have changed)
 			updateNodeInternals(props.id);
-		}, [props.data.node.pins, props.data.node.hash, props.id]);
+		}, [visiblePins, props.data.node.hash, props.id]);
 
 		function isPinAction(pin: IPin | IPinAction): pin is IPinAction {
 			return typeof (pin as IPinAction).onAction === "function";
@@ -761,32 +782,77 @@ const FlowNodeInner = memo(
 				key={`${props.id}__node`}
 				ref={div}
 				className={`bg-card! p-2 react-flow__node-default rounded-md! selectable focus:ring-2 relative group ${props.selected && "border-primary! border-2"} ${executionStatus === "done" ? "opacity-60" : "opacity-100"} ${props.data.isUnavailable && "opacity-50 border-dashed! border-destructive/60!"} ${isReroute && "w-4 max-w-4 max-h-3! overflow-y rounded-lg! p-[0.4rem]!"} ${!isReroute && "border-border!"}`}
-				style={isReroute ? nodeStyle : {}}
+				style={
+					isReroute
+						? nodeStyle
+						: props.data.remoteExecuting
+							? {
+									boxShadow:
+										"0 0 12px 2px rgba(59, 130, 246, 0.5), 0 0 4px 1px rgba(59, 130, 246, 0.3)",
+								}
+							: remoteSelections.length > 0
+								? {
+										boxShadow: `0 0 0 2px ${colorFromSub(remoteSelections[0]?.sub)}40, 0 0 12px 0 ${colorFromSub(remoteSelections[0]?.sub)}25`,
+									}
+								: {}
+				}
 			>
 				{remoteSelections.length > 0 && (
-					<div className="pointer-events-none absolute -top-3 left-0 flex flex-col gap-1">
-						{displayedRemoteSelections.map((participant) => {
-							const color = colorFromSub(participant.sub);
-							return (
-								<div
-									key={`${participant.clientId}-${participant.sub ?? "unknown"}`}
-									className="flex items-center gap-1 rounded-md border bg-background/80 px-1.5 py-0.5 text-[0.625rem] leading-none shadow-sm"
-									style={{ borderColor: color }}
-									title={participant.sub}
-								>
-									<span
-										className="h-1.5 w-1.5 rounded-full"
-										style={{ backgroundColor: color }}
-									/>
-								</div>
-							);
-						})}
+					<div className="pointer-events-none absolute -top-5 left-0 flex items-center gap-0.5 z-10">
+						<div className="flex items-center -space-x-1.5">
+							{displayedRemoteSelections.map((participant) => {
+								const color = colorFromSub(participant.sub);
+								const userInfo = participant.sub
+									? props.data.peerUsers?.get(participant.sub)
+									: undefined;
+								const name = userInfo?.truncatedName ?? "User";
+								return (
+									<div
+										key={`${participant.clientId}-${participant.sub ?? "unknown"}`}
+										className={`flex items-center gap-1 rounded-full border-2 bg-background/95 px-1 py-0.5 text-[0.5625rem] leading-none shadow-md backdrop-blur-sm transition-all duration-200 ${participant.isActive ? "animate-pulse scale-110 ring-2 ring-offset-1" : ""}`}
+										style={{
+											borderColor: color,
+											...(participant.isActive ? { ringColor: color } : {}),
+										}}
+										title={name}
+									>
+										{userInfo?.avatarUrl ? (
+											<img
+												src={userInfo.avatarUrl}
+												alt={name}
+												className="h-3.5 w-3.5 rounded-full object-cover"
+											/>
+										) : (
+											<span
+												className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white"
+												style={{
+													background: `linear-gradient(135deg, ${color}, ${color}dd)`,
+												}}
+											>
+												{name.charAt(0).toUpperCase()}
+											</span>
+										)}
+										{displayedRemoteSelections.length <= 2 && (
+											<span
+												className="font-semibold max-w-14 truncate pr-0.5"
+												style={{ color }}
+											>
+												{name}
+											</span>
+										)}
+									</div>
+								);
+							})}
+						</div>
 						{extraRemoteSelections > 0 && (
-							<div className="rounded-md border bg-background/80 px-1.5 py-0.5 text-[0.625rem] leading-none shadow-sm">
+							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">
 								+{extraRemoteSelections}
 							</div>
 						)}
 					</div>
+				)}
+				{props.data.remoteExecuting && (
+					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
 				)}
 				{playNode}
 				{props.data.node.long_running && (
@@ -915,7 +981,8 @@ const FlowNodeInner = memo(
 		prev.props.data.hash === next.props.data.hash &&
 		prev.props.selected === next.props.selected &&
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
-		prev.props.data.isUnavailable === next.props.data.isUnavailable,
+		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
+		prev.props.data.remoteExecuting === next.props.data.remoteExecuting,
 );
 
 function FlowNode(props: NodeProps<FlowNode>) {
@@ -1128,7 +1195,10 @@ function FlowNode(props: NodeProps<FlowNode>) {
 	}, [props.data.node, invalidate, pushCommands, flow]);
 
 	const orderNodes = useCallback(
-		async (type: "align" | "justify", dir: "start" | "end" | "center") => {
+		async (
+			type: "align" | "justify",
+			dir: "start" | "end" | "center" | "distribute",
+		) => {
 			if (typeof props.data.version !== "undefined") {
 				return;
 			}
@@ -1162,30 +1232,56 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 			const center = (start + end) / 2;
 
-			const commands = selectedNodes.map((node) => {
-				return moveNodeCommand({
-					node_id: node.id,
-					from_coordinates: [node.position.x, node.position.y, 0],
-					to_coordinates: [
-						type === "align"
-							? dir === "start"
-								? start
-								: dir === "end"
-									? end
-									: center
-							: node.position.x,
-						type === "align"
-							? node.position.y
-							: dir === "start"
-								? start
-								: dir === "end"
-									? end
-									: center,
-						0,
-					],
-					current_layer: currentLayer,
+			let commands: IGenericCommand[];
+
+			if (dir === "distribute") {
+				// Even spacing: sort nodes along the relevant axis and distribute evenly
+				const sorted = [...selectedNodes].sort((a, b) =>
+					type === "align"
+						? a.position.x - b.position.x
+						: a.position.y - b.position.y,
+				);
+				const count = sorted.length;
+				const step = count > 1 ? (end - start) / (count - 1) : 0;
+
+				commands = sorted.map((node, i) => {
+					return moveNodeCommand({
+						node_id: node.id,
+						from_coordinates: [node.position.x, node.position.y, 0],
+						to_coordinates: [
+							type === "align" ? start + i * step : node.position.x,
+							type === "justify" ? start + i * step : node.position.y,
+							0,
+						],
+						current_layer: currentLayer,
+					});
 				});
-			});
+			} else {
+				commands = selectedNodes.map((node) => {
+					return moveNodeCommand({
+						node_id: node.id,
+						from_coordinates: [node.position.x, node.position.y, 0],
+						to_coordinates: [
+							type === "align"
+								? dir === "start"
+									? start
+									: dir === "end"
+										? end
+										: center
+								: node.position.x,
+							type === "align"
+								? node.position.y
+								: dir === "start"
+									? start
+									: dir === "end"
+										? end
+										: center,
+							0,
+						],
+						current_layer: currentLayer,
+					});
+				});
+			}
 
 			const backend = useBackendStore.getState().backend;
 			if (!backend) return;
@@ -1321,7 +1417,10 @@ function flowNodeAreEqual(
 		prev.data.hash === next.data.hash &&
 		prev.selected === next.selected &&
 		prev.data.fnRefsHash === next.data.fnRefsHash &&
-		prev.data.isUnavailable === next.data.isUnavailable
+		prev.data.isUnavailable === next.data.isUnavailable &&
+		prev.data.remoteSelections === next.data.remoteSelections &&
+		prev.data.peerUsers === next.data.peerUsers &&
+		prev.data.remoteExecuting === next.data.remoteExecuting
 	);
 }
 

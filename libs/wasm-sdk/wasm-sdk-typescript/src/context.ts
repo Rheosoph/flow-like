@@ -187,7 +187,16 @@ export class Context {
 			body,
 		);
 		if (!result) return null;
-		return JSON.parse(result);
+		const parsed = JSON.parse(result);
+		if (parsed.body_base64 && !parsed.body) {
+			try {
+				const bytes = Uint8Array.from(atob(parsed.body_base64), (c) => c.charCodeAt(0));
+				parsed.body = new TextDecoder().decode(bytes);
+			} catch {
+				parsed.body = "";
+			}
+		}
+		return parsed;
 	}
 
 	httpGet(

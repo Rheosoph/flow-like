@@ -3,6 +3,7 @@ use flow_like::flow_like_model_provider::response::Response;
 use flow_like_catalog::events::chat_event::{
     Attachment, ChatResponse, ChatStreamingResponse, Reasoning,
 };
+use flow_like_catalog::telegram::session::{TelegramBroadcastEvent, broadcast_tg_event};
 use flow_like_types::{intercom::BufferedInterComHandler, sync::Mutex};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,8 @@ use tauri::{AppHandle, Manager};
 use teloxide::prelude::*;
 use teloxide::respond;
 use teloxide::types::{
-    ChatId, InputFile, MediaKind, MediaText, MessageKind, ParseMode, ReplyParameters,
+    CallbackQuery, ChatId, InputFile, MediaKind, MediaText, MessageKind, ParseMode,
+    ReplyParameters,
 };
 
 use crate::utils::UiEmitTarget;
@@ -231,7 +233,9 @@ fn should_process_message(
 
     tracing::debug!(
         "[TELEGRAM] Group message text: '{}', prefix: '{}', respond_to_mentions: {}",
-        text, handler.command_prefix, handler.respond_to_mentions
+        text,
+        handler.command_prefix,
+        handler.respond_to_mentions
     );
 
     if text.starts_with(&handler.command_prefix) {
@@ -243,10 +247,7 @@ fn should_process_message(
         && let Some(username) = bot_username
         && text.contains(&format!("@{}", username))
     {
-        tracing::debug!(
-            "[TELEGRAM] Message mentions bot @{}, processing",
-            username
-        );
+        tracing::debug!("[TELEGRAM] Message mentions bot @{}, processing", username);
         return true;
     }
 
@@ -901,14 +902,23 @@ async fn run_telegram_bot(
     let db_clone = db.clone();
     let bot_instance_clone = bot_instance.clone();
     let bot_username_clone = bot_username.clone();
+    let token_for_broadcast = token.clone();
 
-    let handler = Update::filter_message().endpoint(move |bot: Bot, msg: Message| {
+    let message_handler = Update::filter_message().endpoint(move |bot: Bot, msg: Message| {
         let app_handle = app_handle_clone.clone();
         let db = db_clone.clone();
         let bot_instance = bot_instance_clone.clone();
         let bot_username = bot_username_clone.clone();
+        let broadcast_token = token_for_broadcast.clone();
 
         async move {
+            // Broadcast the message to any waiting interaction nodes
+            broadcast_tg_event(
+                &broadcast_token,
+                TelegramBroadcastEvent::Message(Box::new(msg.clone())),
+            )
+            .await;
+
             tracing::debug!(
                 "[TELEGRAM] === MESSAGE RECEIVED === from {:?} in chat {}",
                 msg.from.as_ref().map(|u| u.full_name()),
@@ -927,10 +937,7 @@ async fn run_telegram_bot(
             tracing::debug!("[TELEGRAM] Found {} registered handlers", handlers.len());
 
             for handler in handlers {
-                tracing::debug!(
-                    "[TELEGRAM] Checking handler for event {}",
-                    handler.event_id
-                );
+                tracing::debug!("[TELEGRAM] Checking handler for event {}", handler.event_id);
 
                 if !should_process_message(&msg, &handler, bot_username.as_deref()) {
                     tracing::debug!(
@@ -961,7 +968,8 @@ async fn run_telegram_bot(
                 {
                     tracing::error!(
                         "[TELEGRAM] Failed to fire event {}: {}",
-                        handler.event_id, e
+                        handler.event_id,
+                        e
                     );
                 }
             }
@@ -969,6 +977,26 @@ async fn run_telegram_bot(
             respond(())
         }
     });
+
+    // Callback query handler: broadcast to interaction nodes waiting for button clicks
+    let token_for_cb_broadcast = token.clone();
+    let callback_handler =
+        Update::filter_callback_query().endpoint(move |_bot: Bot, query: CallbackQuery| {
+            let broadcast_token = token_for_cb_broadcast.clone();
+
+            async move {
+                broadcast_tg_event(
+                    &broadcast_token,
+                    TelegramBroadcastEvent::CallbackQuery(Box::new(query)),
+                )
+                .await;
+                respond(())
+            }
+        });
+
+    let handler = dptree::entry()
+        .branch(message_handler)
+        .branch(callback_handler);
 
     tracing::info!("[TELEGRAM] Setting up dispatcher...");
 
@@ -1219,7 +1247,8 @@ impl EventSink for TelegramSink {
                 {
                     tracing::error!(
                         "[TELEGRAM_SINK] Failed to initialize Telegram bot for event {}: {}",
-                        registration.event_id, e
+                        registration.event_id,
+                        e
                     );
                 }
             }

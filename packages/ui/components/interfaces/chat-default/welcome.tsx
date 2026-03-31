@@ -175,6 +175,7 @@ export function ChatWelcome({
 		<div className="flex flex-col h-full flex-grow bg-background relative">
 			{voiceModeOpen && (
 				<VoiceMode
+					open={voiceModeOpen}
 					onClose={() => setVoiceModeOpen(false)}
 					onSend={handleVoiceModeSend}
 				/>

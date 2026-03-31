@@ -194,6 +194,7 @@ pub async fn upsert_board(
                 board.version = data.version;
                 board.viewport = data.viewport;
                 board.page_ids = data.page_ids;
+                board.updated_at = data.updated_at;
             }
 
             board.save(None).await?;

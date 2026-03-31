@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatDistanceToNow } from "date-fns";
 import { Loader2, MessageSquare, Star, Trash2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -20,11 +19,59 @@ import {
 	CardContent,
 	CardHeader,
 	CardTitle,
+	RelativeTime,
 	Separator,
 	Textarea,
 } from "../ui";
 
 const PAGE_SIZE = 10;
+
+interface RawPackageCommentItem {
+	id: string;
+	text: string;
+	rating: number;
+	userId?: string;
+	user_id?: string;
+	userName?: string;
+	user_name?: string | null;
+	userAvatar?: string;
+	user_avatar?: string | null;
+	createdAt?: string;
+	created_at?: string;
+	updatedAt?: string;
+	updated_at?: string;
+}
+
+interface RawPackageCommentsResponse {
+	comments: RawPackageCommentItem[];
+	total: number;
+	offset: number;
+	limit: number;
+}
+
+function normalizeComment(comment: RawPackageCommentItem): PackageCommentItem {
+	return {
+		id: comment.id,
+		text: comment.text,
+		rating: comment.rating,
+		userId: comment.userId ?? comment.user_id ?? "",
+		userName: comment.userName ?? comment.user_name ?? undefined,
+		userAvatar: comment.userAvatar ?? comment.user_avatar ?? undefined,
+		createdAt: comment.createdAt ?? comment.created_at ?? "",
+		updatedAt: comment.updatedAt ?? comment.updated_at ?? "",
+	};
+}
+
+function normalizeCommentsResponse(
+	response: RawPackageCommentsResponse,
+): PackageCommentsResponse {
+	return {
+		comments: response.comments.map(normalizeComment),
+		total: response.total,
+		offset: response.offset,
+		limit: response.limit,
+	};
+}
 
 function StarRating({
 	value,
@@ -94,11 +141,10 @@ function ReviewItem({
 							{comment.userName ?? "Anonymous"}
 						</span>
 						<StarRating value={comment.rating} readonly />
-						<span className="text-xs text-muted-foreground">
-							{formatDistanceToNow(new Date(comment.createdAt), {
-								addSuffix: true,
-							})}
-						</span>
+						<RelativeTime
+							className="text-xs text-muted-foreground"
+							value={comment.createdAt}
+						/>
 					</div>
 					{onDelete && (
 						<Button
@@ -140,11 +186,13 @@ export function PackageReviewsTab({ packageId }: PackageReviewsTabProps) {
 
 	const { data, isLoading } = useQuery<PackageCommentsResponse>({
 		queryKey,
-		queryFn: () =>
-			backend.registryState.getPackageComments(
-				packageId,
-				page * PAGE_SIZE,
-				PAGE_SIZE,
+		queryFn: async () =>
+			normalizeCommentsResponse(
+				await backend.registryState.getPackageComments(
+					packageId,
+					page * PAGE_SIZE,
+					PAGE_SIZE,
+				) as RawPackageCommentsResponse,
 			),
 	});
 

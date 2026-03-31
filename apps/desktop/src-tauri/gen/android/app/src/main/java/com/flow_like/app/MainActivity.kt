@@ -84,10 +84,27 @@ class MainActivity : TauriActivity() {
     if (webView != null) {
       webView.addJavascriptInterface(InsetBridge(), "FlowLikeInsets")
       bridgeAttached = true
+      tuneWebView(webView)
       Log.d("FlowLike", "JS inset bridge attached")
     } else {
       window.decorView.postDelayed({ attachJsBridge() }, 50)
     }
+  }
+
+  private fun tuneWebView(webView: WebView) {
+    webView.settings.apply {
+      domStorageEnabled = true
+      databaseEnabled = true
+      cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+      // Allow mixed content so asset:// and https:// resources work together
+      mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+    }
+    // Request high-priority rendering for this webview
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+    }
+    // Ensure hardware acceleration is enabled on the webview layer
+    webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
   }
 
   override fun onResume() {
