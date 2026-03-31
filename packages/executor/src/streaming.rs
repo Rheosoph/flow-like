@@ -204,36 +204,20 @@ async fn execute_inner(
 
     let state = Arc::new(state);
 
-    // Load board using pre-resolved board_id and version (cached)
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let cache_key = (
-        request.app_id.clone(),
-        board_id.clone(),
-        request.board_version,
-    );
-    let state_clone = state.clone();
-    let storage_root_clone = storage_root.clone();
-    let board_id_clone = board_id.clone();
-    let board_version = request.board_version;
-    let board = crate::execute::BOARD_CACHE
-        .try_get_with(cache_key, async move {
-            let b = Board::load(
-                storage_root_clone,
-                &board_id_clone,
-                state_clone,
-                board_version,
-            )
-            .await
-            .map_err(|e| {
-                ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id_clone, e))
-            })?;
-            Ok::<Arc<Board>, ExecutorError>(Arc::new(b))
-        })
+    let board = Arc::new(
+        Board::load(
+            storage_root.clone(),
+            board_id,
+            state.clone(),
+            request.board_version,
+        )
         .await
-        .map_err(|e: Arc<ExecutorError>| {
-            ExecutorError::BoardLoad(format!("Board cache error: {}", e))
-        })?;
+        .map_err(|e| {
+            ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
+        })?,
+    );
 
     emit_event(
         tx,

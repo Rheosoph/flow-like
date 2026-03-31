@@ -164,9 +164,9 @@ pub async fn presign_user_data_access(
     }
 
     let (required_permission, credentials_access) = if access_mode == "write" {
-        (RolePermissions::WriteFiles, CredentialsAccess::EditApp)
+        (RolePermissions::WriteFiles, CredentialsAccess::EditUser)
     } else {
-        (RolePermissions::ReadFiles, CredentialsAccess::ReadApp)
+        (RolePermissions::ReadFiles, CredentialsAccess::ReadUser)
     };
 
     let permission = ensure_permission!(user, &app_id, &state, required_permission);

@@ -138,7 +138,7 @@ pub async fn upload_user_files(
         .scoped_credentials(
             &sub,
             &app_id,
-            crate::credentials::CredentialsAccess::EditApp,
+            crate::credentials::CredentialsAccess::EditUser,
         )
         .await?;
 

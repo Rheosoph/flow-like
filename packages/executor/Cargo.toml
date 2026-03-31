@@ -21,7 +21,6 @@ flow-like-catalog.workspace = true
 flow-like-wasm.workspace = true
 
 blake3.workspace = true
-moka.workspace = true
 wasmtime.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

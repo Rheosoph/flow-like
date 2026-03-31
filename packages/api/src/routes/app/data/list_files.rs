@@ -113,7 +113,7 @@ pub async fn list_user_files(
         .scoped_credentials(
             &sub,
             &app_id,
-            crate::credentials::CredentialsAccess::ReadApp,
+            crate::credentials::CredentialsAccess::ReadUser,
         )
         .await?;
     let project_dir = project_dir.to_store(false).await?;

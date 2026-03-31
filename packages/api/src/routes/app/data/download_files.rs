@@ -174,7 +174,7 @@ pub async fn download_user_files(
         .scoped_credentials(
             &sub,
             &app_id,
-            crate::credentials::CredentialsAccess::ReadApp,
+            crate::credentials::CredentialsAccess::ReadUser,
         )
         .await?;
 
