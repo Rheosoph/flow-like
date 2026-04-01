@@ -256,6 +256,10 @@ fn array_value_to_json(
             let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
             JsonValue::String(arr.value(idx).to_string())
         }
+        DataType::Utf8View => {
+            let arr = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+            JsonValue::String(arr.value(idx).to_string())
+        }
         DataType::Decimal128(_, _) => {
             let arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
             decimal_string_to_json(arr.value_as_string(idx))
@@ -309,7 +313,17 @@ fn array_value_to_json(
                 timestamp_to_json(arr.value(idx), *unit)
             }
         }
-        _ => JsonValue::String(format!("{:?}", array.slice(idx, 1))),
+        _ => {
+            use flow_like_storage::arrow::util::display::{ArrayFormatter, FormatOptions};
+            let options = FormatOptions::default();
+            match ArrayFormatter::try_new(array, &options) {
+                Ok(formatter) => {
+                    let formatted = formatter.value(idx).to_string();
+                    decimal_string_to_json(formatted)
+                }
+                Err(_) => JsonValue::Null,
+            }
+        }
     };
 
     Ok(value)

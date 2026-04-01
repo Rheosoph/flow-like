@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +33,7 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import type { IUseInterfaceProps } from "./interfaces";
+import { PageLoadingSkeleton } from "./page-loading-skeleton";
 
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
@@ -67,11 +68,13 @@ function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
 
 function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 	const [surface, setSurface] = useState<Surface | null>(initialSurface);
+	const prevInitialSurfaceRef = useRef<Surface | null>(initialSurface);
 
-	// Update surface when initialSurface changes
-	useEffect(() => {
+	// Sync initialSurface → surface during render (no one-render lag)
+	if (initialSurface !== prevInitialSurfaceRef.current) {
+		prevInitialSurfaceRef.current = initialSurface;
 		setSurface(initialSurface);
-	}, [initialSurface]);
+	}
 
 	const handleServerMessage = useCallback(
 		(message: A2UIServerMessage) => {
@@ -377,7 +380,8 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						};
 						break;
 					}
-					case "setChartData": {
+					case "setChartData":
+					case "setNivoData": {
 						const data = updateValue.data;
 						const componentData = component.component as unknown as Record<
 							string,
@@ -387,13 +391,14 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								data,
+								data: { literalJson: JSON.stringify(data) },
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
 					}
-					case "setChartLayout": {
-						const layout = updateValue.layout;
+					case "setChartLayout":
+					case "setNivoConfig": {
+						const configOrLayout = updateValue.layout ?? updateValue.config;
 						const componentData = component.component as unknown as Record<
 							string,
 							unknown
@@ -402,7 +407,8 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								layout,
+								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -577,10 +583,10 @@ function PageInterfaceInner({
 	const router = useRouter();
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
-	const [page, setPage] = useState<IPage | null>(providedPage || null);
+	const [page, setPage] = useState<IPage | null>(null);
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
-	const [isLoading, setIsLoading] = useState(!providedPage);
+	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
@@ -889,9 +895,7 @@ function PageInterfaceInner({
 
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
-	useEffect(() => {
-		surfaceRef.current = surface;
-	}, [surface]);
+	surfaceRef.current = surface;
 
 	// Build elements from surface components for the workflow payload
 	// Uses ref to avoid dependency on surface changing
@@ -1041,12 +1045,17 @@ function PageInterfaceInner({
 		return () => clearInterval(intervalId);
 	}, [page?.onIntervalEventId, page?.onIntervalSeconds, executePageEvent]);
 
+	// Strip canvasSettings from the surface for A2UIRenderer — this component
+	// already handles CSS injection and canvas styling at the outer level.
+	// Passing it again would cause double CSS scoping and inline-style conflicts.
+	const surfaceForRenderer = useMemo(() => {
+		if (!surface) return null;
+		if (!surface.canvasSettings) return surface;
+		return { ...surface, canvasSettings: undefined };
+	}, [surface]);
+
 	if (isLoading || isLoadEventRunning) {
-		return (
-			<div className="flex items-center justify-center h-full">
-				<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-			</div>
-		);
+		return <PageLoadingSkeleton />;
 	}
 
 	if (error) {
@@ -1105,15 +1114,6 @@ function PageInterfaceInner({
 	};
 
 	const customCss = runtimeCanvasSettings?.customCss;
-
-	// Strip canvasSettings from the surface for A2UIRenderer — this component
-	// already handles CSS injection and canvas styling at the outer level.
-	// Passing it again would cause double CSS scoping and inline-style conflicts.
-	const surfaceForRenderer = useMemo(() => {
-		if (!surface) return null;
-		if (!surface.canvasSettings) return surface;
-		return { ...surface, canvasSettings: undefined };
-	}, [surface]);
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">

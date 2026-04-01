@@ -891,7 +891,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			>
 				<div
 					data-canvas-id={canvasId}
-					className="h-full min-h-full rounded-lg border shadow-sm relative"
+					className="min-h-full rounded-lg border shadow-sm relative"
 					style={{
 						backgroundColor: presignedCanvasSettings.backgroundColor,
 						backgroundImage: presignedCanvasSettings.backgroundImage
@@ -902,7 +902,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					data-canvas-background="true"
 				>
 					{/* Interactive BuilderRenderer - wraps each component */}
-					<BuilderRenderer surface={surface} className="w-full h-full" />
+					<BuilderRenderer surface={surface} className="w-full min-h-full" />
 
 					{/* Empty state */}
 					{components.size <= 1 && (
@@ -1277,7 +1277,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 						};
 						break;
 					}
-					default: {
+					case "setChartData":
+					case "setNivoData": {
+						const data = updateValue.data;
 						const componentData = component.component as unknown as Record<
 							string,
 							unknown
@@ -1286,7 +1288,39 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							...component,
 							component: {
 								...componentData,
-								...updateValue,
+								data: { literalJson: JSON.stringify(data) },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "setChartLayout":
+					case "setNivoConfig": {
+						const configOrLayout = updateValue.layout ?? updateValue.config;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					default: {
+						const { type: _updateType, ...rest } = updateValue;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								...rest,
 							} as unknown as SurfaceComponent["component"],
 						};
 					}

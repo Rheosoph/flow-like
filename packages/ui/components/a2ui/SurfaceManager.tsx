@@ -322,7 +322,8 @@ export function useSurfaceManager() {
 							};
 							break;
 						}
-						case "setChartData": {
+						case "setChartData":
+						case "setNivoData": {
 							const data = updateValue.data;
 							const componentData = component.component as unknown as Record<
 								string,
@@ -332,13 +333,14 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									data,
+									data: { literalJson: JSON.stringify(data) },
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;
 						}
-						case "setChartLayout": {
-							const layout = updateValue.layout;
+						case "setChartLayout":
+						case "setNivoConfig": {
+							const configOrLayout = updateValue.layout ?? updateValue.config;
 							const componentData = component.component as unknown as Record<
 								string,
 								unknown
@@ -347,7 +349,8 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									layout,
+									...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+									...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;

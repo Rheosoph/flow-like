@@ -9,6 +9,7 @@ local-ml = ["flow-like-catalog-core/local-ml"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",
+    "flow-like-catalog-data/execute",
     "dep:fasteval",
     "dep:nalgebra",
     "dep:htmd",
@@ -25,6 +26,7 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
+flow-like-catalog-data.workspace = true
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true

@@ -1084,7 +1084,6 @@ export class BoardState implements IBoardState {
 		}
 
 		const channel = new Channel<IIntercomEvent[]>();
-		let closed = false;
 		let foundRunId = false;
 
 		const isOffline = await this.backend.isOffline(appId);
@@ -1178,11 +1177,6 @@ export class BoardState implements IBoardState {
 		}
 
 		channel.onmessage = (events: IIntercomEvent[]) => {
-			if (closed) {
-				console.warn("Channel closed, ignoring events");
-				return;
-			}
-
 			if (!foundRunId && events.length > 0 && eventId) {
 				const runId_event = events.find(
 					(event) => event.event_type === "run_initiated",
@@ -1199,12 +1193,6 @@ export class BoardState implements IBoardState {
 		};
 
 		const token = this.backend.auth?.user?.access_token;
-		console.log("Using token:", token);
-
-		console.dir({
-			id: this.backend.auth?.user?.id_token,
-			access: this.backend.auth?.user?.access_token,
-		});
 
 		let metadata: ILogMetadata | undefined;
 		try {
@@ -1219,10 +1207,11 @@ export class BoardState implements IBoardState {
 				oauthTokens,
 			});
 
-			closed = true;
+			// Yield to the event loop so any pending channel messages
+			// (A2UI updates, etc.) are delivered before we finish.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			finishAllProgressToasts(true);
 		} catch (error) {
-			closed = true;
 			finishAllProgressToasts(false);
 			throw error;
 		}

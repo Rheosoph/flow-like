@@ -1,6 +1,5 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import {
 	type ReactNode,
 	createContext,
@@ -13,6 +12,7 @@ import {
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
+import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -323,6 +323,39 @@ function RouteDialogRenderer({
 						...props,
 					} as unknown as SurfaceComponent["component"],
 				};
+			} else if (
+				updateType === "setChartData" ||
+				updateType === "setNivoData"
+			) {
+				const data = updateValue.data;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						data: { literalJson: JSON.stringify(data) },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (
+				updateType === "setChartLayout" ||
+				updateType === "setNivoConfig"
+			) {
+				const configOrLayout = updateValue.layout ?? updateValue.config;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+						...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+					} as unknown as SurfaceComponent["component"],
+				};
 			}
 
 			return {
@@ -434,11 +467,7 @@ function RouteDialogRenderer({
 					</DialogHeader>
 				)}
 				<div className="min-h-[200px]">
-					{showLoading && (
-						<div className="flex items-center justify-center h-48">
-							<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-						</div>
-					)}
+					{showLoading && <PageLoadingSkeleton className="h-48" />}
 					{error && !showLoading && (
 						<div className="flex items-center justify-center h-48 text-muted-foreground">
 							<p>{error}</p>

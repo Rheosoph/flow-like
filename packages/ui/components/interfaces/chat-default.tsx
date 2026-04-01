@@ -669,22 +669,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const toolbarElements = useMemo(() => {
-		const normalizeRoute = (value: string): string => {
-			const trimmed = value.trim();
-			if (!trimmed) return "";
-			return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-		};
-
-		const configuredRoutes = (() => {
-			const rawArray = (config as any)?.navigate_to_routes;
-			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
-			const normalized = raw
-				.map((r) => normalizeRoute(String(r)))
-				.filter((r) => !!r);
-			return Array.from(new Set(normalized));
-		})();
-
-		const elements = [
+		return [
 			<HoverCard key="chat-history" openDelay={200} closeDelay={100}>
 				<HoverCardTrigger asChild>
 					<Button
@@ -739,6 +724,25 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</HoverCardContent>
 			</HoverCard>,
 		];
+	}, [handleSidebarToggle, handleNewChat]);
+
+	const navElements = useMemo(() => {
+		const normalizeRoute = (value: string): string => {
+			const trimmed = value.trim();
+			if (!trimmed) return "";
+			return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+		};
+
+		const configuredRoutes = (() => {
+			const rawArray = (config as any)?.navigate_to_routes;
+			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
+			const normalized = raw
+				.map((r) => normalizeRoute(String(r)))
+				.filter((r) => !!r);
+			return Array.from(new Set(normalized));
+		})();
+
+		if (configuredRoutes.length === 0) return [];
 
 		const getRouteLabel = (path: string): string => {
 			if (path === "/") return "Home";
@@ -750,7 +754,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			return null;
 		};
 
-		// Single route: pill button
+		const elements: React.ReactElement[] = [];
+
 		if (configuredRoutes.length === 1) {
 			const route = configuredRoutes[0];
 			const icon = getRouteIcon(route);
@@ -767,7 +772,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</Button>,
 			);
 		} else if (configuredRoutes.length === 2) {
-			// Two routes: segmented control
 			elements.push(
 				<div
 					key="route-nav"
@@ -790,7 +794,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</div>,
 			);
 		} else if (configuredRoutes.length >= 3) {
-			// 3+ routes: dropdown
 			elements.push(
 				<DropdownMenu key="navigate-menu">
 					<DropdownMenuTrigger asChild>
@@ -823,7 +826,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		}
 
 		return elements;
-	}, [config, handleSidebarToggle, handleNewChat, handleNavigateTo]);
+	}, [config, handleNavigateTo]);
 
 	const sidebarContent = useMemo(
 		() => (
@@ -839,8 +842,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	useEffect(() => {
 		toolbarRef?.current?.pushToolbarElements(toolbarElements);
+		toolbarRef?.current?.pushNavElements(navElements);
 		sidebarRef?.current?.pushSidebar(sidebarContent);
-	}, [toolbarElements, sidebarContent, toolbarRef, sidebarRef]);
+	}, [toolbarElements, navElements, sidebarContent, toolbarRef, sidebarRef]);
 
 	// Reconnect to active stream or process completed stream when component mounts or session changes
 	useEffect(() => {

@@ -4,6 +4,7 @@ import type { IHub } from "../../lib/schema/hub/hub";
 
 export interface IToolBarActions {
 	pushToolbarElements: (elements: ReactElement[]) => void;
+	pushNavElements: (elements: ReactElement[]) => void;
 }
 
 export interface ISidebarActions {

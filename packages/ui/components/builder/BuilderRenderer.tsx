@@ -901,7 +901,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					appId={actionContext?.appId}
 					components={Object.fromEntries(allComponents)}
 				>
-					<div className={cn("h-full w-full overflow-auto", className)}>
+					<div className={cn("min-h-full w-full", className)}>
 						<BuilderComponent
 							componentId={surface.rootComponentId}
 							surfaceComponent={rootComponent}

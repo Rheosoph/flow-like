@@ -221,6 +221,7 @@ export function UsePageContent({
 		(newEventId: string) => {
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
+			headerRef.current?.pushNavElements([]);
 			setQueryParams("eventId", newEventId);
 		},
 		[appId, eventId, setQueryParams],
@@ -378,6 +379,7 @@ export function UsePageContent({
 		(path: string) => {
 			if (!appId || !path) return;
 			headerRef.current?.pushToolbarElements([]);
+			headerRef.current?.pushNavElements([]);
 			const params = new URLSearchParams(window.location.search);
 			params.set("route", path);
 			params.delete("eventId");

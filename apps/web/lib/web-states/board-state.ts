@@ -423,7 +423,7 @@ export class WebBoardState implements IBoardState {
 
 			let foundRunId = false;
 
-			if (streamState && response.body) {
+			if (response.body) {
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
