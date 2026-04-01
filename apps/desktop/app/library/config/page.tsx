@@ -41,6 +41,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 	VerificationDialog,
+	formatAppCategory,
 	sanitizeImageUrl,
 	toastError,
 	useBackend,
@@ -757,7 +758,7 @@ export default function DashboardPage() {
 											<SelectContent>
 												{Object.values(IAppCategory).map((cat) => (
 													<SelectItem key={cat} value={cat}>
-														{cat}
+														{formatAppCategory(cat)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -786,7 +787,7 @@ export default function DashboardPage() {
 												<SelectItem value="none">None</SelectItem>
 												{Object.values(IAppCategory).map((cat) => (
 													<SelectItem key={cat} value={cat}>
-														{cat}
+														{formatAppCategory(cat)}
 													</SelectItem>
 												))}
 											</SelectContent>

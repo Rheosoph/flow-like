@@ -5,6 +5,7 @@ export * from "./idb-storage";
 export * from "./messages";
 export * from "./flow-board-utils";
 export * from "./date";
+export * from "./app-category";
 export * from "./llm/history";
 export * from "./llm/response";
 export * from "./platform";

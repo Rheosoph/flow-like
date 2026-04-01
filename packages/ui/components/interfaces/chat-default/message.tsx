@@ -34,6 +34,7 @@ import {
 	TextEditor,
 	Textarea,
 } from "../../ui";
+import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { FilePreview, type ProcessedAttachment } from "./attachment";
 import {
 	FileDialog,
@@ -81,10 +82,12 @@ const MessageActionButton = ({
 const FeedbackButton = ({
 	onClick,
 	isActive,
+	variant = "positive",
 	children,
 }: {
 	onClick: () => void;
 	isActive: boolean;
+	variant?: "positive" | "negative";
 	children: React.ReactNode;
 }) => (
 	<button
@@ -92,7 +95,9 @@ const FeedbackButton = ({
 		className={cn(
 			"transition-colors",
 			isActive
-				? "text-emerald-500 dark:text-emerald-400 hover:text-emerald-300 dark:hover:text-emerald-300"
+				? variant === "positive"
+					? "text-emerald-500 dark:text-emerald-400"
+					: "text-red-500 dark:text-red-400"
 				: "text-muted-foreground hover:text-foreground",
 		)}
 	>
@@ -318,11 +323,11 @@ const MessageActions = ({
 	>
 		{!isUser && (
 			<>
-				<FeedbackButton onClick={onThumbsUp} isActive={rating > 0}>
-					<ThumbsUpIcon className="w-4 h-4" />
+				<FeedbackButton onClick={onThumbsUp} isActive={rating > 0} variant="positive">
+					<ThumbsUpIcon className={cn("w-4 h-4", rating > 0 && "fill-current")} />
 				</FeedbackButton>
-				<FeedbackButton onClick={onThumbsDown} isActive={rating < 0}>
-					<ThumbsDownIcon className="w-4 h-4" />
+				<FeedbackButton onClick={onThumbsDown} isActive={rating < 0} variant="negative">
+					<ThumbsDownIcon className={cn("w-4 h-4", rating < 0 && "fill-current")} />
 				</FeedbackButton>
 			</>
 		)}
@@ -576,43 +581,53 @@ export const MessageComponent = memo(function MessageComponent({
 	}, [messageContent.text]);
 
 	const upsertFeedback = useCallback(
-		(rating: number) => {
+		async (rating: number) => {
 			if (!onMessageUpdate) return;
 
 			const currentRating = message.rating ?? 0;
 			const newRating = currentRating === rating ? 0 : rating;
 
-			onMessageUpdate(message.id, {
-				rating: newRating,
-				ratingSettings: newRating === 0 ? undefined : message.ratingSettings,
-			});
+			try {
+				await onMessageUpdate(message.id, {
+					rating: newRating,
+					ratingSettings:
+						newRating === 0 ? undefined : message.ratingSettings,
+				});
 
-			if (newRating > 0) {
-				toast.success("Thanks for the feedback! ❤️");
-			} else if (newRating < 0) {
-				setShowFeedbackDialog(true);
+				if (newRating > 0) {
+					toast.success("Thanks for the feedback! ❤️");
+				} else if (newRating < 0) {
+					setShowFeedbackDialog(true);
+				}
+			} catch (e) {
+				console.error("[Chat] Failed to update feedback:", e);
+				toast.error("Failed to submit feedback");
 			}
 		},
 		[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 	);
 
 	const handleFeedbackSubmit = useCallback(
-		(data: {
+		async (data: {
 			comment: string;
 			includeChatHistory: boolean;
 			canContact: boolean;
 		}) => {
 			if (!onMessageUpdate) return;
 
-			onMessageUpdate(message.id, {
-				ratingSettings: {
-					comment: data.comment.trim(),
-					includeChatHistory: data.includeChatHistory,
-					canContact: data.canContact,
-				},
-			});
-
-			toast.success("Feedback submitted successfully!");
+			try {
+				await onMessageUpdate(message.id, {
+					ratingSettings: {
+						comment: data.comment.trim(),
+						includeChatHistory: data.includeChatHistory,
+						canContact: data.canContact,
+					},
+				});
+				toast.success("Feedback submitted successfully!");
+			} catch (e) {
+				console.error("[Chat] Failed to submit feedback:", e);
+				toast.error("Failed to submit feedback");
+			}
 		},
 		[message.id, onMessageUpdate],
 	);
@@ -678,15 +693,24 @@ export const MessageComponent = memo(function MessageComponent({
 								: undefined
 						}
 					>
-						<TextEditor
-							initialContent={
-								messageContent.text === "" && loading
-									? "🚀 Sending Message..."
-									: messageContent.text
-							}
-							isMarkdown={true}
-							editable={false}
-						/>
+						{loading && !isUser && messageContent.text === "" ? (
+							<div className="flex items-center gap-1.5 py-1">
+								<div className="flex gap-1">
+									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
+									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
+									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+								</div>
+								<span className="text-xs text-muted-foreground ml-1">Thinking...</span>
+							</div>
+						) : loading && !isUser && messageContent.text !== "" ? (
+							<StreamingTextEditor content={messageContent.text} />
+						) : (
+							<TextEditor
+								initialContent={messageContent.text}
+								isMarkdown={true}
+								editable={false}
+							/>
+						)}
 					</div>{" "}
 					{isUser && showToggle && (
 						<Button

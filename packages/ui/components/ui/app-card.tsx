@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
+import { formatAppCategory } from "../../lib/app-category";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
@@ -504,7 +505,7 @@ function ExtendedAppCard({
 
 					<div className="flex items-center gap-2 mb-3">
 						<Badge variant="default" className="text-xs px-2 py-1">
-							{app.primary_category ?? "Other"}
+							{formatAppCategory(app.primary_category)}
 						</Badge>
 						<Badge variant="outline" className="text-xs px-2 py-1">
 							{metadata?.age_rating ?? 0}+

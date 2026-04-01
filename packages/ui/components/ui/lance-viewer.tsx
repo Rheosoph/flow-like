@@ -1646,7 +1646,7 @@ const SchemaDialog: React.FC<{
 				<Settings className="h-4 w-4 mr-2" /> Schema
 			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="w-full max-w-lg">
+				<DialogContent className="w-full max-w-lg max-h-[80vh] overflow-y-auto">
 					<DialogHeader>
 						<DialogTitle>Table: {tableName}</DialogTitle>
 					</DialogHeader>
@@ -1812,7 +1812,7 @@ const SchemaDialog: React.FC<{
 					)}
 
 					{activeTab === "add" && (
-						<div className="space-y-4 max-h-[60vh] overflow-hidden flex flex-col">
+						<div className="space-y-4 flex flex-col">
 							{onAddColumn && (
 								<div className="space-y-3 flex-shrink-0">
 									<Label>Add New Column</Label>
@@ -1885,7 +1885,7 @@ const SchemaDialog: React.FC<{
 	);
 };
 
-const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
+export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
 	table:
 		typeof arrow?.metadata?.["name"] === "string"
 			? String(arrow.metadata["name"])

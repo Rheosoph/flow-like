@@ -25,6 +25,7 @@ import {
 	TextEditor,
 	Textarea,
 	VerificationDialog,
+	formatAppCategory,
 	sanitizeImageUrl,
 	toastError,
 	useBackend,
@@ -697,7 +698,7 @@ export default function LibraryConfigPage() {
 								<SelectContent>
 									{Object.values(IAppCategory).map((category) => (
 										<SelectItem key={category} value={category}>
-											{category}
+											{formatAppCategory(category)}
 										</SelectItem>
 									))}
 								</SelectContent>
@@ -725,7 +726,7 @@ export default function LibraryConfigPage() {
 									<SelectItem value="none">None</SelectItem>
 									{Object.values(IAppCategory).map((category) => (
 										<SelectItem key={category} value={category}>
-											{category}
+											{formatAppCategory(category)}
 										</SelectItem>
 									))}
 								</SelectContent>

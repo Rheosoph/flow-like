@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMiniSearch } from "react-minisearch";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
+import { formatAppCategory } from "../../lib/app-category";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { useBackend } from "../../state/backend-state";
 import { useSpotlightStore } from "../../state/spotlight-state";
@@ -209,8 +210,7 @@ export function LibraryPage({
 	const categorizedItems = useMemo(() => {
 		const groups = new Map<string, LibraryItem[]>();
 		for (const item of itemsForDisplay) {
-			const cat = item.app.primary_category ?? "Other";
-			const label = cat.replace(/([A-Z])/g, " $1").trim();
+			const label = formatAppCategory(item.app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(item);
 			groups.set(label, existing);

@@ -1353,39 +1353,53 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	const onMessageUpdate = useCallback(
 		async (messageId: string, updates: Partial<IMessage>) => {
-			await chatDb.messages.update(messageId, {
+			const existingMessage =
+				(await chatDb.messages.get(messageId)) ??
+				messagesRef.current.find((message) => message.id === messageId);
+
+			if (!existingMessage) {
+				throw new Error(`Message ${messageId} not found`);
+			}
+
+			const nextMessage: IMessage = {
+				...existingMessage,
 				...updates,
-			});
+			};
+
+			if (
+				Object.prototype.hasOwnProperty.call(updates, "ratingSettings") &&
+				updates.ratingSettings === undefined
+			) {
+				delete nextMessage.ratingSettings;
+			}
+
+			await chatDb.messages.put(nextMessage);
 
 			if (
 				updates.rating !== undefined ||
 				updates.ratingSettings !== undefined
 			) {
-				const msg = await chatDb.messages.get(messageId);
-				if (msg && msg.rating !== undefined && msg.rating !== 0) {
-					const feedbackRating = msg.rating > 0 ? 5 : 1;
-					try {
-						await backend.eventState.upsertEventFeedback(
-							appId,
-							event.id,
-							messageId,
-							{
-								rating: feedbackRating,
-								comment: msg.ratingSettings?.comment ?? "",
-								history: msg.ratingSettings?.includeChatHistory
-									? (
-											await chatDb.messages
-												.where("sessionId")
-												.equals(msg.sessionId)
-												.toArray()
-										).map((m) => m.inner)
-									: undefined,
-							},
-						);
-					} catch (e) {
-						console.warn("[Chat] Failed to sync feedback to backend:", e);
-					}
-				}
+				const rating = nextMessage.rating;
+				if (rating === undefined || rating === 0) return;
+
+				const feedbackRating = rating > 0 ? 5 : 1;
+				await backend.eventState.upsertEventFeedback(
+					appId,
+					event.id,
+					messageId,
+					{
+						rating: feedbackRating,
+						comment: nextMessage.ratingSettings?.comment ?? "",
+						history: nextMessage.ratingSettings?.includeChatHistory
+							? (
+									await chatDb.messages
+										.where("sessionId")
+										.equals(nextMessage.sessionId)
+										.toArray()
+								).map((m) => m.inner)
+							: undefined,
+					},
+				);
 			}
 		},
 		[appId, event.id, backend.eventState],

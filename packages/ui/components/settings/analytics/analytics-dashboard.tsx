@@ -86,6 +86,34 @@ const analyticsCardClassName =
 const analyticsInsetClassName =
 	"rounded-xl border border-border/50 bg-background/40 dark:bg-background/20";
 
+const nivoTheme = {
+	axis: {
+		ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
+		legend: { text: { fill: "hsl(var(--muted-foreground))" } },
+	},
+	grid: { line: { stroke: "hsl(var(--border))" } },
+	legends: { text: { fill: "hsl(var(--muted-foreground))" } },
+	crosshair: { line: { stroke: "hsl(var(--primary))" } },
+	labels: { text: { fill: "hsl(var(--foreground))" } },
+	tooltip: {
+		container: {
+			background: "hsl(var(--popover))",
+			color: "hsl(var(--popover-foreground))",
+			borderRadius: "8px",
+			boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
+			border: "1px solid hsl(var(--border))",
+			fontSize: "12px",
+		},
+	},
+};
+
+const chartColors = {
+	executions: ["hsl(217, 91%, 60%)", "hsl(262, 83%, 58%)"],
+	latency: ["hsl(217, 91%, 60%)"],
+	feedback: ["hsl(142, 71%, 45%)", "hsl(0, 84%, 60%)"],
+	cost: { llm: "hsl(217, 91%, 60%)", embedding: "hsl(142, 71%, 45%)" },
+};
+
 function StatCard({
 	title,
 	value,
@@ -158,7 +186,7 @@ function ExecutionsChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				margin={{ top: 20, right: 100, bottom: 50, left: 60 }}
 				padding={0.3}
 				groupMode="grouped"
-				colors={{ scheme: "paired" }}
+				colors={chartColors.executions}
 				axisBottom={{
 					tickRotation: -45,
 					legend: "Date",
@@ -181,14 +209,7 @@ function ExecutionsChart({ data }: { data: IDailyAnalyticsStat[] }) {
 						itemTextColor: "hsl(var(--muted-foreground))",
 					},
 				]}
-				theme={{
-					axis: {
-						ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
-						legend: { text: { fill: "hsl(var(--muted-foreground))" } },
-					},
-					grid: { line: { stroke: "hsl(var(--border))" } },
-					legends: { text: { fill: "hsl(var(--muted-foreground))" } },
-				}}
+				theme={nivoTheme}
 			/>
 		</div>
 	);
@@ -240,7 +261,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 					legendPosition: "middle",
 					format: (v) => `${v}ms`,
 				}}
-				colors={{ scheme: "category10" }}
+				colors={chartColors.latency}
 				pointSize={8}
 				pointBorderWidth={2}
 				pointBorderColor={{ from: "serieColor" }}
@@ -248,14 +269,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				areaOpacity={0.1}
 				useMesh={true}
 				enableGridX={false}
-				theme={{
-					axis: {
-						ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
-						legend: { text: { fill: "hsl(var(--muted-foreground))" } },
-					},
-					grid: { line: { stroke: "hsl(var(--border))" } },
-					crosshair: { line: { stroke: "hsl(var(--primary))" } },
-				}}
+				theme={nivoTheme}
 			/>
 		</div>
 	);
@@ -265,7 +279,12 @@ function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	const chartData = useMemo(
 		() =>
 			data
-				.filter((d) => d.feedbackCount > 0)
+				.filter(
+					(d) =>
+						d.feedbackCount > 0 ||
+						d.positiveFeedback > 0 ||
+						d.negativeFeedback > 0,
+				)
 				.map((d) => ({
 					date: new Date(d.date).toLocaleDateString("en-US", {
 						month: "short",
@@ -294,7 +313,7 @@ function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				margin={{ top: 20, right: 100, bottom: 50, left: 60 }}
 				padding={0.3}
 				groupMode="stacked"
-				colors={["hsl(142, 76%, 36%)", "hsl(0, 84%, 60%)"]}
+				colors={chartColors.feedback}
 				axisBottom={{
 					tickRotation: -45,
 					legend: "Date",
@@ -317,14 +336,7 @@ function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
 						itemTextColor: "hsl(var(--muted-foreground))",
 					},
 				]}
-				theme={{
-					axis: {
-						ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
-						legend: { text: { fill: "hsl(var(--muted-foreground))" } },
-					},
-					grid: { line: { stroke: "hsl(var(--border))" } },
-					legends: { text: { fill: "hsl(var(--muted-foreground))" } },
-				}}
+				theme={nivoTheme}
 			/>
 		</div>
 	);
@@ -337,12 +349,12 @@ function CostBreakdownChart({ overview }: { overview: IAnalyticsOverview }) {
 				{
 					id: "LLM Cost",
 					value: overview.totalLlmCost,
-					color: "hsl(217, 91%, 60%)",
+					color: chartColors.cost.llm,
 				},
 				{
 					id: "Embedding Cost",
 					value: overview.totalEmbeddingCost,
-					color: "hsl(142, 76%, 36%)",
+					color: chartColors.cost.embedding,
 				},
 			].filter((d) => d.value > 0),
 		[overview],
@@ -372,9 +384,7 @@ function CostBreakdownChart({ overview }: { overview: IAnalyticsOverview }) {
 				arcLabelsSkipAngle={10}
 				arcLabelsTextColor="white"
 				valueFormat={(v) => formatCost(v)}
-				theme={{
-					labels: { text: { fill: "hsl(var(--foreground))" } },
-				}}
+				theme={nivoTheme}
 			/>
 		</div>
 	);

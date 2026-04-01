@@ -428,7 +428,7 @@ export class EventState implements IEventState {
 						global_state: feedback.globalState,
 						local_state: feedback.localState,
 					},
-					comment: feedback.comment,
+					comment: feedback.comment ?? "",
 					feedback_id: feedbackId,
 				}),
 			},

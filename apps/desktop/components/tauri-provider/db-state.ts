@@ -214,7 +214,7 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/indices/${encodeURIComponent(indexName)}`, userScoped),
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`, userScoped),
 				{
 					method: "DELETE",
 				},
@@ -387,9 +387,9 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns/alter`, userScoped),
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
 				{
-					method: "POST",
+					method: "PUT",
 					body: JSON.stringify({ column, nullable }),
 				},
 				this.backend.auth,

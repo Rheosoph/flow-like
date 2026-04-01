@@ -176,147 +176,9 @@ import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 import {
 	AutoLayoutDialog,
-	type LayoutAlgorithm,
+	type LayoutStyle,
 } from "./auto-layout-dialog";
-
-function computeLayeredRanks(
-	allIds: Set<string>,
-	outgoing: Map<string, Set<string>>,
-	incoming: Map<string, Set<string>>,
-): Map<string, number> {
-	const rank = new Map<string, number>();
-	const inDegree = new Map<string, number>();
-	for (const id of allIds) {
-		inDegree.set(id, incoming.get(id)?.size ?? 0);
-	}
-	const queue: string[] = [];
-	for (const [id, deg] of inDegree) {
-		if (deg === 0) {
-			queue.push(id);
-			rank.set(id, 0);
-		}
-	}
-	while (queue.length > 0) {
-		const curr = queue.shift()!;
-		const currRank = rank.get(curr) ?? 0;
-		for (const next of outgoing.get(curr) ?? []) {
-			const existingRank = rank.get(next) ?? 0;
-			rank.set(next, Math.max(existingRank, currRank + 1));
-			inDegree.set(next, (inDegree.get(next) ?? 1) - 1);
-			if (inDegree.get(next) === 0) queue.push(next);
-		}
-	}
-	for (const id of allIds) {
-		if (!rank.has(id)) rank.set(id, 0);
-	}
-	return rank;
-}
-
-function computeLayout(
-	algorithm: LayoutAlgorithm,
-	allIds: Set<string>,
-	outgoing: Map<string, Set<string>>,
-	incoming: Map<string, Set<string>>,
-): Map<string, [number, number]> {
-	const positions = new Map<string, [number, number]>();
-	const ids = [...allIds];
-
-	if (algorithm === "layered-lr") {
-		const rank = computeLayeredRanks(allIds, outgoing, incoming);
-		const columns = new Map<number, string[]>();
-		for (const [id, r] of rank) {
-			if (!columns.has(r)) columns.set(r, []);
-			columns.get(r)!.push(id);
-		}
-		const sorted = [...columns.keys()].sort((a, b) => a - b);
-		const H_GAP = 350;
-		const V_GAP = 150;
-		for (let col = 0; col < sorted.length; col++) {
-			const group = columns.get(sorted[col])!;
-			const totalHeight = (group.length - 1) * V_GAP;
-			const startY = -totalHeight / 2;
-			for (let row = 0; row < group.length; row++) {
-				positions.set(group[row], [col * H_GAP, startY + row * V_GAP]);
-			}
-		}
-	} else if (algorithm === "force-directed") {
-		const pos = new Map<string, { x: number; y: number }>();
-		const angle = (2 * Math.PI) / Math.max(ids.length, 1);
-		const radius = Math.max(150, ids.length * 40);
-		ids.forEach((id, i) => {
-			pos.set(id, {
-				x: Math.cos(angle * i) * radius,
-				y: Math.sin(angle * i) * radius,
-			});
-		});
-		const ITERATIONS = 80;
-		const REPULSION = 50000;
-		const ATTRACTION = 0.005;
-		const DAMPING = 0.9;
-		const vel = new Map<string, { vx: number; vy: number }>();
-		for (const id of ids) vel.set(id, { vx: 0, vy: 0 });
-
-		for (let iter = 0; iter < ITERATIONS; iter++) {
-			for (const id of ids) {
-				const p = pos.get(id)!;
-				const v = vel.get(id)!;
-				let fx = 0;
-				let fy = 0;
-				for (const other of ids) {
-					if (other === id) continue;
-					const o = pos.get(other)!;
-					const dx = p.x - o.x;
-					const dy = p.y - o.y;
-					const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-					const force = REPULSION / (dist * dist);
-					fx += (dx / dist) * force;
-					fy += (dy / dist) * force;
-				}
-				for (const neighbor of outgoing.get(id) ?? []) {
-					const o = pos.get(neighbor)!;
-					fx += (o.x - p.x) * ATTRACTION;
-					fy += (o.y - p.y) * ATTRACTION;
-				}
-				for (const neighbor of incoming.get(id) ?? []) {
-					const o = pos.get(neighbor)!;
-					fx += (o.x - p.x) * ATTRACTION;
-					fy += (o.y - p.y) * ATTRACTION;
-				}
-				v.vx = (v.vx + fx) * DAMPING;
-				v.vy = (v.vy + fy) * DAMPING;
-			}
-			for (const id of ids) {
-				const p = pos.get(id)!;
-				const v = vel.get(id)!;
-				p.x += v.vx;
-				p.y += v.vy;
-			}
-		}
-		for (const id of ids) {
-			const p = pos.get(id)!;
-			positions.set(id, [Math.round(p.x), Math.round(p.y)]);
-		}
-	} else if (algorithm === "tree") {
-		const rank = computeLayeredRanks(allIds, outgoing, incoming);
-		const levels = new Map<number, string[]>();
-		for (const [id, r] of rank) {
-			if (!levels.has(r)) levels.set(r, []);
-			levels.get(r)!.push(id);
-		}
-		const sorted = [...levels.keys()].sort((a, b) => a - b);
-		const H_GAP = 250;
-		const V_GAP = 200;
-		for (const r of sorted) {
-			const group = levels.get(r)!;
-			const totalW = (group.length - 1) * H_GAP;
-			group.forEach((id, i) => {
-				positions.set(id, [i * H_GAP - totalW / 2, r * V_GAP]);
-			});
-		}
-	}
-
-	return positions;
-}
+import { computeFlowLayout } from "../../lib/flow-auto-layout";
 
 export function FlowBoard({
 	appId,
@@ -2415,7 +2277,7 @@ export function FlowBoard({
 
 	const [autoLayoutDialogOpen, setAutoLayoutDialogOpen] = useState(false);
 
-	const autoLayout = useCallback(async (algorithm: LayoutAlgorithm = "layered-lr") => {
+	const autoLayout = useCallback(async (style: LayoutStyle = "compact") => {
 		if (typeof version !== "undefined") {
 			toastError("Cannot modify old version", <XIcon />);
 			return;
@@ -2423,7 +2285,6 @@ export function FlowBoard({
 		const boardData = board.data;
 		if (!boardData) return;
 
-		// Collect nodes visible on the current layer
 		const layerNodes: INode[] = [];
 		for (const node of Object.values(boardData.nodes)) {
 			const nodeLayer = (node.layer ?? "") === "" ? undefined : node.layer;
@@ -2432,7 +2293,6 @@ export function FlowBoard({
 			}
 		}
 
-		// Also include layer nodes (child layers whose parent is currentLayer)
 		const layerEntities: { id: string; coordinates: number[] }[] = [];
 		if (boardData.layers) {
 			for (const layer of Object.values(boardData.layers)) {
@@ -2444,58 +2304,15 @@ export function FlowBoard({
 			}
 		}
 
-		const allIds = new Set([
-			...layerNodes.map((n) => n.id),
-			...layerEntities.map((l) => l.id),
-		]);
+		if (layerNodes.length === 0 && layerEntities.length === 0) return;
 
-		if (allIds.size === 0) return;
+		const newPositions = computeFlowLayout({
+			layerNodes,
+			layerEntities,
+			boardLayers: boardData.layers,
+			currentLayer,
+		}, style);
 
-		// Build adjacency from edges: source -> target (node-level, not pin-level)
-		const outgoing = new Map<string, Set<string>>();
-		const incoming = new Map<string, Set<string>>();
-		for (const id of allIds) {
-			outgoing.set(id, new Set());
-			incoming.set(id, new Set());
-		}
-
-		// Resolve pin ownership
-		const pinOwner = new Map<string, string>();
-		for (const node of layerNodes) {
-			for (const pin of Object.values(node.pins)) {
-				pinOwner.set(pin.id, node.id);
-			}
-		}
-		// Layer pins map to layer id
-		if (boardData.layers) {
-			for (const layer of Object.values(boardData.layers)) {
-				const parentLayer = (layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
-				if (parentLayer === currentLayer && layer.id !== currentLayer) {
-					for (const pin of Object.values(layer.pins)) {
-						pinOwner.set(pin.id, layer.id);
-					}
-				}
-			}
-		}
-
-		// Build graph from connected_to relationships
-		for (const node of layerNodes) {
-			for (const pin of Object.values(node.pins)) {
-				if (pin.pin_type === IPinType.Output) {
-					for (const targetPinId of pin.connected_to) {
-						const targetNodeId = pinOwner.get(targetPinId);
-						if (targetNodeId && allIds.has(targetNodeId) && targetNodeId !== node.id) {
-							outgoing.get(node.id)?.add(targetNodeId);
-							incoming.get(targetNodeId)?.add(node.id);
-						}
-					}
-				}
-			}
-		}
-
-		const newPositions = computeLayout(algorithm, allIds, outgoing, incoming);
-
-		// Generate move commands
 		const commands: IGenericCommand[] = [];
 		for (const node of layerNodes) {
 			const pos = newPositions.get(node.id);
@@ -2525,7 +2342,6 @@ export function FlowBoard({
 		if (commands.length === 0) return;
 		await executeCommands(commands);
 
-		// Fit the view to show all nodes after layout
 		setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
 	}, [board.data, currentLayer, executeCommands, fitView, version]);
 

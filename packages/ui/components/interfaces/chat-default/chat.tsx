@@ -435,14 +435,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 							)}
 						{currentMessage && (
 								<div
-									className="w-full max-w-screen-lg px-4 relative"
+									className="w-full max-w-screen-lg px-4"
 									key={`msg-${currentMessage.id}`}
 								>
-									<PuffLoader
-										color={resolvedTheme === "dark" ? "white" : "black"}
-										className="mt-2 absolute left-0 top-0 translate-y-[2.5rem] translate-x-[-100%]"
-										size={30}
-									/>
 									<MessageComponent loading message={currentMessage} />
 								</div>
 							)}

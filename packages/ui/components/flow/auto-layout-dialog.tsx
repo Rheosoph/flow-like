@@ -10,138 +10,138 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { cn } from "../../lib/utils";
+import type { LayoutStyle } from "../../lib/flow-auto-layout";
 
-export type LayoutAlgorithm = "layered-lr" | "force-directed" | "tree";
+export type { LayoutStyle };
 
 interface LayoutOption {
-	id: LayoutAlgorithm;
+	id: LayoutStyle;
 	label: string;
 	description: string;
 }
 
 const LAYOUT_OPTIONS: LayoutOption[] = [
 	{
-		id: "layered-lr",
-		label: "Layered",
-		description: "Arranges nodes in columns by dependency depth. Best for linear flows.",
+		id: "compact",
+		label: "Compact",
+		description: "Tight spacing. Pure nodes packed close to their consumers.",
 	},
 	{
-		id: "force-directed",
-		label: "Force-Directed",
-		description: "Physics simulation pushes connected nodes apart. Good for clusters.",
+		id: "balanced",
+		label: "Balanced",
+		description: "Even spacing between execution chains and data dependencies.",
 	},
 	{
-		id: "tree",
-		label: "Tree",
-		description: "Hierarchical tree from root nodes. Best for branching flows.",
+		id: "expanded",
+		label: "Expanded",
+		description: "Extra room between event groups and branches for readability.",
 	},
 ];
 
 // ─── Animated SVG Previews ──────────────────────────────────────────────
 
-function AnimatedLayeredLR() {
+function AnimatedCompact() {
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
 			<style>{`
 				@keyframes fadeSlide { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } }
-				.lr-node { animation: fadeSlide 0.5s ease-out both; }
-				.lr-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: dash 1s ease-out 0.4s forwards; }
-				@keyframes dash { to { stroke-dashoffset: 0; } }
+				.cp-node { animation: fadeSlide 0.5s ease-out both; }
+				.cp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: cpDash 1s ease-out 0.4s forwards; }
+				@keyframes cpDash { to { stroke-dashoffset: 0; } }
 			`}</style>
-			{/* Column 1 */}
-			<rect className="lr-node" style={{ animationDelay: "0s" }} x="5" y="30" width="22" height="14" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			{/* Column 2 */}
-			<rect className="lr-node" style={{ animationDelay: "0.1s" }} x="42" y="12" width="22" height="14" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			<rect className="lr-node" style={{ animationDelay: "0.15s" }} x="42" y="48" width="22" height="14" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			{/* Column 3 */}
-			<rect className="lr-node" style={{ animationDelay: "0.2s" }} x="79" y="12" width="22" height="14" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			<rect className="lr-node" style={{ animationDelay: "0.25s" }} x="79" y="48" width="22" height="14" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			{/* Edges */}
-			<line className="lr-edge" x1="27" y1="37" x2="42" y2="19" stroke="currentColor" strokeWidth="1" opacity="0.5" />
-			<line className="lr-edge" x1="27" y1="37" x2="42" y2="55" stroke="currentColor" strokeWidth="1" opacity="0.5" />
-			<line className="lr-edge" style={{ animationDelay: "0.6s" }} x1="64" y1="19" x2="79" y2="19" stroke="currentColor" strokeWidth="1" opacity="0.5" />
-			<line className="lr-edge" style={{ animationDelay: "0.6s" }} x1="64" y1="55" x2="79" y2="55" stroke="currentColor" strokeWidth="1" opacity="0.5" />
+			<rect className="cp-node" style={{ animationDelay: "0s" }} x="3" y="18" width="18" height="12" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.08s" }} x="28" y="18" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.16s" }} x="53" y="10" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.16s" }} x="53" y="26" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.24s" }} x="78" y="18" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.1s" }} x="15" y="5" width="14" height="9" rx="2" fill="currentColor" opacity="0.12" stroke="currentColor" strokeWidth="0.6" />
+			<rect className="cp-node" style={{ animationDelay: "0.18s" }} x="40" y="2" width="14" height="9" rx="2" fill="currentColor" opacity="0.12" stroke="currentColor" strokeWidth="0.6" />
+			<line className="cp-edge" x1="21" y1="24" x2="28" y2="24" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="46" y1="24" x2="53" y2="16" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="46" y1="24" x2="53" y2="32" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="71" y1="16" x2="78" y2="24" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="71" y1="32" x2="78" y2="24" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="29" y1="9" x2="37" y2="18" stroke="currentColor" strokeWidth="0.5" opacity="0.3" strokeDasharray="2 1.5" />
+			<line className="cp-edge" x1="54" y1="9" x2="53" y2="10" stroke="currentColor" strokeWidth="0.5" opacity="0.3" strokeDasharray="2 1.5" />
+			<rect className="cp-node" style={{ animationDelay: "0s" }} x="3" y="52" width="18" height="12" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.08s" }} x="28" y="52" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="cp-node" style={{ animationDelay: "0.16s" }} x="53" y="52" width="18" height="12" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<line className="cp-edge" x1="21" y1="58" x2="28" y2="58" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="cp-edge" x1="46" y1="58" x2="53" y2="58" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
 		</svg>
 	);
 }
 
-function AnimatedForceDirected() {
+function AnimatedBalanced() {
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
 			<style>{`
-				@keyframes pulse { 0%, 100% { r: 6; } 50% { r: 7.5; } }
-				@keyframes spread { 0% { opacity: 0; } 100% { opacity: 1; } }
-				.fd-node { animation: spread 0.6s ease-out both; }
-				.fd-edge { stroke-dasharray: 60; stroke-dashoffset: 60; animation: dashFD 1.2s ease-out 0.3s forwards; }
-				.fd-pulse { animation: pulse 2s ease-in-out infinite; }
-				@keyframes dashFD { to { stroke-dashoffset: 0; } }
+				@keyframes balSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } }
+				.bal-node { animation: balSlide 0.5s ease-out both; }
+				.bal-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: balDash 1s ease-out 0.4s forwards; }
+				@keyframes balDash { to { stroke-dashoffset: 0; } }
 			`}</style>
-			{/* Cluster 1 */}
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0s" }} cx="30" cy="28" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0.1s" }} cx="18" cy="48" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0.15s" }} cx="42" cy="50" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			{/* Cluster 2 */}
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0.2s" }} cx="80" cy="20" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0.25s" }} cx="96" cy="38" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			<circle className="fd-node fd-pulse" style={{ animationDelay: "0.3s" }} cx="75" cy="52" r="6" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1" />
-			{/* Intra-cluster edges */}
-			<line className="fd-edge" x1="30" y1="28" x2="18" y2="48" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="fd-edge" x1="30" y1="28" x2="42" y2="50" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="fd-edge" x1="18" y1="48" x2="42" y2="50" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="fd-edge" x1="80" y1="20" x2="96" y2="38" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="fd-edge" x1="80" y1="20" x2="75" y2="52" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="fd-edge" x1="96" y1="38" x2="75" y2="52" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			{/* Bridge edge */}
-			<line className="fd-edge" style={{ animationDelay: "0.8s" }} x1="42" y1="50" x2="75" y2="52" stroke="currentColor" strokeWidth="0.8" opacity="0.3" strokeDasharray="3 2" />
+			<rect className="bal-node" style={{ animationDelay: "0s" }} x="3" y="15" width="20" height="13" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.1s" }} x="32" y="15" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.2s" }} x="61" y="6" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.2s" }} x="61" y="25" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.3s" }} x="90" y="15" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.12s" }} x="16" y="1" width="16" height="10" rx="2" fill="currentColor" opacity="0.12" stroke="currentColor" strokeWidth="0.6" />
+			<rect className="bal-node" style={{ animationDelay: "0.22s" }} x="45" y="1" width="16" height="10" rx="2" fill="currentColor" opacity="0.12" stroke="currentColor" strokeWidth="0.6" />
+			<line className="bal-edge" x1="23" y1="21" x2="32" y2="21" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="52" y1="21" x2="61" y2="12" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="52" y1="21" x2="61" y2="31" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="81" y1="12" x2="90" y2="21" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="81" y1="31" x2="90" y2="21" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="32" y1="6" x2="42" y2="15" stroke="currentColor" strokeWidth="0.5" opacity="0.3" strokeDasharray="2 1.5" />
+			<line className="bal-edge" x1="61" y1="6" x2="61" y2="6" stroke="currentColor" strokeWidth="0.5" opacity="0.3" strokeDasharray="2 1.5" />
+			<rect className="bal-node" style={{ animationDelay: "0s" }} x="3" y="55" width="20" height="13" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.1s" }} x="32" y="55" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="bal-node" style={{ animationDelay: "0.2s" }} x="61" y="55" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<line className="bal-edge" x1="23" y1="61" x2="32" y2="61" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="bal-edge" x1="52" y1="61" x2="61" y2="61" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
 		</svg>
 	);
 }
 
-function AnimatedTree() {
+function AnimatedExpanded() {
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
 			<style>{`
-				@keyframes treeDrop { 0% { opacity: 0; transform: translateY(-6px); } 100% { opacity: 1; transform: translateY(0); } }
-				.tree-node { animation: treeDrop 0.4s ease-out both; }
-				.tree-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: dashTree 0.8s ease-out 0.3s forwards; }
-				@keyframes dashTree { to { stroke-dashoffset: 0; } }
+				@keyframes expSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } }
+				.exp-node { animation: expSlide 0.6s ease-out both; }
+				.exp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: expDash 1s ease-out 0.4s forwards; }
+				@keyframes expDash { to { stroke-dashoffset: 0; } }
 			`}</style>
-			{/* Root */}
-			<rect className="tree-node" style={{ animationDelay: "0s" }} x="49" y="3" width="22" height="12" rx="3" fill="currentColor" opacity="0.3" stroke="currentColor" strokeWidth="1" />
-			{/* Level 1 */}
-			<rect className="tree-node" style={{ animationDelay: "0.12s" }} x="15" y="30" width="20" height="11" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			<rect className="tree-node" style={{ animationDelay: "0.16s" }} x="50" y="30" width="20" height="11" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			<rect className="tree-node" style={{ animationDelay: "0.2s" }} x="85" y="30" width="20" height="11" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1" />
-			{/* Level 2 */}
-			<rect className="tree-node" style={{ animationDelay: "0.28s" }} x="3" y="56" width="18" height="10" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="0.8" />
-			<rect className="tree-node" style={{ animationDelay: "0.32s" }} x="27" y="56" width="18" height="10" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="0.8" />
-			<rect className="tree-node" style={{ animationDelay: "0.36s" }} x="51" y="56" width="18" height="10" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="0.8" />
-			<rect className="tree-node" style={{ animationDelay: "0.4s" }} x="80" y="56" width="18" height="10" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="0.8" />
-			<rect className="tree-node" style={{ animationDelay: "0.44s" }} x="102" y="56" width="15" height="10" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="0.8" />
-			{/* Edges root → level1 */}
-			<line className="tree-edge" x1="60" y1="15" x2="25" y2="30" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="tree-edge" x1="60" y1="15" x2="60" y2="30" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			<line className="tree-edge" x1="60" y1="15" x2="95" y2="30" stroke="currentColor" strokeWidth="0.8" opacity="0.4" />
-			{/* Edges level1 → level2 */}
-			<line className="tree-edge" style={{ animationDelay: "0.5s" }} x1="25" y1="41" x2="12" y2="56" stroke="currentColor" strokeWidth="0.8" opacity="0.3" />
-			<line className="tree-edge" style={{ animationDelay: "0.5s" }} x1="25" y1="41" x2="36" y2="56" stroke="currentColor" strokeWidth="0.8" opacity="0.3" />
-			<line className="tree-edge" style={{ animationDelay: "0.5s" }} x1="60" y1="41" x2="60" y2="56" stroke="currentColor" strokeWidth="0.8" opacity="0.3" />
-			<line className="tree-edge" style={{ animationDelay: "0.5s" }} x1="95" y1="41" x2="89" y2="56" stroke="currentColor" strokeWidth="0.8" opacity="0.3" />
-			<line className="tree-edge" style={{ animationDelay: "0.5s" }} x1="95" y1="41" x2="109" y2="56" stroke="currentColor" strokeWidth="0.8" opacity="0.3" />
+			<rect className="exp-node" style={{ animationDelay: "0s" }} x="2" y="10" width="20" height="13" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.12s" }} x="36" y="10" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.24s" }} x="70" y="3" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.24s" }} x="70" y="20" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.36s" }} x="100" y="10" width="17" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<line className="exp-edge" x1="22" y1="16" x2="36" y2="16" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="exp-edge" x1="56" y1="16" x2="70" y2="9" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="exp-edge" x1="56" y1="16" x2="70" y2="26" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="exp-edge" x1="90" y1="9" x2="100" y2="16" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="exp-edge" x1="90" y1="26" x2="100" y2="16" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<rect className="exp-node" style={{ animationDelay: "0s" }} x="2" y="58" width="20" height="13" rx="3" fill="hsl(30 80% 55%)" opacity="0.6" stroke="hsl(30 80% 55%)" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.12s" }} x="36" y="58" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<rect className="exp-node" style={{ animationDelay: "0.24s" }} x="70" y="58" width="20" height="13" rx="3" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="0.8" />
+			<line className="exp-edge" x1="22" y1="64" x2="36" y2="64" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+			<line className="exp-edge" x1="56" y1="64" x2="70" y2="64" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
 		</svg>
 	);
 }
 
-const PREVIEW_MAP: Record<LayoutAlgorithm, () => React.JSX.Element> = {
-	"layered-lr": AnimatedLayeredLR,
-	"force-directed": AnimatedForceDirected,
-	tree: AnimatedTree,
+const PREVIEW_MAP: Record<LayoutStyle, () => React.JSX.Element> = {
+	compact: AnimatedCompact,
+	balanced: AnimatedBalanced,
+	expanded: AnimatedExpanded,
 };
 
 export interface AutoLayoutDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onSelect: (algorithm: LayoutAlgorithm) => void;
+	onSelect: (style: LayoutStyle) => void;
 }
 
 export const AutoLayoutDialog = memo(function AutoLayoutDialog({
@@ -187,8 +187,8 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 				<DialogHeader>
 					<DialogTitle>Auto Layout</DialogTitle>
 					<DialogDescription>
-						Choose a layout algorithm to automatically arrange the nodes on the
-						current layer.
+						Arrange nodes left-to-right following execution flow. Events are
+						grouped separately with data nodes placed beside their consumers.
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>

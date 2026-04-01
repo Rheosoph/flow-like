@@ -217,10 +217,10 @@ export class WebDatabaseState implements IDatabaseState {
 		columns: string[],
 		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/drop-columns${this.scopeQuery(userScoped)}`,
-			{ columns },
+		await apiDelete(
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
+			{ columns },
 		);
 	}
 
@@ -231,7 +231,7 @@ export class WebDatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/add-column${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			column,
 			this.backend.auth,
 		);
@@ -244,8 +244,8 @@ export class WebDatabaseState implements IDatabaseState {
 		nullable: boolean,
 		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/alter-column${this.scopeQuery(userScoped)}`,
+		await apiPut(
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			{ column, nullable },
 			this.backend.auth,
 		);

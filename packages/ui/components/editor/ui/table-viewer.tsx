@@ -842,7 +842,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 			)}
 
 			{/* Hidden children for Slate to track elements */}
-			<div className="hidden">{children}</div>
+			<table className="hidden"><tbody>{children}</tbody></table>
 		</div>
 	);
 }
