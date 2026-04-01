@@ -314,4 +314,109 @@ export const fr = {
 	"nav.blog": "Blog",
 	"nav.contact": "Contact",
 	"footer.copyright": "© 2024 TM9657 GmbH. Tous droits réservés.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Comment Flow-Like fonctionne",
+
+	"compare.explain.visual_workflow.title": "Workflows visuels",
+	"compare.explain.visual_workflow.what":
+		"L'automatisation se construit en reliant des nœuds sur un canvas, sans code. Ce que vous voyez est exactement ce qui s'exécute.",
+	"compare.explain.visual_workflow.flow":
+		"Chaque board Flow-Like est un programme visuel. Les nœuds représentent des opérations typées ; les arêtes sont des canaux de données typés. Le canvas est l'unique source de vérité — pas une visualisation superposée sur du code caché.",
+
+	"compare.explain.deterministic.title": "Exécution déterministe",
+	"compare.explain.deterministic.what":
+		"À entrées identiques, le système produit toujours les mêmes sorties dans le même ordre. Pas de surprises, pas d'état caché.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like compile les boards en tâches async Rust. Pas de GC, pas de variance JIT, pas d'ordonnancement probabiliste. Chaque chemin d'exécution est statiquement typé, borné et entièrement reproductible.",
+
+	"compare.explain.high_volume.title": "Haut débit",
+	"compare.explain.high_volume.what":
+		"Le moteur traite des milliers d'événements par seconde sans dégradation de performance.",
+	"compare.explain.high_volume.flow":
+		"Construit sur les abstractions à coût zéro de Rust et le runtime async Tokio. Les benchmarks internes atteignent 244 000 événements/seconde — environ 1 000× plus rapide que les moteurs Python ou Node typiques.",
+
+	"compare.explain.compiled.title": "Exécution compilée",
+	"compare.explain.compiled.what":
+		"Les workflows sont compilés à l'avance plutôt qu'interprétés à l'exécution, éliminant totalement la surcharge de l'interpréteur.",
+	"compare.explain.compiled.flow":
+		"Flow-Like sérialise les boards et les démarre en tâches async Rust compilées. Pas de bytecode, pas de moteur de script. Le graphe de workflow complet est optimisé au chargement, pas à chaque exécution.",
+
+	"compare.explain.ai_agents.title": "IA & Agents",
+	"compare.explain.ai_agents.what":
+		"Les appels LLM, les pipelines RAG et les agents autonomes peuvent être intégrés directement dans les workflows comme nœuds de premier ordre.",
+	"compare.explain.ai_agents.flow":
+		"Des nœuds natifs gèrent l'assemblage des prompts, l'invocation des modèles, les réponses en streaming et l'utilisation des outils. Les agents peuvent appeler des fonctions de workflow de façon déterministe ou autonome — avec les mêmes garanties d'explicabilité.",
+
+	"compare.explain.ui_builder.title": "Constructeur d'UI",
+	"compare.explain.ui_builder.what":
+		"Vous pouvez concevoir des interfaces utilisateur liées aux données du flow sans écrire de code de framework frontend.",
+	"compare.explain.ui_builder.flow":
+		"Un système de widgets canvas est intégré. Boutons, formulaires, tableaux et graphiques se connectent directement aux pins de vos nœuds et se mettent à jour en direct avec le flux de données.",
+
+	"compare.explain.full_apps.title": "Développement d'apps complètes",
+	"compare.explain.full_apps.what":
+		"Vous pouvez livrer des applications complètes prêtes pour la production, pas seulement des scripts ou des automatisations isolées.",
+	"compare.explain.full_apps.flow":
+		"Boards, UI, stockage, auth et routage d'événements vivent dans un seul projet Flow-Like. Empaquetez-le en app desktop, serveur ou module embarqué avec la même chaîne d'outils.",
+
+	"compare.explain.customer_facing.title": "Déploiements côté client",
+	"compare.explain.customer_facing.what":
+		"Le même moteur qui exécute les workflows internes peut servir directement les utilisateurs finaux via des interfaces web ou des apps desktop natives.",
+	"compare.explain.customer_facing.flow":
+		"Les apps Flow-Like peuvent exposer des widgets UI et des endpoints HTTP aux utilisateurs externes. L'isolation multi-tenant, l'auth et le contrôle d'accès sont intégrés dans le système de profils et de capacités.",
+
+	"compare.explain.desktop.title": "Apps desktop",
+	"compare.explain.desktop.what":
+		"Les workflows et UIs peuvent être packagés en applications desktop natives pour Windows, macOS et Linux.",
+	"compare.explain.desktop.flow":
+		"Propulsé par Tauri. Un projet Flow-Like compile en app native en zone de notification système avec accès complet au matériel, aux fichiers et aux périphériques locaux — sans Electron ni surcharge webview.",
+
+	"compare.explain.mobile.title": "Mobile",
+	"compare.explain.mobile.what":
+		"Les workflows peuvent être embarqués dans des applications mobiles pour iOS et Android.",
+	"compare.explain.mobile.flow":
+		"Un runtime Rust compact tourne sur ARM sans JVM ni stack Tauri complet, gardant le binaire minimal et économe en batterie tout en conservant la sécurité des types.",
+
+	"compare.explain.offline.title": "Offline-First",
+	"compare.explain.offline.what":
+		"Les workflows fonctionnent sans connexion internet et synchronisent dès que la connexion est rétablie.",
+	"compare.explain.offline.flow":
+		"Tous les états d'exécution, logs et données sont locaux par défaut. La synchronisation avec un backend cloud est optionnelle et gérée par la couche de stockage.",
+
+	"compare.explain.local_first.title": "Local-First",
+	"compare.explain.local_first.what":
+		"Les données et le calcul restent sur l'appareil de l'utilisateur. Le cloud est optionnel, pas obligatoire.",
+	"compare.explain.local_first.flow":
+		"Flow-Like a été conçu dès le départ pour fonctionner entièrement sur l'appareil. Pas d'appels cloud obligatoires, pas de télémétrie par défaut, pas de dépendance à un fournisseur cloud dans le cœur du runtime.",
+
+	"compare.explain.file_native.title": "Natif fichiers",
+	"compare.explain.file_native.what":
+		"Les workflows traitent les fichiers comme des sources de données de premier ordre — pas en tant qu'après-pensée nécessitant des adaptateurs externes.",
+	"compare.explain.file_native.flow":
+		"Les opérations sur le système de fichiers (lire, écrire, surveiller, transformer) sont des primitives de nœuds intégrées. Les boards consomment CSV, JSON, binaire et formats structurés sans configuration de plugin.",
+
+	"compare.explain.data_science.title": "Data Science",
+	"compare.explain.data_science.what":
+		"Les workflows peuvent orchestrer des pipelines de données, des calculs statistiques et des tâches d'évaluation de modèles.",
+	"compare.explain.data_science.flow":
+		"L'intégration d'Apache DataFusion permet le SQL sur fichiers. Des nœuds intégrés couvrent les opérations tensorielles, les embeddings et la manipulation de datasets — tout dans le même board visuel.",
+
+	"compare.explain.governance.title": "Gouvernance & Audit",
+	"compare.explain.governance.what":
+		"Chaque run est enregistré, reproductible et inspectable — répondant aux exigences de conformité des processus réglementés.",
+	"compare.explain.governance.flow":
+		"Flow-Like capture une trace d'exécution complète par run : entrées, sorties, timing et version exacte du board exécuté. Les snapshots permettent de rejouer n'importe quel run passé dans un environnement sandbox.",
+
+	"compare.explain.self_hosted.title": "Auto-hébergé",
+	"compare.explain.self_hosted.what":
+		"Toute la plateforme peut être déployée sur votre propre infrastructure — cloud privé, on-premises ou air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like se livre comme un binaire ou conteneur unique sans dépendances SaaS obligatoires. L'auth, le stockage et la télémétrie sont configurables ou supprimables. Votre infrastructure, vos règles.",
+
+	"compare.explain.lock_in.title": "Pas de vendor lock-in",
+	"compare.explain.lock_in.what":
+		"Vous possédez vos workflows. Exportez, migrez ou remplacez des composants sans dépendances de format propriétaires.",
+	"compare.explain.lock_in.flow":
+		"Les boards Flow-Like sont stockés en JSON simple. Tous les nœuds du catalogue sont open source. Le runtime, le format de fichier et la surface API sont versionnés et documentés — avec un outillage de migration inclus.",
 } as const;

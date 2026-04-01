@@ -1,10 +1,10 @@
 export const deShopfloor: Record<string, string> = {
 	"ind.meta.title": "Shopfloor-Automatisierung | Flow-Like",
 	"ind.meta.description":
-		"Verbinden Sie Maschinen, Sensoren und SPS mit nachvollziehbaren, typsicheren Datenflüssen. Flow-Like bringt visuelle Workflow-Automatisierung auf den Hallenboden.",
+		"Verbinden Sie Maschinen, Sensoren und SPS mit nachvollziehbaren, typsicheren Datenflüssen. Flow-Like bringt visuelle Workflow-Automatisierung auf den Shopfloor.",
 	"ind.hero.tagline": "Shopfloor",
 	"ind.hero.headline": "Automatisieren Sie Ihren",
-	"ind.hero.headline.highlight": "Hallenboden",
+	"ind.hero.headline.highlight": "Shopfloor",
 	"ind.hero.description":
 		"Überbrücken Sie die Kluft zwischen OT und IT. Flow-Like verbindet Maschinen, Sensoren und SPS zu nachvollziehbaren digitalen Workflows — ohne Middleware-Chaos.",
 	"ind.hero.cta.demo": "Demo anfordern",
@@ -16,13 +16,13 @@ export const deShopfloor: Record<string, string> = {
 	"ind.problem.item1":
 		"Proprietäre Protokolle (OPC-UA, MQTT, Modbus) erfordern benutzerdefinierte Adapter, die bei Updates ausfallen.",
 	"ind.problem.item2":
-		"Manuelle Datenexporte bedeuten stundenlange Verzögerungen zwischen Ereignissen an der Linie und Geschäftsentscheidungen.",
+		"Manuelle Datenexporte bedeuten stundenlange Verzögerungen zwischen Ereignissen in der Produktion und Geschäftsentscheidungen.",
 	"ind.problem.item3":
 		"Keine Rückverfolgbarkeit — bei Qualitätsproblemen dauert die Ursachenanalyse Tage statt Minuten.",
 	"ind.solution.tagline": "Die Lösung",
 	"ind.solution.headline": "Visuelle Workflows für Industriedaten",
 	"ind.solution.description":
-		"Flow-Like ermöglicht Ihren Ingenieuren, produktionsreife Datenpipelines durch Verbinden vorgefertigter Nodes zu erstellen — ohne Code, mit voller Rückverfolgbarkeit.",
+		"Flow-Like ermöglicht Ihren Ingenieuren, produktionsreife Datenpipelines zu erstellen, indem sie vorgefertigte Nodes verbinden — ohne Code, mit voller Rückverfolgbarkeit.",
 	"ind.solution.item1.title": "Protokoll-native Konnektoren",
 	"ind.solution.item1.desc":
 		"Integrierte Nodes für OPC-UA, MQTT, Modbus, S7 und REST. Verbinden Sie jede Maschine in Minuten, nicht Monaten.",
@@ -35,9 +35,9 @@ export const deShopfloor: Record<string, string> = {
 	"ind.solution.item4.title": "Air-Gap-fähig",
 	"ind.solution.item4.desc":
 		"Läuft vollständig on-premise ohne Cloud-Abhängigkeit. Ihre Fabrikdaten verlassen nie Ihr Netzwerk.",
-	"ind.features.tagline": "Fähigkeiten",
+	"ind.features.tagline": "Funktionen",
 	"ind.features.headline": "Für die Fertigung gebaut",
-	"ind.feature.1.title": "PLC-Integration",
+	"ind.feature.1.title": "SPS-Integration",
 	"ind.feature.1.desc":
 		"Verbinden Sie Siemens, Allen-Bradley, Beckhoff und mehr über native Protokoll-Nodes.",
 	"ind.feature.2.title": "TDMS & Zeitreihen",

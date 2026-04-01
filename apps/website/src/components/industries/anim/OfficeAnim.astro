@@ -6,97 +6,202 @@ interface Props { ring: string; dot: string; node: string; line: string; }
 const { ring, dot, node, line } = Astro.props;
 ---
 
-<svg viewBox="0 0 420 420" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md">
-  <!-- Stage 1: Document Inbox (top-left) -->
-  <rect x="20" y="30" width="110" height="90" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="75" y="52" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">Inbox</text>
-  <line x1="32" y1="60" x2="118" y2="60" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <!-- Stacked docs -->
-  <rect x="38" y="68" width="44" height="8" rx="2" fill={dot} opacity="0.1"><animate attributeName="opacity" values="0.08;0.18;0.08" dur="3s" repeatCount="indefinite"/></rect>
-  <rect x="38" y="80" width="36" height="8" rx="2" fill={dot} opacity="0.08"><animate attributeName="opacity" values="0.06;0.14;0.06" dur="4s" repeatCount="indefinite"/></rect>
-  <rect x="38" y="92" width="50" height="8" rx="2" fill={dot} opacity="0.12"><animate attributeName="opacity" values="0.08;0.20;0.08" dur="2.5s" repeatCount="indefinite"/></rect>
-  <!-- Doc icon -->
-  <rect x="95" y="70" width="20" height="26" rx="3" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <line x1="100" y1="78" x2="110" y2="78" stroke={dot} stroke-width="0.5" opacity="0.3"/>
-  <line x1="100" y1="83" x2="108" y2="83" stroke={dot} stroke-width="0.5" opacity="0.2"/>
-  <line x1="100" y1="88" x2="111" y2="88" stroke={dot} stroke-width="0.5" opacity="0.3"/>
+<svg viewBox="0 0 420 420" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md opacity-60">
+  <defs>
+    <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+      <feComponentTransfer in="coloredBlur" result="softBlur">
+         <feFuncA type="linear" slope="0.4"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="softBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
 
-  <!-- Arrow 1→2: wide upward arc, no overlap -->
-  <path d="M 130 70 C 180 25, 240 25, 280 70" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <circle r="2.5" fill={dot} opacity="0.8">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 130,70 C 180,25, 240,25, 280,70"/>
-  </circle>
+    <linearGradient id="scan-laser" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color={dot} stop-opacity="0.4"/>
+      <stop offset="100%" stop-color={dot} stop-opacity="0"/>
+    </linearGradient>
 
-  <!-- Stage 2: AI Extraction (top-right) -->
-  <rect x="280" y="30" width="120" height="90" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="340" y="52" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">AI Extract</text>
-  <line x1="292" y1="60" x2="388" y2="60" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <!-- Brain/sparkle icon -->
-  <circle cx="315" cy="90" r="12" fill={node} opacity="0.06" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="315" cy="90" r="4" fill={dot} opacity="0.3">
-    <animate attributeName="r" values="4;6;4" dur="2s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.3;0.6;0.3" dur="2s" repeatCount="indefinite"/>
-  </circle>
-  <!-- Extracted fields -->
-  <rect x="338" y="72" width="46" height="6" rx="2" fill={dot} opacity="0.12"/>
-  <rect x="338" y="84" width="38" height="6" rx="2" fill={dot} opacity="0.09"/>
-  <rect x="338" y="96" width="42" height="6" rx="2" fill={dot} opacity="0.1"/>
+    <linearGradient id="flow-path" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color={line} stop-opacity="0"/>
+      <stop offset="50%" stop-color={line} stop-opacity="0.3"/>
+      <stop offset="100%" stop-color={line} stop-opacity="0"/>
+    </linearGradient>
+  </defs>
 
-  <!-- Arrow 2→3: sweeps right then down to avoid overlap -->
-  <path d="M 340 120 C 385 155, 340 175, 280 195" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <circle r="2.5" fill={dot} opacity="0.7">
-    <animateMotion dur="2.5s" repeatCount="indefinite" path="M 340,120 C 385,155, 340,175, 280,195" begin="0.5s"/>
-  </circle>
+  <g opacity="0.03">
+    <path d="M 0 70 H 420 M 0 140 H 420 M 0 210 H 420 M 0 280 H 420 M 0 350 H 420" stroke={ring} stroke-width="0.5" stroke-dasharray="2 6"/>
+    <path d="M 70 0 V 420 M 140 0 V 420 M 210 0 V 420 M 280 0 V 420 M 350 0 V 420" stroke={ring} stroke-width="0.5" stroke-dasharray="2 6"/>
+  </g>
 
-  <!-- Stage 3: Approval (center-right) -->
-  <rect x="140" y="175" width="140" height="70" rx="10" fill={node} opacity="0.05" stroke={ring} stroke-width="1" opacity="0.3"/>
-  <text x="210" y="197" text-anchor="middle" fill={dot} font-size="9" opacity="0.6" font-family="monospace">Approval</text>
-  <line x1="155" y1="205" x2="265" y2="205" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <!-- Approval avatars -->
-  <circle cx="180" cy="225" r="9" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <text x="180" y="228" text-anchor="middle" fill={dot} font-size="7" opacity="0.5">✓</text>
-  <circle cx="210" cy="225" r="9" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <text x="210" y="228" text-anchor="middle" fill={dot} font-size="7" opacity="0.4">?</text>
-  <circle cx="240" cy="225" r="9" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <text x="240" y="228" text-anchor="middle" fill={dot} font-size="7" opacity="0.3">—</text>
-  <!-- Animated check appearing -->
-  <circle cx="210" cy="225" r="9" fill={dot} opacity="0">
-    <animate attributeName="opacity" values="0;0.15;0" dur="4s" repeatCount="indefinite" begin="2s"/>
-  </circle>
+  <g opacity="0.6">
+    <path d="M 130 75 C 180 30, 240 30, 280 75" fill="none" stroke="url(#flow-path)" stroke-width="1.5"/>
+    <path d="M 130 75 C 180 30, 240 30, 280 75" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1s" repeatCount="indefinite"/>
+    </path>
 
-  <!-- Arrow 3→4a: wide left arc to Archive -->
-  <path d="M 150 245 C 100 265, 55 275, 75 310" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <circle r="2" fill={dot} opacity="0.7">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 150,245 C 100,265, 55,275, 75,310" begin="1.5s"/>
-  </circle>
+    <path d="M 340 120 C 385 160, 340 175, 280 200" fill="none" stroke="url(#flow-path)" stroke-width="1.5"/>
+    <path d="M 340 120 C 385 160, 340 175, 280 200" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1.2s" repeatCount="indefinite"/>
+    </path>
 
-  <!-- Arrow 3→4b: wide right arc to Notify -->
-  <path d="M 270 245 C 320 265, 370 280, 340 310" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <circle r="2" fill={dot} opacity="0.6">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 270,245 C 320,265, 370,280, 340,310" begin="1.8s"/>
-  </circle>
+    <path d="M 150 240 C 100 260, 55 270, 75 300" fill="none" stroke="url(#flow-path)" stroke-width="1.5"/>
+    <path d="M 150 240 C 100 260, 55 270, 75 300" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1.5s" repeatCount="indefinite"/>
+    </path>
 
-  <!-- Stage 4a: Archive (bottom-left) -->
-  <rect x="20" y="300" width="110" height="70" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="75" y="322" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">Archive</text>
-  <line x1="32" y1="330" x2="118" y2="330" stroke={ring} stroke-width="0.4" opacity="0.12"/>
-  <rect x="48" y="338" width="20" height="24" rx="3" fill={dot} opacity="0.06"/>
-  <rect x="54" y="335" width="20" height="24" rx="3" fill={dot} opacity="0.08"/>
-  <rect x="60" y="332" width="20" height="24" rx="3" fill={dot} opacity="0.1"/>
+    <path d="M 270 240 C 320 260, 370 270, 345 300" fill="none" stroke="url(#flow-path)" stroke-width="1.5"/>
+    <path d="M 270 240 C 320 260, 370 270, 345 300" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1.5s" repeatCount="indefinite"/>
+    </path>
+  </g>
 
-  <!-- Stage 4b: Notify (bottom-right) -->
-  <rect x="290" y="300" width="110" height="70" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="345" y="322" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">Notify</text>
-  <line x1="302" y1="330" x2="388" y2="330" stroke={ring} stroke-width="0.4" opacity="0.12"/>
-  <!-- Notification bell -->
-  <circle cx="345" cy="350" r="8" fill={node} opacity="0.06" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="345" cy="350" r="3" fill={dot} opacity="0.4">
-    <animate attributeName="opacity" values="0.2;0.6;0.2" dur="2s" repeatCount="indefinite"/>
-  </circle>
+  <rect x="20" y="30" width="110" height="95" rx="8" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="75" y="48" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="1" opacity="0.8">INGESTION</text>
+  <line x1="20" y1="56" x2="130" y2="56" stroke={ring} stroke-width="0.4" opacity="0.2"/>
 
-  <!-- Ambient particles -->
-  <circle cx="395" cy="50" r="1.5" fill={dot}><animate attributeName="opacity" values="0.1;0.35;0.1" dur="5s" repeatCount="indefinite"/></circle>
-  <circle cx="10" cy="200" r="1" fill={dot}><animate attributeName="opacity" values="0.15;0.4;0.15" dur="6s" repeatCount="indefinite"/></circle>
-  <circle cx="405" cy="210" r="1.5" fill={dot}><animate attributeName="opacity" values="0.1;0.3;0.1" dur="4s" repeatCount="indefinite"/></circle>
-  <circle cx="210" cy="400" r="2" fill={dot}><animate attributeName="opacity" values="0.05;0.2;0.05" dur="7s" repeatCount="indefinite"/></circle>
+  <g transform="translate(30, 65)">
+    <rect x="0" y="20" width="40" height="2" rx="1" fill={dot} opacity="0.2"/>
+    <rect x="2" y="16" width="36" height="2" rx="1" fill={dot} opacity="0.3"/>
+
+    <path d="M 4 0 L 30 0 L 36 6 L 36 12 L 4 12 Z" fill={node} opacity="0.2" stroke={dot} stroke-width="0.8"/>
+    <path d="M 30 0 L 30 6 L 36 6" fill="none" stroke={dot} stroke-width="0.8"/>
+
+    <line x1="8" y1="4" x2="22" y2="4" stroke={dot} stroke-width="0.5" opacity="0.4"/>
+    <line x1="8" y1="7" x2="26" y2="7" stroke={dot} stroke-width="0.5" opacity="0.4"/>
+    <line x1="8" y1="10" x2="18" y2="10" stroke={dot} stroke-width="0.5" opacity="0.4"/>
+
+    <rect x="2" y="0" width="36" height="1.5" rx="0.5" fill={dot} filter="url(#soft-glow)">
+      <animate attributeName="y" values="-2; 14; -2" dur="2s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="2" y="0" width="36" height="8" fill="url(#scan-laser)">
+      <animate attributeName="y" values="-2; 14; -2" dur="2s" repeatCount="indefinite"/>
+    </rect>
+
+    <text x="70" y="10" text-anchor="middle" fill={dot} font-size="4" font-family="monospace" opacity="0.5">
+      <tspan x="70" dy="0">{`{id: 842}`}</tspan>
+      <tspan x="70" dy="6">{`{type: inv}`}</tspan>
+      <animate attributeName="opacity" values="0.1; 0.6; 0.1" dur="2s" repeatCount="indefinite"/>
+    </text>
+  </g>
+
+  <rect x="280" y="30" width="120" height="95" rx="8" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="340" y="48" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="1" opacity="0.8">AI EXTRACTION</text>
+  <line x1="280" y1="56" x2="400" y2="56" stroke={ring} stroke-width="0.4" opacity="0.2"/>
+
+  <g transform="translate(300, 75)">
+    <circle cx="20" cy="15" r="14" fill={node} opacity="0.1" stroke={ring} stroke-width="0.8" stroke-dasharray="2 2">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="8s" repeatCount="indefinite" center="20,15"/>
+    </circle>
+    <circle cx="20" cy="15" r="8" fill={dot} opacity="0.2" filter="url(#soft-glow)">
+      <animate attributeName="opacity" values="0.1; 0.4; 0.1" dur="1.5s" repeatCount="indefinite"/>
+      <animate attributeName="r" values="7; 9; 7" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="20" cy="15" r="3" fill={dot} filter="url(#soft-glow)"/>
+
+    <path d="M 20 15 L 45 0 M 20 15 L 55 15 M 20 15 L 45 30" stroke={dot} stroke-width="0.5" opacity="0.3"/>
+    <circle cx="45" cy="0" r="1.5" fill={dot} opacity="0.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="2s" repeatCount="indefinite" begin="0s"/></circle>
+    <circle cx="55" cy="15" r="1.5" fill={dot} opacity="0.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="2s" repeatCount="indefinite" begin="0.6s"/></circle>
+    <circle cx="45" cy="30" r="1.5" fill={dot} opacity="0.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="2s" repeatCount="indefinite" begin="1.2s"/></circle>
+
+    <rect x="65" y="-2" width="25" height="4" rx="1" fill={dot} opacity="0.3"/>
+    <rect x="65" y="13" width="18" height="4" rx="1" fill={dot} opacity="0.3"/>
+    <rect x="65" y="28" width="30" height="4" rx="1" fill={dot} opacity="0.3"/>
+  </g>
+
+  <rect x="130" y="175" width="160" height="75" rx="8" fill={node} opacity="0.06" stroke={ring} stroke-width="0.8" stroke-opacity="0.5"/>
+  <text x="210" y="193" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="1" opacity="0.8">HUMAN IN THE LOOP</text>
+  <line x1="130" y1="202" x2="290" y2="202" stroke={ring} stroke-width="0.4" opacity="0.2"/>
+
+  <g transform="translate(160, 225)">
+    <g transform="translate(0,0)">
+      <circle cx="0" cy="0" r="12" fill={node} opacity="0.1" stroke={ring} stroke-width="0.5"/>
+      <path d="M -7 6 C -7 2, 7 2, 7 6" fill="none" stroke={dot} stroke-width="1" opacity="0.5"/>
+      <circle cx="0" cy="-2" r="3" fill="none" stroke={dot} stroke-width="1" opacity="0.5"/>
+      <circle cx="10" cy="-8" r="4" fill={node} stroke={dot} stroke-width="0.5"/>
+      <path d="M 8 -8 L 10 -6 L 13 -10" fill="none" stroke={dot} stroke-width="1" filter="url(#soft-glow)"/>
+    </g>
+
+    <g transform="translate(50,0)">
+      <circle cx="0" cy="0" r="12" fill={node} opacity="0.1" stroke={dot} stroke-width="1" stroke-dasharray="2 3">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="4s" repeatCount="indefinite"/>
+      </circle>
+      <path d="M -7 6 C -7 2, 7 2, 7 6" fill="none" stroke={dot} stroke-width="1" opacity="0.8"/>
+      <circle cx="0" cy="-2" r="3" fill="none" stroke={dot} stroke-width="1" opacity="0.8"/>
+      <circle cx="-3" cy="-12" r="1" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.2;1;0.2" dur="1s" repeatCount="indefinite" begin="0s"/></circle>
+      <circle cx="0" cy="-12" r="1" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.2;1;0.2" dur="1s" repeatCount="indefinite" begin="0.3s"/></circle>
+      <circle cx="3" cy="-12" r="1" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.2;1;0.2" dur="1s" repeatCount="indefinite" begin="0.6s"/></circle>
+    </g>
+
+    <g transform="translate(100,0)">
+      <circle cx="0" cy="0" r="12" fill={node} opacity="0.05" stroke={ring} stroke-width="0.5"/>
+      <path d="M -7 6 C -7 2, 7 2, 7 6" fill="none" stroke={ring} stroke-width="1" opacity="0.3"/>
+      <circle cx="0" cy="-2" r="3" fill="none" stroke={ring} stroke-width="1" opacity="0.3"/>
+    </g>
+  </g>
+
+  <rect x="20" y="300" width="110" height="75" rx="8" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="75" y="318" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="1" opacity="0.8">SECURE ARCHIVE</text>
+  <line x1="20" y1="326" x2="130" y2="326" stroke={ring} stroke-width="0.4" opacity="0.2"/>
+
+  <g transform="translate(50, 340)">
+    <path d="M 0 5 L 0 25 L 50 25 L 50 5 L 25 5 L 20 0 L 5 0 C 2 0, 0 2, 0 5 Z" fill={node} opacity="0.2" stroke={dot} stroke-width="0.8"/>
+    <g>
+      <rect x="10" y="10" width="30" height="15" rx="1" fill="none" stroke={ring} stroke-width="0.5"/>
+      <animateTransform attributeName="transform" type="translate" values="0 -15; 0 0; 0 0" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0; 1; 1" dur="3s" repeatCount="indefinite"/>
+    </g>
+    <path d="M 0 10 L 50 10 L 45 25 L 5 25 Z" fill={node} stroke={dot} stroke-width="0.8" opacity="0.9"/>
+  </g>
+
+  <rect x="290" y="300" width="110" height="75" rx="8" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="345" y="318" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="1" opacity="0.8">SYSTEM NOTIFY</text>
+  <line x1="290" y1="326" x2="400" y2="326" stroke={ring} stroke-width="0.4" opacity="0.2"/>
+
+  <g transform="translate(345, 350)">
+    <path d="M -8 8 C -8 -2, -4 -8, 0 -8 C 4 -8, 8 -2, 8 8 L 10 10 L -10 10 Z" fill="none" stroke={dot} stroke-width="1" opacity="0.8">
+      <animateTransform attributeName="transform" type="rotate" values="0; 15; -15; 10; -10; 0; 0" dur="3s" repeatCount="indefinite"/>
+    </path>
+    <circle cx="0" cy="13" r="2" fill={dot} opacity="0.8"/>
+
+    <circle cx="0" cy="0" r="0" fill="none" stroke={dot} stroke-width="0.5" opacity="0">
+      <animate attributeName="r" values="12; 25" dur="1.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.6; 0" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <g filter="url(#soft-glow)">
+    <g opacity="0">
+      <rect x="-3" y="-4" width="6" height="8" rx="1" fill={dot}/>
+      <animateMotion dur="1.5s" repeatCount="indefinite" path="M 130 75 C 180 30, 240 30, 280 75"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" repeatCount="indefinite"/>
+    </g>
+
+    <g opacity="0">
+      <rect x="-3" y="-4" width="6" height="8" rx="1" fill={dot}/>
+      <animateMotion dur="1.8s" repeatCount="indefinite" path="M 340 120 C 385 160, 340 175, 280 200" begin="0.5s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1.8s" repeatCount="indefinite" begin="0.5s"/>
+    </g>
+
+    <g opacity="0">
+      <rect x="-3" y="-4" width="6" height="8" rx="1" fill={dot}/>
+      <animateMotion dur="2s" repeatCount="indefinite" path="M 150 240 C 100 260, 55 270, 75 300" begin="1s"/>
+      <animate attributeName="opacity" values="0;0.8;0" dur="2s" repeatCount="indefinite" begin="1s"/>
+    </g>
+
+    <g opacity="0">
+      <circle cx="0" cy="0" r="2.5" fill={dot}/>
+      <animateMotion dur="1.6s" repeatCount="indefinite" path="M 270 240 C 320 260, 370 270, 345 300" begin="1.2s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1.6s" repeatCount="indefinite" begin="1.2s"/>
+    </g>
+  </g>
+
+  <g filter="url(#soft-glow)">
+    <circle cx="395" cy="50" r="1" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.4;0" dur="5s" repeatCount="indefinite"/></circle>
+    <circle cx="10" cy="200" r="1.5" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.3;0" dur="6s" repeatCount="indefinite" begin="1s"/></circle>
+    <circle cx="405" cy="210" r="1" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.5;0" dur="4s" repeatCount="indefinite" begin="2s"/></circle>
+    <circle cx="210" cy="400" r="1.5" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.3;0" dur="7s" repeatCount="indefinite" begin="0.5s"/></circle>
+  </g>
 </svg>

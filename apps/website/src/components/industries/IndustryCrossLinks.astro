@@ -5,15 +5,28 @@ interface Props {
 
 const { currentSlug } = Astro.props;
 
-const industries = [
-  { slug: "shopfloor", name: "Shopfloor Automation", accent: "orange", brief: "Connect machines, sensors, and PLCs into traceable digital workflows.", border: "border-orange-500/30 hover:border-orange-500/60", dot: "bg-orange-400", arrow: "text-orange-400" },
-  { slug: "finance",   name: "Finance Operations",   accent: "emerald", brief: "Automate reconciliation, reporting, and compliance workflows.",        border: "border-emerald-500/30 hover:border-emerald-500/60", dot: "bg-emerald-400", arrow: "text-emerald-400" },
-  { slug: "office",    name: "Office Automation",     accent: "blue",    brief: "Streamline documents, approvals, and cross-team handoffs.",           border: "border-blue-500/30 hover:border-blue-500/60",    dot: "bg-blue-400",    arrow: "text-blue-400" },
-  { slug: "ai-agents", name: "AI Agents & RAG",       accent: "violet",  brief: "Orchestrate LLMs, RAG pipelines, and multi-agent systems.",          border: "border-violet-500/30 hover:border-violet-500/60",  dot: "bg-violet-400",  arrow: "text-violet-400" },
-  { slug: "gov-defense", name: "Gov & Defense",        accent: "red",     brief: "Air-gapped, sovereign, and auditable automation.",                   border: "border-red-500/30 hover:border-red-500/60",     dot: "bg-red-400",     arrow: "text-red-400" },
+interface SolutionLink {
+  slug: string;
+  basePath: string;
+  name: string;
+  accent: string;
+  brief: string;
+  border: string;
+  dot: string;
+  arrow: string;
+}
+
+const solutions: SolutionLink[] = [
+  { slug: "shopfloor",            basePath: "/industries",  name: "Shopfloor Automation", accent: "orange",  brief: "Connect machines, sensors, and PLCs into traceable digital workflows.", border: "border-orange-500/30 hover:border-orange-500/60",   dot: "bg-orange-400",  arrow: "text-orange-400" },
+  { slug: "finance",              basePath: "/industries",  name: "Finance Operations",   accent: "emerald", brief: "Automate reconciliation, reporting, and compliance workflows.",        border: "border-emerald-500/30 hover:border-emerald-500/60", dot: "bg-emerald-400", arrow: "text-emerald-400" },
+  { slug: "office",               basePath: "/industries",  name: "Office Automation",     accent: "blue",    brief: "Streamline documents, approvals, and cross-team handoffs.",           border: "border-blue-500/30 hover:border-blue-500/60",      dot: "bg-blue-400",    arrow: "text-blue-400" },
+  { slug: "ai-agents",            basePath: "/industries",  name: "AI Agents & RAG",       accent: "violet",  brief: "Orchestrate LLMs, RAG pipelines, and multi-agent systems.",          border: "border-violet-500/30 hover:border-violet-500/60",  dot: "bg-violet-400",  arrow: "text-violet-400" },
+  { slug: "gov-defense",          basePath: "/industries",  name: "Gov & Defense",         accent: "red",     brief: "Air-gapped, sovereign, and auditable automation.",                   border: "border-red-500/30 hover:border-red-500/60",        dot: "bg-red-400",     arrow: "text-red-400" },
+  { slug: "iot",                  basePath: "/use-cases",   name: "IoT & Sensor Data",     accent: "cyan",    brief: "Ingest, process, and act on real-time sensor and telemetry streams.", border: "border-cyan-500/30 hover:border-cyan-500/60",      dot: "bg-cyan-400",    arrow: "text-cyan-400" },
+  { slug: "process-automation",   basePath: "/use-cases",   name: "Process Automation",    accent: "amber",   brief: "Orchestrate multi-step business processes with full auditability.",   border: "border-amber-500/30 hover:border-amber-500/60",    dot: "bg-amber-400",   arrow: "text-amber-400" },
 ];
 
-const others = industries.filter((i) => i.slug !== currentSlug);
+const others = solutions.filter((i) => i.slug !== currentSlug);
 ---
 
 <section class="relative py-24 sm:py-32">
@@ -29,9 +42,9 @@ const others = industries.filter((i) => i.slug !== currentSlug);
 
     <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
       {others.map((ind) => (
-        <a href={`/industries/${ind.slug}`} class={`group relative flex flex-col rounded-xl border bg-card/50 backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${ind.border}`}>
+        <a href={`${ind.basePath}/${ind.slug}`} class={`group relative flex flex-col rounded-xl border bg-card/50 backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${ind.border}`}>
           <div class="flex items-center gap-2 mb-3">
-            <span class={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${ind.dot}`}></span>
+            <span class={`w-2.5 h-2.5 rounded-full shrink-0 ${ind.dot}`}></span>
             <h3 class="font-semibold text-foreground">{ind.name}</h3>
           </div>
           <p class="text-sm text-muted-foreground leading-relaxed flex-1">{ind.brief}</p>

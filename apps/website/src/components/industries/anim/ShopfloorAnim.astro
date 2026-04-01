@@ -7,111 +7,228 @@ const { ring, dot, node, line } = Astro.props;
 ---
 
 <svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md">
-  <!-- Factory grid backdrop -->
   <defs>
-    <linearGradient id="sf-belt" x1="0" y1="0" x2="400" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color={ring} stop-opacity="0.05"/>
-      <stop offset="50%" stop-color={ring} stop-opacity="0.12"/>
-      <stop offset="100%" stop-color={ring} stop-opacity="0.05"/>
-    </linearGradient>
-    <linearGradient id="sf-data" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color={dot} stop-opacity="0.8"/>
+    <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+      <feComponentTransfer in="coloredBlur" result="softBlur">
+         <feFuncA type="linear" slope="0.4"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="softBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <linearGradient id="scan-beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color={dot} stop-opacity="0.4"/>
       <stop offset="100%" stop-color={dot} stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="sf-belt" x1="0" y1="0" x2="400" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color={ring} stop-opacity="0.02"/>
+      <stop offset="50%" stop-color={ring} stop-opacity="0.1"/>
+      <stop offset="100%" stop-color={ring} stop-opacity="0.02"/>
     </linearGradient>
   </defs>
 
-  <!-- Conveyor belt tracks -->
-  <rect x="40" y="170" width="320" height="60" rx="10" fill="url(#sf-belt)" stroke={ring} stroke-width="0.8" opacity="0.3"/>
-  <line x1="40" y1="200" x2="360" y2="200" stroke={ring} stroke-width="0.5" stroke-dasharray="8 4" opacity="0.2"/>
+  <g opacity="0.03">
+    <path d="M0 100 H400 M0 200 H400 M0 300 H400 M100 0 V400 M200 0 V400 M300 0 V400" stroke={ring} stroke-width="0.5" stroke-dasharray="2 6"/>
+  </g>
 
-  <!-- Conveyor rollers -->
-  <circle cx="60" cy="200" r="8" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="140" cy="200" r="8" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="220" cy="200" r="8" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="300" cy="200" r="8" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
-  <circle cx="340" cy="200" r="8" fill={node} opacity="0.08" stroke={ring} stroke-width="0.5" opacity="0.2"/>
+  <rect x="30" y="170" width="340" height="60" rx="8" fill="url(#sf-belt)" stroke={ring} stroke-width="0.5" stroke-opacity="0.3"/>
 
-  <!-- Product boxes moving along conveyor -->
-  <rect rx="4" width="28" height="24" fill={node} opacity="0.12" stroke={ring} stroke-width="0.8" opacity="0.4">
-    <animateMotion dur="6s" repeatCount="indefinite" path="M 50,183 L 350,183" />
-    <animate attributeName="opacity" values="0;0.12;0.12;0" dur="6s" repeatCount="indefinite"/>
-  </rect>
-  <rect rx="4" width="24" height="20" fill={node} opacity="0.1" stroke={ring} stroke-width="0.8" opacity="0.3">
-    <animateMotion dur="6s" repeatCount="indefinite" path="M 50,185 L 350,185" begin="2s"/>
-    <animate attributeName="opacity" values="0;0.1;0.1;0" dur="6s" repeatCount="indefinite" begin="2s"/>
-  </rect>
-  <rect rx="4" width="20" height="22" fill={node} opacity="0.08" stroke={ring} stroke-width="0.8" opacity="0.3">
-    <animateMotion dur="6s" repeatCount="indefinite" path="M 50,184 L 350,184" begin="4s"/>
-    <animate attributeName="opacity" values="0;0.08;0.08;0" dur="6s" repeatCount="indefinite" begin="4s"/>
-  </rect>
+  <line x1="35" y1="180" x2="365" y2="180" stroke={ring} stroke-width="0.5" stroke-dasharray="10 10" opacity="0.3">
+    <animate attributeName="stroke-dashoffset" values="20;0" dur="1s" repeatCount="indefinite"/>
+  </line>
+  <line x1="35" y1="220" x2="365" y2="220" stroke={ring} stroke-width="0.5" stroke-dasharray="10 10" opacity="0.3">
+    <animate attributeName="stroke-dashoffset" values="20;0" dur="1s" repeatCount="indefinite"/>
+  </line>
 
-  <!-- Sensors above conveyor -->
-  <g opacity="0.7">
-    <!-- Sensor 1: temperature -->
-    <rect x="106" y="100" width="28" height="40" rx="6" fill={node} opacity="0.06" stroke={ring} stroke-width="0.8" opacity="0.3"/>
-    <line x1="120" y1="140" x2="120" y2="170" stroke={ring} stroke-width="0.5" opacity="0.2" stroke-dasharray="3 2"/>
-    <circle cx="120" cy="106" r="3" fill={dot} opacity="0.7">
-      <animate attributeName="opacity" values="0.4;0.9;0.4" dur="2s" repeatCount="indefinite"/>
-    </circle>
-    <!-- Sensor reading -->
-    <line x1="120" y1="70" x2="120" y2="100" stroke={dot} stroke-width="0.5" opacity="0.3">
-      <animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" repeatCount="indefinite"/>
+  <g opacity="0.4" stroke={ring} stroke-width="0.8">
+    <g transform="translate(60, 200)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.5s" repeatCount="indefinite"/>
+        <circle cx="0" cy="0" r="7" fill={node} opacity="0.2"/>
+        <line x1="-5" y1="0" x2="5" y2="0"/>
+      </g>
+    </g>
+    <g transform="translate(140, 200)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.5s" repeatCount="indefinite"/>
+        <circle cx="0" cy="0" r="7" fill={node} opacity="0.2"/>
+        <line x1="-5" y1="0" x2="5" y2="0"/>
+      </g>
+    </g>
+    <g transform="translate(220, 200)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.5s" repeatCount="indefinite"/>
+        <circle cx="0" cy="0" r="7" fill={node} opacity="0.2"/>
+        <line x1="-5" y1="0" x2="5" y2="0"/>
+      </g>
+    </g>
+    <g transform="translate(300, 200)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.5s" repeatCount="indefinite"/>
+        <circle cx="0" cy="0" r="7" fill={node} opacity="0.2"/>
+        <line x1="-5" y1="0" x2="5" y2="0"/>
+      </g>
+    </g>
+    <g transform="translate(340, 200)">
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.5s" repeatCount="indefinite"/>
+        <circle cx="0" cy="0" r="7" fill={node} opacity="0.2"/>
+        <line x1="-5" y1="0" x2="5" y2="0"/>
+      </g>
+    </g>
+  </g>
+
+  <g>
+    <g opacity="0">
+      <animateMotion dur="5s" repeatCount="indefinite" path="M 30,185 L 370,185"/>
+      <animate attributeName="opacity" values="0;0.6;0.6;0" dur="5s" repeatCount="indefinite"/>
+      <rect x="0" y="-12" width="28" height="24" rx="3" fill={node} opacity="0.2" stroke={dot} stroke-width="0.8" stroke-dasharray="2 1"/>
+      <rect x="4" y="-8" width="20" height="16" rx="1" fill="none" stroke={ring} stroke-width="0.5"/>
+    </g>
+    <g opacity="0">
+      <animateMotion dur="5s" repeatCount="indefinite" path="M 30,185 L 370,185" begin="1.6s"/>
+      <animate attributeName="opacity" values="0;0.6;0.6;0" dur="5s" repeatCount="indefinite" begin="1.6s"/>
+      <rect x="0" y="-12" width="28" height="24" rx="3" fill={node} opacity="0.2" stroke={dot} stroke-width="0.8" stroke-dasharray="2 1"/>
+      <rect x="4" y="-8" width="20" height="16" rx="1" fill="none" stroke={ring} stroke-width="0.5"/>
+    </g>
+    <g opacity="0">
+      <animateMotion dur="5s" repeatCount="indefinite" path="M 30,185 L 370,185" begin="3.2s"/>
+      <animate attributeName="opacity" values="0;0.6;0.6;0" dur="5s" repeatCount="indefinite" begin="3.2s"/>
+      <rect x="0" y="-12" width="28" height="24" rx="3" fill={node} opacity="0.2" stroke={dot} stroke-width="0.8" stroke-dasharray="2 1"/>
+      <rect x="4" y="-8" width="20" height="16" rx="1" fill="none" stroke={ring} stroke-width="0.5"/>
+    </g>
+  </g>
+
+  <g transform="translate(106, 90)">
+    <rect width="28" height="35" rx="4" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="14" y="14" text-anchor="middle" fill={dot} font-size="5" font-family="monospace" opacity="0.6">TEMP</text>
+    <circle cx="14" cy="25" r="4" fill="none" stroke={dot} stroke-width="0.8"/>
+    <polygon points="14,30 -5,95 33,95" fill="url(#scan-beam)">
+      <animate attributeName="opacity" values="0.1; 0.8; 0.1" dur="1.6s" repeatCount="indefinite"/>
+    </polygon>
+    <text x="14" y="-10" text-anchor="middle" fill={dot} font-size="6" font-family="monospace" filter="url(#soft-glow)">
+      24.5°C
+      <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite"/>
+    </text>
+  </g>
+
+  <g transform="translate(186, 90)">
+    <rect width="28" height="35" rx="4" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="14" y="14" text-anchor="middle" fill={dot} font-size="5" font-family="monospace" opacity="0.6">PROX</text>
+    <rect x="10" y="22" width="8" height="6" rx="1" fill="none" stroke={dot} stroke-width="0.8"/>
+    <line x1="14" y1="28" x2="14" y2="95" stroke={dot} stroke-width="0.8" stroke-dasharray="2 4" filter="url(#soft-glow)">
+      <animate attributeName="stroke-dashoffset" values="6;0" dur="0.5s" repeatCount="indefinite"/>
     </line>
-    <circle cx="120" cy="65" r="5" fill={node} opacity="0.04"/>
-    <text x="120" y="68" text-anchor="middle" fill={dot} font-size="7" opacity="0.5">24°C</text>
+  </g>
 
-    <!-- Sensor 2: proximity -->
-    <rect x="196" y="100" width="28" height="40" rx="6" fill={node} opacity="0.06" stroke={ring} stroke-width="0.8" opacity="0.3"/>
-    <line x1="210" y1="140" x2="210" y2="170" stroke={ring} stroke-width="0.5" opacity="0.2" stroke-dasharray="3 2"/>
-    <circle cx="210" cy="106" r="3" fill={dot} opacity="0.7">
-      <animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/>
+  <g transform="translate(266, 90)">
+    <rect width="28" height="35" rx="4" fill={node} opacity="0.05" stroke={ring} stroke-width="0.6" stroke-opacity="0.4"/>
+    <text x="14" y="14" text-anchor="middle" fill={dot} font-size="5" font-family="monospace" opacity="0.6">VSN</text>
+    <circle cx="14" cy="25" r="4" fill="none" stroke={dot} stroke-width="0.8"/>
+    <circle cx="14" cy="25" r="1.5" fill={dot} filter="url(#soft-glow)">
+       <animate attributeName="opacity" values="0.2;1;0.2" dur="3s" repeatCount="indefinite"/>
     </circle>
+    <path d="M 0 95 L 28 95 M 5 85 L 23 85 M 10 75 L 18 75" stroke={dot} stroke-width="0.5" opacity="0.3">
+      <animate attributeName="opacity" values="0.1; 0.6; 0.1" dur="2.5s" repeatCount="indefinite"/>
+    </path>
+    <polygon points="14,30 -5,95 33,95" fill="url(#scan-beam)" opacity="0.5"/>
+  </g>
 
-    <!-- Sensor 3: vision -->
-    <rect x="276" y="100" width="28" height="40" rx="6" fill={node} opacity="0.06" stroke={ring} stroke-width="0.8" opacity="0.3"/>
-    <line x1="290" y1="140" x2="290" y2="170" stroke={ring} stroke-width="0.5" opacity="0.2" stroke-dasharray="3 2"/>
-    <circle cx="290" cy="106" r="3" fill={dot} opacity="0.7">
-      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="2.5s" repeatCount="indefinite"/>
+  <g opacity="0.4">
+    <path id="path-temp" d="M 120 125 C 120 200, 85 220, 85 260" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1s" repeatCount="indefinite"/>
+    </path>
+    <path id="path-prox" d="M 200 125 C 200 180, 95 210, 95 260" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1.2s" repeatCount="indefinite"/>
+    </path>
+    <path id="path-vsn" d="M 280 125 C 280 180, 105 200, 105 260" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+      <animate attributeName="stroke-dashoffset" values="10;0" dur="1.4s" repeatCount="indefinite"/>
+    </path>
+    <path id="path-out" d="M 130 285 C 170 285, 200 285, 230 285" fill="none" stroke={line} stroke-width="0.8" stroke-dasharray="4 6">
+       <animate attributeName="stroke-dashoffset" values="10;0" dur="0.8s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <g filter="url(#soft-glow)">
+    <circle r="1.5" fill={dot} opacity="0">
+      <animateMotion dur="1.5s" repeatCount="indefinite" path="M 120 125 C 120 200, 85 220, 85 260"/>
+      <animate attributeName="opacity" values="0;0.9;0" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="1.5" fill={dot} opacity="0">
+      <animateMotion dur="1.8s" repeatCount="indefinite" path="M 200 125 C 200 180, 95 210, 95 260" begin="0.5s"/>
+      <animate attributeName="opacity" values="0;0.8;0" dur="1.8s" repeatCount="indefinite" begin="0.5s"/>
+    </circle>
+    <circle r="1.5" fill={dot} opacity="0">
+      <animateMotion dur="2.1s" repeatCount="indefinite" path="M 280 125 C 280 180, 105 200, 105 260" begin="1s"/>
+      <animate attributeName="opacity" values="0;0.8;0" dur="2.1s" repeatCount="indefinite" begin="1s"/>
+    </circle>
+    <circle r="2" fill={dot} opacity="0">
+      <animateMotion dur="1s" repeatCount="indefinite" path="M 130 285 C 170 285, 200 285, 230 285"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1s" repeatCount="indefinite"/>
     </circle>
   </g>
 
-  <!-- PLC node bottom-left -->
-  <rect x="60" y="260" width="70" height="45" rx="8" fill={node} opacity="0.06" stroke={ring} stroke-width="0.8" opacity="0.3"/>
-  <text x="95" y="278" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">PLC</text>
-  <circle cx="75" cy="290" r="2" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.3;0.8;0.3" dur="1s" repeatCount="indefinite"/></circle>
-  <circle cx="85" cy="290" r="2" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.4;0.9;0.4" dur="1.2s" repeatCount="indefinite"/></circle>
-  <circle cx="95" cy="290" r="2" fill={dot} opacity="0.5"><animate attributeName="opacity" values="0.2;0.7;0.2" dur="0.8s" repeatCount="indefinite"/></circle>
+  <rect x="50" y="260" width="80" height="55" rx="6" fill={node} opacity="0.05" stroke={ring} stroke-width="0.8" stroke-opacity="0.5"/>
+  <text x="90" y="275" text-anchor="middle" fill={dot} font-size="7" opacity="0.7" font-family="monospace" letter-spacing="1">EDGE PLC</text>
 
-  <!-- Data flow lines from sensors to PLC -->
-  <path d="M 120 140 Q 120 240, 95 260" stroke={line} stroke-width="0.5" opacity="0.15" stroke-dasharray="3 3"/>
-  <path d="M 210 140 Q 180 240, 120 260" stroke={line} stroke-width="0.5" opacity="0.15" stroke-dasharray="3 3"/>
+  <text x="70" y="292" fill={dot} font-size="5" opacity="0.4" font-family="monospace">
+    <tspan x="60" dy="0">0x4F</tspan>
+    <tspan x="60" dy="8">0xA2</tspan>
+    <animate attributeName="opacity" values="0.2; 0.7; 0.2" dur="0.5s" repeatCount="indefinite"/>
+  </text>
+  <text x="100" y="292" fill={dot} font-size="5" opacity="0.4" font-family="monospace">
+    <tspan x="90" dy="0">0x1B</tspan>
+    <tspan x="90" dy="8">0x8C</tspan>
+    <animate attributeName="opacity" values="0.7; 0.2; 0.7" dur="0.6s" repeatCount="indefinite"/>
+  </text>
 
-  <!-- Data flowing from PLC to dashboard -->
-  <line x1="130" y1="282" x2="220" y2="282" stroke={line} stroke-width="0.5" opacity="0.15" stroke-dasharray="4 3"/>
+  <circle cx="85" cy="260" r="1.5" fill={dot} opacity="0.8" filter="url(#soft-glow)"/>
+  <circle cx="95" cy="260" r="1.5" fill={dot} opacity="0.8" filter="url(#soft-glow)"/>
+  <circle cx="105" cy="260" r="1.5" fill={dot} opacity="0.8" filter="url(#soft-glow)"/>
 
-  <!-- Dashboard node bottom-right -->
-  <rect x="220" y="260" width="120" height="70" rx="8" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <!-- Mini chart bars -->
-  <rect x="238" y="300" width="8" height="18" rx="2" fill={dot} opacity="0.3"><animate attributeName="height" values="18;24;14;18" dur="3s" repeatCount="indefinite"/><animate attributeName="y" values="300;294;304;300" dur="3s" repeatCount="indefinite"/></rect>
-  <rect x="252" y="295" width="8" height="23" rx="2" fill={dot} opacity="0.4"><animate attributeName="height" values="23;16;28;23" dur="4s" repeatCount="indefinite"/><animate attributeName="y" values="295;302;290;295" dur="4s" repeatCount="indefinite"/></rect>
-  <rect x="266" y="298" width="8" height="20" rx="2" fill={dot} opacity="0.35"><animate attributeName="height" values="20;26;18;20" dur="3.5s" repeatCount="indefinite"/><animate attributeName="y" values="298;292;300;298" dur="3.5s" repeatCount="indefinite"/></rect>
-  <rect x="280" y="302" width="8" height="16" rx="2" fill={dot} opacity="0.25"><animate attributeName="height" values="16;22;12;16" dur="2.5s" repeatCount="indefinite"/><animate attributeName="y" values="302;296;306;302" dur="2.5s" repeatCount="indefinite"/></rect>
-  <rect x="294" y="290" width="8" height="28" rx="2" fill={dot} opacity="0.45"><animate attributeName="height" values="28;20;30;28" dur="3s" repeatCount="indefinite"/><animate attributeName="y" values="290;298;288;290" dur="3s" repeatCount="indefinite"/></rect>
-  <text x="280" y="275" text-anchor="middle" fill={dot} font-size="8" opacity="0.4" font-family="monospace">OEE Dashboard</text>
+  <rect x="230" y="245" width="130" height="85" rx="6" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" stroke-opacity="0.4"/>
+  <text x="295" y="260" text-anchor="middle" fill={dot} font-size="7" opacity="0.7" font-family="monospace" letter-spacing="1">LIVE OEE</text>
+  <line x1="240" y1="265" x2="350" y2="265" stroke={ring} stroke-width="0.5" opacity="0.2"/>
 
-  <!-- Animated data packets -->
-  <circle r="2.5" fill={dot} opacity="0.8">
-    <animateMotion dur="3s" repeatCount="indefinite" path="M 120,140 Q 120,200, 95,260"/>
-  </circle>
-  <circle r="2" fill={dot} opacity="0.6">
-    <animateMotion dur="3.5s" repeatCount="indefinite" path="M 210,140 Q 180,240, 120,260" begin="0.5s"/>
-  </circle>
-  <circle r="2" fill={dot} opacity="0.7">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 130,282 L 220,282" begin="1s"/>
-  </circle>
+  <text x="295" y="282" text-anchor="middle" fill={dot} font-size="14" font-family="monospace" filter="url(#soft-glow)">
+    87.4%
+    <animate attributeName="opacity" values="0.8; 1; 0.8" dur="3s" repeatCount="indefinite"/>
+  </text>
 
-  <!-- Ambient particles -->
-  <circle cx="320" cy="80" r="1.5" fill={dot}><animate attributeName="opacity" values="0.1;0.4;0.1" dur="5s" repeatCount="indefinite"/></circle>
-  <circle cx="50" cy="350" r="1" fill={dot}><animate attributeName="opacity" values="0.15;0.35;0.15" dur="4s" repeatCount="indefinite"/></circle>
-  <circle cx="370" cy="340" r="1.5" fill={dot}><animate attributeName="opacity" values="0.1;0.3;0.1" dur="6s" repeatCount="indefinite"/></circle>
+  <g transform="translate(245, 295)">
+    <text x="0" y="5" fill={dot} font-size="4" font-family="monospace" opacity="0.5">AVL</text>
+    <rect x="15" y="2" width="75" height="3" rx="1.5" fill={ring} opacity="0.1"/>
+    <rect x="15" y="2" width="68" height="3" rx="1.5" fill={dot} opacity="0.6" filter="url(#soft-glow)"/>
+
+    <text x="0" y="13" fill={dot} font-size="4" font-family="monospace" opacity="0.5">PRF</text>
+    <rect x="15" y="10" width="75" height="3" rx="1.5" fill={ring} opacity="0.1"/>
+    <rect x="15" y="10" width="62" height="3" rx="1.5" fill={dot} opacity="0.6" filter="url(#soft-glow)">
+       <animate attributeName="width" values="58; 65; 60; 62" dur="4s" repeatCount="indefinite"/>
+    </rect>
+
+    <text x="0" y="21" fill={dot} font-size="4" font-family="monospace" opacity="0.5">QLT</text>
+    <rect x="15" y="18" width="75" height="3" rx="1.5" fill={ring} opacity="0.1"/>
+    <rect x="15" y="18" width="72" height="3" rx="1.5" fill={dot} opacity="0.6" filter="url(#soft-glow)"/>
+  </g>
+
+  <path d="M 235 250 L 230 250 L 230 255" fill="none" stroke={dot} stroke-width="0.8" opacity="0.5"/>
+  <path d="M 355 250 L 360 250 L 360 255" fill="none" stroke={dot} stroke-width="0.8" opacity="0.5"/>
+  <path d="M 235 325 L 230 325 L 230 320" fill="none" stroke={dot} stroke-width="0.8" opacity="0.5"/>
+  <path d="M 355 325 L 360 325 L 360 320" fill="none" stroke={dot} stroke-width="0.8" opacity="0.5"/>
+
+  <g filter="url(#soft-glow)">
+    <circle cx="360" cy="80" r="1.5" fill={dot} opacity="0">
+      <animate attributeName="opacity" values="0;0.5;0" dur="4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="40" cy="350" r="1" fill={dot} opacity="0">
+      <animate attributeName="opacity" values="0;0.4;0" dur="5s" repeatCount="indefinite" begin="1s"/>
+    </circle>
+    <circle cx="370" cy="360" r="1.5" fill={dot} opacity="0">
+      <animate attributeName="opacity" values="0;0.3;0" dur="6s" repeatCount="indefinite" begin="2s"/>
+    </circle>
+  </g>
 </svg>

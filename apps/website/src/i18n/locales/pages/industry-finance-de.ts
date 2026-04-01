@@ -12,13 +12,13 @@ export const deFinance: Record<string, string> = {
 	"ind.problem.tagline": "Die Herausforderung",
 	"ind.problem.headline": "Tabellenkalkulationen skalieren nicht",
 	"ind.problem.description":
-		"Mit steigendem Transaktionsvolumen erzeugen manuelle Prozesse Engpässe, Fehler und Prüfungsalbträume. Jeder Monatsabschluss ist ein Notfall.",
+		"Mit steigendem Transaktionsvolumen erzeugen manuelle Prozesse Engpässe, Fehler und Compliance-Risiken. Jeder Monatsabschluss wird zum Kraftakt.",
 	"ind.problem.item1":
-		"Die Abstimmung über Systeme hinweg erfordert Kopieren und Einfügen zwischen ERP, Bankportalen und Tabellenkalkulationen.",
+		"Die Abstimmung über Systeme hinweg erfordert manuelles Copy & Paste zwischen ERP, Bankportalen und Tabellenkalkulationen.",
 	"ind.problem.item2":
 		"Die regulatorische Berichterstattung erfordert die manuelle Zusammenstellung von Daten aus Dutzenden von Quellen — fehleranfällig und langsam.",
 	"ind.problem.item3":
-		"Keine Versionskontrolle für kritische Finanzprozesse. Wenn etwas ausfällt, weiß niemand, was sich geändert hat.",
+		"Keine Versionskontrolle für kritische Finanzprozesse. Wenn etwas schiefgeht, weiß niemand, was sich geändert hat.",
 	"ind.solution.tagline": "Die Lösung",
 	"ind.solution.headline": "Prüfbare Workflows für die Finanzabteilung",
 	"ind.solution.description":

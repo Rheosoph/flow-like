@@ -1,0 +1,9 @@
+---
+import IndustryPage from "../../../components/industries/IndustryPage.astro";
+import { tProcessAutomation } from "../../../i18n/locales/pages/usecase-process-automation";
+
+const lang = "sv";
+const t = (key: string) => tProcessAutomation(lang, key);
+---
+
+<IndustryPage lang={lang} t={t} accent="amber" accentHex="#f59e0b" slug="process-automation" />

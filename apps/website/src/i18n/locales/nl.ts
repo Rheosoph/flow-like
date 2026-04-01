@@ -234,4 +234,109 @@ export const nl = {
 	"nav.blog": "Blog",
 	"nav.contact": "Contact",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Zo doet Flow-Like het",
+
+	"compare.explain.visual_workflow.title": "Visuele workflows",
+	"compare.explain.visual_workflow.what":
+		"Automatisering bouw je door nodes op een canvas te verbinden — geen code vereist. Wat je ziet is precies wat er wordt uitgevoerd.",
+	"compare.explain.visual_workflow.flow":
+		"Elk Flow-Like board is een visueel programma. Nodes stellen getypeerde operaties voor; edges zijn getypeerde datakanalen. Het canvas is de enige bron van waarheid — geen visualisatie bovenop verborgen code.",
+
+	"compare.explain.deterministic.title": "Deterministische uitvoering",
+	"compare.explain.deterministic.what":
+		"Bij dezelfde invoer produceert het systeem altijd dezelfde uitvoer in dezelfde volgorde. Geen verrassingen, geen verborgen toestand.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like compileert boards naar Rust async-taken. Geen garbage collector-pauze, geen JIT-variatie, geen probabilistische scheduling. Elk uitvoerpad is statisch getypeerd, begrensd en volledig reproduceerbaar.",
+
+	"compare.explain.high_volume.title": "Hoge doorvoer",
+	"compare.explain.high_volume.what":
+		"De engine verwerkt duizenden events per seconde zonder prestatieverlies.",
+	"compare.explain.high_volume.flow":
+		"Gebouwd op Rust's zero-cost abstracties en Tokio's async runtime. Interne benchmarks bereiken 244.000 events/seconde — ongeveer 1.000× sneller dan typische Python- of Node-engines.",
+
+	"compare.explain.compiled.title": "Gecompileerde uitvoering",
+	"compare.explain.compiled.what":
+		"Workflows worden vooraf gecompileerd in plaats van tijdens runtime geïnterpreteerd, waardoor interpreter-overhead volledig wegvalt.",
+	"compare.explain.compiled.flow":
+		"Flow-Like serialiseert boards en start ze als gecompileerde Rust async-taken. Geen bytecode, geen scriptengine. De volledige workflow-graaf wordt geoptimaliseerd bij laden, niet bij elke uitvoering.",
+
+	"compare.explain.ai_agents.title": "AI & Agents",
+	"compare.explain.ai_agents.what":
+		"LLM-aanroepen, RAG-pipelines en autonome agents kunnen direct als eersteklas nodes in workflows worden opgenomen.",
+	"compare.explain.ai_agents.flow":
+		"Native nodes verwerken promptopbouw, modelaanroep, streaming-antwoorden en toolgebruik. Agents kunnen workflowfuncties deterministisch of autonoom aanroepen — met dezelfde verklaarbaarheidswaarborgen.",
+
+	"compare.explain.ui_builder.title": "UI-builder",
+	"compare.explain.ui_builder.what":
+		"Gebruikersinterfaces gekoppeld aan flowdata kunnen worden ontworpen zonder frontend-framework-code te schrijven.",
+	"compare.explain.ui_builder.flow":
+		"Een canvas-gebaseerd widgetsysteem is ingebouwd. Knoppen, formulieren, tabellen en grafieken verbinden rechtstreeks met de pins van je workflownodes en werken live bij.",
+
+	"compare.explain.full_apps.title": "Volledige app-ontwikkeling",
+	"compare.explain.full_apps.what":
+		"Volledige, productieklare applicaties kunnen worden gebouwd — niet alleen scripts of geïsoleerde automatiseringen.",
+	"compare.explain.full_apps.flow":
+		"Boards, UI, opslag, auth en event-routing leven in één Flow-Like project. Pakket het als desktopapp, server of ingebedde module met dezelfde toolchain.",
+
+	"compare.explain.customer_facing.title": "Klantgerichte deployments",
+	"compare.explain.customer_facing.what":
+		"Dezelfde engine die interne workflows uitvoert, kan eindgebruikers rechtstreeks bedienen via webinterfaces of native desktopapps.",
+	"compare.explain.customer_facing.flow":
+		"Flow-Like apps kunnen UI-widgets en HTTP-endpoints aan externe gebruikers blootstellen. Multi-tenant isolatie, auth en toegangsbeheer zijn ingebouwd in het platform.",
+
+	"compare.explain.desktop.title": "Desktopapps",
+	"compare.explain.desktop.what":
+		"Workflows en UI's kunnen worden verpakt als native desktopapplicaties voor Windows, macOS en Linux.",
+	"compare.explain.desktop.flow":
+		"Aangedreven door Tauri. Een Flow-Like project compileert naar een native systeemvak-app met volledige toegang tot lokale hardware, bestanden en randapparatuur — zonder Electron-overhead.",
+
+	"compare.explain.mobile.title": "Mobiel",
+	"compare.explain.mobile.what":
+		"Workflows kunnen worden ingebed in mobiele applicaties voor iOS en Android.",
+	"compare.explain.mobile.flow":
+		"Een compacte Rust runtime draait op ARM zonder JVM of volledige Tauri-stack, waardoor de binary minimaal en batterijvriendelijk blijft met volledige typeveiligheid.",
+
+	"compare.explain.offline.title": "Offline-First",
+	"compare.explain.offline.what":
+		"Workflows draaien zonder internetverbinding en synchroniseren zodra de verbinding is hersteld.",
+	"compare.explain.offline.flow":
+		"Alle uitvoeringstatus, logs en data staan standaard lokaal. Synchronisatie met een cloud-backend is opt-in en wordt afgehandeld door de opslaglaag.",
+
+	"compare.explain.local_first.title": "Local-First",
+	"compare.explain.local_first.what":
+		"Data en rekenkracht blijven op het apparaat van de gebruiker. De cloud is optioneel, niet verplicht.",
+	"compare.explain.local_first.flow":
+		"Flow-Like is van dag één ontworpen om volledig op het apparaat te draaien. Geen verplichte cloudaanroepen, geen telemetrie standaard, geen cloudleveranciersafhankelijkheid in de kernruntime.",
+
+	"compare.explain.file_native.title": "Bestandsnative",
+	"compare.explain.file_native.what":
+		"Workflows behandelen bestanden als eersteklas gegevensbronnen — geen nagedachte met externe adapters.",
+	"compare.explain.file_native.flow":
+		"Bestandssysteemoperaties (lezen, schrijven, bewaken, transformeren) zijn ingebouwde knooppuntprimitieven. Boards verwerken CSV, JSON, binair en gestructureerde formaten zonder plugin-installatie.",
+
+	"compare.explain.data_science.title": "Data science",
+	"compare.explain.data_science.what":
+		"Workflows kunnen datapipelines, statistische berekeningen en modelevaluatietaken orkestreren.",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion-integratie maakt SQL over bestanden mogelijk. Ingebouwde nodes voor tensoroperaties, embeddings en datasetmanipulatie — alles in hetzelfde visuele board.",
+
+	"compare.explain.governance.title": "Governance & audit",
+	"compare.explain.governance.what":
+		"Elke run wordt gelogd, is reproduceerbaar en inspecteerbaar — voldoet aan compliancevereisten voor gereguleerde processen.",
+	"compare.explain.governance.flow":
+		"Flow-Like legt per run een volledige uitvoeringstrace vast: invoer, uitvoer, timing en de exact uitgevoerde boardversie. Snapshots laten je elke vorige run in een sandbox-omgeving opnieuw afspelen.",
+
+	"compare.explain.self_hosted.title": "Self-hosted",
+	"compare.explain.self_hosted.what":
+		"Het volledige platform kan op eigen infrastructuur worden ingezet — private cloud, on-premises of air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like wordt geleverd als één binary of container zonder verplichte SaaS-afhankelijkheden. Auth, opslag en telemetrie zijn configureerbaar of verwijderbaar. Jouw infrastructuur, jouw regels.",
+
+	"compare.explain.lock_in.title": "Geen vendor lock-in",
+	"compare.explain.lock_in.what":
+		"Je bezit je workflows. Exporteer, migreer of vervang componenten zonder propriëtaire formaatafhankelijkheden.",
+	"compare.explain.lock_in.flow":
+		"Flow-Like boards worden opgeslagen als gewone JSON. Alle catalogusnodes zijn open source. Runtime, bestandsformaat en API-oppervlak zijn versioned en gedocumenteerd — met ingebouwde migratietooling.",
 } as const;

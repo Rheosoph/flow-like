@@ -306,4 +306,109 @@ export const ja = {
 	"nav.blog": "ブログ",
 	"nav.contact": "お問い合わせ",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Flow-Likeの実装方法",
+
+	"compare.explain.visual_workflow.title": "ビジュアルワークフロー",
+	"compare.explain.visual_workflow.what":
+		"キャンバス上でノードを接続して自動化を構築します — コード不要。見たものがそのまま実行されます。",
+	"compare.explain.visual_workflow.flow":
+		"Flow-Likeの各ボードはビジュアルプログラムです。ノードは型付きの操作を表し、エッジは型付きのデータチャネルです。キャンバスが唯一の信頼できる情報源 — 隠れたコードの上に重ねられた可視化ではありません。",
+
+	"compare.explain.deterministic.title": "決定論的実行",
+	"compare.explain.deterministic.what":
+		"同じ入力が与えられると、システムは常に同じ順序で同じ出力を生成します。驚きも隠れた状態もありません。",
+	"compare.explain.deterministic.flow":
+		"Flow-LikeはボードをRustの非同期タスクにコンパイルします。ガベージコレクターの停止なし、JITの変動なし、確率的スケジューリングなし。すべての実行パスは静的型付けされ、境界が明確で、完全に再現可能です。",
+
+	"compare.explain.high_volume.title": "高スループット",
+	"compare.explain.high_volume.what":
+		"エンジンはパフォーマンスを低下させることなく毎秒数万件のイベントを処理できます。",
+	"compare.explain.high_volume.flow":
+		"Rustのゼロコスト抽象化とTokioの非同期ランタイム上に構築。内部ベンチマークでは毎秒244,000イベントを達成 — 典型的なPythonやNodeベースのエンジンの約1,000倍高速です。",
+
+	"compare.explain.compiled.title": "コンパイルされた実行",
+	"compare.explain.compiled.what":
+		"ワークフローはランタイムで解釈されるのではなく、事前にコンパイルされるため、インタープリターのオーバーヘッドが完全に排除されます。",
+	"compare.explain.compiled.flow":
+		"Flow-LikeはボードをシリアライズしてコンパイルされたRust非同期タスクとして起動します。バイトコードなし、スクリプトエンジンなし。ワークフローグラフ全体は各実行時ではなくロード時に最適化されます。",
+
+	"compare.explain.ai_agents.title": "AI・エージェント",
+	"compare.explain.ai_agents.what":
+		"LLM呼び出し、RAGパイプライン、自律エージェントをファーストクラスのノードとしてワークフローに直接組み込めます。",
+	"compare.explain.ai_agents.flow":
+		"ネイティブノードがプロンプト組み立て、モデル呼び出し、ストリーミング応答、ツール使用を処理します。エージェントは決定論的にも自律的にもワークフロー関数を呼び出せ、どちらの場合も同じ説明可能性が保証されます。",
+
+	"compare.explain.ui_builder.title": "UIビルダー",
+	"compare.explain.ui_builder.what":
+		"フロントエンドフレームワークのコードを書くことなく、フローデータにバインドされたユーザーインターフェイスを設計できます。",
+	"compare.explain.ui_builder.flow":
+		"キャンバスベースのウィジェットシステムが内蔵されています。ボタン、フォーム、テーブル、チャートがワークフローノードのピンに直接接続され、データが流れるにつれてリアルタイムに更新されます。",
+
+	"compare.explain.full_apps.title": "フルアプリ開発",
+	"compare.explain.full_apps.what":
+		"スクリプトや孤立した自動化だけでなく、本番対応の完全なアプリケーションをリリースできます。",
+	"compare.explain.full_apps.flow":
+		"ボード、UI、ストレージ、認証、イベントルーティングがすべて1つのFlow-Likeプロジェクトに収まります。同じツールチェーンを使ってデスクトップアプリ、サーバー、または組み込みモジュールとしてパッケージ化できます。",
+
+	"compare.explain.customer_facing.title": "顧客向けデプロイ",
+	"compare.explain.customer_facing.what":
+		"内部ワークフローを実行するのと同じエンジンが、Webインターフェイスやネイティブデスクトップアプリでエンドユーザーに直接サービスを提供できます。",
+	"compare.explain.customer_facing.flow":
+		"Flow-LikeアプリはUIウィジェットとHTTPエンドポイントを外部ユーザーに公開できます。マルチテナント分離、認証、アクセス制御がプラットフォームのプロファイルと機能システムに組み込まれています。",
+
+	"compare.explain.desktop.title": "デスクトップアプリ",
+	"compare.explain.desktop.what":
+		"ワークフローとUIをWindows、macOS、Linux用のネイティブデスクトップアプリとしてパッケージ化できます。",
+	"compare.explain.desktop.flow":
+		"Tauriで動作します。Flow-Likeプロジェクト1つが、ローカルのハードウェア、ファイル、周辺機器へのフルアクセスを持つネイティブシステムトレイアプリにコンパイルされます — Electronなし、WebViewのオーバーヘッドなし。",
+
+	"compare.explain.mobile.title": "モバイル",
+	"compare.explain.mobile.what":
+		"ワークフローをiOSおよびAndroid向けのモバイルアプリケーションに組み込めます。",
+	"compare.explain.mobile.flow":
+		"コンパクトなRustランタイムがJVMや完全なTauriスタックなしでARM上で動作し、完全な型安全性を維持しながらバイナリを最小限に抑えてバッテリー消費を抑制します。",
+
+	"compare.explain.offline.title": "オフラインファースト",
+	"compare.explain.offline.what":
+		"ワークフローはインターネット接続なしで実行され、接続が回復したときに同期します。",
+	"compare.explain.offline.flow":
+		"すべての実行状態、ログ、データはデフォルトでローカルに保存されます。クラウドバックエンドとの同期はオプトインで、ストレージレイヤーで処理されます。",
+
+	"compare.explain.local_first.title": "ローカルファースト",
+	"compare.explain.local_first.what":
+		"データとコンピューティングはユーザーのデバイスに留まります。クラウドはオプションであり、必須ではありません。",
+	"compare.explain.local_first.flow":
+		"Flow-Likeは当初からデバイス上で完全に実行できるように設計されています。コアランタイムには必須クラウド呼び出しなし、デフォルトでテレメトリなし、クラウドベンダー依存なし。",
+
+	"compare.explain.file_native.title": "ファイルネイティブ",
+	"compare.explain.file_native.what":
+		"ワークフローはファイルを外部アダプターが必要な後付け機能ではなく、ファーストクラスのデータソースとして扱います。",
+	"compare.explain.file_native.flow":
+		"ファイルシステム操作（読み取り、書き込み、監視、変換）は組み込みのノードプリミティブです。ボードはプラグイン設定なしでCSV、JSON、バイナリ、構造化フォーマットを扱えます。",
+
+	"compare.explain.data_science.title": "データサイエンス",
+	"compare.explain.data_science.what":
+		"ワークフローはデータパイプライン、統計計算、モデル評価タスクを調整できます。",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion統合でファイルに対するSQLが可能です。テンソル演算、埋め込み、データセット操作のための組み込みノード — すべて同じビジュアルボード上で。",
+
+	"compare.explain.governance.title": "ガバナンス・監査",
+	"compare.explain.governance.what":
+		"すべての実行がログに記録され、再現可能で、検査可能です — 規制されたプロセスのコンプライアンス要件を満たします。",
+	"compare.explain.governance.flow":
+		"Flow-Likeは実行ごとに完全な実行トレースをキャプチャします：入力、出力、タイミング、実行された正確なボードバージョン。スナップショットにより、過去の実行をサンドボックス環境で再現できます。",
+
+	"compare.explain.self_hosted.title": "セルフホスト",
+	"compare.explain.self_hosted.what":
+		"プラットフォーム全体を自社インフラに展開できます — プライベートクラウド、オンプレミス、エアギャップ環境。",
+	"compare.explain.self_hosted.flow":
+		"Flow-Likeは必須のSaaS依存なしで単一のバイナリまたはコンテナとして提供されます。認証、ストレージ、テレメトリはすべて設定可能または削除可能です。あなたのインフラ、あなたのルール。",
+
+	"compare.explain.lock_in.title": "ベンダーロックインなし",
+	"compare.explain.lock_in.what":
+		"ワークフローはあなたのものです。独自フォーマットの依存なしでエクスポート、移行、コンポーネントの交換が可能です。",
+	"compare.explain.lock_in.flow":
+		"Flow-LikeボードはプレーンなJSON形式で保存されます。すべてのカタログノードはオープンソースです。ランタイム、ファイルフォーマット、APIサーフェスはバージョン管理され文書化されており、移行ツールが含まれています。",
 } as const;

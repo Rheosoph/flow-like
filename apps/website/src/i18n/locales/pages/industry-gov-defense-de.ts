@@ -1,5 +1,5 @@
 export const deGovDefense: Record<string, string> = {
-	"ind.meta.title": "Behörden & Verteidigung Automatisierung | Flow-Like",
+	"ind.meta.title": "Automatisierung für Behörden & Verteidigung | Flow-Like",
 	"ind.meta.description":
 		"Air-Gapped Workflow-Automatisierung für Verschlusssachen und souveräne Infrastruktur. Flow-Like läuft vollständig On-Premise ohne Cloud-Abhängigkeiten.",
 	"ind.hero.tagline": "Behörden & Verteidigung",
@@ -31,15 +31,15 @@ export const deGovDefense: Record<string, string> = {
 		"Jede Workflow-Ausführung wird kryptographisch protokolliert. Erfüllt NIST 800-53, FedRAMP oder NATO-Anforderungen.",
 	"ind.solution.item3.title": "Quellcode verfügbar",
 	"ind.solution.item3.desc":
-		"Überprüfen, auditieren und kompilieren Sie die gesamte Codebasis intern. Keine Black Boxes, keine Vertrauenslizenzierung.",
+		"Überprüfen, auditieren und kompilieren Sie die gesamte Codebasis intern. Keine Black Boxes, keine Lizenzserver-Abhängigkeit.",
 	"ind.solution.item4.title": "WebAssembly Sandbox",
 	"ind.solution.item4.desc":
-		"Benutzerdefinierte Nodes laufen in einer WASM-Sandbox mit fähigkeitsbasierten Berechtigungen. Kein unautorisierter Dateisystem- oder Netzwerkzugriff.",
-	"ind.features.tagline": "Fähigkeiten",
+		"Benutzerdefinierte Nodes laufen in einer WASM-Sandbox mit Capability-basierten Berechtigungen. Kein unautorisierter Dateisystem- oder Netzwerkzugriff.",
+	"ind.features.tagline": "Funktionen",
 	"ind.features.headline": "Entwickelt für souveräne Umgebungen",
 	"ind.feature.1.title": "Cross-Domain Guards",
 	"ind.feature.1.desc":
-		"Erstellen Sie automatisierte Datenflusswächter zwischen Geheimhaltungsstufen mit richtlinienbasierter Filterung.",
+		"Erstellen Sie automatisierte Datenfluss-Guards zwischen Geheimhaltungsstufen mit richtlinienbasierter Filterung.",
 	"ind.feature.2.title": "SBOM & Lieferkette",
 	"ind.feature.2.desc":
 		"Vollständige Software-Stückliste. Jede Abhängigkeit ist auditierbar und reproduzierbar.",
@@ -49,7 +49,7 @@ export const deGovDefense: Record<string, string> = {
 	"ind.feature.4.title": "Rollenbasierter Zugriff",
 	"ind.feature.4.desc":
 		"Feingranulare Berechtigungen integriert mit Active Directory, LDAP oder PKI-Infrastruktur.",
-	"ind.feature.5.title": "Offline-KI",
+	"ind.feature.5.title": "Offline-AI",
 	"ind.feature.5.desc":
 		"Führen Sie lokale LLM- und ML-Modelle innerhalb von Workflows aus — keine Cloud-API-Aufrufe, kein Datenleck.",
 	"ind.feature.6.title": "Zertifikatsbasierte Authentifizierung",

@@ -1060,6 +1060,7 @@ pub fn run() {
             functions::recording::get_recorded_actions,
             functions::recording::insert_recording_to_board,
             functions::statistics::get_board_statistics,
+            functions::statistics::get_cached_statistics,
             functions::interaction::respond_to_interaction,
             functions::feedback::upsert_offline_feedback,
             functions::feedback::get_offline_feedback,

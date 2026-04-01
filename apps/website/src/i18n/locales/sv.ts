@@ -235,4 +235,109 @@ export const sv = {
 	"nav.blog": "Blogg",
 	"nav.contact": "Kontakt",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Så här gör Flow-Like det",
+
+	"compare.explain.visual_workflow.title": "Visuella arbetsflöden",
+	"compare.explain.visual_workflow.what":
+		"Automatisering byggs genom att koppla samman noder på en arbetsyta — ingen kod krävs. Det du ser är exakt det som körs.",
+	"compare.explain.visual_workflow.flow":
+		"Varje Flow-Like-board är ett visuellt program. Noder representerar typade operationer; kanter är typade datakanaler. Arbetsytan är den enda sanningskällan — inte en visualisering ovanpå dold kod.",
+
+	"compare.explain.deterministic.title": "Deterministisk körning",
+	"compare.explain.deterministic.what":
+		"Med samma indata producerar systemet alltid samma utdata i samma ordning. Inga överraskningar, inget dolt tillstånd.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like kompilerar boards till Rust async-uppgifter. Ingen garbage collector-paus, ingen JIT-variation, ingen probabilistisk schemaläggning. Varje körningsväg är statiskt typat, begränsat och helt reproducerbart.",
+
+	"compare.explain.high_volume.title": "Hög genomströmning",
+	"compare.explain.high_volume.what":
+		"Motorn kan bearbeta tusentals händelser per sekund utan prestandaförsämring.",
+	"compare.explain.high_volume.flow":
+		"Byggd på Rusts nollkostnadsabstraktioner och Tokios async-runtime. Interna benchmarks når 244 000 händelser/sekund — ungefär 1 000× snabbare än typiska Python- eller Node-baserade motorer.",
+
+	"compare.explain.compiled.title": "Kompilerad körning",
+	"compare.explain.compiled.what":
+		"Arbetsflöden kompileras i förväg snarare än att tolkas vid körning, vilket eliminerar tolkarens overhead helt.",
+	"compare.explain.compiled.flow":
+		"Flow-Like serialiserar boards och startar dem som kompilerade Rust async-uppgifter. Ingen bytekod, ingen skriptmotor. Hela arbetsflödesgrafen optimeras vid laddning, inte vid varje körning.",
+
+	"compare.explain.ai_agents.title": "AI & agenter",
+	"compare.explain.ai_agents.what":
+		"LLM-anrop, RAG-pipelines och autonoma agenter kan kopplas direkt till arbetsflöden som förstklassiga noder.",
+	"compare.explain.ai_agents.flow":
+		"Inbyggda noder hanterar promptmontering, modellanrop, streaming-svar och verktygsanvändning. Agenter kan anropa arbetsflödesfunktioner deterministiskt eller autonomt — med samma förklarbarhetssäkringar oavsett.",
+
+	"compare.explain.ui_builder.title": "UI-byggare",
+	"compare.explain.ui_builder.what":
+		"Du kan designa användargränssnitt bundna till flödesdata utan att skriva någon frontend-ramverkskod.",
+	"compare.explain.ui_builder.flow":
+		"Ett canvas-baserat widgetsystem ingår inbyggt. Knappar, formulär, tabeller och diagram kopplas direkt till nålar på dina arbetsflödesnoder och uppdateras live när data flödar igenom.",
+
+	"compare.explain.full_apps.title": "Fullständig apputveckling",
+	"compare.explain.full_apps.what":
+		"Du kan leverera fullständiga, produktionsklara applikationer — inte bara skript eller isolerade automatiseringar.",
+	"compare.explain.full_apps.flow":
+		"Boards, UI, lagring, autentisering och händelserutt lever alla i ett enda Flow-Like-projekt. Paketera det som en skrivbordsapp, server eller inbäddad modul med samma verktygskedja.",
+
+	"compare.explain.customer_facing.title": "Kundvända driftsättningar",
+	"compare.explain.customer_facing.what":
+		"Samma motor som kör interna arbetsflöden kan betjäna slutanvändare direkt — via webbgränssnitt eller inbyggda skrivbordsappar.",
+	"compare.explain.customer_facing.flow":
+		"Flow-Like-appar kan exponera UI-widgets och HTTP-endpoints till externa användare. Klientbaserad isolering, autentisering och åtkomstkontroll är inbyggda i plattformens profil- och förmågasystem.",
+
+	"compare.explain.desktop.title": "Skrivbordsappar",
+	"compare.explain.desktop.what":
+		"Arbetsflöden och UI:n kan paketeras som inbyggda skrivbordsapplikationer för Windows, macOS och Linux.",
+	"compare.explain.desktop.flow":
+		"Drivs av Tauri. Ett Flow-Like-projekt kompileras till en inbyggd systembricksapp med full åtkomst till lokal hårdvara, filer och kringutrustning — utan Electron, utan webview-overhead.",
+
+	"compare.explain.mobile.title": "Mobil",
+	"compare.explain.mobile.what":
+		"Arbetsflöden kan bäddas in i mobilapplikationer för iOS och Android.",
+	"compare.explain.mobile.flow":
+		"En kompakt Rust-runtime körs på ARM utan JVM eller fullständig Tauri-stack, vilket håller binären minimal och batterivänlig med full typsäkerhet.",
+
+	"compare.explain.offline.title": "Offline-first",
+	"compare.explain.offline.what":
+		"Arbetsflöden körs utan internetanslutning och synkroniseras när anslutningen återupprättas.",
+	"compare.explain.offline.flow":
+		"Alla körningsstatus, loggar och data lagras lokalt som standard. Synkronisering med ett molnbackend är opt-in och hanteras av lagringslagret.",
+
+	"compare.explain.local_first.title": "Lokal-first",
+	"compare.explain.local_first.what":
+		"Data och beräkning stannar på användarens enhet. Molnet är valfritt, inte obligatoriskt.",
+	"compare.explain.local_first.flow":
+		"Flow-Like designades från dag ett för att köra helt på enheten. Inga obligatoriska molnanrop, ingen telemetri som standard, inget molnleverantörsberoende i kärnruntimen.",
+
+	"compare.explain.file_native.title": "Fil-nativt",
+	"compare.explain.file_native.what":
+		"Arbetsflöden behandlar filer som förstklassiga datakällor — inte som en eftertanke som kräver externa adaptrar.",
+	"compare.explain.file_native.flow":
+		"Filsystemoperationer (läsa, skriva, övervaka, transformera) är inbyggda nodprimitiver. Boards konsumerar CSV, JSON, binärt och strukturerade format utan någon pluginkonfiguration.",
+
+	"compare.explain.data_science.title": "Datavetenskap",
+	"compare.explain.data_science.what":
+		"Arbetsflöden kan orkestrera datapipelines, statistiska beräkningar och modellutvärderingsuppgifter.",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion-integration möjliggör SQL över filer. Inbyggda noder täcker tensoroperationer, inbäddningar och datasetmanipulation — allt inom samma visuella board.",
+
+	"compare.explain.governance.title": "Styrning & Revision",
+	"compare.explain.governance.what":
+		"Varje körning loggas, är reproducerbar och inspekterbar — uppfyller efterlevnadskrav för reglerade processer.",
+	"compare.explain.governance.flow":
+		"Flow-Like fångar ett fullständigt körningsspår per körning: indata, utdata, timing och exakt körda board-version. Ögonblicksbilder låter dig återskapa valfri tidigare körning i en sandlådemiljö.",
+
+	"compare.explain.self_hosted.title": "Självhostat",
+	"compare.explain.self_hosted.what":
+		"Hela plattformen kan driftsättas på din egen infrastruktur — privat moln, on-premises eller air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like levereras som ett enda binärt eller container utan obligatoriska SaaS-beroenden. Autentisering, lagring och telemetri är alla konfigurerbara eller borttagbara. Din infrastruktur, dina regler.",
+
+	"compare.explain.lock_in.title": "Inget leverantörsberoende",
+	"compare.explain.lock_in.what":
+		"Du äger dina arbetsflöden. Exportera, migrera eller byt ut komponenter utan egna formatberoenden.",
+	"compare.explain.lock_in.flow":
+		"Flow-Like-boards lagras som vanlig JSON. Alla katalognoder är öppen källkod. Runtime, filformat och API-yta är versionerade och dokumenterade — med migreringsverktyg inkluderat.",
 } as const;

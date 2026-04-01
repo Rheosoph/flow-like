@@ -6,95 +6,216 @@ interface Props { ring: string; dot: string; node: string; line: string; }
 const { ring, dot, node, line } = Astro.props;
 ---
 
-<svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md">
+<svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md opacity-70">
   <defs>
-    <linearGradient id="fn-glow" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color={dot} stop-opacity="0.15"/>
-      <stop offset="100%" stop-color={dot} stop-opacity="0"/>
+    <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+      <feComponentTransfer in="coloredBlur" result="softBlur">
+         <feFuncA type="linear" slope="0.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="softBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <linearGradient id="stream-fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color={line} stop-opacity="0"/>
+      <stop offset="50%" stop-color={line} stop-opacity="0.4"/>
+      <stop offset="100%" stop-color={line} stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="panel-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color={node} stop-opacity="0.08"/>
+      <stop offset="100%" stop-color={node} stop-opacity="0.02"/>
     </linearGradient>
   </defs>
 
-  <!-- Left ledger (Source A) -->
-  <rect x="30" y="60" width="120" height="170" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="90" y="85" text-anchor="middle" fill={dot} font-size="9" opacity="0.5" font-family="monospace">Bank Feed</text>
-  <line x1="42" y1="95" x2="138" y2="95" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <!-- Ledger rows -->
-  <rect x="42" y="105" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="105" width="60" height="10" rx="3" fill={dot} opacity="0.12"><animate attributeName="opacity" values="0.08;0.18;0.08" dur="3s" repeatCount="indefinite"/></rect>
-  <rect x="42" y="122" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="122" width="75" height="10" rx="3" fill={dot} opacity="0.1"><animate attributeName="opacity" values="0.06;0.15;0.06" dur="4s" repeatCount="indefinite"/></rect>
-  <rect x="42" y="139" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="139" width="48" height="10" rx="3" fill={dot} opacity="0.08"><animate attributeName="opacity" values="0.05;0.14;0.05" dur="3.5s" repeatCount="indefinite"/></rect>
-  <rect x="42" y="156" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="156" width="82" height="10" rx="3" fill={dot} opacity="0.1"><animate attributeName="opacity" values="0.07;0.16;0.07" dur="2.8s" repeatCount="indefinite"/></rect>
-  <rect x="42" y="173" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="173" width="55" height="10" rx="3" fill={dot} opacity="0.09"><animate attributeName="opacity" values="0.06;0.13;0.06" dur="4.2s" repeatCount="indefinite"/></rect>
-  <rect x="42" y="190" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="42" y="190" width="70" height="10" rx="3" fill={dot} opacity="0.1"/>
+  <g opacity="0.04">
+    <path d="M0 50 H400 M0 100 H400 M0 150 H400 M0 200 H400 M0 250 H400 M0 300 H400 M0 350 H400" stroke={ring} stroke-width="0.5" stroke-dasharray="2 4"/>
+    <path d="M50 0 V400 M100 0 V400 M150 0 V400 M200 0 V400 M250 0 V400 M300 0 V400 M350 0 V400" stroke={ring} stroke-width="0.5" stroke-dasharray="2 4"/>
+  </g>
 
-  <!-- Right ledger (Source B) -->
-  <rect x="250" y="60" width="120" height="170" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="310" y="85" text-anchor="middle" fill={dot} font-size="9" opacity="0.5" font-family="monospace">ERP Journal</text>
-  <line x1="262" y1="95" x2="358" y2="95" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <rect x="262" y="105" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="298" y="105" width="60" height="10" rx="3" fill={dot} opacity="0.12"><animate attributeName="opacity" values="0.08;0.18;0.08" dur="3.2s" repeatCount="indefinite"/></rect>
-  <rect x="262" y="122" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="283" y="122" width="75" height="10" rx="3" fill={dot} opacity="0.1"><animate attributeName="opacity" values="0.06;0.15;0.06" dur="3.8s" repeatCount="indefinite"/></rect>
-  <rect x="262" y="139" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="310" y="139" width="48" height="10" rx="3" fill={dot} opacity="0.08"><animate attributeName="opacity" values="0.05;0.14;0.05" dur="4.5s" repeatCount="indefinite"/></rect>
-  <rect x="262" y="156" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="276" y="156" width="82" height="10" rx="3" fill={dot} opacity="0.1"/>
-  <rect x="262" y="173" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="303" y="173" width="55" height="10" rx="3" fill={dot} opacity="0.09"/>
-  <rect x="262" y="190" width="96" height="10" rx="3" fill={node} opacity="0.06"/><rect x="288" y="190" width="70" height="10" rx="3" fill={dot} opacity="0.1"/>
+  <path id="path-bank-1" d="M 125 75 C 160 75, 170 140, 200 140" fill="none" stroke="url(#stream-fade)" stroke-width="1.5"/>
+  <path id="path-bank-2" d="M 125 110 C 150 110, 160 145, 200 145" fill="none" stroke={line} stroke-width="0.8" opacity="0.15" stroke-dasharray="2 4"/>
+  <path id="path-bank-3" d="M 125 145 C 160 145, 170 150, 200 150" fill="none" stroke="url(#stream-fade)" stroke-width="1.5"/>
 
-  <!-- Matching center node -->
-  <circle cx="200" cy="170" r="30" fill={node} opacity="0.06" stroke={ring} stroke-width="1" opacity="0.3"/>
-  <circle cx="200" cy="170" r="18" fill={node} opacity="0.08"/>
-  <text x="200" y="167" text-anchor="middle" fill={dot} font-size="7" opacity="0.6" font-family="monospace">Match</text>
-  <text x="200" y="178" text-anchor="middle" fill={dot} font-size="7" opacity="0.6" font-family="monospace">Engine</text>
+  <path id="path-erp-1" d="M 275 75 C 240 75, 230 140, 200 140" fill="none" stroke="url(#stream-fade)" stroke-width="1.5"/>
+  <path id="path-erp-2" d="M 275 110 C 250 110, 240 145, 200 145" fill="none" stroke={line} stroke-width="0.8" opacity="0.15" stroke-dasharray="2 4"/>
+  <path id="path-erp-3" d="M 275 145 C 240 145, 230 150, 200 150" fill="none" stroke="url(#stream-fade)" stroke-width="1.5"/>
 
-  <!-- Connection lines left → center -->
-  <path d="M 150 120 Q 170 120, 175 155" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <path d="M 150 150 Q 165 150, 172 165" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <path d="M 150 180 Q 165 180, 172 175" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
+  <path d="M 200 180 L 200 240" fill="none" stroke={line} stroke-width="1" opacity="0.3" stroke-dasharray="4 4">
+    <animate attributeName="stroke-dashoffset" values="8;0" dur="1s" repeatCount="indefinite"/>
+  </path>
 
-  <!-- Connection lines center → right -->
-  <path d="M 228 155 Q 235 120, 250 120" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <path d="M 228 165 Q 240 150, 250 150" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
-  <path d="M 228 175 Q 240 180, 250 180" stroke={line} stroke-width="0.7" opacity="0.2" stroke-dasharray="4 3"/>
+  <rect x="20" y="30" width="110" height="155" rx="6" fill="url(#panel-grad)" stroke={ring} stroke-width="0.8" stroke-opacity="0.4"/>
+  <text x="75" y="48" text-anchor="middle" fill={dot} font-size="8" font-family="monospace" letter-spacing="1" opacity="0.8">BANK FEED</text>
+  <line x1="20" y1="56" x2="130" y2="56" stroke={ring} stroke-width="0.5" opacity="0.3"/>
+  <text x="28" y="65" fill={dot} font-size="4" font-family="monospace" opacity="0.4">TXN ID    AMOUNT   STATUS</text>
 
-  <!-- Animated matching packets left → center -->
-  <circle r="2.5" fill={dot} opacity="0.8">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 150,120 Q 170,120, 175,155"/>
-  </circle>
-  <circle r="2" fill={dot} opacity="0.6">
-    <animateMotion dur="2.5s" repeatCount="indefinite" path="M 150,150 Q 165,150, 172,165" begin="0.4s"/>
-  </circle>
-  <circle r="2" fill={dot} opacity="0.7">
-    <animateMotion dur="2.2s" repeatCount="indefinite" path="M 150,180 Q 165,180, 172,175" begin="0.8s"/>
-  </circle>
+  <g transform="translate(25, 72)">
+    <text x="0" y="5" fill={dot} font-size="5" font-family="monospace" opacity="0.7">#0x8A2</text>
+    <rect x="35" y="0" width="28" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="5" text-anchor="end" fill={dot} font-size="5" font-family="monospace" filter="url(#soft-glow)">$4,102</text>
+    <circle cx="75" cy="3" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="1.5s" repeatCount="indefinite"/></circle>
 
-  <!-- Animated matching packets center → right -->
-  <circle r="2.5" fill={dot} opacity="0.8">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 228,155 Q 235,120, 250,120" begin="1s"/>
-  </circle>
-  <circle r="2" fill={dot} opacity="0.6">
-    <animateMotion dur="2.3s" repeatCount="indefinite" path="M 228,165 Q 240,150, 250,150" begin="1.3s"/>
-  </circle>
+    <text x="0" y="20" fill={dot} font-size="5" font-family="monospace" opacity="0.7">#0x9B4</text>
+    <rect x="35" y="15" width="22" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="20" text-anchor="end" fill={dot} font-size="5" font-family="monospace" opacity="0.8">$840</text>
+    <circle cx="75" cy="18" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite"/></circle>
 
-  <!-- Match status indicators -->
-  <circle cx="200" cy="170" r="5" fill={dot} opacity="0.15">
-    <animate attributeName="r" values="5;8;5" dur="2s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.15;0.3;0.15" dur="2s" repeatCount="indefinite"/>
-  </circle>
+    <text x="0" y="35" fill={dot} font-size="5" font-family="monospace" opacity="0.7">#0x1C7</text>
+    <rect x="35" y="30" width="32" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="35" text-anchor="end" fill={dot} font-size="5" font-family="monospace" filter="url(#soft-glow)">$12,450</text>
+    <circle cx="75" cy="33" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="1.2s" repeatCount="indefinite"/></circle>
 
-  <!-- Output report below -->
-  <line x1="200" y1="200" x2="200" y2="270" stroke={line} stroke-width="0.5" opacity="0.15" stroke-dasharray="4 3"/>
-  <rect x="140" y="270" width="120" height="80" rx="10" fill={node} opacity="0.04" stroke={ring} stroke-width="0.8" opacity="0.25"/>
-  <text x="200" y="292" text-anchor="middle" fill={dot} font-size="8" opacity="0.5" font-family="monospace">Audit Report</text>
-  <line x1="155" y1="300" x2="245" y2="300" stroke={ring} stroke-width="0.4" opacity="0.15"/>
-  <!-- Check marks -->
-  <path d="M 160 315 l 4 4 l 8 -8" stroke={dot} stroke-width="1.2" fill="none" opacity="0.4"><animate attributeName="opacity" values="0.2;0.6;0.2" dur="3s" repeatCount="indefinite"/></path>
-  <rect x="180" y="313" width="52" height="6" rx="2" fill={dot} opacity="0.08"/>
-  <path d="M 160 330 l 4 4 l 8 -8" stroke={dot} stroke-width="1.2" fill="none" opacity="0.4"><animate attributeName="opacity" values="0.3;0.6;0.3" dur="3.5s" repeatCount="indefinite"/></path>
-  <rect x="180" y="328" width="40" height="6" rx="2" fill={dot} opacity="0.08"/>
+    <text x="0" y="50" fill={dot} font-size="5" font-family="monospace" opacity="0.7">#0x3F1</text>
+    <rect x="35" y="45" width="18" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="50" text-anchor="end" fill={dot} font-size="5" font-family="monospace" opacity="0.8">$120</text>
+    <circle cx="75" cy="48" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2.5s" repeatCount="indefinite"/></circle>
 
-  <!-- Animated data packet down to report -->
-  <circle r="2" fill={dot} opacity="0.7">
-    <animateMotion dur="2s" repeatCount="indefinite" path="M 200,200 L 200,270" begin="1.5s"/>
-  </circle>
+    <line x1="-5" y1="-2" x2="85" y2="-2" stroke={dot} stroke-width="0.5" opacity="0.5" filter="url(#soft-glow)">
+      <animate attributeName="y1" values="-2; 60; -2" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="y2" values="-2; 60; -2" dur="4s" repeatCount="indefinite"/>
+    </line>
+  </g>
 
-  <!-- Ambient -->
-  <circle cx="20" cy="350" r="1.5" fill={dot}><animate attributeName="opacity" values="0.1;0.3;0.1" dur="5s" repeatCount="indefinite"/></circle>
-  <circle cx="380" cy="30" r="1.5" fill={dot}><animate attributeName="opacity" values="0.15;0.35;0.15" dur="4s" repeatCount="indefinite"/></circle>
+  <rect x="270" y="30" width="110" height="155" rx="6" fill="url(#panel-grad)" stroke={ring} stroke-width="0.8" stroke-opacity="0.4"/>
+  <text x="325" y="48" text-anchor="middle" fill={dot} font-size="8" font-family="monospace" letter-spacing="1" opacity="0.8">ERP JOURNAL</text>
+  <line x1="270" y1="56" x2="380" y2="56" stroke={ring} stroke-width="0.5" opacity="0.3"/>
+  <text x="278" y="65" fill={dot} font-size="4" font-family="monospace" opacity="0.4">REF ID    AMOUNT   STATUS</text>
+
+  <g transform="translate(275, 72)">
+    <text x="0" y="5" fill={dot} font-size="5" font-family="monospace" opacity="0.7">INV-102</text>
+    <rect x="35" y="0" width="28" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="5" text-anchor="end" fill={dot} font-size="5" font-family="monospace" filter="url(#soft-glow)">$4,102</text>
+    <circle cx="75" cy="3" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="1.7s" repeatCount="indefinite"/></circle>
+
+    <text x="0" y="20" fill={dot} font-size="5" font-family="monospace" opacity="0.7">INV-103</text>
+    <rect x="35" y="15" width="22" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="20" text-anchor="end" fill={dot} font-size="5" font-family="monospace" opacity="0.8">$840</text>
+    <circle cx="75" cy="18" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2.1s" repeatCount="indefinite"/></circle>
+
+    <text x="0" y="35" fill={dot} font-size="5" font-family="monospace" opacity="0.7">INV-104</text>
+    <rect x="35" y="30" width="32" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="35" text-anchor="end" fill={dot} font-size="5" font-family="monospace" filter="url(#soft-glow)">$12,450</text>
+    <circle cx="75" cy="33" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="1.4s" repeatCount="indefinite"/></circle>
+
+    <text x="0" y="50" fill={dot} font-size="5" font-family="monospace" opacity="0.7">INV-105</text>
+    <rect x="35" y="45" width="18" height="6" rx="1" fill={dot} opacity="0.1"/>
+    <text x="62" y="50" text-anchor="end" fill={dot} font-size="5" font-family="monospace" opacity="0.8">$120</text>
+    <circle cx="75" cy="48" r="1.5" fill={dot} opacity="0.4"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2.3s" repeatCount="indefinite"/></circle>
+
+    <line x1="-5" y1="-2" x2="85" y2="-2" stroke={dot} stroke-width="0.5" opacity="0.5" filter="url(#soft-glow)">
+      <animate attributeName="y1" values="60; -2; 60" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="y2" values="60; -2; 60" dur="4s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <g transform="translate(200, 140)">
+    <circle cx="0" cy="0" r="32" fill={node} opacity="0.05" stroke={ring} stroke-width="0.5"/>
+
+    <g>
+      <circle cx="0" cy="0" r="28" fill="none" stroke={ring} stroke-width="0.8" stroke-dasharray="10 4 2 4" opacity="0.6"/>
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="10s" repeatCount="indefinite"/>
+    </g>
+    <g>
+      <circle cx="0" cy="0" r="22" fill="none" stroke={dot} stroke-width="1" stroke-dasharray="20 10 5 5" opacity="0.5" filter="url(#soft-glow)"/>
+      <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="6s" repeatCount="indefinite"/>
+    </g>
+
+    <circle cx="0" cy="0" r="14" fill={node} opacity="0.2" stroke={dot} stroke-width="0.5"/>
+    <text x="0" y="-2" text-anchor="middle" fill={dot} font-size="5" font-family="monospace" font-weight="bold" letter-spacing="1" filter="url(#soft-glow)">RECON</text>
+    <text x="0" y="5" text-anchor="middle" fill={dot} font-size="4" font-family="monospace" opacity="0.6">ENGINE</text>
+
+    <circle cx="0" cy="0" r="2" fill={dot} filter="url(#soft-glow)">
+      <animate attributeName="opacity" values="0.2; 1; 0.2" dur="1s" repeatCount="indefinite"/>
+      <animate attributeName="r" values="1.5; 3; 1.5" dur="1s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <g filter="url(#soft-glow)">
+    <g opacity="0">
+      <rect x="-3" y="-3" width="6" height="6" rx="1" fill={dot}/>
+      <animateMotion dur="2s" repeatCount="indefinite" path="M 125 75 C 160 75, 170 140, 200 140"/>
+      <animate attributeName="opacity" values="0;1;0" dur="2s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0">
+      <rect x="-2" y="-2" width="4" height="4" rx="1" fill={dot}/>
+      <animateMotion dur="2.5s" repeatCount="indefinite" path="M 125 110 C 150 110, 160 145, 200 145" begin="0.5s"/>
+      <animate attributeName="opacity" values="0;0.6;0" dur="2.5s" repeatCount="indefinite" begin="0.5s"/>
+    </g>
+    <g opacity="0">
+      <rect x="-3" y="-3" width="6" height="6" rx="1" fill={dot}/>
+      <animateMotion dur="2.2s" repeatCount="indefinite" path="M 125 145 C 160 145, 170 150, 200 150" begin="1.2s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="2.2s" repeatCount="indefinite" begin="1.2s"/>
+    </g>
+
+    <g opacity="0">
+      <rect x="-3" y="-3" width="6" height="6" rx="1" fill={dot}/>
+      <animateMotion dur="2s" repeatCount="indefinite" path="M 275 75 C 240 75, 230 140, 200 140" begin="0.2s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="2s" repeatCount="indefinite" begin="0.2s"/>
+    </g>
+    <g opacity="0">
+      <rect x="-2" y="-2" width="4" height="4" rx="1" fill={dot}/>
+      <animateMotion dur="2.8s" repeatCount="indefinite" path="M 275 110 C 250 110, 240 145, 200 145" begin="0.8s"/>
+      <animate attributeName="opacity" values="0;0.6;0" dur="2.8s" repeatCount="indefinite" begin="0.8s"/>
+    </g>
+    <g opacity="0">
+      <rect x="-3" y="-3" width="6" height="6" rx="1" fill={dot}/>
+      <animateMotion dur="2.1s" repeatCount="indefinite" path="M 275 145 C 240 145, 230 150, 200 150" begin="1.5s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="2.1s" repeatCount="indefinite" begin="1.5s"/>
+    </g>
+
+    <g opacity="0">
+      <circle r="2.5" fill={dot}/>
+      <animateMotion dur="1.5s" repeatCount="indefinite" path="M 200 180 L 200 240" begin="1s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" repeatCount="indefinite" begin="1s"/>
+    </g>
+    <g opacity="0">
+      <circle r="2.5" fill={dot}/>
+      <animateMotion dur="1.5s" repeatCount="indefinite" path="M 200 180 L 200 240" begin="2.5s"/>
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" repeatCount="indefinite" begin="2.5s"/>
+    </g>
+  </g>
+
+  <rect x="120" y="240" width="160" height="110" rx="6" fill="url(#panel-grad)" stroke={ring} stroke-width="0.8" stroke-opacity="0.5"/>
+
+  <rect x="120" y="240" width="160" height="20" rx="6" fill={node} opacity="0.1"/>
+  <text x="200" y="253" text-anchor="middle" fill={dot} font-size="7" font-family="monospace" letter-spacing="2" opacity="0.9" filter="url(#soft-glow)">CRYPTOGRAPHIC AUDIT</text>
+  <line x1="120" y1="260" x2="280" y2="260" stroke={ring} stroke-width="0.5" opacity="0.3"/>
+
+  <g transform="translate(135, 275)">
+    <path d="M 0 5 L 4 9 L 12 1" fill="none" stroke={dot} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)">
+      <animate attributeName="stroke-dasharray" values="0 20; 20 0; 20 0" dur="3s" repeatCount="indefinite"/>
+    </path>
+    <text x="20" y="6" fill={dot} font-size="5" font-family="monospace" opacity="0.8">MATCHED: $4,102.00</text>
+    <text x="20" y="14" fill={dot} font-size="4" font-family="monospace" opacity="0.4">HASH: 0x8A2...INV-102</text>
+
+    <path d="M 0 25 L 4 29 L 12 21" fill="none" stroke={dot} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)">
+      <animate attributeName="stroke-dasharray" values="0 20; 20 0; 20 0" dur="3s" repeatCount="indefinite" begin="1s"/>
+    </path>
+    <text x="20" y="26" fill={dot} font-size="5" font-family="monospace" opacity="0.8">MATCHED: $12,450.00</text>
+    <text x="20" y="34" fill={dot} font-size="4" font-family="monospace" opacity="0.4">HASH: 0x1C7...INV-104</text>
+
+    <path d="M 0 45 L 4 49 L 12 41" fill="none" stroke={dot} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)">
+      <animate attributeName="stroke-dasharray" values="0 20; 20 0; 20 0" dur="3s" repeatCount="indefinite" begin="2s"/>
+    </path>
+    <text x="20" y="46" fill={dot} font-size="5" font-family="monospace" opacity="0.8">MATCHED: $840.00</text>
+    <text x="20" y="54" fill={dot} font-size="4" font-family="monospace" opacity="0.4">HASH: 0x9B4...INV-103</text>
+  </g>
+
+  <g transform="translate(260, 330)">
+    <circle cx="0" cy="0" r="10" fill="none" stroke={dot} stroke-width="0.5" opacity="0.5"/>
+    <circle cx="0" cy="0" r="8" fill="none" stroke={dot} stroke-width="0.5" stroke-dasharray="2 2" opacity="0.8">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="5s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M -3 0 L -1 3 L 4 -2" fill="none" stroke={dot} stroke-width="1" filter="url(#soft-glow)"/>
+  </g>
+
+  <g filter="url(#soft-glow)">
+    <circle cx="30" cy="350" r="1" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.5;0" dur="4s" repeatCount="indefinite"/></circle>
+    <circle cx="360" cy="40" r="1.5" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.4;0" dur="5s" repeatCount="indefinite" begin="1s"/></circle>
+    <circle cx="380" cy="280" r="1" fill={dot} opacity="0"><animate attributeName="opacity" values="0;0.6;0" dur="3s" repeatCount="indefinite" begin="2s"/></circle>
+  </g>
 </svg>

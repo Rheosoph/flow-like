@@ -295,4 +295,109 @@ export const zh = {
 	"nav.blog": "博客",
 	"nav.contact": "联系",
 	"footer.copyright": "© 2024 TM9657 GmbH. 保留所有权利。",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Flow-Like 的实现方式",
+
+	"compare.explain.visual_workflow.title": "可视化工作流",
+	"compare.explain.visual_workflow.what":
+		"通过在画布上连接节点来构建自动化，无需编写代码。所见即所得，画布上的内容就是实际运行的内容。",
+	"compare.explain.visual_workflow.flow":
+		"每个 Flow-Like Board 都是一个可视化程序。节点代表有类型的操作，边是有类型的数据通道。画布是唯一的事实来源——而非叠加在隐藏代码之上的可视化层。",
+
+	"compare.explain.deterministic.title": "确定性执行",
+	"compare.explain.deterministic.what":
+		"给定相同的输入，系统始终以相同的顺序产生相同的输出。没有意外，没有隐藏状态。",
+	"compare.explain.deterministic.flow":
+		"Flow-Like 将 Board 编译为 Rust 异步任务。没有垃圾回收暂停，没有 JIT 抖动，没有概率性调度。每条执行路径都是静态类型化、有界且完全可重现的。",
+
+	"compare.explain.high_volume.title": "高吞吐量",
+	"compare.explain.high_volume.what":
+		"引擎可在不降低性能的情况下每秒处理数万个事件。",
+	"compare.explain.high_volume.flow":
+		"基于 Rust 的零成本抽象和 Tokio 异步运行时构建。内部基准测试达到每秒 244,000 个事件——比典型的 Python 或 Node 引擎快约 1,000 倍。",
+
+	"compare.explain.compiled.title": "编译执行",
+	"compare.explain.compiled.what":
+		"工作流提前编译而非运行时解释，彻底消除解释器开销。",
+	"compare.explain.compiled.flow":
+		"Flow-Like 序列化 Board 并将其作为编译后的 Rust 异步任务启动。没有字节码，没有脚本引擎。整个工作流图在加载时优化，而非每次执行时优化。",
+
+	"compare.explain.ai_agents.title": "AI 与智能体",
+	"compare.explain.ai_agents.what":
+		"LLM 调用、RAG 管道和自主智能体可以作为一等公民节点直接接入工作流。",
+	"compare.explain.ai_agents.flow":
+		"原生节点处理提示词组装、模型调用、流式响应和工具使用。智能体可以确定性或自主地调用工作流函数——两种方式都具有相同的可解释性保证。",
+
+	"compare.explain.ui_builder.title": "UI 构建器",
+	"compare.explain.ui_builder.what":
+		"无需编写任何前端框架代码，即可设计绑定到流数据的用户界面。",
+	"compare.explain.ui_builder.flow":
+		"内置基于画布的 Widget 系统。按钮、表单、表格和图表直接与工作流节点上的引脚连接，随数据流实时更新。",
+
+	"compare.explain.full_apps.title": "完整应用开发",
+	"compare.explain.full_apps.what":
+		"可以交付完整的生产就绪应用——而不仅仅是脚本或孤立的自动化任务。",
+	"compare.explain.full_apps.flow":
+		"Board、UI、存储、认证和事件路由都存在于单个 Flow-Like 项目中。使用同一工具链将其打包为桌面应用、服务器或嵌入式模块。",
+
+	"compare.explain.customer_facing.title": "面向客户的部署",
+	"compare.explain.customer_facing.what":
+		"运行内部工作流的同一引擎可以通过 Web 界面或原生桌面应用直接服务终端用户。",
+	"compare.explain.customer_facing.flow":
+		"Flow-Like 应用可以向外部用户暴露 UI Widget 和 HTTP 端点。多租户隔离、认证和访问控制内置于平台的配置文件和能力系统中。",
+
+	"compare.explain.desktop.title": "桌面应用",
+	"compare.explain.desktop.what":
+		"工作流和 UI 可以打包为 Windows、macOS 和 Linux 的原生桌面应用。",
+	"compare.explain.desktop.flow":
+		"由 Tauri 驱动。单个 Flow-Like 项目编译为原生系统托盘应用，可完全访问本地硬件、文件和外设——无 Electron，无 WebView 开销。",
+
+	"compare.explain.mobile.title": "移动端",
+	"compare.explain.mobile.what":
+		"工作流可以嵌入到针对 iOS 和 Android 的移动应用中。",
+	"compare.explain.mobile.flow":
+		"一个紧凑的 Rust 运行时在 ARM 上运行，无需 JVM 或完整的 Tauri 栈，在保持完整类型安全的同时将二进制文件保持在最小且省电的状态。",
+
+	"compare.explain.offline.title": "离线优先",
+	"compare.explain.offline.what":
+		"工作流在没有互联网连接的情况下运行，恢复连接时自动同步。",
+	"compare.explain.offline.flow":
+		"默认情况下，所有执行状态、日志和数据都存储在本地。与云后端的同步是可选的，由存储层处理——而非内置于每个节点中。",
+
+	"compare.explain.local_first.title": "本地优先",
+	"compare.explain.local_first.what":
+		"数据和计算保留在用户设备上。云端是可选的，而非必需的。",
+	"compare.explain.local_first.flow":
+		"Flow-Like 从第一天起就被设计为完全在设备上运行。核心运行时中没有强制性云调用、默认不收集遥测数据、不依赖任何云厂商。",
+
+	"compare.explain.file_native.title": "文件原生",
+	"compare.explain.file_native.what":
+		"工作流将文件视为一等数据源——而非需要外部适配器的附加功能。",
+	"compare.explain.file_native.flow":
+		"文件系统操作（读取、写入、监视、转换）是内置的节点原语。Board 无需任何插件配置即可处理 CSV、JSON、二进制和结构化格式。",
+
+	"compare.explain.data_science.title": "数据科学",
+	"compare.explain.data_science.what":
+		"工作流可以编排数据管道、统计计算和模型评估任务。",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion 集成支持在文件上运行 SQL。内置节点涵盖张量运算、嵌入向量和数据集操作——一切都在同一个可视化 Board 中。",
+
+	"compare.explain.governance.title": "治理与审计",
+	"compare.explain.governance.what":
+		"每次运行都有日志记录、可重现且可检查——满足受监管流程的合规要求。",
+	"compare.explain.governance.flow":
+		"Flow-Like 为每次运行捕获完整的执行追踪：输入、输出、时序以及所执行的确切 Board 版本。快照允许您在沙箱环境中重放任何过去的运行。",
+
+	"compare.explain.self_hosted.title": "自托管",
+	"compare.explain.self_hosted.what":
+		"整个平台可以部署在您自己的基础设施上——私有云、本地部署或隔离网络。",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like 作为单一二进制或容器交付，没有强制性 SaaS 依赖。认证、存储和遥测均可配置或删除。您的基础设施，您的规则。",
+
+	"compare.explain.lock_in.title": "无厂商锁定",
+	"compare.explain.lock_in.what":
+		"您拥有自己的工作流。无需专有格式依赖即可导出、迁移或替换组件。",
+	"compare.explain.lock_in.flow":
+		"Flow-Like Board 以纯 JSON 存储。所有目录节点均为开源。运行时、文件格式和 API 接口均已版本化和文档化——并附带迁移工具。",
 } as const;

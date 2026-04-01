@@ -3,7 +3,7 @@
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsivePie } from "@nivo/pie";
 import { ResponsiveTreeMap } from "@nivo/treemap";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	Badge,
 	Button,
@@ -21,7 +21,6 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-	useQuery,
 } from "@tm9657/flow-like-ui";
 import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
 import {
@@ -41,7 +40,7 @@ import {
 	Workflow,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTauriInvoke } from "../../../components/useInvoke";
 
 interface NodeUsage {
@@ -100,6 +99,45 @@ interface BoardStatistics {
 	category_stats: CategoryStats[];
 	board_summaries: BoardSummary[];
 }
+
+type BoardStatisticsUpdate =
+	| {
+			type: "Cached";
+			statistics: BoardStatistics;
+	  }
+	| {
+			type: "BoardsLoaded";
+			total_boards: number;
+			total_nodes: number;
+			total_connections: number;
+			total_variables: number;
+			total_layers: number;
+			total_comments: number;
+			avg_nodes_per_board: number;
+			avg_connections_per_board: number;
+			board_summaries: BoardSummary[];
+	  }
+	| {
+			type: "NodeUsage";
+			most_used_nodes: NodeUsage[];
+			category_stats: CategoryStats[];
+	  }
+	| {
+			type: "PatternsReady";
+			rare_patterns: NodePattern[];
+			common_patterns: NodePattern[];
+	  }
+	| {
+			type: "Complete";
+			statistics: BoardStatistics;
+	  };
+
+type LoadingPhase =
+	| "idle"
+	| "loading-boards"
+	| "loading-nodes"
+	| "mining-patterns"
+	| "complete";
 
 function StatCard({
 	title,
@@ -606,24 +644,99 @@ export default function StatisticsPage() {
 
 	const profileId = currentProfile.data?.hub_profile?.id;
 
-	const {
-		data: statistics,
-		isLoading,
-		isFetching,
-		isError,
-		error,
-		refetch,
-	} = useQuery<BoardStatistics>({
-		queryKey: ["board_statistics", profileId],
-		queryFn: async () => {
-			const stats = await invoke<BoardStatistics>("get_board_statistics");
-			return stats;
-		},
-		enabled: !!profileId,
-		staleTime: 5 * 60 * 1000, // 5 minutes
-	});
+	const [statistics, setStatistics] = useState<BoardStatistics | null>(null);
+	const [phase, setPhase] = useState<LoadingPhase>("idle");
+	const [isStale, setIsStale] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const fetchingRef = useRef(false);
 
-	if (isLoading || currentProfile.isLoading) {
+	const streamStatistics = useCallback(async () => {
+		if (fetchingRef.current) return;
+		fetchingRef.current = true;
+		setError(null);
+		setPhase("loading-boards");
+
+		try {
+			const channel = new Channel<BoardStatisticsUpdate>();
+
+			channel.onmessage = (update: BoardStatisticsUpdate) => {
+				switch (update.type) {
+					case "Cached":
+						setStatistics(update.statistics);
+						setIsStale(true);
+						break;
+					case "BoardsLoaded":
+						setStatistics((prev) => ({
+							...(prev ?? {
+								most_used_nodes: [],
+								rare_patterns: [],
+								common_patterns: [],
+								category_stats: [],
+							}),
+							total_boards: update.total_boards,
+							total_nodes: update.total_nodes,
+							total_connections: update.total_connections,
+							total_variables: update.total_variables,
+							total_layers: update.total_layers,
+							total_comments: update.total_comments,
+							avg_nodes_per_board: update.avg_nodes_per_board,
+							avg_connections_per_board: update.avg_connections_per_board,
+							board_summaries: update.board_summaries,
+						}));
+						setPhase("loading-nodes");
+						break;
+					case "NodeUsage":
+						setStatistics((prev) =>
+							prev
+								? {
+										...prev,
+										most_used_nodes: update.most_used_nodes,
+										category_stats: update.category_stats,
+									}
+								: null,
+						);
+						setPhase("mining-patterns");
+						break;
+					case "PatternsReady":
+						setStatistics((prev) =>
+							prev
+								? {
+										...prev,
+										rare_patterns: update.rare_patterns,
+										common_patterns: update.common_patterns,
+									}
+								: null,
+						);
+						break;
+					case "Complete":
+						setStatistics(update.statistics);
+						setPhase("complete");
+						setIsStale(false);
+						break;
+				}
+			};
+
+			await invoke("get_board_statistics", { channel });
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+			setPhase("idle");
+		} finally {
+			fetchingRef.current = false;
+		}
+	}, []);
+
+	useEffect(() => {
+		if (profileId) {
+			streamStatistics();
+		}
+	}, [profileId, streamStatistics]);
+
+	const isComputing = phase !== "idle" && phase !== "complete";
+
+	if (
+		!statistics &&
+		(phase === "loading-boards" || currentProfile.isLoading)
+	) {
 		return (
 			<div className="container mx-auto p-6 max-w-7xl">
 				<div className="flex items-center justify-between mb-6">
@@ -639,7 +752,7 @@ export default function StatisticsPage() {
 		);
 	}
 
-	if (isError) {
+	if (error && !statistics) {
 		return (
 			<div className="container mx-auto p-6 max-w-7xl">
 				<Card>
@@ -647,13 +760,9 @@ export default function StatisticsPage() {
 						<h3 className="text-lg font-semibold mb-2 text-destructive">
 							Error loading statistics
 						</h3>
-						<p className="text-sm text-muted-foreground mb-4">
-							{error instanceof Error
-								? error.message
-								: "Failed to load statistics"}
-						</p>
+						<p className="text-sm text-muted-foreground mb-4">{error}</p>
 						<Button
-							onClick={() => refetch()}
+							onClick={streamStatistics}
 							variant="outline"
 							className="gap-2"
 						>
@@ -677,7 +786,7 @@ export default function StatisticsPage() {
 						</p>
 					</div>
 				</div>
-				<EmptyState onRefresh={() => refetch()} />
+				<EmptyState onRefresh={streamStatistics} />
 			</div>
 		);
 	}
@@ -690,23 +799,35 @@ export default function StatisticsPage() {
 						<h1 className="text-2xl font-bold flex items-center gap-2">
 							<Sparkles className="h-6 w-6 text-primary" />
 							Board Statistics
-							{isFetching && (
+							{isComputing && (
 								<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+							)}
+							{isStale && !isComputing && (
+								<Badge variant="outline" className="text-xs font-normal ml-1">
+									cached
+								</Badge>
 							)}
 						</h1>
 						<p className="text-muted-foreground">
 							Insights from {statistics.total_boards} local board
 							{statistics.total_boards !== 1 ? "s" : ""} in your current profile
+							{isComputing && (
+								<span className="ml-2 text-xs">
+									{phase === "loading-boards" && "— loading boards..."}
+									{phase === "loading-nodes" && "— analyzing node usage..."}
+									{phase === "mining-patterns" && "— mining patterns..."}
+								</span>
+							)}
 						</p>
 					</div>
 					<Button
-						onClick={() => refetch()}
+						onClick={streamStatistics}
 						variant="outline"
 						className="gap-2"
-						disabled={isFetching}
+						disabled={isComputing}
 					>
 						<RefreshCw
-							className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
+							className={`h-4 w-4 ${isComputing ? "animate-spin" : ""}`}
 						/>
 						Refresh
 					</Button>
@@ -766,7 +887,12 @@ export default function StatisticsPage() {
 					<TabsList className="grid w-full grid-cols-5">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">Top Nodes</TabsTrigger>
-						<TabsTrigger value="patterns">Patterns</TabsTrigger>
+						<TabsTrigger value="patterns">
+							Patterns
+							{phase === "mining-patterns" && (
+								<Loader2 className="h-3 w-3 animate-spin ml-1" />
+							)}
+						</TabsTrigger>
 						<TabsTrigger value="categories">Categories</TabsTrigger>
 						<TabsTrigger value="boards">Boards</TabsTrigger>
 					</TabsList>
@@ -781,7 +907,13 @@ export default function StatisticsPage() {
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
-									<NodeUsageBarChart nodes={statistics.most_used_nodes} />
+									{statistics.most_used_nodes.length > 0 ? (
+										<NodeUsageBarChart nodes={statistics.most_used_nodes} />
+									) : (
+										<div className="h-100 flex items-center justify-center">
+											<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+										</div>
+									)}
 								</CardContent>
 							</Card>
 							<Card>
@@ -792,7 +924,13 @@ export default function StatisticsPage() {
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
-									<CategoryPieChart categories={statistics.category_stats} />
+									{statistics.category_stats.length > 0 ? (
+										<CategoryPieChart categories={statistics.category_stats} />
+									) : (
+										<div className="h-100 flex items-center justify-center">
+											<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+										</div>
+									)}
 								</CardContent>
 							</Card>
 						</div>
@@ -804,7 +942,13 @@ export default function StatisticsPage() {
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
-								<BoardComplexityTreeMap boards={statistics.board_summaries} />
+								{statistics.board_summaries.length > 0 ? (
+									<BoardComplexityTreeMap boards={statistics.board_summaries} />
+								) : (
+									<div className="h-100 flex items-center justify-center">
+										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+									</div>
+								)}
 							</CardContent>
 						</Card>
 					</TabsContent>
@@ -818,31 +962,47 @@ export default function StatisticsPage() {
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
-								<NodeUsageBarChart nodes={statistics.most_used_nodes} />
-								<div className="mt-6 grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-									{statistics.most_used_nodes.slice(0, 12).map((node, i) => (
-										<div
-											key={node.name}
-											className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30"
-										>
-											<span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-sm font-bold">
-												{i + 1}
-											</span>
-											<div className="flex-1 min-w-0">
-												<p className="font-medium truncate">
-													{node.friendly_name || node.name}
-												</p>
-												<p className="text-xs text-muted-foreground">
-													{node.count}× in {node.boards.length} board
-													{node.boards.length !== 1 ? "s" : ""}
-												</p>
-											</div>
-											<Badge variant="secondary" className="text-xs shrink-0">
-												{node.category}
-											</Badge>
+								{statistics.most_used_nodes.length > 0 ? (
+									<>
+										<NodeUsageBarChart nodes={statistics.most_used_nodes} />
+										<div className="mt-6 grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+											{statistics.most_used_nodes
+												.slice(0, 12)
+												.map((node, i) => (
+													<div
+														key={node.name}
+														className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30"
+													>
+														<span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-sm font-bold">
+															{i + 1}
+														</span>
+														<div className="flex-1 min-w-0">
+															<p className="font-medium truncate">
+																{node.friendly_name || node.name}
+															</p>
+															<p className="text-xs text-muted-foreground">
+																{node.count}× in {node.boards.length} board
+																{node.boards.length !== 1 ? "s" : ""}
+															</p>
+														</div>
+														<Badge
+															variant="secondary"
+															className="text-xs shrink-0"
+														>
+															{node.category}
+														</Badge>
+													</div>
+												))}
 										</div>
-									))}
-								</div>
+									</>
+								) : (
+									<div className="flex items-center justify-center py-12">
+										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+										<span className="ml-2 text-muted-foreground">
+											Analyzing node usage...
+										</span>
+									</div>
+								)}
 							</CardContent>
 						</Card>
 					</TabsContent>
@@ -854,6 +1014,9 @@ export default function StatisticsPage() {
 									<CardTitle className="flex items-center gap-2">
 										<TrendingUp className="h-5 w-5 text-primary" />
 										Common Patterns
+										{phase === "mining-patterns" && (
+											<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+										)}
 									</CardTitle>
 									<CardDescription>
 										Frequently used node combinations across your boards
@@ -873,6 +1036,14 @@ export default function StatisticsPage() {
 												))}
 											</div>
 										</ScrollArea>
+									) : phase === "mining-patterns" ? (
+										<div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+											<Loader2 className="h-8 w-8 animate-spin mb-3" />
+											<p className="text-sm">Mining subgraph patterns...</p>
+											<p className="text-xs mt-1">
+												This may take a moment for large workspaces
+											</p>
+										</div>
 									) : (
 										<div className="text-center py-8 text-muted-foreground">
 											No common patterns found.
@@ -885,6 +1056,9 @@ export default function StatisticsPage() {
 									<CardTitle className="flex items-center gap-2">
 										<Sparkles className="h-5 w-5 text-amber-500" />
 										Rare Patterns
+										{phase === "mining-patterns" && (
+											<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+										)}
 									</CardTitle>
 									<CardDescription>
 										Large node structures that appear in fewer boards
@@ -904,6 +1078,14 @@ export default function StatisticsPage() {
 												))}
 											</div>
 										</ScrollArea>
+									) : phase === "mining-patterns" ? (
+										<div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+											<Loader2 className="h-8 w-8 animate-spin mb-3" />
+											<p className="text-sm">Mining subgraph patterns...</p>
+											<p className="text-xs mt-1">
+												This may take a moment for large workspaces
+											</p>
+										</div>
 									) : (
 										<div className="text-center py-8 text-muted-foreground">
 											No rare patterns found.
@@ -923,29 +1105,40 @@ export default function StatisticsPage() {
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
-								<div className="grid gap-4 md:grid-cols-2">
-									<CategoryPieChart categories={statistics.category_stats} />
-									<div className="space-y-3">
-										{statistics.category_stats
-											.sort((a, b) => b.node_count - a.node_count)
-											.map((cat) => (
-												<div
-													key={cat.name}
-													className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
-												>
-													<div>
-														<p className="font-medium">
-															{cat.name || "Uncategorized"}
-														</p>
-														<p className="text-xs text-muted-foreground">
-															{cat.unique_nodes} unique node types
-														</p>
+								{statistics.category_stats.length > 0 ? (
+									<div className="grid gap-4 md:grid-cols-2">
+										<CategoryPieChart categories={statistics.category_stats} />
+										<div className="space-y-3">
+											{[...statistics.category_stats]
+												.sort((a, b) => b.node_count - a.node_count)
+												.map((cat) => (
+													<div
+														key={cat.name}
+														className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
+													>
+														<div>
+															<p className="font-medium">
+																{cat.name || "Uncategorized"}
+															</p>
+															<p className="text-xs text-muted-foreground">
+																{cat.unique_nodes} unique node types
+															</p>
+														</div>
+														<Badge variant="secondary">
+															{cat.node_count}
+														</Badge>
 													</div>
-													<Badge variant="secondary">{cat.node_count}</Badge>
-												</div>
-											))}
+												))}
+										</div>
 									</div>
-								</div>
+								) : (
+									<div className="flex items-center justify-center py-12">
+										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+										<span className="ml-2 text-muted-foreground">
+											Loading categories...
+										</span>
+									</div>
+								)}
 							</CardContent>
 						</Card>
 					</TabsContent>
@@ -959,9 +1152,18 @@ export default function StatisticsPage() {
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
-								<ScrollArea className="h-125">
-									<BoardsTable boards={statistics.board_summaries} />
-								</ScrollArea>
+								{statistics.board_summaries.length > 0 ? (
+									<ScrollArea className="h-125">
+										<BoardsTable boards={statistics.board_summaries} />
+									</ScrollArea>
+								) : (
+									<div className="flex items-center justify-center py-12">
+										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+										<span className="ml-2 text-muted-foreground">
+											Loading boards...
+										</span>
+									</div>
+								)}
 							</CardContent>
 						</Card>
 					</TabsContent>

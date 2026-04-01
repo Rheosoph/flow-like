@@ -4,6 +4,8 @@ import FinanceAnim from "./anim/FinanceAnim.astro";
 import OfficeAnim from "./anim/OfficeAnim.astro";
 import AiAgentsAnim from "./anim/AiAgentsAnim.astro";
 import GovDefenseAnim from "./anim/GovDefenseAnim.astro";
+import IotAnim from "./anim/IotAnim.astro";
+import ProcessAutomationAnim from "./anim/ProcessAutomationAnim.astro";
 
 interface Props {
   t: (key: string) => string;
@@ -63,6 +65,26 @@ const theme: Record<string, Record<string, string>> = {
     pulse: "bg-red-400",
     svgRing: "#dc2626", svgDot: "#f87171", svgNode: "#dc2626", svgLine: "#dc2626",
   },
+  cyan: {
+    badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+    gradientText: "from-cyan-400 to-sky-300",
+    btn: "bg-cyan-600 hover:bg-cyan-500",
+    btnGhost: "border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10",
+    glow1: "bg-cyan-500/15",
+    glow2: "bg-sky-500/10",
+    pulse: "bg-cyan-400",
+    svgRing: "#0891b2", svgDot: "#22d3ee", svgNode: "#0891b2", svgLine: "#0891b2",
+  },
+  amber: {
+    badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    gradientText: "from-amber-400 to-yellow-300",
+    btn: "bg-amber-600 hover:bg-amber-500",
+    btnGhost: "border-amber-500/40 text-amber-300 hover:bg-amber-500/10",
+    glow1: "bg-amber-500/15",
+    glow2: "bg-yellow-500/10",
+    pulse: "bg-amber-400",
+    svgRing: "#d97706", svgDot: "#fbbf24", svgNode: "#d97706", svgLine: "#d97706",
+  },
 };
 
 const c = theme[accent] ?? theme.orange;
@@ -116,6 +138,8 @@ const c = theme[accent] ?? theme.orange;
       {accent === "blue" && <OfficeAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
       {accent === "violet" && <AiAgentsAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
       {accent === "red" && <GovDefenseAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "cyan" && <IotAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "amber" && <ProcessAutomationAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
     </div>
   </div>
 </section>

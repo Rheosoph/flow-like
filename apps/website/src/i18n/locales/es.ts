@@ -313,4 +313,109 @@ export const es = {
 	"nav.blog": "Blog",
 	"nav.contact": "Contacto",
 	"footer.copyright": "© 2024 TM9657 GmbH. Todos los derechos reservados.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Cómo lo hace Flow-Like",
+
+	"compare.explain.visual_workflow.title": "Flujos de trabajo visuales",
+	"compare.explain.visual_workflow.what":
+		"La automatización se construye conectando nodos en un lienzo — sin código. Lo que ves es exactamente lo que se ejecuta.",
+	"compare.explain.visual_workflow.flow":
+		"Cada tablero de Flow-Like es un programa visual. Los nodos representan operaciones tipadas; las aristas son canales de datos tipados. El lienzo es la única fuente de verdad — no una visualización superpuesta sobre código oculto.",
+
+	"compare.explain.deterministic.title": "Ejecución determinista",
+	"compare.explain.deterministic.what":
+		"Con las mismas entradas, el sistema siempre produce las mismas salidas en el mismo orden. Sin sorpresas, sin estado oculto.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like compila los tableros en tareas async de Rust. Sin pausas de recolector de basura, sin varianza JIT, sin planificación probabilística. Cada ruta de ejecución está tipada estáticamente, acotada y es totalmente reproducible.",
+
+	"compare.explain.high_volume.title": "Alto rendimiento",
+	"compare.explain.high_volume.what":
+		"El motor puede procesar miles de eventos por segundo sin degradación del rendimiento.",
+	"compare.explain.high_volume.flow":
+		"Construido sobre las abstracciones de costo cero de Rust y el runtime async de Tokio. Los benchmarks internos alcanzan 244.000 eventos/segundo — aproximadamente 1.000× más rápido que los motores típicos basados en Python o Node.",
+
+	"compare.explain.compiled.title": "Ejecución compilada",
+	"compare.explain.compiled.what":
+		"Los flujos de trabajo se compilan anticipadamente en lugar de interpretarse en tiempo de ejecución, eliminando completamente la sobrecarga del intérprete.",
+	"compare.explain.compiled.flow":
+		"Flow-Like serializa los tableros y los inicia como tareas async compiladas de Rust. Sin bytecode, sin motor de scripts. El grafo de flujo de trabajo completo se optimiza en la carga, no en cada ejecución.",
+
+	"compare.explain.ai_agents.title": "IA y agentes",
+	"compare.explain.ai_agents.what":
+		"Llamadas a LLM, pipelines RAG y agentes autónomos pueden conectarse directamente en los flujos de trabajo como nodos de primera clase.",
+	"compare.explain.ai_agents.flow":
+		"Los nodos nativos manejan el ensamblado de prompts, la invocación de modelos, las respuestas en streaming y el uso de herramientas. Los agentes pueden llamar a funciones del flujo de forma determinista o autónoma — con las mismas garantías de explicabilidad en ambos casos.",
+
+	"compare.explain.ui_builder.title": "Constructor de UI",
+	"compare.explain.ui_builder.what":
+		"Puedes diseñar interfaces de usuario vinculadas a datos del flujo sin escribir código de framework frontend.",
+	"compare.explain.ui_builder.flow":
+		"Un sistema de widgets basado en lienzo está incluido. Botones, formularios, tablas y gráficos se conectan directamente a los pines de los nodos del flujo y se actualizan en tiempo real conforme fluyen los datos.",
+
+	"compare.explain.full_apps.title": "Desarrollo de apps completas",
+	"compare.explain.full_apps.what":
+		"Puedes entregar aplicaciones completas y listas para producción — no solo scripts o automatizaciones aisladas.",
+	"compare.explain.full_apps.flow":
+		"Tableros, UI, almacenamiento, auth y enrutamiento de eventos viven en un único proyecto de Flow-Like. Empaquétalo como app de escritorio, servidor o módulo embebido con la misma cadena de herramientas.",
+
+	"compare.explain.customer_facing.title": "Despliegues orientados al cliente",
+	"compare.explain.customer_facing.what":
+		"El mismo motor que ejecuta flujos de trabajo internos puede servir directamente a usuarios finales — a través de interfaces web o apps de escritorio nativas.",
+	"compare.explain.customer_facing.flow":
+		"Las apps de Flow-Like pueden exponer widgets de UI y endpoints HTTP a usuarios externos. El aislamiento multi-tenant, la autenticación y el control de acceso están integrados en el sistema de perfiles y capacidades de la plataforma.",
+
+	"compare.explain.desktop.title": "Apps de escritorio",
+	"compare.explain.desktop.what":
+		"Los flujos de trabajo y UIs pueden empaquetarse como aplicaciones de escritorio nativas para Windows, macOS y Linux.",
+	"compare.explain.desktop.flow":
+		"Impulsado por Tauri. Un proyecto de Flow-Like se compila en una app nativa de bandeja del sistema con acceso completo al hardware local, archivos y periféricos — sin Electron, sin sobrecarga de webview.",
+
+	"compare.explain.mobile.title": "Móvil",
+	"compare.explain.mobile.what":
+		"Los flujos de trabajo pueden embeberse en aplicaciones móviles para iOS y Android.",
+	"compare.explain.mobile.flow":
+		"Un runtime Rust compacto corre en ARM sin JVM ni stack Tauri completo, manteniendo el binario mínimo y eficiente en batería con total seguridad de tipos.",
+
+	"compare.explain.offline.title": "Offline-First",
+	"compare.explain.offline.what":
+		"Los flujos de trabajo se ejecutan sin conexión a internet y sincronizan cuando se restaura la conectividad.",
+	"compare.explain.offline.flow":
+		"Todos los estados de ejecución, registros y datos están almacenados localmente por defecto. La sincronización con un backend en la nube es opt-in y gestionada por la capa de almacenamiento.",
+
+	"compare.explain.local_first.title": "Local-First",
+	"compare.explain.local_first.what":
+		"Los datos y el cómputo permanecen en el dispositivo del usuario. La nube es opcional, no obligatoria.",
+	"compare.explain.local_first.flow":
+		"Flow-Like fue diseñado desde el primer día para ejecutarse completamente en el dispositivo. Sin llamadas a la nube obligatorias, sin telemetría por defecto, sin dependencia de proveedor de nube en el runtime principal.",
+
+	"compare.explain.file_native.title": "Nativo en archivos",
+	"compare.explain.file_native.what":
+		"Los flujos de trabajo tratan los archivos como fuentes de datos de primera clase — no como un añadido que requiere adaptadores externos.",
+	"compare.explain.file_native.flow":
+		"Las operaciones del sistema de archivos (leer, escribir, monitorear, transformar) son primitivas de nodos integradas. Los tableros consumen CSV, JSON, binario y formatos estructurados sin ninguna configuración de plugins.",
+
+	"compare.explain.data_science.title": "Ciencia de datos",
+	"compare.explain.data_science.what":
+		"Los flujos de trabajo pueden orquestar pipelines de datos, cálculos estadísticos y tareas de evaluación de modelos.",
+	"compare.explain.data_science.flow":
+		"La integración de Apache DataFusion permite SQL sobre archivos. Los nodos integrados cubren operaciones tensoriales, incrustaciones y manipulación de conjuntos de datos — todo en el mismo tablero visual.",
+
+	"compare.explain.governance.title": "Gobernanza y auditoría",
+	"compare.explain.governance.what":
+		"Cada ejecución se registra, es reproducible e inspeccionable — cumpliendo los requisitos de cumplimiento de procesos regulados.",
+	"compare.explain.governance.flow":
+		"Flow-Like captura un rastro de ejecución completo por cada ejecución: entradas, salidas, tiempos y la versión exacta del tablero ejecutado. Los snapshots permiten reproducir cualquier ejecución pasada en un entorno sandbox.",
+
+	"compare.explain.self_hosted.title": "Auto-alojado",
+	"compare.explain.self_hosted.what":
+		"Toda la plataforma puede desplegarse en tu propia infraestructura — nube privada, on-premises o air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like se entrega como un único binario o contenedor sin dependencias SaaS obligatorias. La autenticación, el almacenamiento y la telemetría son configurables o eliminables. Tu infraestructura, tus reglas.",
+
+	"compare.explain.lock_in.title": "Sin dependencia del proveedor",
+	"compare.explain.lock_in.what":
+		"Tus flujos de trabajo te pertenecen. Exporta, migra o intercambia componentes sin dependencias de formatos propietarios.",
+	"compare.explain.lock_in.flow":
+		"Los tableros de Flow-Like se almacenan como JSON simple. Todos los nodos del catálogo son de código abierto. El runtime, el formato de archivo y la superficie de la API están versionados y documentados — con herramientas de migración incluidas.",
 } as const;

@@ -235,4 +235,109 @@ export const it = {
 	"nav.blog": "Blog",
 	"nav.contact": "Contatti",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Come Flow-Like lo realizza",
+
+	"compare.explain.visual_workflow.title": "Flussi di lavoro visivi",
+	"compare.explain.visual_workflow.what":
+		"L'automazione si costruisce collegando nodi su una tela — senza codice richiesto. Quello che vedi è esattamente quello che viene eseguito.",
+	"compare.explain.visual_workflow.flow":
+		"Ogni board di Flow-Like è un programma visivo. I nodi rappresentano operazioni tipizzate; gli archi sono canali di dati tipizzati. La tela è l'unica fonte di verità — non una visualizzazione sovrapposta a codice nascosto.",
+
+	"compare.explain.deterministic.title": "Esecuzione deterministica",
+	"compare.explain.deterministic.what":
+		"Con gli stessi input, il sistema produce sempre gli stessi output nello stesso ordine. Nessuna sorpresa, nessuno stato nascosto.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like compila i board in task async Rust. Nessuna pausa del garbage collector, nessuna varianza JIT, nessuna schedulazione probabilistica. Ogni percorso di esecuzione è tipizzato staticamente, delimitato e completamente riproducibile.",
+
+	"compare.explain.high_volume.title": "Alto volume",
+	"compare.explain.high_volume.what":
+		"Il motore può elaborare migliaia di eventi al secondo senza degradazione delle prestazioni.",
+	"compare.explain.high_volume.flow":
+		"Costruito sulle astrazioni a costo zero di Rust e sul runtime async di Tokio. I benchmark interni raggiungono 244.000 eventi/secondo — circa 1.000× più veloce dei tipici motori basati su Python o Node.",
+
+	"compare.explain.compiled.title": "Esecuzione compilata",
+	"compare.explain.compiled.what":
+		"I flussi di lavoro vengono compilati in anticipo anziché interpretati in fase di esecuzione, eliminando completamente l'overhead dell'interprete.",
+	"compare.explain.compiled.flow":
+		"Flow-Like serializza i board e li avvia come task async Rust compilati. Nessun bytecode, nessun motore di script. L'intero grafo del flusso di lavoro viene ottimizzato al caricamento, non ad ogni esecuzione.",
+
+	"compare.explain.ai_agents.title": "IA & Agenti",
+	"compare.explain.ai_agents.what":
+		"Chiamate LLM, pipeline RAG e agenti autonomi possono essere collegati direttamente nei flussi di lavoro come nodi di prima classe.",
+	"compare.explain.ai_agents.flow":
+		"I nodi nativi gestiscono l'assemblaggio dei prompt, l'invocazione dei modelli, le risposte in streaming e l'uso degli strumenti. Gli agenti possono chiamare funzioni del flusso in modo deterministico o autonomo — con le stesse garanzie di spiegabilità in entrambi i casi.",
+
+	"compare.explain.ui_builder.title": "Costruttore di UI",
+	"compare.explain.ui_builder.what":
+		"Puoi progettare interfacce utente legate ai dati del flusso senza scrivere codice di framework frontend.",
+	"compare.explain.ui_builder.flow":
+		"Un sistema di widget basato su tela è integrato. Pulsanti, moduli, tabelle e grafici si connettono direttamente ai pin dei nodi del flusso e si aggiornano in tempo reale mentre i dati scorrono.",
+
+	"compare.explain.full_apps.title": "Sviluppo completo di app",
+	"compare.explain.full_apps.what":
+		"Puoi consegnare applicazioni complete e pronte per la produzione — non solo script o automazioni isolate.",
+	"compare.explain.full_apps.flow":
+		"Board, UI, archiviazione, auth e routing degli eventi vivono in un unico progetto Flow-Like. Pacchettizzalo come app desktop, server o modulo incorporato con la stessa catena di strumenti.",
+
+	"compare.explain.customer_facing.title": "Distribuzione verso i clienti",
+	"compare.explain.customer_facing.what":
+		"Lo stesso motore che esegue i flussi di lavoro interni può servire direttamente gli utenti finali — tramite interfacce web o app desktop native.",
+	"compare.explain.customer_facing.flow":
+		"Le app Flow-Like possono esporre widget UI e endpoint HTTP agli utenti esterni. L'isolamento multi-tenant, l'autenticazione e il controllo degli accessi sono integrati nel sistema di profili e capacità della piattaforma.",
+
+	"compare.explain.desktop.title": "App desktop",
+	"compare.explain.desktop.what":
+		"I flussi di lavoro e le UI possono essere pacchettizzati come applicazioni desktop native per Windows, macOS e Linux.",
+	"compare.explain.desktop.flow":
+		"Alimentato da Tauri. Un progetto Flow-Like si compila in un'app nativa della system tray con pieno accesso all'hardware locale, ai file e alle periferiche — senza Electron, senza overhead di webview.",
+
+	"compare.explain.mobile.title": "Mobile",
+	"compare.explain.mobile.what":
+		"I flussi di lavoro possono essere incorporati in applicazioni mobili per iOS e Android.",
+	"compare.explain.mobile.flow":
+		"Un runtime Rust compatto gira su ARM senza JVM né stack Tauri completo, mantenendo il binario minimale ed efficiente in termini di batteria con piena sicurezza dei tipi.",
+
+	"compare.explain.offline.title": "Offline-First",
+	"compare.explain.offline.what":
+		"I flussi di lavoro funzionano senza connessione internet e sincronizzano quando la connettività viene ripristinata.",
+	"compare.explain.offline.flow":
+		"Tutti gli stati di esecuzione, i log e i dati risiedono localmente per impostazione predefinita. La sincronizzazione con un backend cloud è opt-in e gestita dal layer di archiviazione.",
+
+	"compare.explain.local_first.title": "Local-First",
+	"compare.explain.local_first.what":
+		"Dati e calcolo rimangono sul dispositivo dell'utente. Il cloud è opzionale, non obbligatorio.",
+	"compare.explain.local_first.flow":
+		"Flow-Like è stato progettato fin dall'inizio per girare completamente sul dispositivo. Nessuna chiamata cloud obbligatoria, nessuna telemetria per impostazione predefinita, nessuna dipendenza da fornitore cloud nel runtime principale.",
+
+	"compare.explain.file_native.title": "Nativo sui file",
+	"compare.explain.file_native.what":
+		"I flussi di lavoro trattano i file come sorgenti di dati di prima classe — non come un ripensamento che richiede adattatori esterni.",
+	"compare.explain.file_native.flow":
+		"Le operazioni sul file system (lettura, scrittura, monitoraggio, trasformazione) sono primitive di nodi integrate. I board consumano CSV, JSON, binario e formati strutturati senza alcuna configurazione di plugin.",
+
+	"compare.explain.data_science.title": "Data Science",
+	"compare.explain.data_science.what":
+		"I flussi di lavoro possono orchestrare pipeline di dati, calcoli statistici e attività di valutazione di modelli.",
+	"compare.explain.data_science.flow":
+		"L'integrazione di Apache DataFusion abilita SQL sui file. Nodi integrati per operazioni tensoriali, embedding e manipolazione di dataset — tutto nello stesso board visivo.",
+
+	"compare.explain.governance.title": "Governance & Audit",
+	"compare.explain.governance.what":
+		"Ogni esecuzione viene registrata, è riproducibile e ispezionabile — soddisfacendo i requisiti di conformità per i processi regolamentati.",
+	"compare.explain.governance.flow":
+		"Flow-Like cattura una traccia di esecuzione completa per ogni run: input, output, tempistica e la versione esatta del board eseguito. Gli snapshot permettono di riprodurre qualsiasi esecuzione passata in un ambiente sandbox.",
+
+	"compare.explain.self_hosted.title": "Self-hosted",
+	"compare.explain.self_hosted.what":
+		"L'intera piattaforma può essere distribuita sulla propria infrastruttura — cloud privato, on-premises o air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like viene fornito come singolo binario o container senza dipendenze SaaS obbligatorie. Autenticazione, archiviazione e telemetria sono tutti configurabili o rimovibili. La tua infrastruttura, le tue regole.",
+
+	"compare.explain.lock_in.title": "Nessun vendor lock-in",
+	"compare.explain.lock_in.what":
+		"I tuoi flussi di lavoro sono tuoi. Esporta, migra o sostituisci componenti senza dipendenze da formati proprietari.",
+	"compare.explain.lock_in.flow":
+		"I board di Flow-Like sono archiviati come JSON semplice. Tutti i nodi del catalogo sono open source. Runtime, formato file e superficie API sono versionati e documentati — con strumenti di migrazione inclusi.",
 } as const;

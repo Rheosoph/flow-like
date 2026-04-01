@@ -319,4 +319,109 @@ export const en = {
 	"nav.blog": "Blog",
 	"nav.contact": "Contact",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "How Flow-Like does it",
+
+	"compare.explain.visual_workflow.title": "Visual Workflows",
+	"compare.explain.visual_workflow.what":
+		"You build automation by drawing connected nodes on a canvas — no code required. What you see is exactly what runs.",
+	"compare.explain.visual_workflow.flow":
+		"Every Flow-Like board is a visual program. Nodes represent typed operations; edges are typed data channels. The canvas is the source of truth — not a visualization layered on top of hidden code.",
+
+	"compare.explain.deterministic.title": "Deterministic Execution",
+	"compare.explain.deterministic.what":
+		"Given the same inputs, the system always produces the same outputs in the same order. No surprises, no hidden state.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like compiles boards to Rust async tasks. There's no garbage collector, no JIT variance, no probabilistic scheduling. Every execution path is statically typed, bounded, and fully reproducible.",
+
+	"compare.explain.high_volume.title": "High-Volume Throughput",
+	"compare.explain.high_volume.what":
+		"The engine can process many thousands of events per second without performance degradation.",
+	"compare.explain.high_volume.flow":
+		"Built on Rust's zero-cost abstractions and Tokio's async runtime. Internal benchmarks reach 244,000 events/second — roughly 1,000× faster than typical Python or Node-based engines.",
+
+	"compare.explain.compiled.title": "Compiled Execution",
+	"compare.explain.compiled.what":
+		"Workflows are compiled ahead-of-time rather than interpreted at runtime, eliminating interpreter overhead entirely.",
+	"compare.explain.compiled.flow":
+		"Flow-Like serializes boards and spawns them as compiled Rust async tasks. No bytecode, no script engine. The entire workflow graph is optimized at load time, not at each execution.",
+
+	"compare.explain.ai_agents.title": "AI & Agents",
+	"compare.explain.ai_agents.what":
+		"LLM calls, RAG pipelines, and autonomous agents can be wired directly into workflows as first-class nodes.",
+	"compare.explain.ai_agents.flow":
+		"Native nodes handle prompt assembly, model invocation, streaming responses, and tool use. Agents can call workflow functions deterministically or autonomously — with the same explainability guarantees either way.",
+
+	"compare.explain.ui_builder.title": "UI Builder",
+	"compare.explain.ui_builder.what":
+		"You can design user interfaces bound to flow data without writing any frontend framework code.",
+	"compare.explain.ui_builder.flow":
+		"A canvas-based widget system ships built-in. Buttons, forms, tables, and charts connect directly to pins on your workflow nodes and update live as data flows through.",
+
+	"compare.explain.full_apps.title": "Full App Development",
+	"compare.explain.full_apps.what":
+		"You can ship complete, production-ready applications — not just scripts or isolated automations.",
+	"compare.explain.full_apps.flow":
+		"Boards, UI, storage, auth, and event routing all live inside a single Flow-Like project. Package it as a desktop app, a server, or an embedded module using the same toolchain.",
+
+	"compare.explain.customer_facing.title": "Customer-Facing Deployments",
+	"compare.explain.customer_facing.what":
+		"The same engine that runs internal workflows can serve end-users directly — via web interfaces or native desktop apps.",
+	"compare.explain.customer_facing.flow":
+		"Flow-Like apps can expose UI widgets and HTTP endpoints to external users. Multi-tenant isolation, auth, and access control are built into the platform's profile and capability system.",
+
+	"compare.explain.desktop.title": "Desktop Apps",
+	"compare.explain.desktop.what":
+		"Workflows and UIs can be packaged as native desktop applications for Windows, macOS, and Linux.",
+	"compare.explain.desktop.flow":
+		"Powered by Tauri. A single Flow-Like project compiles to a native system-tray app with full access to local hardware, files, and peripherals — no Electron, no web-view overhead.",
+
+	"compare.explain.mobile.title": "Mobile",
+	"compare.explain.mobile.what":
+		"Workflows can be embedded in mobile applications targeting iOS and Android.",
+	"compare.explain.mobile.flow":
+		"A compact Rust runtime runs on ARM without a JVM or full Tauri stack, keeping the binary minimal and battery-friendly while retaining full type safety.",
+
+	"compare.explain.offline.title": "Offline-First",
+	"compare.explain.offline.what":
+		"Workflows run without an internet connection and sync when connectivity is restored.",
+	"compare.explain.offline.flow":
+		"All execution state, logs, and data live locally by default. Sync to a cloud backend is opt-in and handled by the storage layer — not baked into every node.",
+
+	"compare.explain.local_first.title": "Local-First",
+	"compare.explain.local_first.what":
+		"Data and compute stay on the user's device. The cloud is optional, not required.",
+	"compare.explain.local_first.flow":
+		"Flow-Like was designed from day one to run entirely on-device. No mandatory cloud calls, no telemetry by default, no cloud vendor dependency in the core runtime.",
+
+	"compare.explain.file_native.title": "File-Native",
+	"compare.explain.file_native.what":
+		"Workflows treat files as first-class data sources — not as an afterthought requiring external adapters.",
+	"compare.explain.file_native.flow":
+		"File system operations (read, write, watch, transform) are built-in node primitives. Boards consume CSV, JSON, binary, and structured formats without any plugin setup.",
+
+	"compare.explain.data_science.title": "Data Science",
+	"compare.explain.data_science.what":
+		"Workflows can orchestrate data pipelines, statistical computations, and model evaluation tasks.",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion integration enables SQL-over-files. Built-in nodes cover tensor operations, embeddings, and dataset manipulation — all within the same visual board.",
+
+	"compare.explain.governance.title": "Governance & Audit",
+	"compare.explain.governance.what":
+		"Every run is logged, reproducible, and inspectable — meeting compliance requirements for regulated processes.",
+	"compare.explain.governance.flow":
+		"Flow-Like captures a full execution trace per run: inputs, outputs, timing, and the exact board version executed. Snapshots let you replay any past run in a sandboxed environment.",
+
+	"compare.explain.self_hosted.title": "Self-Hosted",
+	"compare.explain.self_hosted.what":
+		"The entire platform can be deployed on your own infrastructure — private cloud, on-premises, or air-gapped.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like ships as a single binary or container with no mandatory SaaS dependencies. Auth, storage, and telemetry are all configurable or removable. Your infrastructure, your rules.",
+
+	"compare.explain.lock_in.title": "No Vendor Lock-In",
+	"compare.explain.lock_in.what":
+		"You own your workflows. Export, migrate, or swap components without proprietary format dependencies.",
+	"compare.explain.lock_in.flow":
+		"Flow-Like boards are stored as plain JSON. All catalog nodes are open source. The runtime, file format, and API surface are versioned and documented — with migration tooling included.",
 } as const;

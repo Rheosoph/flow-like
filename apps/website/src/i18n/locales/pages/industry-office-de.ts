@@ -25,7 +25,7 @@ export const deOffice: Record<string, string> = {
 		"Erstellen Sie Dokumenten-Pipelines, Genehmigungsabläufe und teamübergreifende Prozesse visuell. Jeder kann sie verstehen, die IT kann sie verwalten.",
 	"ind.solution.item1.title": "Dokumentenverarbeitung",
 	"ind.solution.item1.desc":
-		"Extrahieren Sie Daten aus PDFs, Rechnungen und Formularen mit AI-Knoten. Leiten Sie extrahierte Daten automatisch in Ihre Systeme weiter.",
+		"Extrahieren Sie Daten aus PDFs, Rechnungen und Formularen mit AI-Nodes. Leiten Sie extrahierte Daten automatisch in Ihre Systeme weiter.",
 	"ind.solution.item2.title": "Genehmigungs-Workflows",
 	"ind.solution.item2.desc":
 		"Erstellen Sie mehrstufige Genehmigungsketten mit Eskalationsregeln, SLA-Tracking und mobilen Benachrichtigungen.",
@@ -34,12 +34,12 @@ export const deOffice: Record<string, string> = {
 		"Definieren Sie klare Übergabepunkte zwischen Abteilungen. Jeder sieht den Status und weiß, was als Nächstes kommt.",
 	"ind.solution.item4.title": "Integrations-Hub",
 	"ind.solution.item4.desc":
-		"Verbinden Sie Microsoft 365, Google Workspace, Salesforce und Hunderte weiterer Tools über vorgefertigte Knoten.",
+		"Verbinden Sie Microsoft 365, Google Workspace, Salesforce und Hunderte weiterer Tools über vorgefertigte Nodes.",
 	"ind.features.tagline": "Funktionen",
 	"ind.features.headline": "Entwickelt für moderne Büros",
 	"ind.feature.1.title": "AI-Dokumentenextraktion",
 	"ind.feature.1.desc":
-		"Nutzen Sie LLM-gestützte Knoten, um strukturierte Daten aus unstrukturierten Dokumenten zu extrahieren.",
+		"Nutzen Sie LLM-gestützte Nodes, um strukturierte Daten aus unstrukturierten Dokumenten zu extrahieren.",
 	"ind.feature.2.title": "E-Mail & Benachrichtigungen",
 	"ind.feature.2.desc":
 		"Senden Sie gebrandete E-Mails, Slack-Nachrichten oder Teams-Benachrichtigungen bei jedem Workflow-Schritt.",

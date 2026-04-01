@@ -2,12 +2,41 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
+use dashmap::DashMap;
 use flow_like::{app::App, flow::board::Board};
 use flow_like_types::tokio::task::JoinSet;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
-use tauri::AppHandle;
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
+};
+use tauri::{ipc::Channel, AppHandle};
+
+static STATISTICS_CACHE: LazyLock<DashMap<String, BoardStatistics>> =
+    LazyLock::new(DashMap::new);
+
+fn statistics_store_path(user_dir: &Path, profile_id: &str) -> PathBuf {
+    user_dir.join(format!("board-statistics-{profile_id}.json"))
+}
+
+fn load_statistics_from_disk(user_dir: &Path, profile_id: &str) -> Option<BoardStatistics> {
+    let path = statistics_store_path(user_dir, profile_id);
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn save_statistics_to_disk(user_dir: &Path, profile_id: &str, stats: &BoardStatistics) {
+    let path = statistics_store_path(user_dir, profile_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(stats) {
+        let _ = std::fs::write(&path, json);
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct NodeUsage {
@@ -82,6 +111,36 @@ pub struct BoardStatistics {
     pub common_patterns: Vec<NodePattern>,
     pub category_stats: Vec<CategoryStats>,
     pub board_summaries: Vec<BoardSummary>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum BoardStatisticsUpdate {
+    Cached {
+        statistics: BoardStatistics,
+    },
+    BoardsLoaded {
+        total_boards: u32,
+        total_nodes: u32,
+        total_connections: u32,
+        total_variables: u32,
+        total_layers: u32,
+        total_comments: u32,
+        avg_nodes_per_board: f32,
+        avg_connections_per_board: f32,
+        board_summaries: Vec<BoardSummary>,
+    },
+    NodeUsage {
+        most_used_nodes: Vec<NodeUsage>,
+        category_stats: Vec<CategoryStats>,
+    },
+    PatternsReady {
+        rare_patterns: Vec<NodePattern>,
+        common_patterns: Vec<NodePattern>,
+    },
+    Complete {
+        statistics: BoardStatistics,
+    },
 }
 
 struct BoardGraph {
@@ -537,21 +596,29 @@ fn filter_redundant_patterns(patterns: Vec<NodePattern>, max_count: usize) -> Ve
 fn analyze_board(
     board: &Board,
     app_id: &str,
+    catalog_names: &HashMap<String, (String, String)>,
 ) -> (BoardSummary, HashMap<String, (String, String, String)>, u32) {
     let mut node_usage: HashMap<String, (String, String, String)> = HashMap::new();
     let mut connection_count = 0u32;
     let mut non_reroute_node_count = 0u32;
+
+    let canonical = |node_name: &str, fallback_friendly: &str, fallback_category: &str| {
+        catalog_names
+            .get(node_name)
+            .map(|(f, c)| (f.clone(), c.clone()))
+            .unwrap_or_else(|| (fallback_friendly.to_string(), fallback_category.to_string()))
+    };
 
     for node in board.nodes.values() {
         if node.name == "reroute" {
             continue;
         }
         non_reroute_node_count += 1;
-        node_usage.entry(node.name.clone()).or_insert((
-            node.name.clone(),
-            node.friendly_name.clone(),
-            node.category.clone(),
-        ));
+        node_usage.entry(node.name.clone()).or_insert_with(|| {
+            let (friendly, category) =
+                canonical(&node.name, &node.friendly_name, &node.category);
+            (node.name.clone(), friendly, category)
+        });
 
         for pin in node.pins.values() {
             connection_count += pin.connected_to.len() as u32;
@@ -564,11 +631,11 @@ fn analyze_board(
                 continue;
             }
             non_reroute_node_count += 1;
-            node_usage.entry(node.name.clone()).or_insert((
-                node.name.clone(),
-                node.friendly_name.clone(),
-                node.category.clone(),
-            ));
+            node_usage.entry(node.name.clone()).or_insert_with(|| {
+                let (friendly, category) =
+                    canonical(&node.name, &node.friendly_name, &node.category);
+                (node.name.clone(), friendly, category)
+            });
 
             for pin in node.pins.values() {
                 connection_count += pin.connected_to.len() as u32;
@@ -595,9 +662,42 @@ fn analyze_board(
 #[tauri::command(async)]
 pub async fn get_board_statistics(
     app_handle: AppHandle,
-) -> Result<BoardStatistics, TauriFunctionError> {
+    channel: Channel<BoardStatisticsUpdate>,
+) -> Result<(), TauriFunctionError> {
     let profile = TauriSettingsState::current_profile(&app_handle).await?;
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let user_dir = settings.lock().await.user_dir.clone();
+    let cache_key = profile.hub_profile.id.clone();
+
+    if let Some(cached) = STATISTICS_CACHE.get(&cache_key) {
+        let _ = channel.send(BoardStatisticsUpdate::Cached {
+            statistics: cached.clone(),
+        });
+    } else if let Some(disk_cached) = load_statistics_from_disk(&user_dir, &cache_key) {
+        STATISTICS_CACHE.insert(cache_key.clone(), disk_cached.clone());
+        let _ = channel.send(BoardStatisticsUpdate::Cached {
+            statistics: disk_cached,
+        });
+    }
+
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+
+    let catalog_names: Arc<HashMap<String, (String, String)>> = {
+        let reg_guard = flow_like_state.node_registry.read().await;
+        Arc::new(
+            reg_guard
+                .node_registry
+                .registry
+                .iter()
+                .map(|(key, (node, _))| {
+                    (
+                        key.clone(),
+                        (node.friendly_name.clone(), node.category.clone()),
+                    )
+                })
+                .collect::<HashMap<String, (String, String)>>(),
+        )
+    };
 
     let apps = profile.hub_profile.apps.unwrap_or_default();
 
@@ -606,6 +706,7 @@ pub async fn get_board_statistics(
     for profile_app in apps {
         let app_id = profile_app.app_id.clone();
         let state = flow_like_state.clone();
+        let catalog_names = catalog_names.clone();
 
         join_set.spawn(async move {
             let app = App::load(app_id.clone(), state)
@@ -616,7 +717,8 @@ pub async fn get_board_statistics(
             for board_id in &app.boards {
                 if let Ok(board) = app.open_board(board_id.clone(), Some(true), None).await {
                     let board_lock = board.lock().await;
-                    let (summary, node_usages, _) = analyze_board(&board_lock, &app_id);
+                    let (summary, node_usages, _) =
+                        analyze_board(&board_lock, &app_id, &catalog_names);
                     let graph = BoardGraph::from_board(&board_lock, &app_id);
                     drop(board_lock);
 
@@ -687,14 +789,21 @@ pub async fn get_board_statistics(
         0.0
     };
 
-    let graphs: Vec<BoardGraph> = all_results.into_iter().map(|r| r.graph).collect();
-    let (rare, common) =
-        flow_like_types::tokio::task::spawn_blocking(move || mine_patterns(&graphs, 6))
-            .await
-            .map_err(|e| TauriFunctionError::new(&format!("Mining task failed: {e}")))?;
+    stats
+        .board_summaries
+        .sort_by(|a, b| b.node_count.cmp(&a.node_count));
 
-    stats.rare_patterns = rare;
-    stats.common_patterns = common;
+    let _ = channel.send(BoardStatisticsUpdate::BoardsLoaded {
+        total_boards: stats.total_boards,
+        total_nodes: stats.total_nodes,
+        total_connections: stats.total_connections,
+        total_variables: stats.total_variables,
+        total_layers: stats.total_layers,
+        total_comments: stats.total_comments,
+        avg_nodes_per_board: stats.avg_nodes_per_board,
+        avg_connections_per_board: stats.avg_connections_per_board,
+        board_summaries: stats.board_summaries.clone(),
+    });
 
     let mut node_usage_vec: Vec<NodeUsage> = global_node_usage.into_values().collect();
     node_usage_vec.sort_by(|a, b| b.count.cmp(&a.count));
@@ -712,9 +821,58 @@ pub async fn get_board_statistics(
         .category_stats
         .sort_by(|a, b| b.node_count.cmp(&a.node_count));
 
-    stats
-        .board_summaries
-        .sort_by(|a, b| b.node_count.cmp(&a.node_count));
+    let _ = channel.send(BoardStatisticsUpdate::NodeUsage {
+        most_used_nodes: stats.most_used_nodes.clone(),
+        category_stats: stats.category_stats.clone(),
+    });
 
-    Ok(stats)
+    let graphs: Vec<BoardGraph> = all_results.into_iter().map(|r| r.graph).collect();
+    let (rare, common) =
+        flow_like_types::tokio::task::spawn_blocking(move || mine_patterns(&graphs, 6))
+            .await
+            .map_err(|e| TauriFunctionError::new(&format!("Mining task failed: {e}")))?;
+
+    stats.rare_patterns = rare;
+    stats.common_patterns = common;
+
+    let _ = channel.send(BoardStatisticsUpdate::PatternsReady {
+        rare_patterns: stats.rare_patterns.clone(),
+        common_patterns: stats.common_patterns.clone(),
+    });
+
+    let _ = channel.send(BoardStatisticsUpdate::Complete {
+        statistics: stats.clone(),
+    });
+
+    STATISTICS_CACHE.insert(cache_key.clone(), stats.clone());
+    save_statistics_to_disk(&user_dir, &cache_key, &stats);
+
+    Ok(())
+}
+
+pub fn get_cached_board_statistics(profile_id: &str) -> Option<BoardStatistics> {
+    STATISTICS_CACHE
+        .get(profile_id)
+        .map(|entry| entry.clone())
+}
+
+#[tauri::command(async)]
+pub async fn get_cached_statistics(
+    app_handle: AppHandle,
+) -> Result<Option<BoardStatistics>, TauriFunctionError> {
+    let profile = TauriSettingsState::current_profile(&app_handle).await?;
+    let cache_key = profile.hub_profile.id.clone();
+
+    if let Some(cached) = get_cached_board_statistics(&cache_key) {
+        return Ok(Some(cached));
+    }
+
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let user_dir = settings.lock().await.user_dir.clone();
+    if let Some(disk_cached) = load_statistics_from_disk(&user_dir, &cache_key) {
+        STATISTICS_CACHE.insert(cache_key, disk_cached.clone());
+        return Ok(Some(disk_cached));
+    }
+
+    Ok(None)
 }

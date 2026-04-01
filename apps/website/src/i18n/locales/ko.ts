@@ -231,4 +231,109 @@ export const ko = {
 	"nav.blog": "블로그",
 	"nav.contact": "문의하기",
 	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+
+	// Compare page — capability deep-dive cards
+	"compare.explain.how_does_it": "Flow-Like의 구현 방식",
+
+	"compare.explain.visual_workflow.title": "시각적 워크플로",
+	"compare.explain.visual_workflow.what":
+		"캔버스에서 노드를 연결하여 자동화를 구축합니다 — 코드가 필요하지 않습니다. 보이는 것이 정확히 실행되는 것입니다.",
+	"compare.explain.visual_workflow.flow":
+		"모든 Flow-Like 보드는 시각적 프로그램입니다. 노드는 타입이 있는 연산을 나타내고 엣지는 타입이 있는 데이터 채널입니다. 캔버스가 유일한 진실의 근원입니다 — 숨겨진 코드 위에 얹혀진 시각화가 아닙니다.",
+
+	"compare.explain.deterministic.title": "결정론적 실행",
+	"compare.explain.deterministic.what":
+		"동일한 입력이 주어지면 시스템은 항상 동일한 순서로 동일한 출력을 생성합니다. 놀라움도, 숨겨진 상태도 없습니다.",
+	"compare.explain.deterministic.flow":
+		"Flow-Like는 보드를 Rust 비동기 태스크로 컴파일합니다. 가비지 컬렉터 중단 없음, JIT 변동 없음, 확률적 스케줄링 없음. 모든 실행 경로는 정적으로 타입화되고, 경계가 명확하며, 완전히 재현 가능합니다.",
+
+	"compare.explain.high_volume.title": "고용량 처리",
+	"compare.explain.high_volume.what":
+		"엔진은 성능 저하 없이 초당 수만 건의 이벤트를 처리할 수 있습니다.",
+	"compare.explain.high_volume.flow":
+		"Rust의 제로 비용 추상화와 Tokio 비동기 런타임 위에 구축되었습니다. 내부 벤치마크에서 초당 244,000건의 이벤트를 달성 — 일반 Python 또는 Node 기반 엔진보다 약 1,000배 빠릅니다.",
+
+	"compare.explain.compiled.title": "컴파일된 실행",
+	"compare.explain.compiled.what":
+		"워크플로는 런타임에 해석되지 않고 미리 컴파일되어 인터프리터 오버헤드를 완전히 제거합니다.",
+	"compare.explain.compiled.flow":
+		"Flow-Like는 보드를 직렬화하고 컴파일된 Rust 비동기 태스크로 실행합니다. 바이트코드 없음, 스크립트 엔진 없음. 전체 워크플로 그래프는 각 실행 시가 아닌 로드 시에 최적화됩니다.",
+
+	"compare.explain.ai_agents.title": "AI & 에이전트",
+	"compare.explain.ai_agents.what":
+		"LLM 호출, RAG 파이프라인, 자율 에이전트를 일급 노드로 워크플로에 직접 연결할 수 있습니다.",
+	"compare.explain.ai_agents.flow":
+		"네이티브 노드가 프롬프트 조합, 모델 호출, 스트리밍 응답, 도구 사용을 처리합니다. 에이전트는 결정론적 또는 자율적으로 워크플로 함수를 호출할 수 있으며, 두 방식 모두 동일한 설명 가능성 보장을 제공합니다.",
+
+	"compare.explain.ui_builder.title": "UI 빌더",
+	"compare.explain.ui_builder.what":
+		"프론트엔드 프레임워크 코드 없이 플로우 데이터에 바인딩된 사용자 인터페이스를 설계할 수 있습니다.",
+	"compare.explain.ui_builder.flow":
+		"캔버스 기반 위젯 시스템이 내장되어 있습니다. 버튼, 양식, 테이블, 차트가 워크플로 노드의 핀에 직접 연결되어 데이터 흐름에 따라 실시간으로 업데이트됩니다.",
+
+	"compare.explain.full_apps.title": "완전한 앱 개발",
+	"compare.explain.full_apps.what":
+		"스크립트나 단독 자동화가 아닌 완전한 프로덕션 준비 애플리케이션을 제공할 수 있습니다.",
+	"compare.explain.full_apps.flow":
+		"보드, UI, 스토리지, 인증, 이벤트 라우팅이 모두 하나의 Flow-Like 프로젝트 안에 있습니다. 동일한 툴체인을 사용하여 데스크톱 앱, 서버 또는 임베디드 모듈로 패키징하세요.",
+
+	"compare.explain.customer_facing.title": "고객 대면 배포",
+	"compare.explain.customer_facing.what":
+		"내부 워크플로를 실행하는 것과 동일한 엔진이 웹 인터페이스나 네이티브 데스크톱 앱을 통해 최종 사용자를 직접 서비스할 수 있습니다.",
+	"compare.explain.customer_facing.flow":
+		"Flow-Like 앱은 외부 사용자에게 UI 위젯과 HTTP 엔드포인트를 노출할 수 있습니다. 멀티 테넌트 격리, 인증, 접근 제어가 플랫폼의 프로필 및 기능 시스템에 내장되어 있습니다.",
+
+	"compare.explain.desktop.title": "데스크톱 앱",
+	"compare.explain.desktop.what":
+		"워크플로와 UI를 Windows, macOS, Linux용 네이티브 데스크톱 애플리케이션으로 패키징할 수 있습니다.",
+	"compare.explain.desktop.flow":
+		"Tauri로 구동됩니다. 하나의 Flow-Like 프로젝트가 로컬 하드웨어, 파일, 주변 기기에 완전히 접근할 수 있는 네이티브 시스템 트레이 앱으로 컴파일됩니다 — Electron 없음, 웹뷰 오버헤드 없음.",
+
+	"compare.explain.mobile.title": "모바일",
+	"compare.explain.mobile.what":
+		"워크플로를 iOS 및 Android용 모바일 애플리케이션에 임베드할 수 있습니다.",
+	"compare.explain.mobile.flow":
+		"컴팩트한 Rust 런타임이 JVM이나 전체 Tauri 스택 없이 ARM에서 실행되어 완전한 타입 안전성을 유지하면서 바이너리를 최소화하고 배터리 효율을 높입니다.",
+
+	"compare.explain.offline.title": "오프라인 우선",
+	"compare.explain.offline.what":
+		"워크플로는 인터넷 연결 없이 실행되며 연결이 복원되면 동기화됩니다.",
+	"compare.explain.offline.flow":
+		"모든 실행 상태, 로그, 데이터는 기본적으로 로컬에 저장됩니다. 클라우드 백엔드와의 동기화는 선택 사항이며 스토리지 레이어에서 처리됩니다.",
+
+	"compare.explain.local_first.title": "로컬 우선",
+	"compare.explain.local_first.what":
+		"데이터와 컴퓨팅이 사용자 기기에 머뭅니다. 클라우드는 선택 사항이지 필수가 아닙니다.",
+	"compare.explain.local_first.flow":
+		"Flow-Like는 처음부터 기기에서 완전히 실행되도록 설계되었습니다. 핵심 런타임에 필수 클라우드 호출, 기본 원격 측정, 클라우드 공급업체 의존성이 없습니다.",
+
+	"compare.explain.file_native.title": "파일 네이티브",
+	"compare.explain.file_native.what":
+		"워크플로는 파일을 일급 데이터 소스로 취급합니다 — 외부 어댑터가 필요한 부가 기능이 아닙니다.",
+	"compare.explain.file_native.flow":
+		"파일 시스템 작업(읽기, 쓰기, 감시, 변환)은 내장 노드 기본 요소입니다. 보드는 플러그인 설정 없이 CSV, JSON, 이진 파일, 구조화된 형식을 처리합니다.",
+
+	"compare.explain.data_science.title": "데이터 사이언스",
+	"compare.explain.data_science.what":
+		"워크플로는 데이터 파이프라인, 통계 계산, 모델 평가 작업을 조율할 수 있습니다.",
+	"compare.explain.data_science.flow":
+		"Apache DataFusion 통합으로 파일에 대한 SQL을 실행할 수 있습니다. 텐서 연산, 임베딩, 데이터셋 조작을 위한 내장 노드 — 모두 동일한 시각적 보드에서 처리됩니다.",
+
+	"compare.explain.governance.title": "거버넌스 & 감사",
+	"compare.explain.governance.what":
+		"모든 실행이 기록되고, 재현 가능하며, 검사 가능합니다 — 규제 프로세스의 컴플라이언스 요구 사항을 충족합니다.",
+	"compare.explain.governance.flow":
+		"Flow-Like는 실행마다 완전한 실행 추적을 캡처합니다: 입력, 출력, 타이밍, 실행된 정확한 보드 버전. 스냅샷을 통해 샌드박스 환경에서 과거 실행을 재현할 수 있습니다.",
+
+	"compare.explain.self_hosted.title": "자체 호스팅",
+	"compare.explain.self_hosted.what":
+		"전체 플랫폼을 자체 인프라에 배포할 수 있습니다 — 프라이빗 클라우드, 온프레미스, 또는 에어갭 환경.",
+	"compare.explain.self_hosted.flow":
+		"Flow-Like는 필수 SaaS 의존성 없이 단일 바이너리 또는 컨테이너로 제공됩니다. 인증, 스토리지, 원격 측정은 모두 구성 가능하거나 제거할 수 있습니다. 귀하의 인프라, 귀하의 규칙.",
+
+	"compare.explain.lock_in.title": "벤더 종속성 없음",
+	"compare.explain.lock_in.what":
+		"워크플로는 귀하의 소유입니다. 독점 형식 의존성 없이 내보내고, 마이그레이션하고, 컴포넌트를 교체하세요.",
+	"compare.explain.lock_in.flow":
+		"Flow-Like 보드는 일반 JSON으로 저장됩니다. 모든 카탈로그 노드는 오픈소스입니다. 런타임, 파일 형식, API 표면은 버전 관리되고 문서화되어 있으며 — 마이그레이션 도구가 포함되어 있습니다.",
 } as const;
