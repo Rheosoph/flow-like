@@ -31,7 +31,7 @@ use crate::arrow_utils::value_to_batch_iterator;
 
 use super::VectorStore;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug)]
 pub struct IndexConfigDto {
     pub name: String,
     pub index_type: String, // render enum via Display

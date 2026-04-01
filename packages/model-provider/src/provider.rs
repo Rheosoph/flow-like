@@ -24,6 +24,8 @@ pub enum RemoteEmbeddingProvider {
     HuggingfaceEndpoint,
     /// Cloudflare Workers AI
     CloudflareWorkersAI,
+    /// Internal embedding gateway
+    Internal,
 }
 
 /// Configuration for remote execution via API proxy
@@ -39,6 +41,9 @@ pub struct RemoteExecutionConfig {
     /// Which remote provider implementation to use
     #[serde(default)]
     pub implementation: Option<RemoteEmbeddingProvider>,
+    /// Deployed model ID for the upstream provider (e.g., Internal gateway model name)
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

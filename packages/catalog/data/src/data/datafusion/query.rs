@@ -32,7 +32,7 @@ impl NodeLogic for SqlQueryNode {
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",

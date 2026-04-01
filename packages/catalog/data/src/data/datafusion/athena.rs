@@ -40,6 +40,7 @@ impl NodeLogic for RegisterAthenaNode {
             "Data/DataFusion/Databases",
         );
         node.add_icon("/flow/icons/aws.svg");
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -327,6 +328,7 @@ impl NodeLogic for MountAthenaQueryNode {
             "Data/DataFusion/Databases",
         );
         node.add_icon("/flow/icons/aws.svg");
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
