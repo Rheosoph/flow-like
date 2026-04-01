@@ -1,0 +1,254 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const checks = [
+  { title: t("v3.trust.access.title"), desc: t("v3.trust.access.desc") },
+  { title: t("v3.trust.audit.title"), desc: t("v3.trust.audit.desc") },
+  { title: t("v3.trust.sbom.title"), desc: t("v3.trust.sbom.desc"), link: "/thirdparty", linkText: t("v3.trust.sbom.link") },
+  { title: t("v3.trust.sovereignty.title"), desc: t("v3.trust.sovereignty.desc"), link: "/security", linkText: t("v3.trust.sovereignty.link") },
+  { title: t("v3.trust.compliance.title"), desc: t("v3.trust.compliance.desc"), link: "/security", linkText: t("v3.trust.compliance.link") },
+  { title: t("v3.trust.gdpr.title"), desc: t("v3.trust.gdpr.desc"), link: "/data-deletion", linkText: t("v3.trust.gdpr.link") },
+];
+
+const badges = [
+  "Open Source",
+  "Self-Hosted",
+  "EU-Based",
+  "SOC 2 Aligned",
+  "SBOM Published",
+  "Prowler Assessed",
+  "GDPR Ready",
+  "On-Premise Deployment",
+];
+---
+
+<section class="trust-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="trust-orb trust-orb--green"></div>
+    <div class="trust-orb trust-orb--blue"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="trust-reveal mx-auto max-w-3xl text-center mb-10 md:mb-14">
+      <span class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-4 py-1.5 text-xs font-medium text-emerald-400/80 mb-6">
+        {t("v3.trust.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v3.trust.headline")}
+      </h2>
+      <p class="mt-4 text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+        {t("v3.trust.description")}
+      </p>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="trust-reveal mx-auto max-w-md mb-12 md:mb-16" id="trust-progress-wrap">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-medium text-muted-foreground">
+          <span id="trust-count" class="tabular-nums text-foreground font-semibold">0</span>/<span>6</span>
+          {t("v3.trust.progress")}
+        </span>
+        <span class="text-sm text-emerald-400/70 font-medium opacity-0 transition-opacity duration-500" id="trust-complete-label">Done</span>
+      </div>
+      <div class="h-2 rounded-full bg-muted/40 overflow-hidden">
+        <div
+          class="trust-progress-fill h-full rounded-full bg-gradient-to-r from-emerald-500/80 to-emerald-400/80 transition-[width] duration-700 ease-out"
+          id="trust-progress-bar"
+          style="width: 0%;"
+          role="progressbar"
+          aria-valuenow="0"
+          aria-valuemin="0"
+          aria-valuemax="6"
+        ></div>
+      </div>
+    </div>
+
+    <!-- Checklist grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-6 mb-14 md:mb-16">
+      {checks.map((item, i) => (
+        <div
+          class="trust-check trust-reveal group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-5 sm:p-6 transition-colors hover:border-emerald-500/20 hover:bg-emerald-500/[0.02]"
+          data-trust-index={i}
+        >
+          <div class="flex items-start gap-4">
+            <div class="trust-check__icon mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 opacity-40 transition-opacity duration-500">
+              <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3.5 8.5 L6.5 11.5 L12.5 5" />
+              </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+              <h3 class="text-sm font-semibold text-foreground leading-snug">{item.title}</h3>
+              <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{item.desc}</p>
+              {item.link && (
+                <a
+                  href={item.link}
+                  class="mt-2 inline-flex items-center text-xs font-medium text-emerald-400/70 hover:text-emerald-400 transition-colors"
+                >
+                  {item.linkText}
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <!-- Badge strip -->
+    <div class="trust-reveal flex flex-wrap items-center justify-center gap-2.5">
+      {badges.map((badge) => (
+        <span class="inline-flex items-center rounded-full border border-border/30 bg-muted/20 px-3.5 py-1.5 text-xs font-medium text-muted-foreground/70 select-none">
+          {badge}
+        </span>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .trust-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+  }
+  .trust-orb--green {
+    width: 500px;
+    height: 500px;
+    top: -80px;
+    left: -120px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.1), transparent 70%);
+  }
+  .trust-orb--blue {
+    width: 400px;
+    height: 400px;
+    bottom: -60px;
+    right: -100px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.07), transparent 70%);
+  }
+
+  .trust-reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .trust-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .trust-check.is-checked .trust-check__icon {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trust-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .trust-progress-fill {
+      transition: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initTrust() {
+    const section = document.querySelector<HTMLElement>(".trust-section");
+    if (!section) return;
+
+    const reveals = section.querySelectorAll<HTMLElement>(".trust-reveal");
+    const checkItems = section.querySelectorAll<HTMLElement>(".trust-check");
+    const progressBar = document.getElementById("trust-progress-bar");
+    const countEl = document.getElementById("trust-count");
+    const completeLabel = document.getElementById("trust-complete-label");
+    const total = 6;
+    let animated = false;
+
+    if (!("IntersectionObserver" in window)) {
+      reveals.forEach((el) => el.classList.add("is-visible"));
+      checkItems.forEach((el) => el.classList.add("is-checked"));
+      if (progressBar) progressBar.style.width = "100%";
+      if (countEl) countEl.textContent = String(total);
+      if (completeLabel) completeLabel.style.opacity = "1";
+      return;
+    }
+
+    // Reveal observer for general elements
+    const revealIO = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            revealIO.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.1 },
+    );
+    reveals.forEach((el) => revealIO.observe(el));
+
+    // Progress + check animation observer
+    const progressIO = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            animateProgress();
+            progressIO.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.3 },
+    );
+
+    const progressWrap = document.getElementById("trust-progress-wrap");
+    if (progressWrap) progressIO.observe(progressWrap);
+
+    function animateProgress() {
+      let current = 0;
+      const staggerMs = 280;
+
+      function tick() {
+        if (current > total) return;
+
+        if (progressBar) {
+          const pct = (current / total) * 100;
+          progressBar.style.width = `${pct}%`;
+          progressBar.setAttribute("aria-valuenow", String(current));
+        }
+        if (countEl) countEl.textContent = String(current);
+
+        // Activate check item
+        if (current > 0) {
+          const item = checkItems[current - 1];
+          if (item) item.classList.add("is-checked");
+        }
+
+        // Show complete label on last
+        if (current === total && completeLabel) {
+          completeLabel.style.opacity = "1";
+        }
+
+        current++;
+        if (current <= total) {
+          setTimeout(tick, staggerMs);
+        }
+      }
+
+      tick();
+    }
+  }
+
+  initTrust();
+</script>

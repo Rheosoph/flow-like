@@ -1,0 +1,164 @@
+---
+import {
+  LuWorkflow,
+  LuMousePointerClick,
+  LuLayoutTemplate,
+  LuPaintbrush,
+  LuRocket,
+  LuBookOpen,
+  LuArrowRight,
+  LuPackage,
+  LuGitBranch,
+  LuShieldCheck,
+} from "react-icons/lu";
+
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section id="workflow-path" class="relative py-24 overflow-hidden scroll-mt-20">
+  <!-- Divider -->
+  <div class="max-w-5xl mx-auto px-4 mb-20">
+    <div class="flex items-center gap-4">
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
+      <span class="text-xs font-medium text-muted-foreground uppercase tracking-widest">{t("dev.nodes.divider")}</span>
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
+    </div>
+  </div>
+
+  <!-- Background glow -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0">
+    <div class="absolute -top-32 left-1/4 w-[600px] h-[600px] rounded-full blur-[140px] opacity-30 bg-rose-500/20"></div>
+  </div>
+
+  <div class="relative z-10 max-w-7xl mx-auto px-4 lg:px-8">
+    <!-- Section header -->
+    <div class="max-w-3xl mb-16">
+      <div class="inline-flex items-center gap-2.5 rounded-full border border-rose-500/30 bg-rose-500/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-rose-600 dark:text-rose-400 mb-6 shadow-[0_0_30px_-8px_rgba(244,63,94,0.4)]">
+        <LuWorkflow className="w-4 h-4" />
+        <span>{t("dev.workflow.badge")}</span>
+      </div>
+
+      <h2 class="text-4xl font-extrabold sm:text-5xl bg-gradient-to-r from-foreground via-rose-500 to-rose-500/60 bg-clip-text text-transparent leading-tight mb-6">
+        {t("dev.workflow.headline")}
+      </h2>
+
+      <p class="text-lg text-muted-foreground leading-relaxed">
+        {t("dev.workflow.description")}
+      </p>
+    </div>
+
+    <!-- Feature grid -->
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuMousePointerClick className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.dragdrop.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.dragdrop.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuPackage className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.catalog.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.catalog.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuLayoutTemplate className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.templates.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.templates.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuPaintbrush className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.interfaces.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.interfaces.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuGitBranch className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.vcs.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.vcs.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-rose-500/30 transition-colors group">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-rose-500 to-rose-500/60 mb-4">
+          <LuShieldCheck className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.workflow.feature.typesafe.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.workflow.feature.typesafe.description")}
+        </p>
+      </div>
+    </div>
+
+    <!-- Workflow: how it works -->
+    <div class="rounded-2xl border border-border/40 bg-card/20 backdrop-blur p-8 mb-10">
+      <h3 class="text-xl font-bold mb-6">{t("dev.workflow.howitworks")}</h3>
+      <div class="grid sm:grid-cols-4 gap-6">
+        <div class="flex flex-col items-center text-center gap-3">
+          <div class="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center text-rose-600 dark:text-rose-400 font-bold text-lg border border-rose-500/20">1</div>
+          <p class="text-sm font-medium">{t("dev.workflow.step1.title")}</p>
+          <p class="text-xs text-muted-foreground">{t("dev.workflow.step1.description")}</p>
+        </div>
+        <div class="flex flex-col items-center text-center gap-3">
+          <div class="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center text-rose-600 dark:text-rose-400 font-bold text-lg border border-rose-500/20">2</div>
+          <p class="text-sm font-medium">{t("dev.workflow.step2.title")}</p>
+          <p class="text-xs text-muted-foreground">{t("dev.workflow.step2.description")}</p>
+        </div>
+        <div class="flex flex-col items-center text-center gap-3">
+          <div class="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center text-rose-600 dark:text-rose-400 font-bold text-lg border border-rose-500/20">3</div>
+          <p class="text-sm font-medium">{t("dev.workflow.step3.title")}</p>
+          <p class="text-xs text-muted-foreground">{t("dev.workflow.step3.description")}</p>
+        </div>
+        <div class="flex flex-col items-center text-center gap-3">
+          <div class="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center text-rose-600 dark:text-rose-400 font-bold text-lg border border-rose-500/20">4</div>
+          <p class="text-sm font-medium">{t("dev.workflow.step4.title")}</p>
+          <p class="text-xs text-muted-foreground">{t("dev.workflow.step4.description")}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div class="flex flex-wrap gap-4">
+      <a
+        href="https://docs.flow-like.com"
+        target="_blank"
+        class="inline-flex items-center gap-2 bg-rose-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-rose-600/90 transition-colors shadow-lg shadow-rose-600/20"
+      >
+        <LuBookOpen className="w-4 h-4" />
+        {t("dev.workflow.cta.docs")}
+        <LuArrowRight className="w-4 h-4" />
+      </a>
+      <a
+        href="/download"
+        class="inline-flex items-center gap-2 border border-border/60 bg-card/60 backdrop-blur px-6 py-3 rounded-xl font-medium hover:bg-card/80 transition-colors"
+      >
+        <LuRocket className="w-4 h-4" />
+        {t("dev.workflow.cta.download")}
+      </a>
+    </div>
+  </div>
+</section>

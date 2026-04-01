@@ -151,9 +151,7 @@ English (`en.ts`) is the base language. All translation keys should match the ke
 ## Testing Locally
 
 ```bash
-cd apps/website
-bun install
-bun dev
+mise run dev:website
 ```
 
 Then visit `http://localhost:4321/[lang]/` to preview your translations.

@@ -1,15 +1,5 @@
 "use client";
 import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
-} from "../ui/avatar";
-import { Button } from "../ui/button";
-import { ShareButton } from "../ui/share-button";
-import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
-import type { IAppVisibility } from "../../lib/schema/app/app";
-import { IAppVisibility as AppVis } from "../../lib/schema/app/app";
-import {
 	Download,
 	Heart,
 	KeyRound,
@@ -18,6 +8,13 @@ import {
 	ShoppingCart,
 	Star,
 } from "lucide-react";
+import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
+import { formatAppCategory } from "../../lib/app-category";
+import type { IAppVisibility } from "../../lib/schema/app/app";
+import { IAppVisibility as AppVis } from "../../lib/schema/app/app";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { Button } from "../ui/button";
+import { ShareButton } from "../ui/share-button";
 import { visibilityLabel } from "./visibility";
 
 export function StoreHero({
@@ -121,11 +118,9 @@ export function StoreHero({
 							)}
 						</div>
 						<div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground/60">
-							<span>{category}</span>
+							<span>{formatAppCategory(category)}</span>
 							<span className="select-none">·</span>
-							<span className="capitalize">
-								{visibilityLabel(visibility)}
-							</span>
+							<span className="capitalize">{visibilityLabel(visibility)}</span>
 							{authors?.length > 0 && (
 								<>
 									<span className="select-none">·</span>
@@ -164,8 +159,7 @@ export function StoreHero({
 									"Processing..."
 								) : (
 									<>
-										<ShoppingCart className="h-3.5 w-3.5 mr-1.5" />{" "}
-										{priceLabel}
+										<ShoppingCart className="h-3.5 w-3.5 mr-1.5" /> {priceLabel}
 									</>
 								)}
 							</Button>

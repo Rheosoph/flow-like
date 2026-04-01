@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     error::ApiError,
     mail::{EmailMessage, templates::solution_log_added},
     middleware::jwt::AppUser,
@@ -103,6 +104,14 @@ pub async fn add_solution_log(
         "Solution log added by admin"
     );
 
+    audit!(
+        state,
+        user,
+        "admin.solution.log",
+        "solution_log",
+        log_id,
+        format!("Solution log added: {}", body.action)
+    );
     Ok(Json(AddLogResponse {
         success: true,
         log_id,

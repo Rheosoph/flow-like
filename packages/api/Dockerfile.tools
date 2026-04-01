@@ -1,4 +1,4 @@
-FROM rust:1.90-bookworm as seaorm_builder
+FROM rust:1.91-bookworm as seaorm_builder
 RUN cargo install sea-orm-cli@1.1.16 --locked
 
 FROM oven/bun:latest

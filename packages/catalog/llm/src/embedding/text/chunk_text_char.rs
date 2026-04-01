@@ -105,25 +105,28 @@ impl NodeLogic for ChunkTextChar {
         let overlap: i64 = context.evaluate_pin("overlap").await?;
         let markdown: bool = context.evaluate_pin("markdown").await?;
 
-        let chunks = tokio::task::spawn_blocking(move || -> flow_like_types::Result<Vec<String>> {
-            if markdown {
-                let config = ChunkConfig::new(capacity as usize).with_overlap(overlap as usize)?;
-                let splitter = TextSplitter::new(config);
-                Ok(splitter
-                    .chunks(&text)
-                    .map(|c| c.to_string())
-                    .collect::<Vec<String>>())
-            } else {
-                let config = ChunkConfig::new(capacity as usize).with_overlap(overlap as usize)?;
-                let splitter = MarkdownSplitter::new(config);
-                Ok(splitter
-                    .chunks(&text)
-                    .map(|c| c.to_string())
-                    .collect::<Vec<String>>())
-            }
-        })
-        .await
-        .map_err(|e| anyhow!("Blocking task failed: {}", e))??;
+        let chunks =
+            tokio::task::spawn_blocking(move || -> flow_like_types::Result<Vec<String>> {
+                if markdown {
+                    let config =
+                        ChunkConfig::new(capacity as usize).with_overlap(overlap as usize)?;
+                    let splitter = TextSplitter::new(config);
+                    Ok(splitter
+                        .chunks(&text)
+                        .map(|c| c.to_string())
+                        .collect::<Vec<String>>())
+                } else {
+                    let config =
+                        ChunkConfig::new(capacity as usize).with_overlap(overlap as usize)?;
+                    let splitter = MarkdownSplitter::new(config);
+                    Ok(splitter
+                        .chunks(&text)
+                        .map(|c| c.to_string())
+                        .collect::<Vec<String>>())
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("Blocking task failed: {}", e))??;
 
         context.set_pin_value("chunks", json!(chunks)).await?;
         context.activate_exec_pin("exec_out").await?;

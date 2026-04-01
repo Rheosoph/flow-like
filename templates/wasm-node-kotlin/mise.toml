@@ -1,0 +1,19 @@
+[tools]
+java = "21"
+kotlin = "2.1"
+
+[tasks.setup]
+description = "Sync Gradle dependencies"
+run = "./gradlew dependencies"
+
+[tasks.build]
+description = "Build the WASM node"
+run = "./gradlew build"
+
+[tasks.test]
+description = "Run tests"
+run = "./gradlew wasmWasiNodeTest"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "./gradlew clean"

@@ -96,11 +96,6 @@ pub async fn get_profiles_raw(
         let settings_guard = settings.lock().await;
         settings_guard.profiles.clone()
     };
-    println!(
-        "[ProfileSync] get_profiles_raw: returning {} profiles: {:?}",
-        profiles.len(),
-        profiles.keys().collect::<Vec<_>>()
-    );
     Ok(profiles)
 }
 
@@ -291,10 +286,6 @@ pub async fn remap_profile_id(
     local_id: String,
     server_id: String,
 ) -> Result<(), TauriFunctionError> {
-    println!(
-        "[ProfileSync] remap_profile_id: {} -> {}",
-        local_id, server_id
-    );
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
 
@@ -516,10 +507,6 @@ pub async fn get_profile_icon_path(
     profile_id: String,
     field: String,
 ) -> Result<Option<String>, TauriFunctionError> {
-    println!(
-        "[ProfileSync] get_profile_icon_path: profile_id={}, field={}",
-        profile_id, field
-    );
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let settings = settings.lock().await;
 

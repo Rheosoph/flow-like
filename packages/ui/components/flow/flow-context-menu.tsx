@@ -5,8 +5,8 @@ import {
 	VariableIcon,
 	ZapIcon,
 } from "lucide-react";
+import MiniSearch from "minisearch";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMiniSearch } from "react-minisearch";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -15,6 +15,7 @@ import {
 } from "../../components/ui/context-menu";
 import { type IBoard, doPinsMatch } from "../../lib";
 import type { INode } from "../../lib/schema/flow/node";
+import { ILayerType } from "../../lib/schema/flow/board";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { IVariable } from "../../lib/schema/flow/variable";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -33,12 +34,18 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Separator } from "../ui/separator";
 import { FlowContextMenuNodes } from "./flow-context-menu-nodes";
 
+type SearchableNode = INode & {
+	pin_in_names: string[];
+	pin_out_names: string[];
+};
+
 export function FlowContextMenu({
 	nodes,
 	board,
 	refs,
 	children,
 	droppedPin,
+	currentLayerId,
 	onPlaceholder,
 	onNodePlace,
 	onCommentPlace,
@@ -50,6 +57,7 @@ export function FlowContextMenu({
 	refs: { [key: string]: string };
 	children: React.ReactNode;
 	droppedPin?: IPin;
+	currentLayerId?: string;
 	onPlaceholder: (name: string) => void;
 	onNodePlace: (node: INode) => void;
 	onCommentPlace: () => void;
@@ -130,6 +138,18 @@ export function FlowContextMenu({
 		setPlaceholderName("Placeholder");
 	};
 
+	const allVariables = useMemo(() => {
+		if (!board) return [];
+		const vars = Object.values(board.variables);
+		if (currentLayerId) {
+			const layer = board.layers[currentLayerId];
+			if (layer?.type === ILayerType.Function) {
+				vars.push(...Object.values(layer.variables));
+			}
+		}
+		return vars;
+	}, [board, currentLayerId]);
+
 	const handleNodePlace = useCallback(
 		async (node: INode) => {
 			await onNodePlace(node);
@@ -143,6 +163,7 @@ export function FlowContextMenu({
 		let callRefNode: INode | undefined = undefined;
 		let variableGetNode: INode | undefined = undefined;
 		let variableSetNode: INode | undefined = undefined;
+		let callFunctionNode: INode | undefined = undefined;
 
 		const normalNodes =
 			nodes
@@ -161,6 +182,10 @@ export function FlowContextMenu({
 
 					if (a.name === "variable_set") {
 						variableSetNode = a;
+					}
+
+					if (a.name === "control_call_function") {
+						callFunctionNode = a;
 					}
 
 					if (a.friendly_name === b.friendly_name) {
@@ -195,7 +220,7 @@ export function FlowContextMenu({
 		}
 
 		if (board && variableGetNode && variableSetNode) {
-			Object.values(board.variables).forEach((variable) => {
+			allVariables.forEach((variable) => {
 				const getPins = Object.values(variableGetNode?.pins ?? {}).map(
 					(pin) => {
 						if (pin.name === "var_ref") {
@@ -243,7 +268,7 @@ export function FlowContextMenu({
 
 				normalNodes.push({
 					...(variableGetNode as INode),
-					id: variable.id,
+					id: `get${variable.id}`,
 					pin_in_names: Object.values(newGetPins)
 						.filter((pin) => pin.pin_type === "Input")
 						.map((pin) => pin.friendly_name),
@@ -257,7 +282,7 @@ export function FlowContextMenu({
 
 				normalNodes.push({
 					...(variableSetNode as INode),
-					id: variable.id,
+					id: `set${variable.id}`,
 					pin_in_names: Object.values(newSetPins)
 						.filter((pin) => pin.pin_type === "Input")
 						.map((pin) => pin.friendly_name),
@@ -271,10 +296,53 @@ export function FlowContextMenu({
 			});
 		}
 
-		return normalNodes;
-	}, [nodes, board]);
-	const { search, searchResults, addAllAsync, removeAll } =
-		useMiniSearch<INode>([], {
+		if (board && callFunctionNode) {
+			Object.values(board.layers).forEach((layer) => {
+				if (layer.type !== ILayerType.Function) return;
+				const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
+					pin.name === "function_layer_id"
+						? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
+						: pin,
+				);
+				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+
+				normalNodes.push({
+					...(callFunctionNode as INode),
+					id: `fn-call-${layer.id}`,
+					pin_in_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Input")
+						.map((pin) => pin.friendly_name),
+					pin_out_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Output")
+						.map((pin) => pin.friendly_name),
+					friendly_name: `Call ${layer.name}`,
+					category: "Functions/Call",
+					pins: newPins,
+				});
+			});
+		}
+
+			return normalNodes;
+	}, [nodes, board, allVariables]);
+
+	const searchableNodes = useMemo(() => {
+		const dedupedNodes = new Map<string, SearchableNode>();
+		for (const node of sortedNodes) {
+			dedupedNodes.set(node.id, {
+				...(node as SearchableNode),
+				pin_in_names: Object.values(node.pins)
+					.filter((pin) => pin.pin_type === "Input")
+					.map((pin) => pin.friendly_name),
+				pin_out_names: Object.values(node.pins)
+					.filter((pin) => pin.pin_type === "Output")
+					.map((pin) => pin.friendly_name),
+			});
+		}
+		return Array.from(dedupedNodes.values());
+	}, [sortedNodes]);
+
+	const searchIndex = useMemo(() => {
+		const miniSearch = new MiniSearch<SearchableNode>({
 			fields: [
 				"name",
 				"friendly_name",
@@ -298,144 +366,56 @@ export function FlowContextMenu({
 			},
 		});
 
+		if (searchableNodes.length > 0) {
+			miniSearch.addAll(searchableNodes);
+		}
+
+		const nodeMap = new Map<string, INode>(
+			searchableNodes.map((node) => [node.id, node]),
+		);
+		return { miniSearch, nodeMap };
+	}, [searchableNodes]);
+
+	const searchResults = useMemo(() => {
+		if (filter === "") {
+			return [] as INode[];
+		}
+
+		return searchIndex.miniSearch
+			.search(filter, {
+				prefix: true,
+				fuzzy: true,
+			})
+			.map((result) => searchIndex.nodeMap.get(String(result.id)))
+			.filter((node): node is INode => node !== undefined);
+	}, [filter, searchIndex]);
+
+	const displayedItems = useMemo(() => {
+		const baseItems = filter === "" ? sortedNodes : (searchResults ?? []);
+
+		if (!droppedPin || !contextSensitive) {
+			return baseItems;
+		}
+
+		return baseItems.filter((node) => {
+			const isRefInHandle = droppedPin.id.startsWith("ref_in_");
+			const isRefOutHandle = droppedPin.id.startsWith("ref_out_");
+
+			if (isRefInHandle) return node.fn_refs?.can_reference_fns ?? false;
+			if (isRefOutHandle) return node.fn_refs?.can_be_referenced_by_fns ?? false;
+
+			const pins = Object.values(node.pins);
+			return pins.some((pin) => {
+				if (pin.pin_type === droppedPin.pin_type) return false;
+				return doPinsMatch(pin, droppedPin, refs, node);
+			});
+		});
+	}, [filter, sortedNodes, searchResults, droppedPin, contextSensitive, refs]);
+
 	useEffect(() => {
 		inputRef.current?.focus();
 	}, [filter]);
 
-	useEffect(() => {
-		removeAll();
-		(async () => {
-			if (!nodes) return;
-			const dedupedNodes = new Map<string, INode>();
-			let callRefNode: INode | undefined = undefined;
-			let variableGetNode: INode | undefined = undefined;
-			let variableSetNode: INode | undefined = undefined;
-
-			nodes.forEach((node) => {
-				if (node.name === "control_call_reference") {
-					callRefNode = node;
-				}
-				if (node.name === "variable_get") {
-					variableGetNode = node;
-				}
-				if (node.name === "variable_set") {
-					variableSetNode = node;
-				}
-				dedupedNodes.set(node.name, {
-					...node,
-					pin_in_names: Object.values(node.pins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(node.pins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-				});
-			});
-
-			if (board && callRefNode) {
-				Object.values(board.nodes).forEach((node) => {
-					if (!node.start) return;
-					const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
-						pin.name === "fn_ref"
-							? { ...pin, default_value: convertJsonToUint8Array(node.id) }
-							: pin,
-					);
-					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
-
-					dedupedNodes.set(node.id, {
-						...(callRefNode as INode),
-						id: node.id,
-						pin_in_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Input")
-							.map((pin) => pin.friendly_name),
-						pin_out_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Output")
-							.map((pin) => pin.friendly_name),
-						friendly_name: `Call ${node.friendly_name}`,
-						category: "Events/Call",
-						pins: newPins,
-					});
-				});
-			}
-
-			if (board && variableGetNode && variableSetNode) {
-				Object.values(board.variables).forEach((variable) => {
-					const getPins = Object.values(variableGetNode?.pins ?? {}).map(
-						(pin) => {
-							if (pin.name === "var_ref") {
-								return {
-									...pin,
-									default_value: convertJsonToUint8Array(variable.id),
-								};
-							}
-							if (pin.name === "value_ref") {
-								return {
-									...pin,
-									data_type: variable.data_type,
-									value_type: variable.value_type,
-									schema: variable.schema ?? null,
-								};
-							}
-							return pin;
-						},
-					);
-					const setPins = Object.values(variableSetNode?.pins ?? {}).map(
-						(pin) => {
-							if (pin.name === "var_ref") {
-								return {
-									...pin,
-									default_value: convertJsonToUint8Array(variable.id),
-								};
-							}
-							if (pin.name === "value_in" || pin.name === "value_ref") {
-								return {
-									...pin,
-									data_type: variable.data_type,
-									value_type: variable.value_type,
-									schema: variable.schema ?? null,
-								};
-							}
-							return pin;
-						},
-					);
-					const newGetPins = Object.fromEntries(
-						getPins.map((pin) => [pin.id, pin]),
-					);
-					const newSetPins = Object.fromEntries(
-						setPins.map((pin) => [pin.id, pin]),
-					);
-					dedupedNodes.set(variable.id, {
-						...(variableGetNode as INode),
-						id: "get" + variable.id,
-						pin_in_names: Object.values(newGetPins)
-							.filter((pin) => pin.pin_type === "Input")
-							.map((pin) => pin.friendly_name),
-						pin_out_names: Object.values(newGetPins)
-							.filter((pin) => pin.pin_type === "Output")
-							.map((pin) => pin.friendly_name),
-						friendly_name: `Get ${variable.name}`,
-						category: "Variables/Get",
-						pins: newGetPins,
-					});
-					dedupedNodes.set("set" + variable.id, {
-						...(variableSetNode as INode),
-						id: variable.id,
-						pin_in_names: Object.values(newSetPins)
-							.filter((pin) => pin.pin_type === "Input")
-							.map((pin) => pin.friendly_name),
-						pin_out_names: Object.values(newSetPins)
-							.filter((pin) => pin.pin_type === "Output")
-							.map((pin) => pin.friendly_name),
-						friendly_name: `Set ${variable.name}`,
-						category: "Variables/Set",
-						pins: newSetPins,
-					});
-				});
-			}
-
-			await addAllAsync(Array.from(dedupedNodes.values()));
-		})();
-	}, [sortedNodes, board]);
 
 	return (
 		<>
@@ -572,16 +552,15 @@ export function FlowContextMenu({
 							value={filter}
 							onChange={(e) => {
 								setFilter(e.target.value);
-								search(e.target.value);
 							}}
 							onKeyDown={(e) => {
 								e.stopPropagation();
 							}}
 						/>
 					</div>
-					<div className="pr-1 flex flex-grow flex-col overflow-hidden">
+					<div className="pr-1 flex grow flex-col overflow-hidden">
 						<ScrollArea
-							className="h-full w-[calc(20rem-0.5rem)] max-h-full overflow-auto border rounded-md"
+							className="h-full w-78 max-h-full overflow-auto border rounded-md"
 							onFocusCapture={() => {
 								if (inputRef.current && filter !== "") {
 									inputRef.current.focus();
@@ -590,46 +569,7 @@ export function FlowContextMenu({
 						>
 							{nodes && (
 								<FlowContextMenuNodes
-									items={
-										droppedPin && contextSensitive
-											? [
-													...(filter === ""
-														? sortedNodes
-														: (searchResults ?? [])
-													).filter((node) => {
-														// Check if the dropped pin is a function reference handle
-														const isRefInHandle =
-															droppedPin.id.startsWith("ref_in_");
-														const isRefOutHandle =
-															droppedPin.id.startsWith("ref_out_");
-
-														if (isRefInHandle) {
-															// For ref_in, only show nodes with can_reference_fns
-															return node.fn_refs?.can_reference_fns ?? false;
-														}
-
-														if (isRefOutHandle) {
-															// For ref_out, only show nodes with can_be_referenced_by_fns
-															return (
-																node.fn_refs?.can_be_referenced_by_fns ?? false
-															);
-														}
-
-														// Regular pin matching logic
-														const pins = Object.values(node.pins);
-														return pins.some((pin) => {
-															if (pin.pin_type === droppedPin.pin_type)
-																return false;
-															return doPinsMatch(pin, droppedPin, refs, node);
-														});
-													}),
-												]
-											: [
-													...(filter === ""
-														? sortedNodes
-														: (searchResults ?? [])),
-												]
-									}
+									items={displayedItems}
 									filter={filter}
 									onNodePlace={handleNodePlace}
 									menuBlockedRef={menuBlockedRef}

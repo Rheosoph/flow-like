@@ -119,10 +119,9 @@ impl NodeLogic for SampleDatasetNode {
         let source = source.load(context).await?;
         let target = target.load(context).await?;
 
-        let source_db = source.db.read().await.clone();
-        let mut target_db = target.db.read().await.clone();
-
-        let source_table = source_db.raw().await?;
+        source.ensure_flushed().await?;
+        let source_guard = source.db.read().await;
+        let source_table = source_guard.inner().raw().await?;
         let query = source_table.query();
         let mut item_stream = query.execute().await?;
 
@@ -154,7 +153,7 @@ impl NodeLogic for SampleDatasetNode {
 
         // Insert sampled items
         if !sampled_items.is_empty() {
-            target_db.insert(sampled_items).await?;
+            target.db.write().await.insert(sampled_items).await?;
         }
 
         context

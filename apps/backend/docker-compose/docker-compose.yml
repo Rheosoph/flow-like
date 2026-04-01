@@ -138,6 +138,10 @@ services:
       EXECUTOR_URL: http://runtime:9000
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
+      COMPILATION_BACKEND: ${COMPILATION_BACKEND:-inline}
+      COMPILER_URL: http://compiler:8081
+      API_BASE_URL: http://api:${API_PORT:-8080}
+      WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
 
       # Unified backend JWT keys (used for execution, realtime, etc.)
       BACKEND_KEY: ${BACKEND_KEY:-}
@@ -217,6 +221,51 @@ services:
           memory: 2G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowlike
+
+  # =============================================================================
+  # WASM Compiler Service
+  # =============================================================================
+  compiler:
+    build:
+      context: ../../..
+      dockerfile: apps/backend/docker-compose/compiler/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${COMPILER_PORT:-8081}:8081"
+      - "${COMPILER_METRICS_PORT:-9091}:9091"
+    environment:
+      PORT: 8081
+      METRICS_PORT: 9091
+      RUST_LOG: ${RUST_LOG:-info,k8s_compiler=debug}
+      API_URL: http://api:${API_PORT:-8080}
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      COMPILER_TIMEOUT_SECS: ${COMPILER_TIMEOUT_SECS:-600}
+      COMPILER_CALLBACK_TIMEOUT_MS: ${COMPILER_CALLBACK_TIMEOUT_MS:-10000}
+      COMPILER_CALLBACK_RETRIES: ${COMPILER_CALLBACK_RETRIES:-3}
+      COMPILER_MAX_PARALLEL_TARGETS: ${COMPILER_MAX_PARALLEL_TARGETS:-}
+      OTEL_SERVICE_NAME: flow-like-compiler
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 10s
       timeout: 5s
       retries: 5

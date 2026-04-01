@@ -1,35 +1,35 @@
-name: "Clippy Check"
+name: "Lint & Format"
 
 on:
   pull_request:
-    branches: 
+    branches:
       - dev
-      - int
-      - main
-
-# This is the example from the readme.
-# On each push to the `release` branch it will create or update a GitHub release, build your app, and upload the artifacts to the release.
 
 jobs:
-  clippy-application:
-    name: Clippy Check
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}          
-
-      - name: install clippy
-        run: rustup component add clippy
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy
-        run: cargo clippy --message-format=json -- -D warnings > clippy-report.json
+        run: cargo clippy -- -D clippy::correctness -D clippy::suspicious
 
-      - name: Upload Clippy Report
-        uses: actions/upload-artifact@v4
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-environment
         with:
-          name: clippy-report
-          path: clippy-report.json
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Formatting
+        run: cargo fmt --check

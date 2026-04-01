@@ -10,26 +10,35 @@ import {
 	CardTitle,
 	Input,
 	Skeleton,
+	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
-import type {
-	InstalledPackage,
-	PackageUpdate,
+import {
+	type InstalledPackage,
+	PackageStatus,
+	type PackageSummary,
+	type PackageUpdate,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import { motion } from "framer-motion";
 import {
 	AlertTriangle,
 	Check,
+	Download,
+	Eye,
+	EyeOff,
 	FolderOpen,
 	Loader2,
 	Package,
 	RefreshCw,
 	Search,
+	Shield,
 	Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { fetcher } from "../../../../lib/api";
 
 function InstalledPackageCard({
 	pkg,
@@ -37,6 +46,7 @@ function InstalledPackageCard({
 	latestVersion,
 	onUninstall,
 	onUpdate,
+	onSelect,
 	isLoading,
 }: {
 	pkg: InstalledPackage;
@@ -44,6 +54,7 @@ function InstalledPackageCard({
 	latestVersion?: string;
 	onUninstall: (id: string) => void;
 	onUpdate: (id: string) => void;
+	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
 	return (
@@ -51,6 +62,8 @@ function InstalledPackageCard({
 			initial={{ opacity: 0, y: 10 }}
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.2 }}
+			className="cursor-pointer"
+			onClick={() => onSelect?.(pkg.id)}
 		>
 			<Card className="hover:shadow-md transition-shadow">
 				<CardHeader className="pb-2">
@@ -92,7 +105,10 @@ function InstalledPackageCard({
 								<Button
 									size="sm"
 									variant="secondary"
-									onClick={() => onUpdate(pkg.id)}
+									onClick={(e) => {
+										e.stopPropagation();
+										onUpdate(pkg.id);
+									}}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -166,7 +182,10 @@ function LocalPackageCard({
 						<Button
 							size="sm"
 							variant="destructive"
-							onClick={() => onRemove(pkg.id)}
+							onClick={(e) => {
+								e.stopPropagation();
+								onRemove(pkg.id);
+							}}
 							disabled={isLoading}
 						>
 							{isLoading ? (
@@ -209,14 +228,20 @@ function PackageCardSkeleton() {
 
 export default function InstalledPackagesPage() {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
+	const [showDisabled, setShowDisabled] = useState(false);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+		null,
+	);
 
 	const [installedPackages, setInstalledPackages] = useState<
 		InstalledPackage[]
 	>([]);
 	const [localPackages, setLocalPackages] = useState<InstalledPackage[]>([]);
+	const [ownedPackages, setOwnedPackages] = useState<PackageSummary[]>([]);
 	const [updates, setUpdates] = useState<PackageUpdate[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [loadingPackage, setLoadingPackage] = useState<string | null>(null);
@@ -242,21 +267,29 @@ export default function InstalledPackagesPage() {
 		if (!backend?.registryState || !isInitialized) return;
 		setIsLoading(true);
 		try {
-			const [packages, updateList] = await Promise.all([
+			const [packages, updateList, ownedResults] = await Promise.all([
 				backend.registryState.getInstalledPackages(),
 				backend.registryState.checkForUpdates(),
+				backend.registryState.getOwnedPackages({
+					includeDisabled: showDisabled,
+				}),
 			]);
 			const registry = packages.filter((p) => !p.id.startsWith("local."));
 			const local = packages.filter((p) => p.id.startsWith("local."));
 			setInstalledPackages(registry);
 			setLocalPackages(local);
 			setUpdates(updateList);
+
+			const installedIds = new Set(packages.map((p) => p.id));
+			setOwnedPackages(
+				ownedResults.packages.filter((p) => !installedIds.has(p.id)),
+			);
 		} catch (err) {
 			console.error("Failed to fetch installed packages:", err);
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized]);
+	}, [backend?.registryState, isInitialized, showDisabled]);
 
 	useEffect(() => {
 		if (isInitialized) {
@@ -294,6 +327,21 @@ export default function InstalledPackagesPage() {
 		}
 	};
 
+	const handleInstall = async (packageId: string) => {
+		if (!backend?.registryState) return;
+		setLoadingPackage(packageId);
+		try {
+			await backend.registryState.installPackage(packageId);
+			toast.success("Package installed");
+			await fetchInstalled();
+		} catch (err) {
+			console.error("Failed to install package:", err);
+			toast.error(`Failed to install: ${err}`);
+		} finally {
+			setLoadingPackage(null);
+		}
+	};
+
 	const updateMap = new Map(updates.map((u) => [u.packageId, u.latestVersion]));
 
 	const filteredPackages = installedPackages.filter((pkg) => {
@@ -314,6 +362,15 @@ export default function InstalledPackagesPage() {
 		);
 	});
 
+	const filteredOwnedPackages = ownedPackages.filter((pkg) => {
+		if (!searchQuery) return true;
+		const query = searchQuery.toLowerCase();
+		return (
+			pkg.name.toLowerCase().includes(query) ||
+			pkg.description.toLowerCase().includes(query)
+		);
+	});
+
 	if (isInitializing) {
 		return (
 			<div className="flex items-center justify-center h-full">
@@ -322,6 +379,35 @@ export default function InstalledPackagesPage() {
 					<p className="text-muted-foreground">Initializing registry...</p>
 				</div>
 			</div>
+		);
+	}
+
+	if (selectedPackageId) {
+		return (
+			<StorePackageDetail
+				packageId={selectedPackageId}
+				onBack={() => setSelectedPackageId(null)}
+				onInstallSuccess={() => {
+					toast.success("Package installed");
+					fetchInstalled();
+				}}
+				onUninstallSuccess={() => {
+					toast.success("Package uninstalled");
+					fetchInstalled();
+				}}
+				onInstallError={(error) =>
+					toast.error(`Failed to install: ${error.message}`)
+				}
+				onUninstallError={(error) =>
+					toast.error(`Failed to uninstall: ${error.message}`)
+				}
+				onDeleteSuccess={() => {
+					setSelectedPackageId(null);
+					fetchInstalled();
+				}}
+				fetcher={fetcher}
+				auth={auth}
+			/>
 		);
 	}
 
@@ -349,14 +435,29 @@ export default function InstalledPackagesPage() {
 				</div>
 			</div>
 
-			<div className="relative max-w-sm">
-				<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-				<Input
-					placeholder="Search installed packages..."
-					value={searchQuery}
-					onChange={(e) => setSearchQuery(e.target.value)}
-					className="pl-9"
-				/>
+			<div className="flex items-center gap-2">
+				<div className="relative max-w-sm flex-1">
+					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+					<Input
+						placeholder="Search installed packages..."
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						className="pl-9"
+					/>
+				</div>
+				<Button
+					variant={showDisabled ? "secondary" : "outline"}
+					size="sm"
+					onClick={() => setShowDisabled((v) => !v)}
+					className="gap-1.5 shrink-0"
+				>
+					{showDisabled ? (
+						<Eye className="h-4 w-4" />
+					) : (
+						<EyeOff className="h-4 w-4" />
+					)}
+					Disabled
+				</Button>
 			</div>
 
 			{updates.length > 0 && (
@@ -388,7 +489,6 @@ export default function InstalledPackagesPage() {
 						</div>
 					</div>
 				)}
-
 				{/* Registry Packages Section */}
 				<div className="space-y-3">
 					{localPackages.length > 0 && (
@@ -413,6 +513,7 @@ export default function InstalledPackagesPage() {
 									latestVersion={updateMap.get(pkg.id)}
 									onUninstall={handleUninstall}
 									onUpdate={handleUpdate}
+									onSelect={setSelectedPackageId}
 									isLoading={loadingPackage === pkg.id}
 								/>
 							))}
@@ -432,6 +533,90 @@ export default function InstalledPackagesPage() {
 						</div>
 					) : null}
 				</div>
+				{/* Owned but not installed */}
+				{filteredOwnedPackages.length > 0 && (
+					<div className="space-y-3">
+						<h2 className="text-lg font-semibold flex items-center gap-2">
+							<Shield className="h-5 w-5" />
+							Not Installed
+						</h2>
+						<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+							{filteredOwnedPackages.map((pkg) => (
+								<motion.div
+									key={pkg.id}
+									initial={{ opacity: 0, y: 10 }}
+									animate={{ opacity: 1, y: 0 }}
+									transition={{ duration: 0.2 }}
+									className="cursor-pointer"
+									onClick={() => setSelectedPackageId(pkg.id)}
+								>
+									<Card
+										className={`hover:shadow-md transition-shadow ${pkg.status === PackageStatus.Disabled ? "opacity-60" : ""}`}
+									>
+										<CardHeader className="pb-2">
+											<div className="flex items-start justify-between gap-2">
+												<div className="flex items-center gap-2 min-w-0">
+													<Package className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
+													<CardTitle className="text-base truncate">
+														{pkg.name}
+													</CardTitle>
+												</div>
+												<div className="flex items-center gap-1 flex-shrink-0">
+													<Badge variant="outline">v{pkg.latestVersion}</Badge>
+													{pkg.status === PackageStatus.Disabled && (
+														<Badge variant="destructive">Disabled</Badge>
+													)}
+													{pkg.visibility && pkg.visibility !== "public" && (
+														<Badge variant="secondary">{pkg.visibility}</Badge>
+													)}
+												</div>
+											</div>
+											<CardDescription className="line-clamp-2">
+												{pkg.description}
+											</CardDescription>
+										</CardHeader>
+										<CardContent>
+											<div className="flex flex-wrap gap-1 mb-3">
+												{pkg.keywords.slice(0, 3).map((keyword) => (
+													<Badge
+														key={keyword}
+														variant="outline"
+														className="text-xs"
+													>
+														{keyword}
+													</Badge>
+												))}
+											</div>
+											<div className="flex items-center justify-between">
+												<span className="text-xs text-muted-foreground">
+													{pkg.downloadCount.toLocaleString()} downloads
+												</span>
+												<Button
+													size="sm"
+													variant="secondary"
+													onClick={(e) => {
+														e.stopPropagation();
+														handleInstall(pkg.id);
+													}}
+													disabled={loadingPackage === pkg.id}
+												>
+													{loadingPackage === pkg.id ? (
+														<Loader2 className="h-4 w-4 animate-spin" />
+													) : (
+														<>
+															<Download className="h-4 w-4 mr-1" />
+															Install
+														</>
+													)}
+												</Button>
+											</div>
+										</CardContent>
+									</Card>
+								</motion.div>
+							))}
+						</div>
+					</div>
+				)}{" "}
 			</div>
 		</div>
 	);

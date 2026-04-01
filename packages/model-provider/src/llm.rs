@@ -32,9 +32,11 @@ pub mod groq;
 pub mod huggingface;
 pub mod hyperbolic;
 pub mod llamacpp;
+pub mod lmstudio;
 pub mod mira;
 pub mod mistral;
 pub mod moonshot;
+pub mod mozilla;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
@@ -116,6 +118,10 @@ pub trait ModelLogic: Send + Sync {
 
     #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
+        let mut history = history.clone();
+        self.transform_history(&mut history);
+        history.normalize_for_alternation();
+
         let model_name = self
             .default_model()
             .await
@@ -125,12 +131,21 @@ pub trait ModelLogic: Send + Sync {
         let completion_model = constructor.inner.completion_model(&model_name);
         let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
 
+        // Extract and remove system prompt so it becomes preamble instead of
+        // being converted to a User message (which would break role alternation
+        // for models that require strict user/assistant/user/assistant ordering).
+        let system_prompt = history.take_system_prompt();
+
         let (prompt, chat_history) = history
             .extract_prompt_and_history()
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
 
         let mut builder =
             CompletionModel::completion_request(&completion_handle, prompt).messages(chat_history);
+
+        if let Some(preamble) = system_prompt {
+            builder = builder.preamble(preamble);
+        }
 
         if let Some(temp) = history.temperature {
             builder = builder.temperature(temp as f64);
@@ -190,42 +205,35 @@ impl ModelConstructor {
 
     /// Create a DynamicCompletionModel for the given model name.
     /// This properly returns a type that implements `CompletionModel + Send + Sync + 'static`.
-    pub fn dynamic_model(&self, model_name: &str) -> DynamicCompletionModel {
-        let model = self.inner.completion_model(model_name);
-        // The underlying concrete types implement Send + Sync + 'static
-        // We need to express this in the type system
-        // Since CompletionModelDyn requires WasmCompatSend + WasmCompatSync (which are Send + Sync on non-wasm),
-        // and all concrete models are 'static, this transmute is safe
-        let model: Box<dyn CompletionModelDyn + Send + Sync + 'static> = unsafe {
-            std::mem::transmute::<
-                Box<dyn CompletionModelDyn + '_>,
-                Box<dyn CompletionModelDyn + Send + Sync + 'static>,
-            >(model)
-        };
-        DynamicCompletionModel::from_boxed(model)
+    pub fn dynamic_model(self, model_name: &str) -> DynamicCompletionModel {
+        DynamicCompletionModel::new(self.inner, model_name.to_string())
     }
 }
 
-/// A wrapper around `CompletionModelDyn` that properly implements `CompletionModel`.
+/// A wrapper around a `CompletionClientDyn` + model name that properly implements `CompletionModel`.
 /// This allows using dynamic completion models with libraries that require the concrete trait.
+/// The model is created lazily on each request to avoid lifetime issues.
 #[derive(Clone)]
 #[allow(deprecated)]
 pub struct DynamicCompletionModel {
-    inner: Arc<dyn CompletionModelDyn + Send + Sync + 'static>,
+    client: Arc<dyn CompletionClientDyn + Send + Sync>,
+    model_name: String,
 }
 
 #[allow(deprecated)]
 impl DynamicCompletionModel {
-    pub fn new(model: Arc<dyn CompletionModelDyn + Send + Sync + 'static>) -> Self {
-        Self { inner: model }
+    pub fn new(client: Box<dyn CompletionClientDyn + Send + Sync>, model_name: String) -> Self {
+        Self {
+            client: Arc::from(client),
+            model_name,
+        }
     }
 
-    /// Create from a boxed CompletionModelDyn.
-    /// The model must be Send + Sync + 'static.
-    pub fn from_boxed(model: Box<dyn CompletionModelDyn + Send + Sync + 'static>) -> Self {
-        Self {
-            inner: Arc::from(model),
-        }
+    pub fn from_arc(
+        client: Arc<dyn CompletionClientDyn + Send + Sync>,
+        model_name: String,
+    ) -> Self {
+        Self { client, model_name }
     }
 }
 
@@ -251,9 +259,9 @@ impl CompletionModel for DynamicCompletionModel {
     ) -> impl std::future::Future<
         Output = Result<CompletionResponse<Self::Response>, CompletionError>,
     > + Send {
-        let inner = self.inner.clone();
+        let model = self.client.completion_model(&self.model_name);
         async move {
-            let response = inner.completion(request).await?;
+            let response = model.completion(request).await?;
             Ok(CompletionResponse {
                 choice: response.choice,
                 usage: response.usage,
@@ -268,8 +276,8 @@ impl CompletionModel for DynamicCompletionModel {
     ) -> impl std::future::Future<
         Output = Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>,
     > + Send {
-        let inner = self.inner.clone();
-        async move { inner.stream(request).await }
+        let model = self.client.completion_model(&self.model_name);
+        async move { model.stream(request).await }
     }
 }
 

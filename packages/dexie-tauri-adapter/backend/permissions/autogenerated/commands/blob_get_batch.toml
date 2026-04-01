@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-blob-get-batch"
+description = "Enables the blob_get_batch command without any pre-configured scope."
+commands.allow = ["blob_get_batch"]
+
+[[permission]]
+identifier = "deny-blob-get-batch"
+description = "Denies the blob_get_batch command without any pre-configured scope."
+commands.deny = ["blob_get_batch"]

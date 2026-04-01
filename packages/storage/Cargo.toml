@@ -17,7 +17,7 @@ arrow-array = "57.2"
 arrow-schema = {version="57.2", features = ["serde"] }
 arrow = "57.2"
 serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
-blake3 = {version = "1.8.1", features = ["rayon"]}
+blake3 = {workspace=true, features = ["rayon"]}
 futures.workspace = true
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }

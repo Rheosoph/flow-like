@@ -1,0 +1,9 @@
+---
+import IndustryPage from "../../../components/industries/IndustryPage.astro";
+import { tShopfloor } from "../../../i18n/locales/pages/industry-shopfloor";
+
+const lang = "sv";
+const t = (key: string) => tShopfloor(lang, key);
+---
+
+<IndustryPage lang={lang} t={t} accent="orange" accentHex="#ea580c" slug="shopfloor" />

@@ -46,7 +46,7 @@ export const esCompare = {
 	"compare.cap.data_science": "Workflows de data-science",
 	"compare.cap.governance": "Gobernanza & RBAC",
 	"compare.cap.self_hosted": "Opción self-hosted",
-	"compare.cap.lock_in": "Riesgo de dependencia del proveedor",
+	"compare.cap.lock_in": "Sin dependencia del proveedor",
 
 	// Flow-Like Values
 	"compare.fl.visual_workflow": "IR tipado",
@@ -153,7 +153,7 @@ export const esCompare = {
 	"compare.explain.self_hosted.flow":
 		"Despliega Flow-Like on-prem, en tu nube privada o totalmente aislado. Sin dependencias externas.",
 
-	"compare.explain.lock_in.title": "Riesgo de Dependencia del Proveedor",
+	"compare.explain.lock_in.title": "Sin Dependencia del Proveedor",
 	"compare.explain.lock_in.what":
 		"¿Qué tan difícil es cambiar si es necesario?",
 	"compare.explain.lock_in.flow":
@@ -193,4 +193,7 @@ export const esCompare = {
 		"Estándar de la industria para orquestación de workflows. Potente para pipelines de datos, pero requiere experiencia en Python y sin desarrollo de UI.",
 	"compare.competitor.temporal":
 		"Plataforma de ejecución durable. Excelente para workflows complejos, pero orientada a desarrolladores con curva de aprendizaje pronunciada.",
+
+	// Capability Deep Dive
+	"compare.explain.how_does_it": "Cómo lo hace Flow-Like",
 };

@@ -7,6 +7,17 @@ import { cn } from "../../lib";
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const;
 
+/** Sanitizes a CSS identifier (chart id or config key) to prevent selector injection. */
+function sanitizeCssIdentifier(value: string): string {
+	return value.replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+/** Sanitizes a CSS color value to prevent style tag injection. */
+function sanitizeCssColorValue(value: string): string {
+	// Remove characters that can break out of CSS context or close a <style> tag
+	return value.replace(/[<>"']/g, "");
+}
+
 export type ChartConfig = {
 	[k in string]: {
 		label?: React.ReactNode;
@@ -83,13 +94,14 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 				__html: Object.entries(THEMES)
 					.map(
 						([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart=${sanitizeCssIdentifier(id)}] {
 ${colorConfig
 	.map(([key, itemConfig]) => {
-		const color =
+		const rawColor =
 			itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
 			itemConfig.color;
-		return color ? `  --color-${key}: ${color};` : null;
+		const color = rawColor ? sanitizeCssColorValue(rawColor) : null;
+		return color ? `  --color-${sanitizeCssIdentifier(key)}: ${color};` : null;
 	})
 	.join("\n")}
 }

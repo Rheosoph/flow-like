@@ -32,6 +32,7 @@ import {
 } from "@tm9657/flow-like-ui";
 import type { ICommandSync } from "@tm9657/flow-like-ui/lib";
 import type { IAIState } from "@tm9657/flow-like-ui/state/backend-state/ai-state";
+import type { IAnalyticsState } from "@tm9657/flow-like-ui/state/backend-state/analytics-state";
 import { useEffect } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -59,6 +60,7 @@ import {
 } from "@/lib/web-states";
 import type { WebBackendRef } from "@/lib/web-states/api-utils";
 import { WebSalesState } from "@/lib/web-states/sales-state";
+import { WebAnalyticsState } from "@/lib/web-states/analytics-state";
 
 export class WebBackend implements IBackendState {
 	appState: IAppState;
@@ -82,6 +84,7 @@ export class WebBackend implements IBackendState {
 	sinkState: ISinkState;
 	salesState: ISalesState;
 	usageState: IUsageState;
+	analyticsState: IAnalyticsState;
 
 	private backendRef: WebBackendRef;
 
@@ -114,6 +117,7 @@ export class WebBackend implements IBackendState {
 		this.sinkState = new WebSinkState(this.backendRef);
 		this.salesState = new WebSalesState(this.backendRef);
 		this.usageState = new WebUsageState(this.backendRef);
+		this.analyticsState = new WebAnalyticsState(this.backendRef);
 	}
 
 	capabilities(): ICapabilities {

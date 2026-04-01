@@ -1,0 +1,22 @@
+[tools]
+node = "22"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "npm install"
+
+[tasks.build]
+description = "Build the WASM node"
+run = "npm run build"
+
+[tasks.build-examples]
+description = "Build example nodes"
+run = "npm run build:examples"
+
+[tasks.test]
+description = "Run tests"
+run = "npm test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf build/ node_modules/"

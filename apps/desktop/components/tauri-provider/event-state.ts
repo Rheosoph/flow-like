@@ -7,6 +7,7 @@ import {
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
+	type INode,
 	type IOAuthProvider,
 	type IOAuthToken,
 	type IPrerunEventResponse,
@@ -61,11 +62,36 @@ export class EventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<IEvent> {
-		const event = await invoke<IEvent>("get_event", {
-			appId: appId,
-			eventId: eventId,
-			version: version,
-		});
+		let event: IEvent;
+		try {
+			event = await invoke<IEvent>("get_event", {
+				appId: appId,
+				eventId: eventId,
+				version: version,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Event not found: ${eventId}`);
+			}
+			let url = `apps/${appId}/events/${eventId}`;
+			if (version) {
+				url += `?version=${version.join("_")}`;
+			}
+			const remoteData = await fetcher<IEvent>(
+				this.backend.profile,
+				url,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			await invoke("upsert_event", {
+				appId: appId,
+				event: remoteData,
+				enforceId: true,
+				offline: false,
+			}).catch(() => {});
+			return remoteData;
+		}
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (
@@ -256,6 +282,8 @@ export class EventState implements IEventState {
 					event: event,
 					version_type: versionType,
 					profile_id: this.backend.profile.id,
+					pat: personalAccessToken,
+					oauth_tokens: oauthTokens,
 				}),
 			},
 			this.backend.auth,
@@ -278,6 +306,7 @@ export class EventState implements IEventState {
 				appId: appId,
 				eventId: eventId,
 			});
+			return;
 		}
 
 		if (
@@ -352,7 +381,30 @@ export class EventState implements IEventState {
 		},
 	): Promise<string> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) return "";
+		if (isOffline) {
+			try {
+				const now = Math.floor(Date.now() / 1000);
+				await invoke("upsert_offline_feedback", {
+					appId,
+					feedback: {
+						id: feedbackId,
+						app_id: appId,
+						event_id: eventId,
+						message_id: feedbackId,
+						session_id: "",
+						rating: feedback.rating,
+						comment: feedback.comment ?? null,
+						include_chat_history: !!feedback.history,
+						can_contact: false,
+						created_at: now,
+						updated_at: now,
+					},
+				});
+			} catch (e) {
+				console.warn("[Feedback] Failed to save offline feedback:", e);
+			}
+			return feedbackId;
+		}
 
 		if (
 			!this.backend.profile ||
@@ -376,7 +428,7 @@ export class EventState implements IEventState {
 						global_state: feedback.globalState,
 						local_state: feedback.localState,
 					},
-					comment: feedback.comment,
+					comment: feedback.comment ?? "",
 					feedback_id: feedbackId,
 				}),
 			},
@@ -430,11 +482,11 @@ export class EventState implements IEventState {
 			  >
 			| undefined;
 		const event = await this.getEvent(appId, eventId);
-		const board: IBoard = await invoke("get_board", {
-			appId: appId,
-			boardId: event.board_id,
-			version: event.board_version,
-		});
+		const board: IBoard = await this.backend.boardState.getBoard(
+			appId,
+			event.board_id,
+			(event.board_version as [number, number, number]) ?? undefined,
+		);
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
@@ -705,6 +757,26 @@ export class EventState implements IEventState {
 				can_execute_locally,
 			} = extractOAuthRequirementsFromBoard(board);
 
+			// Collect all WASM (external) node package_ids and permissions
+			const wasmPackageIds = new Set<string>();
+			const wasmPackagePermissions: Record<string, string[]> = {};
+			const collectWasm = (node: INode) => {
+				if (node.wasm?.package_id) {
+					wasmPackageIds.add(node.wasm.package_id);
+					if (node.wasm.permissions?.length) {
+						const existing = wasmPackagePermissions[node.wasm.package_id] ?? [];
+						for (const perm of node.wasm.permissions) {
+							if (!existing.includes(perm)) existing.push(perm);
+						}
+						wasmPackagePermissions[node.wasm.package_id] = existing;
+					}
+				}
+			};
+			for (const node of Object.values(board.nodes)) collectWasm(node);
+			for (const layer of Object.values(board.layers)) {
+				for (const node of Object.values(layer.nodes)) collectWasm(node);
+			}
+
 			return {
 				board_id: event.board_id,
 				runtime_variables: runtimeVariables,
@@ -712,6 +784,9 @@ export class EventState implements IEventState {
 				requires_local_execution,
 				execution_mode,
 				can_execute_locally,
+				has_wasm_nodes: wasmPackageIds.size > 0,
+				wasm_package_ids: Array.from(wasmPackageIds),
+				wasm_package_permissions: wasmPackagePermissions,
 			};
 		};
 

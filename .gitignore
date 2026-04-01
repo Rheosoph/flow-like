@@ -31,7 +31,8 @@ target
 *.sln
 *.sw?
 tmp
-
+/.tools/
+.ruff_cache
 /.next/
 /out/
 /coverage
@@ -72,3 +73,10 @@ next-env.d.ts
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 .codacy/cli.sh
+
+# Build artifacts
+*.cwasm
+nohup.out
+
+# Tauri generated schemas
+apps/desktop/src-tauri/gen/schemas/

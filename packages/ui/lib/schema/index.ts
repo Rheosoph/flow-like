@@ -1,3 +1,4 @@
+export * from "./developer";
 export type { IIntercomEvent } from "./events/intercom-event";
 export type { IRunPayload } from "./flow/run-payload";
 export * from "./bit/bit";
@@ -99,3 +100,5 @@ export * from "./copilot";
 export * from "./wasm";
 // Usage tracking types
 export * from "./usage";
+// Human-in-the-loop interaction types
+export * from "./interaction";

@@ -1,0 +1,267 @@
+---
+title: Swift WASM Nodes
+description: Create custom WASM nodes using Swift
+sidebar:
+  order: 8
+  badge:
+    text: Component Model
+    variant: success
+---
+
+Swift's WASM support lets you bring existing Swift code into Flow-Like nodes. The template uses **wit-bindgen C bindings** consumed through a Swift C-interop module, compiled with the `swift.org` toolchain's WASM backend.
+
+:::caution
+You need the **swift.org toolchain** (not Xcode's bundled Swift) — only the swift.org distribution includes the WASM compilation backend. Install it from [swift.org/download](https://swift.org/download/).
+:::
+
+## Prerequisites
+
+- [Swift 6.2+](https://swift.org/download/) — the **swift.org** toolchain
+- Swift WASM SDK: `swift sdk install swift-6.2.3-RELEASE_wasm` (or matching version)
+- [wasm-tools](https://github.com/bytecodealliance/wasm-tools) — component model tooling
+- [wit-bindgen](https://github.com/bytecodealliance/wit-bindgen) — WIT binding generator
+- [Cargo](https://rustup.rs/) — needed to install wasm-tools and wit-bindgen
+
+```bash
+# Install tooling (or use `mise run setup` from the template)
+cargo install wasm-tools
+cargo install wit-bindgen-cli@0.53.1
+```
+
+Set `TOOLCHAINS` to your swift.org toolchain identifier so `swift build` uses the right compiler:
+
+```bash
+export TOOLCHAINS=org.swift.623202512101a  # adjust to your installed version
+```
+
+## Project Structure
+
+```
+wasm-node-swift/
+├── Package.swift              # SPM package definition
+├── flow-like.toml             # Flow-Like package manifest
+├── mise.toml                  # Build tasks
+├── Sources/
+│   ├── Node/
+│   │   └── main.swift         # Node implementation
+│   └── WitBindings/           # C-interop module for WIT bindings
+│       ├── include/
+│       │   ├── flow_like_node.h
+│       │   ├── WitBindings.h
+│       │   └── module.modulemap
+│       ├── flow_like_node.c
+│       ├── flow_like_node_component_type.o
+│       ├── reactor_init.c
+│       └── stubs.c
+└── wit/
+    └── flow-like-node.wit     # WIT interface definition
+```
+
+The `WitBindings` target is a C library that Swift imports as a module. The `Node` target depends on it.
+
+### Package.swift
+
+```swift title="Package.swift"
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "FlowLikeWasmNode",
+    targets: [
+        .target(
+            name: "WitBindings",
+            path: "Sources/WitBindings",
+            publicHeadersPath: "include"
+        ),
+        .executableTarget(
+            name: "Node",
+            dependencies: ["WitBindings"],
+            path: "Sources/Node",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "--no-entry",
+                    "-Xlinker", "--export=_initialize",
+                    "-Xlinker", "--export=exports_flow_like_node_get_node",
+                    "-Xlinker", "--export=exports_flow_like_node_get_nodes",
+                    "-Xlinker", "--export=exports_flow_like_node_run",
+                    "-Xlinker", "--export=exports_flow_like_node_get_abi_version",
+                    "-Xlinker", "--export=cabi_realloc",
+                    "-Xlinker", "Sources/WitBindings/flow_like_node_component_type.o",
+                ]),
+            ]
+        ),
+    ]
+)
+```
+
+The linker settings export the required WIT entry points and embed the component type metadata.
+
+## Quick Start
+
+### Node Definition
+
+Define your node's metadata, pins, and permissions:
+
+```swift title="Sources/Node/main.swift"
+import WitBindings
+
+func buildDefinition() -> NodeDefinition {
+    var def = NodeDefinition()
+    def.name = "my_custom_node_swift"
+    def.friendlyName = "My Custom Node (Swift)"
+    def.description = "A template WASM node built with Swift (Component Model)"
+    def.category = "Custom/WASM"
+    def.abiVersion = 1
+    def.addPermission("streaming")
+
+    // Input pins
+    def.addPin(.input("exec", "Execute", "Trigger execution", "Exec"))
+    def.addPin(.input("input_text", "Input Text", "Text to process", "String").withDefault("\"\""))
+    def.addPin(.input("multiplier", "Multiplier", "Times to repeat", "I64").withDefault("1"))
+
+    // Output pins
+    def.addPin(.output("exec_out", "Done", "Execution complete", "Exec"))
+    def.addPin(.output("output_text", "Output Text", "Processed text", "String"))
+    def.addPin(.output("char_count", "Character Count", "Characters in output", "I64"))
+
+    return def
+}
+```
+
+### Run Handler
+
+The `Context` struct wraps WIT import functions (`flow_like_node_pins_get_input`, `flow_like_node_pins_set_output`, etc.):
+
+```swift title="Sources/Node/main.swift"
+func handleRun(_ ctx: inout Context) -> ExecutionResult {
+    let inputText = ctx.getString("input_text")
+    let multiplier = ctx.getI64("multiplier", 1)
+
+    ctx.debug("Processing: '\(inputText)' x \(multiplier)")
+
+    var output = ""
+    for _ in 0..<multiplier {
+        output += inputText
+    }
+
+    ctx.streamText("Generated \(output.count) characters")
+
+    ctx.setOutput("output_text", jsonQuote(output))
+    ctx.setOutput("char_count", "\(output.count)")
+
+    return ctx.success()
+}
+```
+
+### Context API
+
+```swift
+// Read inputs
+ctx.getString("pin_name")              // -> String
+ctx.getI64("pin_name", defaultValue)   // -> Int64
+ctx.getF64("pin_name", defaultValue)   // -> Double
+ctx.getBool("pin_name", defaultValue)  // -> Bool
+
+// Write outputs
+ctx.setOutput("pin_name", jsonValue)
+
+// Logging
+ctx.debug("message")
+ctx.info("message")
+ctx.warn("message")
+ctx.logError("message")
+
+// Streaming
+ctx.streamText("partial output")
+ctx.streamEvent("event_type", "data")
+
+// Execution control
+ctx.success()       // -> ExecutionResult (activates "exec_out")
+ctx.fail("reason")  // -> ExecutionResult with error
+```
+
+### WIT Exports
+
+Every node must export these four `@_cdecl` functions:
+
+```swift title="Sources/Node/main.swift"
+@_cdecl("exports_flow_like_node_get_node")
+func _exports_get_node(_ ret: UnsafeMutablePointer<flow_like_node_string_t>) {
+    setWitResult(buildDefinition().toJSON(), ret)
+}
+
+@_cdecl("exports_flow_like_node_get_nodes")
+func _exports_get_nodes(_ ret: UnsafeMutablePointer<flow_like_node_string_t>) {
+    setWitResult("[" + buildDefinition().toJSON() + "]", ret)
+}
+
+@_cdecl("exports_flow_like_node_run")
+func _exports_run(_ input: UnsafeMutablePointer<flow_like_node_string_t>,
+                   _ ret: UnsafeMutablePointer<flow_like_node_string_t>) {
+    var ctx = Context()
+    let result = handleRun(&ctx)
+    setWitResult(result.toJSON(), ret)
+}
+
+@_cdecl("exports_flow_like_node_get_abi_version")
+func _exports_get_abi_version() -> UInt32 { 1 }
+```
+
+## Build
+
+The template uses [mise](https://mise.jdx.dev/) for task orchestration:
+
+```bash
+# One-time setup: install wasm-tools, wit-bindgen, WASI adapter, resolve packages
+mise run setup
+
+# Generate C bindings and copy into Sources/WitBindings/
+mise run generate
+
+# Build the WASM component (generates node.wasm)
+mise run build
+```
+
+The build pipeline:
+
+1. `wit-bindgen c` generates C bindings from the WIT file
+2. Generated files are copied into `Sources/WitBindings/` (header + C source + component type object)
+3. `swift build --swift-sdk swift-6.2.3-RELEASE_wasm -c release` compiles to a core WASM module
+4. `wasm-tools component embed` adds the WIT world to the module
+5. `wasm-tools component new` wraps it into a WASM Component with the WASI adapter
+
+Output: `node.wasm`
+
+### Manual Build (without mise)
+
+```bash
+# Step 1: Generate bindings
+wit-bindgen c --world flow-like-node --out-dir gen wit/flow-like-node.wit
+cp gen/flow_like_node.h Sources/WitBindings/include/
+cp gen/flow_like_node.c Sources/WitBindings/
+cp gen/flow_like_node_component_type.o Sources/WitBindings/
+
+# Step 2: Compile
+swift build --swift-sdk swift-6.2.3-RELEASE_wasm -c release
+
+# Step 3: Embed WIT + create component
+wasm-tools component embed wit/ .build/wasm32-unknown-wasip1/release/Node.wasm \
+    --world flow-like-node -o build/node.embed.wasm
+
+wasm-tools component new build/node.embed.wasm \
+    --adapt wasi_snapshot_preview1=wasi_snapshot_preview1.reactor.wasm \
+    -o node.wasm
+```
+
+## Testing
+
+```bash
+mise run test    # runs swift test (native, not WASM)
+mise run clean   # removes .build/, build/, gen/, node.wasm
+```
+
+## Related
+
+- [Overview](/dev/wasm-nodes/overview/) — How WASM nodes work
+- [Package Manifest](/dev/wasm-nodes/manifest/) — Full manifest reference
+- [Rust WASM Nodes](/dev/wasm-nodes/rust/) — Recommended language with SDK macros

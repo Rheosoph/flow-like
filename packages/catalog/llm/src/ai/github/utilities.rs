@@ -42,7 +42,8 @@ impl NodeLogic for CopilotGetVersionNode {
             "Client",
             "Copilot client handle",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<CopilotClientHandle>();
 
         node.add_output_pin(
             "version",
@@ -122,7 +123,8 @@ impl NodeLogic for CopilotGetModelsNode {
             "Client",
             "Copilot client handle",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<CopilotClientHandle>();
 
         node.add_output_pin(
             "models",
@@ -204,7 +206,8 @@ impl NodeLogic for CopilotGetAuthStatusNode {
             "Client",
             "Copilot client handle",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<CopilotClientHandle>();
 
         node.add_output_pin(
             "is_authenticated",
@@ -297,7 +300,8 @@ impl NodeLogic for CopilotClientStatusNode {
             "Client",
             "Copilot client handle",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<CopilotClientHandle>();
 
         node.add_output_pin(
             "is_connected",

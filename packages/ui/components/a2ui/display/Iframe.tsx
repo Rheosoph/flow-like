@@ -12,11 +12,16 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
+const SANDBOX_SRC_DEFAULT =
+	"allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox";
+const SANDBOX_SRCDOC_DEFAULT = "allow-scripts";
+
 export function A2UIIframe({
 	component,
 	style,
 }: ComponentProps<IframeComponent>) {
 	const src = useResolved<string>(component.src);
+	const srcdoc = useResolved<string>(component.srcdoc);
 	const width = useResolved<string>(component.width) ?? "100%";
 	const height = useResolved<string>(component.height) ?? "400px";
 	const title = useResolved<string>(component.title) ?? "Embedded content";
@@ -26,7 +31,12 @@ export function A2UIIframe({
 	const referrerPolicy = useResolved<string>(component.referrerPolicy);
 	const border = useResolved<boolean>(component.border);
 
-	if (!src) {
+	const useSrcdoc = !!srcdoc;
+	const effectiveSandbox =
+		sandbox ?? (useSrcdoc ? SANDBOX_SRCDOC_DEFAULT : SANDBOX_SRC_DEFAULT);
+	const effectiveReferrerPolicy = referrerPolicy ?? "no-referrer";
+
+	if (!src && !srcdoc) {
 		return (
 			<div
 				className={cn(
@@ -35,21 +45,24 @@ export function A2UIIframe({
 				)}
 				style={{ ...resolveInlineStyle(style), width, height }}
 			>
-				No URL provided
+				No content provided
 			</div>
 		);
 	}
 
 	return (
 		<iframe
-			src={src}
+			src={useSrcdoc ? undefined : src}
+			srcDoc={useSrcdoc ? srcdoc : undefined}
 			title={title}
 			width={width}
 			height={height}
-			sandbox={sandbox}
+			sandbox={effectiveSandbox}
 			allow={allow}
 			loading={loading ?? "lazy"}
-			referrerPolicy={referrerPolicy as React.HTMLAttributeReferrerPolicy}
+			referrerPolicy={
+				effectiveReferrerPolicy as React.HTMLAttributeReferrerPolicy
+			}
 			className={cn(
 				border ? "border rounded" : "border-0",
 				resolveStyle(style),

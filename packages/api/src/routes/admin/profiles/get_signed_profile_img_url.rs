@@ -18,7 +18,7 @@ pub async fn get_signed_profile_img_url(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<SignedProfileImgUrl>, ApiError> {
-    user.check_global_permission(&state, GlobalPermission::WriteBits)
+    user.check_global_permission(&state, GlobalPermission::WriteProfile)
         .await?;
 
     let id = create_id();

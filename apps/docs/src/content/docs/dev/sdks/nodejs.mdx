@@ -1,0 +1,411 @@
+---
+title: Node.js / TypeScript SDK
+description: Complete reference for the @flow-like/sdk package — authenticate, trigger workflows, manage files, query databases, and use LLMs from Node.js.
+sidebar:
+  order: 1
+---
+
+import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
+
+## Installation
+
+<Tabs>
+  <TabItem label="npm">
+    ```bash
+    npm install @flow-like/sdk
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```bash
+    bun add @flow-like/sdk
+    ```
+  </TabItem>
+  <TabItem label="pnpm">
+    ```bash
+    pnpm add @flow-like/sdk
+    ```
+  </TabItem>
+</Tabs>
+
+### Optional peer dependencies
+
+| Package | For | Install |
+|---------|-----|---------|
+| `@lancedb/lancedb` | `createLanceConnection()` | `npm install @lancedb/lancedb` |
+| `@langchain/core` | LangChain wrappers | `npm install @langchain/core` |
+
+## Creating a Client
+
+```typescript
+import { FlowLikeClient } from "@flow-like/sdk";
+
+// From environment variables (FLOW_LIKE_BASE_URL + FLOW_LIKE_PAT or FLOW_LIKE_API_KEY)
+const client = new FlowLikeClient();
+
+// Explicit PAT
+const client = new FlowLikeClient({
+  baseUrl: "https://api.flow-like.com",
+  pat: "pat_myid.mysecret",
+});
+
+// Explicit API key
+const client = new FlowLikeClient({
+  baseUrl: "https://api.flow-like.com",
+  apiKey: "flk_appid.keyid.secret",
+});
+
+// Auto-detect token type
+const client = new FlowLikeClient({
+  baseUrl: "https://api.flow-like.com",
+  token: "pat_myid.mysecret", // or "flk_..."
+});
+```
+
+## Workflows
+
+### Trigger a workflow (streaming)
+
+Returns a Server-Sent Events stream:
+
+```typescript
+for await (const event of client.triggerWorkflow(
+  "app-id",
+  "board-id",
+  "start-node-id",
+  { key: "value" },
+)) {
+  console.log(event.data);
+}
+```
+
+### Trigger a workflow (async)
+
+Returns immediately with a run ID for polling:
+
+```typescript
+const result = await client.triggerWorkflowAsync(
+  "app-id",
+  "board-id",
+  "start-node-id",
+  { key: "value" },
+);
+console.log(result.run_id, result.poll_token);
+```
+
+### Trigger an event
+
+```typescript
+// Streaming
+for await (const event of client.triggerEvent("app-id", "event-id", { key: "value" })) {
+  console.log(event.data);
+}
+
+// Async
+const result = await client.triggerEventAsync("app-id", "event-id", { key: "value" });
+```
+
+## Execution Monitoring
+
+```typescript
+// Check run status
+const status = await client.getRunStatus("run-id");
+console.log(status.status); // "running" | "completed" | "failed"
+
+// Poll for execution events
+const poll = await client.pollExecution("poll-token", {
+  afterSequence: 0,
+  timeout: 30,
+});
+for (const event of poll.events) {
+  console.log(event);
+}
+```
+
+## File Management
+
+```typescript
+// List files in an app's storage
+const files = await client.listFiles("app-id", { prefix: "uploads/" });
+
+// Upload a file
+await client.uploadFile("app-id", myFile);
+
+// Download a file
+const response = await client.downloadFile("app-id", "path/to/file.pdf");
+
+// Delete a file
+await client.deleteFile("app-id", "path/to/file.pdf");
+```
+
+## Database / LanceDB
+
+### Credentials
+
+```typescript
+// Get resolved credentials (uri + storageOptions ready for LanceDB)
+const info = await client.getDbCredentials("app-id", "_default", "read");
+console.log(info.uri, info.storageOptions);
+
+// Get raw presign response (shared_credentials enum, db_path, etc.)
+const raw = await client.getDbCredentialsRaw("app-id", "_default", "write");
+```
+
+### Tables
+
+```typescript
+// List tables
+const tables = await client.listTables("app-id");
+
+// Query a table with SQL-like filter
+const rows = await client.queryTable("app-id", "my-table", {
+  filter: "age > 25",
+  limit: 10,
+});
+```
+
+### LanceDB Connection
+
+<Aside type="note">
+  Requires `@lancedb/lancedb` as a peer dependency.
+</Aside>
+
+```typescript
+// Returns a ready-to-use LanceDB Connection object
+const db = await client.createLanceConnection("app-id", "write");
+
+// Now use it with the LanceDB API
+const table = await db.openTable("my-embeddings");
+const results = await table.search([0.1, 0.2, ...]).limit(10).toArray();
+```
+
+The `accessMode` parameter controls whether you get read-only or read-write credentials:
+- `"read"` (default) — read-only access
+- `"write"` — full read-write access
+
+## Chat Completions
+
+Use `listLlms()` to discover available model `bit_id` values.
+
+```typescript
+// Non-streaming
+const result = await client.chatCompletions(
+  [{ role: "user", content: "Explain quantum computing in one sentence." }],
+  "bit-id-for-gpt4",
+  { temperature: 0.7, max_tokens: 200 },
+);
+console.log(result.choices[0].message.content);
+```
+
+### Streaming
+
+```typescript
+for await (const chunk of client.chatCompletionsStream(
+  [{ role: "user", content: "Hello!" }],
+  "bit-id-for-gpt4",
+)) {
+  process.stdout.write(chunk.data);
+}
+```
+
+### Usage tracking
+
+```typescript
+const usage = await client.getUsage();
+console.log(usage.llm_price, usage.embedding_price);
+```
+
+## Embeddings
+
+Use `listEmbeddingModels()` to discover available embedding model `bit_id` values.
+
+```typescript
+const result = await client.embed("bit-id-for-embedding", [
+  "Hello world",
+  "Goodbye world",
+]);
+console.log(result.embeddings); // number[][]
+```
+
+## Model Discovery
+
+```typescript
+// List all remotely-available LLMs
+const llms = await client.listLlms();
+for (const m of llms) {
+  console.log(m.bit_id, m.name, m.provider_name, m.context_length);
+}
+
+// List all remotely-available embedding models
+const embeddings = await client.listEmbeddingModels();
+for (const m of embeddings) {
+  console.log(m.bit_id, m.name, m.vector_length);
+}
+
+// Search all bits by keyword
+const bits = await client.searchBits({ search: "llama", bit_types: ["Llm"] });
+
+// Get a specific bit by ID
+const bit = await client.getBit("some-bit-id");
+```
+
+Each model returns a `ModelInfo` object:
+
+```typescript
+interface ModelInfo {
+  bit_id: string;
+  name: string;
+  description: string;
+  provider_name?: string;
+  model_id?: string;
+  context_length?: number;  // LLMs only
+  vector_length?: number;    // Embeddings only
+  languages?: string[];
+  tags: string[];
+}
+```
+
+## Board Management
+
+```typescript
+// List all boards in an app
+const boards = await client.listBoards("app-id");
+
+// Get a specific board
+const board = await client.getBoard("app-id", "board-id");
+
+// Create or update a board
+const { id } = await client.upsertBoard("app-id", "board-id", {
+  name: "My Board",
+  description: "Processes incoming data",
+});
+
+// Delete a board
+await client.deleteBoard("app-id", "board-id");
+
+// Pre-run analysis (discover runtime variables, validate the graph)
+const prerun = await client.prerunBoard("app-id", "board-id");
+console.log(prerun.runtime_variables);
+```
+
+## App Management
+
+```typescript
+const apps = await client.listApps();
+const app = await client.getApp("app-id");
+const newApp = await client.createApp("My App", "Description");
+```
+
+## HTTP Sinks
+
+Trigger an HTTP sink endpoint on an app:
+
+```typescript
+const result = await client.triggerHttpSink("app-id", "webhook/path", "POST", {
+  event: "user.created",
+  data: { userId: "123" },
+});
+```
+
+## Health Check
+
+```typescript
+const health = await client.health();
+console.log(health.healthy); // true
+```
+
+## LangChain Integration
+
+<Aside type="tip">
+  Requires `@langchain/core` as a peer dependency: `npm install @langchain/core`
+</Aside>
+
+### Factory methods (recommended)
+
+The easiest way — creates LangChain-compatible models from your existing client:
+
+```typescript
+// Chat model
+const chatModel = await client.asLangChainChat("your-model-bit-id", {
+  temperature: 0.7,
+  maxTokens: 1024,
+});
+
+// Embeddings
+const embeddings = await client.asLangChainEmbeddings("your-embedding-bit-id");
+```
+
+### Standalone usage
+
+```typescript
+import { FlowLikeChatModel, FlowLikeEmbeddings } from "@flow-like/sdk/langchain";
+
+const chatModel = new FlowLikeChatModel({
+  baseUrl: "https://api.flow-like.com",
+  token: "pat_myid.mysecret",
+  bitId: "your-model-bit-id",
+  temperature: 0.7,
+});
+
+const embeddings = new FlowLikeEmbeddings({
+  baseUrl: "https://api.flow-like.com",
+  token: "pat_myid.mysecret",
+  bitId: "your-embedding-bit-id",
+});
+```
+
+### With LangChain chains
+
+```typescript
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { StringOutputParser } from "@langchain/core/output_parsers";
+
+const chatModel = await client.asLangChainChat("your-model-bit-id");
+
+const chain = ChatPromptTemplate
+  .fromMessages([
+    ["system", "You are a helpful assistant."],
+    ["human", "{input}"],
+  ])
+  .pipe(chatModel)
+  .pipe(new StringOutputParser());
+
+const response = await chain.invoke({ input: "What is Flow-Like?" });
+```
+
+### RAG with LangChain
+
+```typescript
+const embeddings = await client.asLangChainEmbeddings("your-embedding-bit-id");
+
+// Use with any LangChain vector store
+const vectors = await embeddings.embedDocuments([
+  "Flow-Like is a visual workflow engine.",
+  "It runs on your device.",
+]);
+const queryVector = await embeddings.embedQuery("What runs locally?");
+```
+
+## Requirements
+
+- **Node.js** >= 18 (uses native `fetch`)
+- **TypeScript** >= 5.0 (for development)
+- **Module system**: ESM (`"type": "module"`)
+
+## Type Exports
+
+The SDK exports all relevant types:
+
+```typescript
+import type {
+  Bit,
+  BitSearchQuery,
+  BitType,
+  ModelInfo,
+  SharedCredentials,
+  AwsCredentials,
+  AzureCredentials,
+  GcpCredentials,
+  DbPresignResponse,
+  LanceConnection,
+} from "@flow-like/sdk";
+```

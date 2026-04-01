@@ -25,7 +25,7 @@ export default function RegistryLayout({
 					<Link href="/settings/registry/installed">
 						<TabsTrigger value="installed" className="gap-2">
 							<Download className="h-4 w-4" />
-							Installed
+							Owned
 						</TabsTrigger>
 					</Link>
 					<Link href="/settings/registry/explore">

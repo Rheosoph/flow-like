@@ -5,7 +5,10 @@ use flow_like_types::{
     sync::{DashMap, mpsc},
 };
 use serde::{Deserialize, Serialize};
-use std::{sync::{Arc, OnceLock}, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use super::cache::{cache_file_exists, read_cache_file, write_cache_file};
 

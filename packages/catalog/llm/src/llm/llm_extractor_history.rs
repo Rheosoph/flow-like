@@ -10,6 +10,8 @@ use flow_like::{
     },
 };
 use flow_like_model_provider::history::History;
+#[cfg(feature = "execute")]
+use flow_like_model_provider::response::{LLMUsageStats, Usage};
 use flow_like_types::json::{self, Deserialize, Serialize};
 use flow_like_types::{Value, anyhow};
 #[cfg(feature = "execute")]
@@ -18,7 +20,7 @@ use rig::completion::{Completion, ToolDefinition};
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Instant};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -181,6 +183,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -246,6 +249,15 @@ impl NodeLogic for LLMExtractHistoryNode {
             VariableType::Generic,
         );
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<flow_like_model_provider::response::LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -292,6 +304,7 @@ impl NodeLogic for LLMExtractHistoryNode {
 
         let agent = agent_builder.build();
 
+        let start = Instant::now();
         let response = agent
             .completion(prompt, chat_history.into_iter().collect())
             .await
@@ -299,6 +312,15 @@ impl NodeLogic for LLMExtractHistoryNode {
             .send()
             .await
             .map_err(|e| anyhow!("Failed to send completion request: {}", e))?;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let stats = LLMUsageStats {
+            usage: Usage::from_rig(response.usage),
+            model: model_bit.meta.get("en").map(|m| m.name.clone()),
+            duration_ms: Some(duration_ms),
+            iterations: None,
+            calls: vec![],
+        };
 
         let mut last_args: Option<Value> = None;
         for content in response.choice {
@@ -329,6 +351,7 @@ impl NodeLogic for LLMExtractHistoryNode {
         context.log_message("Successfully extracted structured data", LogLevel::Debug);
 
         context.set_pin_value("response", extracted).await?;
+        context.set_pin_value("stats", json::json!(stats)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

@@ -1,9 +1,7 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import {
 	Brain,
-	ChevronDown,
 	Code2,
 	Cpu,
 	DollarSign,
@@ -14,7 +12,6 @@ import {
 	ImageIcon,
 	LayoutList,
 	Lightbulb,
-	Loader2,
 	type LucideIcon,
 	MessageSquare,
 	PackageCheck,
@@ -29,6 +26,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMiniSearch } from "react-minisearch";
 import { useInvoke } from "../../../hooks/index";
+import { useIsMobile } from "../../../hooks/use-mobile";
 import { Bit } from "../../../lib/bit/bit";
 import type { IBit } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
@@ -47,7 +45,6 @@ import {
 	Slider,
 	formatContextLength,
 } from "../../ui";
-import { Badge } from "../../ui/badge";
 import { Checkbox } from "../../ui/checkbox";
 import {
 	Sheet,
@@ -56,6 +53,8 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../../ui/sheet";
+import { Skeleton } from "../../ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
 type SortOption =
 	| "name"
@@ -133,11 +132,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		backend.userState,
 		[],
 	);
+	const isMobile = useIsMobile();
 	const [searchTerm, setSearchTerm] = useState("");
 	const [blacklist, setBlacklist] = useState(new Set<string>());
 	const [viewMode, setViewMode] = useState<ViewMode>("grid");
 	const [sortBy, setSortBy] = useState<SortOption>("updated");
-	const [showFilters, setShowFilters] = useState(true);
+	const [filtersExpanded, setFiltersExpanded] = useState(false);
 	const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 	const [providerFilter, setProviderFilter] = useState("all");
 	const [contextLengthFilter, setContextLengthFilter] = useState<
@@ -485,70 +485,37 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		});
 	}, [maxContextLength]);
 
-	const sidebarContent = (
-		<div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-5">
-			<FilterSection title="Input" icon={MessageSquare}>
-				<FilterCheckbox
-					checked={inputModalities.has("text")}
-					onCheckedChange={() => toggleInputModality("text")}
-					icon={Type}
-					iconColor="text-blue-500"
-					label="Text"
-					count={modalityCounts.text}
-				/>
-				<FilterCheckbox
-					checked={inputModalities.has("image")}
-					onCheckedChange={() => toggleInputModality("image")}
-					icon={ImageIcon}
-					iconColor="text-purple-500"
-					label="Image"
-					count={modalityCounts.image}
-				/>
-			</FilterSection>
-
-			<FilterSection
-				title="Output"
-				icon={MessageSquare}
-				className="-scale-x-100"
-			>
-				<FilterCheckbox
-					checked={outputModalities.has("text")}
-					onCheckedChange={() => toggleOutputModality("text")}
-					icon={Type}
-					iconColor="text-green-500"
-					label="Text"
-				/>
-				<FilterCheckbox
-					checked={outputModalities.has("embedding")}
-					onCheckedChange={() => toggleOutputModality("embedding")}
-					icon={FileSearchIcon}
-					iconColor="text-orange-500"
-					label="Embedding"
-					count={modalityCounts.embedding}
-				/>
-			</FilterSection>
-
-			<FilterSection title="Status" icon={Filter}>
-				<FilterCheckbox
-					checked={showInProfileOnly}
-					onCheckedChange={(c) => setShowInProfileOnly(!!c)}
-					icon={Sparkles}
-					iconColor="text-primary"
-					label="In Profile"
-				/>
-				{!webMode && (
+	const filterContent = (
+		<div className="space-y-5">
+			<div className="space-y-2">
+				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+					Status
+				</p>
+				<div className="space-y-1.5">
 					<FilterCheckbox
-						checked={showDownloadedOnly}
-						onCheckedChange={(c) => setShowDownloadedOnly(!!c)}
-						icon={PackageCheck}
-						iconColor="text-emerald-500"
-						label="Downloaded"
+						checked={showInProfileOnly}
+						onCheckedChange={(c) => setShowInProfileOnly(!!c)}
+						icon={Sparkles}
+						iconColor="text-primary"
+						label="In Profile"
 					/>
-				)}
-			</FilterSection>
+					{!webMode && (
+						<FilterCheckbox
+							checked={showDownloadedOnly}
+							onCheckedChange={(c) => setShowDownloadedOnly(!!c)}
+							icon={PackageCheck}
+							iconColor="text-emerald-500"
+							label="Downloaded"
+						/>
+					)}
+				</div>
+			</div>
 
 			{providers.length > 0 && (
-				<FilterSection title="Provider" icon={Globe}>
+				<div className="space-y-2">
+					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+						Provider
+					</p>
 					<Select value={providerFilter} onValueChange={setProviderFilter}>
 						<SelectTrigger className="h-8 text-xs">
 							<SelectValue placeholder="All providers" />
@@ -562,302 +529,299 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							))}
 						</SelectContent>
 					</Select>
-				</FilterSection>
+				</div>
 			)}
 
 			<div className="space-y-2">
-				<div className="flex items-center justify-between px-2">
-					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+				<div className="flex items-center justify-between">
+					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
 						<Cpu className="h-3 w-3" />
 						Context
 					</p>
-					<span className="text-[10px] text-muted-foreground">
-						{formatContextLength(contextLengthFilter[0])} -{" "}
+					<span className="text-[10px] text-muted-foreground/40">
+						{formatContextLength(contextLengthFilter[0])} –{" "}
 						{formatContextLength(contextLengthFilter[1])}
 					</span>
 				</div>
-				<div className="px-2 pb-2">
-					<Slider
-						value={contextLengthFilter}
-						onValueChange={(v) => setContextLengthFilter(v as [number, number])}
-						min={0}
-						max={maxContextLength}
-						step={1000}
-					/>
-				</div>
+				<Slider
+					value={contextLengthFilter}
+					onValueChange={(v) => setContextLengthFilter(v as [number, number])}
+					min={0}
+					max={maxContextLength}
+					step={1000}
+				/>
 			</div>
 
 			<div className="space-y-3">
-				<button
-					type="button"
-					onClick={() => setShowFilters(!showFilters)}
-					className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 w-full hover:text-foreground transition-colors"
-				>
+				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
 					<Brain className="h-3 w-3" />
-					<span>Capabilities</span>
-					{Object.values(capabilityFilters).some((v) => v > 0) && (
-						<Badge variant="default" className="h-4 px-1 text-[9px] ml-1">
-							Active
-						</Badge>
-					)}
-					<ChevronDown
-						className={`h-3 w-3 ml-auto transition-transform ${showFilters ? "rotate-180" : ""}`}
-					/>
-				</button>
-
-				<AnimatePresence>
-					{showFilters && (
-						<motion.div
-							initial={{ height: 0, opacity: 0 }}
-							animate={{ height: "auto", opacity: 1 }}
-							exit={{ height: 0, opacity: 0 }}
-							className="space-y-5 overflow-hidden px-2 pb-2"
-						>
-							{Object.entries(capabilityIcons)
-								.slice(0, 6)
-								.map(([key, info]) => {
-									const Icon = info.icon;
-									const value = capabilityFilters[key] ?? 0;
-									return (
-										<div key={key} className="space-y-2">
-											<div className="flex items-center justify-between text-xs">
-												<div
-													className={`flex items-center gap-1.5 ${info.color}`}
-												>
-													<Icon className="h-3 w-3" />
-													<span>{info.label}</span>
-												</div>
-												<span className="text-muted-foreground">
-													{value > 0 ? `≥${Math.round(value * 100)}%` : "Any"}
-												</span>
-											</div>
-											<Slider
-												value={[value]}
-												onValueChange={([v]) =>
-													setCapabilityFilters((prev) => ({
-														...prev,
-														[key]: v,
-													}))
-												}
-												min={0}
-												max={1}
-												step={0.1}
-												className="h-1"
-											/>
+					Capabilities
+				</p>
+				<div className="space-y-4">
+					{Object.entries(capabilityIcons)
+						.slice(0, 6)
+						.map(([key, info]) => {
+							const Icon = info.icon;
+							const value = capabilityFilters[key] ?? 0;
+							return (
+								<div key={key} className="space-y-1.5">
+									<div className="flex items-center justify-between text-xs">
+										<div className={`flex items-center gap-1.5 ${info.color}`}>
+											<Icon className="h-3 w-3" />
+											<span>{info.label}</span>
 										</div>
-									);
-								})}
-						</motion.div>
-					)}
-				</AnimatePresence>
+										<span className="text-muted-foreground/40">
+											{value > 0 ? `\u2265${Math.round(value * 100)}%` : "Any"}
+										</span>
+									</div>
+									<Slider
+										value={[value]}
+										onValueChange={([v]) =>
+											setCapabilityFilters((prev) => ({
+												...prev,
+												[key]: v,
+											}))
+										}
+										min={0}
+										max={1}
+										step={0.1}
+										className="h-1"
+									/>
+								</div>
+							);
+						})}
+				</div>
 			</div>
 
 			{activeFilterCount > 0 && (
-				<div className="px-2 pt-2">
-					<Button
-						variant="outline"
-						size="sm"
-						className="w-full h-8 text-xs"
-						onClick={resetFilters}
-					>
-						<X className="h-3 w-3 mr-1.5" />
-						Clear {activeFilterCount} Filter
-						{activeFilterCount !== 1 ? "s" : ""}
-					</Button>
-				</div>
+				<button
+					type="button"
+					onClick={resetFilters}
+					className="text-xs text-muted-foreground/40 hover:text-foreground transition-colors"
+				>
+					Clear {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""}
+				</button>
 			)}
 		</div>
 	);
 
 	return (
-		<main className="flex grow h-full min-h-0 overflow-hidden flex-col w-full -m-4 sm:m-0 sm:rounded-lg sm:border sm:border-border/40">
-			<div className="flex flex-1 min-h-0 overflow-hidden">
-				{/* Desktop Sidebar */}
-				<div className="hidden lg:flex w-64 border-r border-border/40 flex-col bg-muted/10 min-h-0">
-					<div className="p-4 border-b border-border/40 shrink-0">
-						<div className="flex items-center gap-2 mb-1">
-							<Sparkles className="h-5 w-5 text-primary" />
-							<h1 className="text-lg font-bold">Model Catalog</h1>
-						</div>
-						<p className="text-xs text-muted-foreground">
-							{modalityCounts.total} models available
-						</p>
-					</div>
-					{sidebarContent}
-				</div>
-
-				{/* Mobile Filter Sheet */}
-				<Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
-					<SheetContent side="left" className="w-72 p-0 lg:hidden">
-						<SheetHeader className="p-4 border-b border-border/40">
-							<SheetTitle className="flex items-center gap-2">
-								<Filter className="h-4 w-4" />
-								Filters
-							</SheetTitle>
-							<SheetDescription className="text-xs">
-								{modalityCounts.total} models available
-							</SheetDescription>
-						</SheetHeader>
-						{sidebarContent}
-					</SheetContent>
-				</Sheet>
-
-				{/* Main Content */}
-				<div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-					<div className="p-3 sm:p-4 border-b border-border/40 space-y-3 bg-background/80 backdrop-blur-sm shrink-0">
-						{/* Mobile header */}
-						<div className="flex items-center gap-2 lg:hidden">
-							<Sparkles className="h-5 w-5 text-primary" />
-							<h1 className="text-lg font-bold">Model Catalog</h1>
-						</div>
-
-						<div className="flex flex-wrap items-center gap-2 sm:gap-3">
-							{/* Mobile filter toggle */}
-							<Button
-								variant="outline"
-								size="icon"
-								className="relative h-10 w-10 lg:hidden shrink-0"
-								onClick={() => setMobileFiltersOpen(true)}
+		<main className="flex flex-col w-full flex-1 min-h-0">
+			<div
+				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+			>
+				<div className="flex items-center gap-2">
+					<div className="relative flex-1 max-w-lg">
+						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
+						<Input
+							placeholder="Search…"
+							value={searchTerm}
+							onChange={(e) => {
+								setSearchTerm(e.target.value);
+								search(e.target.value);
+							}}
+							className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+						/>
+						{searchTerm && (
+							<button
+								type="button"
+								onClick={() => {
+									setSearchTerm("");
+									search("");
+								}}
+								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
 							>
-								<Filter className="h-4 w-4" />
-								{activeFilterCount > 0 && (
-									<span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[10px] text-primary-foreground flex items-center justify-center">
-										{activeFilterCount}
-									</span>
-								)}
-							</Button>
-
-							<div className="relative flex-1 min-w-37.5 max-w-lg">
-								<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-								<Input
-									placeholder="Search models..."
-									value={searchTerm}
-									onChange={(e) => {
-										setSearchTerm(e.target.value);
-										search(e.target.value);
-									}}
-									className="pl-10 h-10"
-								/>
-							</div>
-
-							<Select
-								value={sortBy}
-								onValueChange={(v) => setSortBy(v as SortOption)}
-							>
-								<SelectTrigger className="w-32 sm:w-44 h-10 shrink-0">
-									<SelectValue placeholder="Sort by" />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="updated">Recently Updated</SelectItem>
-									<SelectItem value="name">Name</SelectItem>
-									<SelectItem value="context">Context Length</SelectItem>
-									<SelectItem value="speed">Speed</SelectItem>
-									<SelectItem value="cost">Cost Efficiency</SelectItem>
-									<SelectItem value="reasoning">Reasoning</SelectItem>
-									<SelectItem value="coding">Coding</SelectItem>
-								</SelectContent>
-							</Select>
-
-							<div className="flex items-center border rounded-lg p-0.5 bg-muted/30">
-								<Button
-									variant={viewMode === "grid" ? "secondary" : "ghost"}
-									size="icon"
-									className="h-8 w-8"
-									onClick={() => setViewMode("grid")}
-								>
-									<Grid3X3 className="h-4 w-4" />
-								</Button>
-								<Button
-									variant={viewMode === "list" ? "secondary" : "ghost"}
-									size="icon"
-									className="h-8 w-8"
-									onClick={() => setViewMode("list")}
-								>
-									<LayoutList className="h-4 w-4" />
-								</Button>
-							</div>
-						</div>
-
-						<div className="flex items-center justify-between text-sm">
-							<span className="text-muted-foreground">
-								{searchTerm
-									? `${filteredModels.length} results for "${searchTerm}"`
-									: `${filteredModels.length} models`}
-							</span>
-							{activeFilterCount > 0 && (
-								<Badge variant="outline" className="text-xs">
-									{activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""}{" "}
-									applied
-								</Badge>
-							)}
-						</div>
+								<X className="h-4 w-4" />
+							</button>
+						)}
 					</div>
 
-					<div className="flex-1 min-h-0 overflow-y-auto">
-						<div className="p-2 sm:p-4">
-							{foundBits.isLoading ? (
-								<div className="flex flex-col items-center justify-center py-16">
-									<Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
-									<p className="text-sm text-muted-foreground">
-										Loading models...
-									</p>
-								</div>
-							) : filteredModels.length === 0 ? (
-								<div className="flex flex-col items-center justify-center py-16">
-									<div className="h-16 w-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">
-										<Search className="h-8 w-8 text-muted-foreground/50" />
-									</div>
-									<p className="text-sm font-medium text-muted-foreground">
-										No models found
-									</p>
-									<p className="text-xs text-muted-foreground/60 mt-1">
-										Try adjusting your filters
-									</p>
-									{(searchTerm || activeFilterCount > 0) && (
-										<Button
-											variant="outline"
-											size="sm"
-											className="mt-4"
-											onClick={() => {
-												setSearchTerm("");
-												search("");
-												resetFilters();
-											}}
-										>
-											Clear all filters
-										</Button>
-									)}
-								</div>
-							) : (
-								<div
-									className={
-										viewMode === "grid"
-											? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3"
-											: "space-y-2"
+					<div className="flex items-center gap-1">
+						<Select
+							value={sortBy}
+							onValueChange={(v) => setSortBy(v as SortOption)}
+						>
+							<SelectTrigger className="h-8 w-auto gap-1.5 rounded-full border-transparent bg-transparent text-xs text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 px-3 focus:ring-0">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="updated">Recent</SelectItem>
+								<SelectItem value="name">Name</SelectItem>
+								<SelectItem value="context">Context</SelectItem>
+								<SelectItem value="speed">Speed</SelectItem>
+								<SelectItem value="cost">Cost</SelectItem>
+								<SelectItem value="reasoning">Reasoning</SelectItem>
+								<SelectItem value="coding">Coding</SelectItem>
+							</SelectContent>
+						</Select>
+
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									className={`h-8 w-8 rounded-full ${
+										viewMode === "list"
+											? "text-foreground/80 bg-muted/40"
+											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									}`}
+									onClick={() =>
+										setViewMode((v) => (v === "grid" ? "list" : "grid"))
 									}
 								>
-									<AnimatePresence mode="popLayout">
-										{filteredModels.map((bit, index) => (
-											<motion.div
-												key={bit.id}
-												initial={{ opacity: 0, y: 8 }}
-												animate={{ opacity: 1, y: 0 }}
-												exit={{ opacity: 0, y: -8 }}
-												transition={{ delay: index * 0.01, duration: 0.15 }}
-											>
-												<ModelCard
-													bit={bit}
-													variant={viewMode}
-													onClick={() => setSelectedModel(bit)}
-												/>
-											</motion.div>
-										))}
-									</AnimatePresence>
-								</div>
-							)}
-						</div>
+									{viewMode === "grid" ? (
+										<Grid3X3 className="h-4 w-4" />
+									) : (
+										<LayoutList className="h-4 w-4" />
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{viewMode === "grid" ? "Switch to list" : "Switch to grid"}
+							</TooltipContent>
+						</Tooltip>
+
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant={filtersExpanded ? "secondary" : "ghost"}
+									size="icon"
+									className={`h-8 w-8 rounded-full relative ${
+										filtersExpanded
+											? "text-primary bg-primary/10"
+											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									}`}
+									onClick={() => {
+										if (isMobile) {
+											setMobileFiltersOpen(true);
+										} else {
+											setFiltersExpanded((v) => !v);
+										}
+									}}
+								>
+									<Filter className="h-4 w-4" />
+									{activeFilterCount > 0 && !filtersExpanded && (
+										<span className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-primary text-[9px] text-primary-foreground flex items-center justify-center">
+											{activeFilterCount}
+										</span>
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{filtersExpanded ? "Hide filters" : "Show filters"}
+							</TooltipContent>
+						</Tooltip>
 					</div>
 				</div>
+
+				{/* Quick modality chips */}
+				<div className="flex items-center gap-1.5 flex-wrap">
+					<ModalityChip
+						active={inputModalities.has("text")}
+						onClick={() => toggleInputModality("text")}
+						icon={Type}
+						label="Text"
+					/>
+					<ModalityChip
+						active={inputModalities.has("image")}
+						onClick={() => toggleInputModality("image")}
+						icon={ImageIcon}
+						label="Image"
+					/>
+					<span className="w-px h-4 bg-border/20 mx-0.5" />
+					<ModalityChip
+						active={outputModalities.has("text")}
+						onClick={() => toggleOutputModality("text")}
+						icon={MessageSquare}
+						label="Chat"
+					/>
+					<ModalityChip
+						active={outputModalities.has("embedding")}
+						onClick={() => toggleOutputModality("embedding")}
+						icon={FileSearchIcon}
+						label="Embedding"
+					/>
+
+					<span className="text-xs text-muted-foreground/30 ml-auto">
+						{filteredModels.length} model
+						{filteredModels.length !== 1 ? "s" : ""}
+					</span>
+				</div>
+
+				{/* Expanded filter panel (desktop) */}
+				{filtersExpanded && (
+					<div className="pt-3 border-t border-border/10">{filterContent}</div>
+				)}
+			</div>
+
+			{/* Mobile Filter Sheet */}
+			<Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
+				<SheetContent side="left" className="w-72 p-0">
+					<SheetHeader className="p-4 border-b border-border/10">
+						<SheetTitle className="text-sm font-medium">Filters</SheetTitle>
+						<SheetDescription className="text-xs text-muted-foreground/50">
+							{modalityCounts.total} models available
+						</SheetDescription>
+					</SheetHeader>
+					<div className="p-4 overflow-y-auto">{filterContent}</div>
+				</SheetContent>
+			</Sheet>
+
+			{/* Model grid */}
+			<div
+				className={`flex-1 overflow-auto pb-8 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+			>
+				{foundBits.isLoading ? (
+					<ModelCatalogSkeleton />
+				) : filteredModels.length === 0 ? (
+					<div className="flex flex-col items-center justify-center py-32 text-center">
+						<div className="rounded-full bg-muted/30 p-5 mb-5">
+							<Search className="h-7 w-7 text-muted-foreground/40" />
+						</div>
+						<p className="text-sm text-foreground/60 mb-1">
+							{searchTerm
+								? `Nothing found for \u201C${searchTerm}\u201D`
+								: "No models found"}
+						</p>
+						<p className="text-xs text-muted-foreground/60">
+							Try adjusting your filters
+						</p>
+						{(searchTerm || activeFilterCount > 0) && (
+							<button
+								type="button"
+								onClick={() => {
+									setSearchTerm("");
+									search("");
+									resetFilters();
+								}}
+								className="mt-4 text-xs text-muted-foreground/40 hover:text-foreground transition-colors px-4 py-1.5 rounded-full border border-border/30 hover:border-border/50 hover:bg-muted/30"
+							>
+								Clear all filters
+							</button>
+						)}
+					</div>
+				) : (
+					<div
+						className={viewMode === "grid" ? "grid gap-3" : "space-y-2"}
+						style={
+							viewMode === "grid"
+								? {
+										gridTemplateColumns:
+											"repeat(auto-fill, minmax(280px, 1fr))",
+									}
+								: undefined
+						}
+					>
+						{filteredModels.map((bit) => (
+							<ModelCard
+								key={bit.id}
+								bit={bit}
+								variant={viewMode}
+								onClick={() => setSelectedModel(bit)}
+							/>
+						))}
+					</div>
+				)}
 			</div>
 
 			<ModelDetailSheet
@@ -868,39 +832,33 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			/>
 		</main>
 	);
-
-	return null;
 }
 
-function FilterSection({
-	title,
+function ModalityChip({
+	active,
+	onClick,
 	icon: Icon,
-	children,
-	className,
+	label,
 }: {
-	title: string;
+	active: boolean;
+	onClick: () => void;
 	icon: LucideIcon;
-	children: React.ReactNode;
-	className?: string;
+	label: string;
 }) {
 	return (
-		<div className="space-y-2">
-			<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-2 flex items-center gap-2">
-				<Icon className={"h-3 w-3 " + (className ?? "")} />
-				{title}
-			</p>
-			<div className="space-y-1.5 px-2">{children}</div>
-		</div>
+		<button
+			type="button"
+			onClick={onClick}
+			className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all ${
+				active
+					? "bg-foreground/10 text-foreground"
+					: "text-muted-foreground/40 hover:text-muted-foreground/70 hover:bg-muted/20"
+			}`}
+		>
+			<Icon className="h-3 w-3" />
+			{label}
+		</button>
 	);
-}
-
-interface FilterCheckboxProps {
-	checked: boolean;
-	onCheckedChange: (checked: boolean | "indeterminate") => void;
-	icon: LucideIcon;
-	iconColor: string;
-	label: string;
-	count?: number;
 }
 
 function FilterCheckbox({
@@ -909,18 +867,36 @@ function FilterCheckbox({
 	icon: Icon,
 	iconColor,
 	label,
-	count,
-}: FilterCheckboxProps) {
+}: {
+	checked: boolean;
+	onCheckedChange: (checked: boolean | "indeterminate") => void;
+	icon: LucideIcon;
+	iconColor: string;
+	label: string;
+}) {
 	return (
-		<label className="flex items-center gap-2.5 text-sm cursor-pointer hover:text-foreground transition-colors">
+		<label className="flex items-center gap-2.5 text-sm cursor-pointer text-muted-foreground/70 hover:text-foreground transition-colors">
 			<Checkbox checked={checked} onCheckedChange={onCheckedChange} />
 			<Icon className={`h-3.5 w-3.5 ${iconColor}`} />
 			<span>{label}</span>
-			{count !== undefined && (
-				<Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]">
-					{count}
-				</Badge>
-			)}
 		</label>
+	);
+}
+
+function ModelCatalogSkeleton() {
+	return (
+		<div className="space-y-8 pt-2">
+			<div
+				className="grid gap-3"
+				style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
+			>
+				{Array.from({ length: 8 }).map((_, i) => (
+					<Skeleton
+						key={`skel-model-${i.toString()}`}
+						className="h-48 rounded-xl"
+					/>
+				))}
+			</div>
+		</div>
 	);
 }

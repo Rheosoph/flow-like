@@ -1,3 +1,5 @@
+import type { INodePermission } from "../flow/board";
+
 export interface PackageAuthor {
 	name: string;
 	email?: string;
@@ -8,6 +10,9 @@ export interface NetworkPermissions {
 	httpEnabled: boolean;
 	allowedHosts: string[];
 	websocketEnabled: boolean;
+	tcpEnabled: boolean;
+	udpEnabled: boolean;
+	dnsEnabled: boolean;
 }
 
 export interface FileSystemPermissions {
@@ -30,6 +35,10 @@ export enum MemoryTier {
 	Standard = "standard",
 	Heavy = "heavy",
 	Intensive = "intensive",
+	Large = "large",
+	Huge = "huge",
+	Extreme = "extreme",
+	Maximum = "maximum",
 }
 
 export enum TimeoutTier {
@@ -37,7 +46,44 @@ export enum TimeoutTier {
 	Standard = "standard",
 	Extended = "extended",
 	LongRunning = "long_running",
+	VeryLong = "very_long",
+	Maximum = "maximum",
 }
+
+export type WasmPackageCategory =
+	| "DOCUMENT_PROCESSING"
+	| "DATA_TRANSFORMATION"
+	| "WORKFLOW_AUTOMATION"
+	| "COMMUNICATION"
+	| "ANALYTICS_REPORTING"
+	| "FINANCE_BILLING"
+	| "COMPLIANCE_REGULATORY"
+	| "HR_PEOPLE"
+	| "AI_ML"
+	| "INTEGRATION_CONNECTORS"
+	| "SECURITY_IDENTITY"
+	| "DEVOPS"
+	| "IOT_INDUSTRIAL"
+	| "ROBOTICS_PHYSICAL_AI"
+	| "GAMING_SIMULATION"
+	| "HEALTHCARE"
+	| "VETERINARY"
+	| "LEGAL"
+	| "MANUFACTURING"
+	| "AGRICULTURE"
+	| "REAL_ESTATE"
+	| "LOGISTICS"
+	| "ENERGY"
+	| "CONSTRUCTION_TRADES"
+	| "EDUCATION"
+	| "GOVERNMENT_DEFENSE"
+	| "ECOMMERCE"
+	| "INSURANCE"
+	| "TELECOM"
+	| "SCIENTIFIC_ENGINEERING"
+	| "GEOSPATIAL"
+	| "MEDIA_CONTENT"
+	| "OTHER";
 
 export interface PackagePermissions {
 	memory: MemoryTier;
@@ -52,13 +98,55 @@ export interface PackagePermissions {
 	models: boolean;
 }
 
+export interface NodeScores {
+	privacy: number;
+	security: number;
+	performance: number;
+	governance: number;
+	reliability: number;
+	cost: number;
+}
+
+export interface PinOptions {
+	sensitive?: boolean;
+	validValues?: string[];
+	range?: [number, number];
+	step?: number;
+	enforceSchema?: boolean;
+	enforceGenericValueType?: boolean;
+}
+
+export interface Pin {
+	id: string;
+	name: string;
+	friendlyName?: string;
+	pinType: "Input" | "Output";
+	dataType: string;
+	defaultValue?: unknown;
+	options?: PinOptions;
+	schema?: unknown;
+	depends_on: string[];
+	connected_to: string[];
+}
+
 export interface PackageNodeEntry {
 	id: string;
 	name: string;
+	friendlyName?: string;
 	description: string;
 	category: string;
 	icon?: string;
+	scores?: NodeScores;
+	pins: Record<string, Pin>;
+	start?: boolean;
+	longRunning?: boolean;
+	docs?: string;
+	eventCallback?: boolean;
 	oauthProviders: string[];
+	requiredOauthScopes?: Record<string, string[]>;
+	onlyOffline: boolean;
+	version?: number;
+	permissions: INodePermission[];
 	metadata: Record<string, unknown>;
 }
 
@@ -73,8 +161,9 @@ export interface PackageManifest {
 	repository?: string;
 	homepage?: string;
 	permissions: PackagePermissions;
-	nodes: PackageNodeEntry[];
 	keywords: string[];
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
 	minFlowLikeVersion?: string;
 	wasmPath?: string;
 	wasmHash?: string;
@@ -84,7 +173,17 @@ export interface PackageManifest {
 export enum PackageStatus {
 	Active = "active",
 	Deprecated = "deprecated",
+	PendingReview = "pending_review",
+	Disabled = "disabled",
 	Yanked = "yanked",
+}
+
+export interface PackageReviewer {
+	userId: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	role?: string;
 }
 
 export interface PackageSource {
@@ -108,6 +207,7 @@ export interface PackageVersion {
 export interface RegistryEntry {
 	id: string;
 	manifest: PackageManifest;
+	nodes: PackageNodeEntry[];
 	versions: PackageVersion[];
 	status: PackageStatus;
 	downloadCount: number;
@@ -115,6 +215,12 @@ export interface RegistryEntry {
 	updatedAt: string;
 	source: PackageSource;
 	verified: boolean;
+	price: number;
+	visibility: string;
+	currentUserPermission?: number;
+	avgRating?: number | null;
+	ratingCount?: number;
+	ratingSum?: number;
 }
 
 export interface CachedPackage {
@@ -133,6 +239,13 @@ export interface PackageSummary {
 	status: PackageStatus;
 	keywords: string[];
 	verified: boolean;
+	price: number;
+	visibility: string;
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
+	metadata?: MetaSummary;
+	avgRating?: number | null;
+	ratingCount?: number;
 }
 
 export interface SearchResults {
@@ -149,6 +262,8 @@ export interface InstalledPackage {
 	installedAt: string;
 	wasmPath: string;
 	manifest: PackageManifest;
+	metadata?: MetaSummary;
+	wasmHash?: string;
 }
 
 export interface SearchFilters {
@@ -158,16 +273,22 @@ export interface SearchFilters {
 	author?: string;
 	verifiedOnly?: boolean;
 	includeDeprecated?: boolean;
+	includeDisabled?: boolean;
 	sortBy?: "relevance" | "name" | "downloads" | "updated_at" | "created_at";
 	sortDesc?: boolean;
 	offset?: number;
 	limit?: number;
+	language?: string;
+	includeOwn?: boolean;
+	ownedOnly?: boolean;
 }
 
 export interface PackageUpdate {
 	packageId: string;
+	packageName: string;
 	currentVersion: string;
 	latestVersion: string;
+	releaseNotes?: string;
 }
 
 // Admin types for package management
@@ -190,14 +311,19 @@ export interface PackageDetails {
 	repository?: string;
 	keywords: string[];
 	status: PackageAdminStatus;
+	visibility: PackageVisibility;
 	verified: boolean;
 	downloadCount: number;
 	wasmSize: number;
 	nodes: PackageNodeEntry[];
 	permissions: PackagePermissions;
+	price: number;
+	primaryCategory?: WasmPackageCategory;
+	secondaryCategory?: WasmPackageCategory;
 	createdAt: string;
 	updatedAt: string;
 	publishedAt?: string;
+	readme?: string;
 	submitterId?: string;
 }
 
@@ -213,6 +339,7 @@ export interface PackageReview {
 	id: string;
 	packageId: string;
 	reviewerId: string;
+	reviewer?: PackageReviewer;
 	action: ReviewAction;
 	comment?: string;
 	securityScore?: number;
@@ -250,4 +377,213 @@ export interface AdminPackageListResponse {
 export interface AdminPackageDetailResponse {
 	package: PackageDetails;
 	reviews: PackageReview[];
+}
+
+// Package visibility and compilation
+export type PackageVisibility = "private" | "public" | "public_request_access";
+
+export type CompilationStatus = "compiled" | "local_only" | "pending";
+
+export type InvitationStatus = "pending" | "accepted" | "rejected" | "expired";
+
+// Package user/team management
+export type PackagePermissionLevel = "owner" | "maintainer" | "user" | "buyer";
+
+export interface PackageUser {
+	id: string;
+	userId: string;
+	username?: string;
+	name?: string;
+	avatar?: string;
+	permission: number;
+	grantedAt: string;
+}
+
+export interface PackageInvitation {
+	id: string;
+	packageId: string;
+	inviteeId: string;
+	invitedById: string;
+	permission: number;
+	status: InvitationStatus;
+	createdAt: string;
+	expiresAt?: string;
+}
+
+export interface InviteUserRequest {
+	inviteeId: string;
+	permission: number;
+}
+
+export interface UpdateUserPermissionRequest {
+	permission: number;
+}
+
+// Two-step publish flow
+export interface UploadUrlResponse {
+	uploadUrl: string;
+	tmpPath: string;
+	expiresInSecs: number;
+}
+
+export interface TwoStepPublishRequest {
+	manifest: PackageManifest;
+	tmpPath: string;
+}
+
+// Recompile
+export interface RecompileRequest {
+	packageId: string;
+	version: string;
+}
+
+export interface RecompileResponse {
+	success: boolean;
+	message: string;
+}
+
+export interface MetaSummary {
+	lang: string;
+	name: string;
+	description: string;
+	icon?: string;
+	thumbnail?: string;
+}
+
+export interface PackageMeta {
+	id: string;
+	lang: string;
+	name: string;
+	description?: string;
+	longDescription?: string;
+	tags?: string[];
+	icon?: string;
+	thumbnail?: string;
+	website?: string;
+	supportUrl?: string;
+	docsUrl?: string;
+	useCase?: string;
+	releaseNotes?: string;
+	previewMedia?: string[];
+	ageRating?: number;
+}
+
+export interface UpsertPackageMetaRequest {
+	name: string;
+	description?: string;
+	longDescription?: string;
+	tags?: string[];
+	website?: string;
+	supportUrl?: string;
+	docsUrl?: string;
+	useCase?: string;
+	releaseNotes?: string;
+	ageRating?: number;
+}
+
+export interface PushMediaResponse {
+	signed_url: string;
+}
+
+// App package management
+export interface AppPackage {
+	id: string;
+	appId: string;
+	packageId: string;
+	packageName?: string;
+	version: string;
+	autoUpdate: boolean;
+	addedAt: string;
+	stale: boolean;
+	metadata?: MetaSummary;
+}
+
+export interface AddAppPackageRequest {
+	packageId: string;
+	version: string;
+	autoUpdate: boolean;
+}
+
+export interface UpdateAppPackageRequest {
+	version?: string;
+	autoUpdate?: boolean;
+}
+
+// Extended PackageVersion with compilation info
+export interface PackageVersionExtended extends PackageVersion {
+	compilationStatus: CompilationStatus;
+	compiledPlatforms: string[];
+	compilationError?: string;
+	duplicateOfPackageId?: string;
+	duplicateOfVersion?: string;
+	duplicateFlagged: boolean;
+	nodes: PackageNodeEntry[];
+}
+
+// Extended PackageDetails with visibility
+export interface PackageDetailsExtended extends PackageDetails {
+	visibility: PackageVisibility;
+	readme?: string;
+	users: PackageUser[];
+}
+
+// Purchase and access request types
+
+export interface WasmPurchaseParams {
+	successUrl?: string;
+	cancelUrl?: string;
+}
+
+export interface WasmPurchaseResponse {
+	checkoutUrl?: string;
+	alreadyHasAccess: boolean;
+	packageId: string;
+}
+
+export interface RequestAccessParams {
+	comment?: string;
+}
+
+export interface RequestAccessResponse {
+	granted: boolean;
+	queued: boolean;
+	requiresPurchase: boolean;
+	packageId: string;
+}
+
+export interface AccessRequest {
+	id: string;
+	userId: string;
+	packageId: string;
+	comment?: string;
+	createdAt: string;
+}
+
+// Package comment / review types
+
+export interface PackageCommentItem {
+	id: string;
+	text: string;
+	rating: number;
+	userId: string;
+	userName?: string;
+	userAvatar?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PackageCommentsResponse {
+	comments: PackageCommentItem[];
+	total: number;
+	offset: number;
+	limit: number;
+}
+
+export interface UpsertPackageCommentRequest {
+	text: string;
+	rating: number;
+}
+
+export interface UpsertPackageCommentResponse {
+	commentId: string;
 }

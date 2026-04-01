@@ -1,0 +1,40 @@
+---
+import { LuArrowRight, LuGithub } from "react-icons/lu";
+
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section class="relative py-24 overflow-hidden">
+  <div class="max-w-4xl mx-auto px-4 text-center">
+    <div class="rounded-3xl border border-border/40 bg-gradient-to-b from-card/60 to-card/30 backdrop-blur p-12 md:p-16">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4">
+        {t("dev.cta.headline")}
+      </h2>
+      <p class="text-lg text-muted-foreground max-w-2xl mx-auto mb-10">
+        {t("dev.cta.description")}
+      </p>
+
+      <div class="flex flex-wrap items-center justify-center gap-4">
+        <a
+          href="/download"
+          class="inline-flex items-center gap-2 bg-primary text-primary-foreground px-8 py-3.5 rounded-xl font-medium hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20 text-base"
+        >
+          {t("dev.cta.download")}
+          <LuArrowRight className="w-4 h-4" />
+        </a>
+        <a
+          href="https://github.com/TM9657/flow-like"
+          target="_blank"
+          class="inline-flex items-center gap-2 border border-border/60 bg-card/60 backdrop-blur px-8 py-3.5 rounded-xl font-medium hover:bg-card/80 transition-colors text-base"
+        >
+          <LuGithub className="w-5 h-5" />
+          {t("dev.cta.github")}
+        </a>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,7 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -60,7 +60,8 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Ordered GPS coordinates to match",
             VariableType::Struct,
         )
-        .set_schema::<Vec<GeoCoordinate>>()
+        .set_schema::<GeoCoordinate>()
+        .set_value_type(ValueType::Array)
         .set_options(PinOptions::new().set_enforce_schema(true).build())
         .set_default_value(Some(json!([])));
 
@@ -77,18 +78,18 @@ impl NodeLogic for OsrmMatchTraceNode {
             "timestamps",
             "Timestamps",
             "Optional UNIX timestamps for each coordinate (seconds)",
-            VariableType::Struct,
+            VariableType::Integer,
         )
-        .set_schema::<Vec<i64>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "radiuses",
             "Radiuses",
             "Optional search radiuses in meters for each coordinate",
-            VariableType::Struct,
+            VariableType::Float,
         )
-        .set_schema::<Vec<f64>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(json!([])));
 
         node.add_input_pin(
@@ -139,7 +140,8 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Matched routes for the trace",
             VariableType::Struct,
         )
-        .set_schema::<Vec<RouteResult>>();
+        .set_schema::<RouteResult>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "primary_matching",
@@ -155,7 +157,8 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Tracepoints mapped to the road network",
             VariableType::Struct,
         )
-        .set_schema::<Vec<Option<Tracepoint>>>();
+        .set_schema::<Tracepoint>()
+        .set_value_type(ValueType::Array);
 
         node.set_scores(
             NodeScores::new()

@@ -56,3 +56,4 @@ next-env.d.ts
 .yarn/install-state.gz
 .env
 .VSCodeCounter
+google-services.json

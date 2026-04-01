@@ -1,0 +1,57 @@
+---
+interface Props {
+  t: (key: string) => string;
+  accent: string;
+}
+
+const { t, accent } = Astro.props;
+
+const theme: Record<string, Record<string, string>> = {
+  orange:  { badge: "bg-orange-500/15 text-orange-300 border-orange-500/30",  border: "border-orange-500/30",  num: "text-orange-500/30", highlight: "text-orange-400", line: "bg-orange-500" },
+  emerald: { badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30", border: "border-emerald-500/30", num: "text-emerald-500/30", highlight: "text-emerald-400", line: "bg-emerald-500" },
+  blue:    { badge: "bg-blue-500/15 text-blue-300 border-blue-500/30",     border: "border-blue-500/30",    num: "text-blue-500/30",   highlight: "text-blue-400",   line: "bg-blue-500" },
+  violet:  { badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",  border: "border-violet-500/30",  num: "text-violet-500/30", highlight: "text-violet-400", line: "bg-violet-500" },
+  red:     { badge: "bg-red-500/15 text-red-300 border-red-500/30",       border: "border-red-500/30",     num: "text-red-500/30",    highlight: "text-red-400",    line: "bg-red-500" },
+  cyan:    { badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",     border: "border-cyan-500/30",    num: "text-cyan-500/30",   highlight: "text-cyan-400",   line: "bg-cyan-500" },
+  amber:   { badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",   border: "border-amber-500/30",   num: "text-amber-500/30",  highlight: "text-amber-400",  line: "bg-amber-500" },
+};
+
+const c = theme[accent] ?? theme.orange;
+const problems = [
+  { num: "01", text: t("ind.problem.item1") },
+  { num: "02", text: t("ind.problem.item2") },
+  { num: "03", text: t("ind.problem.item3") },
+];
+---
+
+<section class="relative py-24 sm:py-32">
+  <div class="max-w-7xl mx-auto px-6 lg:px-8">
+    <div class="max-w-2xl mb-16">
+      <div class={`inline-flex items-center px-3 py-1 rounded-full border text-xs font-medium mb-4 ${c.badge}`}>
+        {t("ind.problem.tagline")}
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-foreground mb-4">
+        {t("ind.problem.headline")}
+      </h2>
+      <p class="text-lg text-muted-foreground leading-relaxed">
+        {t("ind.problem.description")}
+      </p>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-3">
+      {problems.map((p) => (
+        <div class={`relative group rounded-xl border ${c.border} bg-card/50 backdrop-blur-sm p-6 transition-all hover:bg-card/80`}>
+          <div class="flex items-start gap-4">
+            <span class={`text-4xl font-black tabular-nums leading-none select-none ${c.num}`}>
+              {p.num}
+            </span>
+            <div class="pt-1">
+              <div class={`w-8 h-0.5 rounded-full mb-3 ${c.line}`}></div>
+              <p class="text-sm text-muted-foreground leading-relaxed">{p.text}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

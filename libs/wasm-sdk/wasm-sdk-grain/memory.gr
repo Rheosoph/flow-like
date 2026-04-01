@@ -1,0 +1,157 @@
+// Flow-Like WASM SDK — Memory utilities (Grain)
+//
+// Handles packing/unpacking i64 ↔ (ptr, len), raw pointer ↔ Grain String
+// conversion, and the alloc/dealloc exports required by the host ABI.
+//
+// Grain version: 0.6+
+
+module Memory
+
+from "runtime/unsafe/wasmi32" include WasmI32
+use WasmI32.{
+  (+),
+  (-),
+  (*),
+  (<),
+  load,
+  load8U,
+  store8,
+  fromGrain,
+  toGrain,
+  wrapI64,
+  eqz,
+}
+from "runtime/unsafe/wasmi64" include WasmI64
+use WasmI64.{ extendI32U }
+from "bytes" include Bytes
+
+provide let abiVersion = 1
+
+// -----------------------------------------------------------------------
+// i64 packing: upper 32 bits = pointer, lower 32 bits = length
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let packI64 = (ptr: WasmI32, len: WasmI32) => {
+  use WasmI64.{ (|), (<<) }
+  (extendI32U(ptr) << 32N) | extendI32U(len)
+}
+
+@unsafe
+provide let unpackHigh = (packed: WasmI64) => {
+  use WasmI64.{ (>>>) }
+  wrapI64(packed >>> 32N)
+}
+
+@unsafe
+provide let unpackLow = (packed: WasmI64) => {
+  wrapI64(packed)
+}
+
+// -----------------------------------------------------------------------
+// Grain String ⟷ raw WASM pointer conversions
+// Grain String heap layout: [4-byte tag] [4-byte byte_length] [data…]
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let stringDataPtr = (s: String) => {
+  fromGrain(s) + 8n
+}
+
+@unsafe
+provide let stringByteLen = (s: String) => {
+  load(fromGrain(s), 4n)
+}
+
+@unsafe
+provide let packString = (s: String) => {
+  packI64(stringDataPtr(s), stringByteLen(s))
+}
+
+@unsafe
+provide let ptrToString = (ptr: WasmI32, len: WasmI32) => {
+  if (eqz(len)) {
+    ""
+  } else {
+    // Allocate a Bytes buffer and copy raw bytes into it
+    let size: Number = toGrain(len * 2n + 1n)
+    let buf = Bytes.make(size)
+    let bufPtr = fromGrain(buf) + 8n
+    let mut i = 0n
+    while (i < len) {
+      store8(bufPtr + i, load8U(ptr + i, 0n), 0n)
+      i = i + 1n
+    }
+    Bytes.toString(buf)
+  }
+}
+
+@unsafe
+provide let unpackString = (packed: WasmI64) => {
+  if (WasmI64.eqz(packed)) {
+    ""
+  } else {
+    ptrToString(unpackHigh(packed), unpackLow(packed))
+  }
+}
+
+// -----------------------------------------------------------------------
+// Number ⟷ WasmI32 helpers (Grain simple-number tag: value*2+1)
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let toNumber = (n: WasmI32) => {
+  let result: Number = toGrain(n * 2n + 1n)
+  result
+}
+
+@unsafe
+provide let fromNumber = (n: Number) => {
+  use WasmI32.{ (>>) }
+  fromGrain(n) >> 1n
+}
+
+// -----------------------------------------------------------------------
+// Scratch buffer for alloc / dealloc exports
+// -----------------------------------------------------------------------
+
+@unsafe
+let scratchBuffer = Bytes.make(1048576)
+
+@unsafe
+let mut scratchOffset: WasmI32 = 0n
+
+@unsafe
+provide let wasmAlloc = (size: WasmI32) => {
+  let base = fromGrain(scratchBuffer) + 8n
+  let ptr = base + scratchOffset
+  scratchOffset = scratchOffset + size
+  ptr
+}
+
+@unsafe
+provide let wasmDealloc = (_ptr: WasmI32, _size: WasmI32) => {
+  void
+}
+
+@unsafe
+provide let resetScratch = () => {
+  scratchOffset = 0n
+}
+
+// -----------------------------------------------------------------------
+// Pack an arbitrary result string using the scratch buffer
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let packResult = (s: String) => {
+  let len = stringByteLen(s)
+  let src = stringDataPtr(s)
+  let dst = wasmAlloc(len)
+  let mut i = 0n
+  while (i < len) {
+    store8(dst + i, load8U(src + i, 0n), 0n)
+    i = i + 1n
+  }
+  packI64(dst, len)
+}

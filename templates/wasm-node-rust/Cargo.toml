@@ -2,45 +2,20 @@
 name = "flow-like-wasm-node-template"
 version = "0.1.0"
 edition = "2021"
-description = "Template for creating Flow-Like WASM nodes in Rust"
+description = "Template for creating Flow-Like WASM nodes in Rust (Component Model)"
 license = "MIT"
 
 [workspace]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Core SDK for building WASM nodes
-flow-like-wasm-sdk = { path = "../wasm-sdk" }
-
-# JSON serialization
+# When copying this template outside the repo, replace with: flow-like-wasm-sdk = "0.3"
+flow-like-wasm-sdk = { version="0.3.4", features = ["rig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# ============================================================================
-# Example Node Packages
-# ============================================================================
-
-[[example]]
-name = "math_nodes"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "string_nodes"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "control_flow"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "json_nodes"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "validation_nodes"
-crate-type = ["cdylib"]
+rig-core = { version = "0.29.0", default-features = false, features = ["wasm"] }
 
 [profile.release]
 opt-level = "z"

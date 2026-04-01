@@ -1,0 +1,409 @@
+---
+title: Python SDK
+description: Complete reference for the flow-like Python package — authenticate, trigger workflows, manage files, query databases, and use LLMs from Python.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+## Installation
+
+<Tabs>
+  <TabItem label="uv (recommended)">
+    ```bash
+    uv add flow-like
+    ```
+  </TabItem>
+  <TabItem label="pip">
+    ```bash
+    pip install flow-like
+    ```
+  </TabItem>
+</Tabs>
+
+### Optional extras
+
+| Extra | For | Install |
+|-------|-----|---------|
+| `lance` | `create_lance_connection()` | `uv add flow-like[lance]` |
+| `langchain` | LangChain wrappers | `uv add flow-like[langchain]` |
+
+## Creating a Client
+
+```python
+from flow_like import FlowLikeClient
+
+# From environment variables (FLOW_LIKE_BASE_URL + FLOW_LIKE_PAT or FLOW_LIKE_API_KEY)
+client = FlowLikeClient()
+
+# Explicit PAT
+client = FlowLikeClient(
+    base_url="https://api.flow-like.com",
+    pat="pat_myid.mysecret",
+)
+
+# Explicit API key
+client = FlowLikeClient(
+    base_url="https://api.flow-like.com",
+    api_key="flk_appid.keyid.secret",
+)
+
+# Auto-detect token type
+client = FlowLikeClient(
+    base_url="https://api.flow-like.com",
+    token="pat_myid.mysecret",  # or "flk_..."
+)
+```
+
+<Aside type="tip">
+  Use the client as a context manager to ensure HTTP connections are properly closed:
+  ```python
+  async with FlowLikeClient(base_url="...", pat="...") as client:
+      apps = await client.alist_apps()
+  ```
+</Aside>
+
+## Sync vs Async
+
+Every method has both a synchronous and an asynchronous variant. Async methods are prefixed with `a`:
+
+```python
+# Sync
+llms = client.list_llms()
+
+# Async
+llms = await client.alist_llms()
+```
+
+## Workflows
+
+### Trigger a workflow (streaming)
+
+Returns a Server-Sent Events stream:
+
+```python
+for event in client.trigger_workflow("app-id", "board-id", "start-node-id", {"key": "value"}):
+    print(event.data)
+```
+
+### Trigger a workflow (async)
+
+Returns immediately with a run ID for polling:
+
+```python
+result = client.trigger_workflow_async("app-id", "board-id", "start-node-id", {"key": "value"})
+print(result.run_id, result.poll_token)
+```
+
+### Trigger an event
+
+```python
+# Streaming
+for event in client.trigger_event("app-id", "event-id", {"key": "value"}):
+    print(event.data)
+
+# Async invocation
+result = client.trigger_event_async("app-id", "event-id")
+```
+
+## Execution Monitoring
+
+```python
+# Check run status
+status = client.get_run_status("run-id")
+print(status.status)  # "running" | "completed" | "failed"
+
+# Poll for execution events
+poll = client.poll_execution("poll-token", after_sequence=0, timeout=30)
+for event in poll.events:
+    print(event)
+```
+
+## File Management
+
+```python
+# List files
+files = client.list_files("app-id")
+
+# Upload
+client.upload_file("app-id", open("data.csv", "rb"))
+
+# Download
+content = client.download_file("app-id", "path/to/file.csv")
+
+# Delete
+client.delete_file("app-id", "path/to/file.csv")
+```
+
+## Database / LanceDB
+
+### Credentials
+
+```python
+# Get resolved credentials (uri + storage_options ready for LanceDB)
+info = client.get_db_credentials("app-id", access_mode="read")
+print(info.uri, info.storage_options)
+
+# Get raw presign response (shared_credentials dict, db_path, etc.)
+raw = client.get_db_credentials_raw("app-id", table_name="_default", access_mode="write")
+```
+
+### Tables
+
+```python
+# List tables
+tables = client.list_tables("app-id")
+
+# Query a table
+result = client.query_table("app-id", "my-table", {"filter": "col > 5", "limit": 10})
+```
+
+### LanceDB Connection
+
+<Aside type="note">
+  Requires the `lance` extra: `uv add flow-like[lance]`
+</Aside>
+
+```python
+# Returns a ready-to-use lancedb.DBConnection
+db = client.create_lance_connection("app-id", access_mode="write")
+
+# Use with the LanceDB API
+table = db.open_table("my-embeddings")
+results = table.search([0.1, 0.2, ...]).limit(10).to_pandas()
+```
+
+Access modes:
+- `"read"` (default) — read-only credentials
+- `"write"` — full read-write credentials
+
+## Chat Completions
+
+Use `list_llms()` to discover available model `bit_id` values.
+
+```python
+# Non-streaming
+result = client.chat_completions(
+    messages=[{"role": "user", "content": "Explain quantum computing in one sentence."}],
+    bit_id="bit-id-for-gpt4",
+    temperature=0.7,
+    max_tokens=200,
+)
+print(result.choices[0].message.content)
+```
+
+### Streaming
+
+```python
+for event in client.chat_completions(
+    messages=[{"role": "user", "content": "Hello!"}],
+    bit_id="bit-id-for-gpt4",
+    stream=True,
+):
+    print(event.data, end="")
+```
+
+### Usage tracking
+
+```python
+usage = client.get_usage()
+print(usage)  # {"llm_price": ..., "embedding_price": ...}
+```
+
+## Embeddings
+
+Use `list_embedding_models()` to discover available embedding model `bit_id` values.
+
+```python
+result = client.embed(bit_id="bit-id-for-embedding", input="Hello world")
+print(result.embeddings)  # list[list[float]]
+
+# Multiple inputs
+result = client.embed(bit_id="bit-id-for-embedding", input=["Hello", "World"])
+```
+
+## Model Discovery
+
+```python
+# List all remotely-available LLMs
+llms = client.list_llms()
+for m in llms:
+    print(m.bit_id, m.name, m.provider_name, m.context_length)
+
+# List all remotely-available embedding models
+embeddings = client.list_embedding_models()
+for m in embeddings:
+    print(m.bit_id, m.name, m.vector_length)
+
+# Search all bits by keyword
+bits = client.search_bits(search="llama", bit_types=["Llm"])
+
+# Get a specific bit by ID
+bit = client.get_bit("some-bit-id")
+```
+
+Each model returns a `ModelInfo` dataclass:
+
+```python
+@dataclass
+class ModelInfo:
+    bit_id: str
+    name: str
+    description: str
+    provider_name: str | None
+    model_id: str | None
+    context_length: int | None   # LLMs only
+    vector_length: int | None    # Embeddings only
+    languages: list[str]
+    tags: list[str]
+```
+
+## Board Management
+
+```python
+# List all boards in an app
+boards = client.list_boards("app-id")
+
+# Get a specific board
+board = client.get_board("app-id", "board-id")
+
+# Create or update a board
+result = client.upsert_board("app-id", "board-id", name="My Board", description="Does things")
+print(result.id)
+
+# Delete a board
+client.delete_board("app-id", "board-id")
+
+# Pre-run analysis (discover runtime variables)
+prerun = client.prerun_board("app-id", "board-id")
+print(prerun.runtime_variables)
+```
+
+## App Management
+
+```python
+apps = client.list_apps()
+app = client.get_app("app-id")
+new_app = client.create_app("My App", "Description")
+```
+
+## HTTP Sinks
+
+```python
+response = client.trigger_http_sink(
+    "app-id",
+    "my/webhook/path",
+    method="POST",
+    body={"event": "user.created", "data": {"userId": "123"}},
+)
+```
+
+## Health Check
+
+```python
+health = client.health()
+print(health.healthy)  # True
+```
+
+## LangChain Integration
+
+<Aside type="tip">
+  Requires the `langchain` extra: `uv add flow-like[langchain]`
+</Aside>
+
+### Factory methods (recommended)
+
+Create LangChain-compatible models from your existing client:
+
+```python
+# Chat model
+chat_model = client.as_langchain_chat(
+    bit_id="your-model-bit-id",
+    temperature=0.7,
+    max_tokens=1024,
+)
+
+# Embeddings
+embeddings = client.as_langchain_embeddings(bit_id="your-embedding-bit-id")
+```
+
+### Standalone usage
+
+```python
+from flow_like.langchain import FlowLikeChatModel, FlowLikeEmbeddings
+
+chat_model = FlowLikeChatModel(
+    base_url="https://api.flow-like.com",
+    token="pat_myid.mysecret",
+    bit_id="your-model-bit-id",
+    temperature=0.7,
+    max_tokens=1024,
+)
+
+embeddings = FlowLikeEmbeddings(
+    base_url="https://api.flow-like.com",
+    token="pat_myid.mysecret",
+    bit_id="your-embedding-bit-id",
+)
+```
+
+### With LangChain chains
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+chat_model = client.as_langchain_chat("your-model-bit-id")
+
+chain = (
+    ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant."),
+        ("human", "{input}"),
+    ])
+    | chat_model
+    | StrOutputParser()
+)
+
+response = chain.invoke({"input": "What is Flow-Like?"})
+```
+
+### RAG with LangChain
+
+```python
+embeddings = client.as_langchain_embeddings("your-embedding-bit-id")
+
+# Use with any LangChain vector store
+vectors = embeddings.embed_documents([
+    "Flow-Like is a visual workflow engine.",
+    "It runs on your device.",
+])
+query_vector = embeddings.embed_query("What runs locally?")
+```
+
+### Async support
+
+LangChain async methods work out of the box:
+
+```python
+response = await chat_model.ainvoke("Hello!")
+vectors = await embeddings.aembed_documents(["text1", "text2"])
+```
+
+## Requirements
+
+- **Python** >= 3.10
+- **httpx** >= 0.27.0 (installed automatically)
+
+## Error Handling
+
+The SDK raises `httpx.HTTPStatusError` for non-2xx responses:
+
+```python
+import httpx
+
+try:
+    result = client.get_app("nonexistent-id")
+except httpx.HTTPStatusError as e:
+    print(f"HTTP {e.response.status_code}: {e.response.text}")
+```

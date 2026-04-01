@@ -86,7 +86,31 @@ export interface INode {
 	start?: boolean | null;
 	/** Schema version for node migration. When catalog version > placed version, pins are synced. */
 	version?: number | null;
+	/** WASM metadata for external nodes. Undefined for built-in catalog nodes. */
+	wasm?: INodeWasm | null;
 	[property: string]: any;
+}
+
+export enum INodePermission {
+	NetworkHttp = "network:http",
+	NetworkWebsocket = "network:websocket",
+	NetworkTcp = "network:tcp",
+	NetworkUdp = "network:udp",
+	NetworkDns = "network:dns",
+	StorageRead = "storage:read",
+	StorageWrite = "storage:write",
+	Variables = "variables",
+	Cache = "cache",
+	Streaming = "streaming",
+	Models = "models",
+	A2ui = "a2ui",
+	OAuth = "oauth",
+	Functions = "functions",
+}
+
+export interface INodeWasm {
+	package_id: string;
+	permissions: INodePermission[];
 }
 
 export interface IPin {

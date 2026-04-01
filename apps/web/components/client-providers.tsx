@@ -12,6 +12,7 @@ import { Toaster } from "@tm9657/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@tm9657/flow-like-ui/components/ui/tooltip";
 import { useNetworkStatus } from "@tm9657/flow-like-ui/hooks/use-network-status";
 import { createIDBPersister } from "@tm9657/flow-like-ui/lib/persister";
+import { runIDBCleanup } from "@tm9657/flow-like-ui/lib/idb-cleanup";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { WebAuthProvider } from "../components/auth-provider";
@@ -28,7 +29,7 @@ const queryClient = new QueryClient({
 		queries: {
 			networkMode: "always",
 			staleTime: 30 * 1000,
-			gcTime: 7 * 24 * 60 * 60 * 1000,
+			gcTime: 24 * 60 * 60 * 1000,
 			refetchOnWindowFocus: false,
 			refetchOnReconnect: false,
 			refetchOnMount: true,
@@ -55,12 +56,18 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function ClientProviders({ children }: { children: React.ReactNode }) {
+	useEffect(() => {
+		const timer = setTimeout(() => runIDBCleanup().catch(() => {}), 5_000);
+		return () => clearTimeout(timer);
+	}, []);
+
 	return (
 		<ReactFlowProvider>
 			<PersistQueryClientProvider
 				client={queryClient}
 				persistOptions={{
 					persister,
+					maxAge: 24 * 60 * 60 * 1000,
 				}}
 			>
 				<NetworkAwareProvider>

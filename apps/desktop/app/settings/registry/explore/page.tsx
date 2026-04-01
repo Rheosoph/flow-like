@@ -3,18 +3,15 @@
 import {
 	Badge,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Input,
+	PackageStatusBadge,
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
 	Skeleton,
+	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
 import type {
@@ -23,9 +20,7 @@ import type {
 	SearchFilters,
 	SearchResults,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
-import { motion } from "framer-motion";
 import {
-	ArrowUpDown,
 	Check,
 	Download,
 	Loader2,
@@ -36,7 +31,10 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { usePackageStatusMap } from "../../../../hooks/use-package-status";
+import { fetcher } from "../../../../lib/api";
 
 type SortOption =
 	| "relevance"
@@ -53,139 +51,154 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 	{ value: "name", label: "Name" },
 ];
 
-function PackageCard({
+function PackageItem({
 	pkg,
 	isInstalled,
 	installedVersion,
 	onInstall,
 	onUninstall,
+	onSelect,
 	isLoading,
+	compileStatus,
 }: {
 	pkg: PackageSummary;
 	isInstalled: boolean;
 	installedVersion?: string;
 	onInstall: (id: string) => void;
 	onUninstall: (id: string) => void;
+	onSelect?: (id: string) => void;
 	isLoading: boolean;
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
 	return (
-		<motion.div
-			initial={{ opacity: 0, y: 10 }}
-			animate={{ opacity: 1, y: 0 }}
-			transition={{ duration: 0.2 }}
+		<div
+			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
+			onClick={() => onSelect?.(pkg.id)}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onSelect?.(pkg.id);
+				}
+			}}
+			role="button"
+			tabIndex={0}
 		>
-			<Card className="hover:shadow-md transition-shadow">
-				<CardHeader className="pb-2">
-					<div className="flex items-start justify-between gap-2">
-						<div className="flex items-center gap-2 min-w-0">
-							<Package className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
-							<CardTitle className="text-base truncate">{pkg.name}</CardTitle>
-						</div>
-						<div className="flex items-center gap-1 flex-shrink-0">
-							{pkg.verified && (
-								<Badge variant="secondary" className="gap-1">
-									<Shield className="h-3 w-3" />
-									Verified
-								</Badge>
-							)}
-							<Badge variant="outline">v{pkg.latestVersion}</Badge>
-						</div>
-					</div>
-					<CardDescription className="line-clamp-2">
-						{pkg.description}
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<div className="flex flex-wrap gap-1 mb-3">
-						{pkg.keywords.slice(0, 3).map((keyword) => (
-							<Badge key={keyword} variant="outline" className="text-xs">
-								{keyword}
-							</Badge>
-						))}
-						{pkg.keywords.length > 3 && (
-							<Badge variant="outline" className="text-xs">
-								+{pkg.keywords.length - 3}
-							</Badge>
-						)}
-					</div>
-					<div className="flex items-center justify-between">
-						<span className="text-xs text-muted-foreground">
-							{pkg.downloadCount.toLocaleString()} downloads
+			<div className="flex items-start justify-between gap-3 mb-2">
+				<div className="flex items-center gap-2 min-w-0 flex-1">
+					<span className="truncate text-sm font-medium">{pkg.name}</span>
+					{pkg.verified && (
+						<Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+					)}
+					<span className="text-[11px] text-muted-foreground/50 shrink-0">
+						v{pkg.latestVersion}
+					</span>
+					{compileStatus && compileStatus !== "idle" && (
+						<PackageStatusBadge status={compileStatus} />
+					)}
+				</div>
+			</div>
+
+			{pkg.description && (
+				<p className="text-xs text-muted-foreground/70 line-clamp-2 mb-3 leading-relaxed">
+					{pkg.description}
+				</p>
+			)}
+
+			{pkg.keywords.length > 0 && (
+				<div className="flex flex-wrap gap-1.5 mb-3">
+					{pkg.keywords.slice(0, 4).map((keyword) => (
+						<Badge
+							key={keyword}
+							variant="outline"
+							className="text-[10px] px-1.5 py-0 h-5 font-normal text-muted-foreground/60 border-border/30"
+						>
+							{keyword}
+						</Badge>
+					))}
+					{pkg.keywords.length > 4 && (
+						<span className="text-[10px] text-muted-foreground/40 self-center">
+							+{pkg.keywords.length - 4}
 						</span>
-						{isInstalled ? (
-							<div className="flex items-center gap-2">
-								<span className="text-xs text-green-600 flex items-center gap-1">
-									<Check className="h-3 w-3" />v{installedVersion}
-								</span>
-								<Button
-									size="sm"
-									variant="destructive"
-									onClick={() => onUninstall(pkg.id)}
-									disabled={isLoading}
-								>
-									{isLoading ? (
-										<Loader2 className="h-4 w-4 animate-spin" />
-									) : (
-										<Trash2 className="h-4 w-4" />
-									)}
-								</Button>
-							</div>
-						) : (
-							<Button
-								size="sm"
-								onClick={() => onInstall(pkg.id)}
-								disabled={isLoading}
-							>
-								{isLoading ? (
-									<Loader2 className="h-4 w-4 animate-spin" />
-								) : (
-									<>
-										<Download className="h-4 w-4 mr-1" />
-										Install
-									</>
-								)}
-							</Button>
-						)}
+					)}
+				</div>
+			)}
+
+			<div className="flex items-center justify-between">
+				<span className="text-[11px] text-muted-foreground/50">
+					{pkg.downloadCount.toLocaleString()} downloads
+				</span>
+				{isInstalled ? (
+					<div className="flex items-center gap-2">
+						<span className="text-[11px] text-muted-foreground/60 flex items-center gap-1">
+							<Check className="h-3 w-3 text-green-500/70" />v{installedVersion}
+						</span>
+						<Button
+							size="sm"
+							variant="ghost"
+							className="h-7 w-7 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 p-0"
+							onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
+							disabled={isLoading}
+						>
+							{isLoading ? (
+								<Loader2 className="h-3.5 w-3.5 animate-spin" />
+							) : (
+								<Trash2 className="h-3.5 w-3.5" />
+							)}
+						</Button>
 					</div>
-				</CardContent>
-			</Card>
-		</motion.div>
+				) : (
+					<Button
+						size="sm"
+						variant="ghost"
+						className="h-7 gap-1.5 rounded-full text-xs text-muted-foreground/70 hover:text-foreground/80 hover:bg-muted/30 px-3"
+						onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
+						disabled={isLoading}
+					>
+						{isLoading ? (
+							<Loader2 className="h-3.5 w-3.5 animate-spin" />
+						) : (
+							<>
+								<Download className="h-3.5 w-3.5" />
+								Install
+							</>
+						)}
+					</Button>
+				)}
+			</div>
+		</div>
 	);
 }
 
-function PackageCardSkeleton() {
+function PackageItemSkeleton() {
 	return (
-		<Card>
-			<CardHeader className="pb-2">
-				<div className="flex items-start justify-between gap-2">
-					<Skeleton className="h-5 w-32" />
-					<Skeleton className="h-5 w-16" />
-				</div>
-				<Skeleton className="h-4 w-full mt-2" />
-				<Skeleton className="h-4 w-3/4" />
-			</CardHeader>
-			<CardContent>
-				<div className="flex gap-1 mb-3">
-					<Skeleton className="h-5 w-12" />
-					<Skeleton className="h-5 w-16" />
-					<Skeleton className="h-5 w-10" />
-				</div>
-				<div className="flex items-center justify-between">
-					<Skeleton className="h-4 w-24" />
-					<Skeleton className="h-8 w-20" />
-				</div>
-			</CardContent>
-		</Card>
+		<div className="rounded-xl border border-border/20 bg-card/50 p-4">
+			<div className="flex items-center gap-2 mb-2">
+				<Skeleton className="h-4 w-28" />
+				<Skeleton className="h-3 w-12" />
+			</div>
+			<Skeleton className="h-3 w-full mb-1" />
+			<Skeleton className="h-3 w-3/4 mb-3" />
+			<div className="flex gap-1.5 mb-3">
+				<Skeleton className="h-5 w-12 rounded-full" />
+				<Skeleton className="h-5 w-16 rounded-full" />
+				<Skeleton className="h-5 w-10 rounded-full" />
+			</div>
+			<div className="flex items-center justify-between">
+				<Skeleton className="h-3 w-20" />
+				<Skeleton className="h-7 w-16 rounded-full" />
+			</div>
+		</div>
 	);
 }
 
 export default function ExplorePackagesPage() {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
-
 	const [searchQuery, setSearchQuery] = useState("");
 	const [sortBy, setSortBy] = useState<SortOption>("relevance");
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 	const [searchResults, setSearchResults] = useState<SearchResults | null>(
 		null,
 	);
@@ -194,6 +207,7 @@ export default function ExplorePackagesPage() {
 	>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [loadingPackage, setLoadingPackage] = useState<string | null>(null);
+	const packageStatusMap = usePackageStatusMap();
 
 	const initRegistry = useCallback(async () => {
 		if (!backend?.registryState || isInitialized || isInitializing) return;
@@ -212,6 +226,8 @@ export default function ExplorePackagesPage() {
 		initRegistry();
 	}, [initRegistry]);
 
+	const isAuthenticated = !!auth?.user?.access_token;
+
 	const fetchPackages = useCallback(async () => {
 		if (!backend?.registryState || !isInitialized) return;
 		setIsLoading(true);
@@ -229,7 +245,7 @@ export default function ExplorePackagesPage() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized, searchQuery, sortBy]);
+	}, [backend?.registryState, isInitialized, searchQuery, sortBy, isAuthenticated]);
 
 	const fetchInstalled = useCallback(async () => {
 		if (!backend?.registryState || !isInitialized) return;
@@ -288,56 +304,61 @@ export default function ExplorePackagesPage() {
 	if (isInitializing) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<div className="text-center">
-					<Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
-					<p className="text-muted-foreground">Initializing registry...</p>
+				<div className="flex flex-col items-center gap-3">
+					<Loader2 className="h-5 w-5 animate-spin text-muted-foreground/50" />
+					<p className="text-xs text-muted-foreground/50">
+						Initializing registry…
+					</p>
 				</div>
 			</div>
 		);
 	}
 
-	return (
-		<div className="flex flex-col h-full space-y-4">
-			<div className="flex items-center justify-between">
-				<div>
-					<h1 className="text-2xl font-bold">Explore Packages</h1>
-					<p className="text-sm text-muted-foreground">
-						Discover and install WASM node packages from the registry
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						fetchPackages();
-						fetchInstalled();
-					}}
-					disabled={isLoading}
-				>
-					<RefreshCw
-						className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`}
-					/>
-					Refresh
-				</Button>
-			</div>
+	if (selectedPackageId) {
+		return (
+			<StorePackageDetail
+				packageId={selectedPackageId}
+				onBack={() => setSelectedPackageId(null)}
+				onInstallSuccess={() => {
+					toast.success("Package installed");
+					fetchInstalled();
+				}}
+				onUninstallSuccess={() => {
+					toast.success("Package uninstalled");
+					fetchInstalled();
+				}}
+				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
+				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onDeleteSuccess={() => {
+					setSelectedPackageId(null);
+					fetchInstalled();
+				}}
+				fetcher={fetcher}
+				auth={auth}
+				compileStatus={packageStatusMap.get(selectedPackageId)}
+			/>
+		);
+	}
 
+	return (
+		<div className="flex flex-col h-full gap-4">
 			<div className="flex items-center gap-2">
-				<div className="relative flex-1 max-w-md">
-					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+				<div className="relative flex-1 max-w-lg">
+					<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder="Search packages..."
+						placeholder="Search packages…"
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && fetchPackages()}
-						className="pl-9"
+						className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
 					/>
 				</div>
+
 				<Select
 					value={sortBy}
 					onValueChange={(v) => setSortBy(v as SortOption)}
 				>
-					<SelectTrigger className="w-[180px]">
-						<ArrowUpDown className="h-4 w-4 mr-2" />
+					<SelectTrigger className="w-40 h-10 rounded-full bg-muted/30 border-transparent text-sm text-muted-foreground/70">
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
@@ -348,48 +369,69 @@ export default function ExplorePackagesPage() {
 						))}
 					</SelectContent>
 				</Select>
-				<Button onClick={fetchPackages} disabled={isLoading}>
-					{isLoading ? (
-						<Loader2 className="h-4 w-4 animate-spin" />
-					) : (
-						<Search className="h-4 w-4" />
-					)}
+
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+					onClick={() => {
+						fetchPackages();
+						fetchInstalled();
+					}}
+					disabled={isLoading}
+				>
+					<RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
 				</Button>
 			</div>
 
 			{searchResults && (
-				<p className="text-sm text-muted-foreground">
-					{searchResults.totalCount} packages found
+				<p className="text-xs text-muted-foreground/50">
+					{searchResults.totalCount} package
+					{searchResults.totalCount !== 1 ? "s" : ""} found
 				</p>
 			)}
 
 			<div className="flex-1 overflow-y-auto">
 				{isLoading ? (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+					<div
+						className="grid gap-3"
+						style={{
+							gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+						}}
+					>
 						{Array.from({ length: 6 }).map((_, i) => (
-							<PackageCardSkeleton key={i} />
+							<PackageItemSkeleton key={i} />
 						))}
 					</div>
 				) : searchResults?.packages.length ? (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+					<div
+						className="grid gap-3"
+						style={{
+							gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+						}}
+					>
 						{searchResults.packages.map((pkg) => (
-							<PackageCard
+							<PackageItem
 								key={pkg.id}
 								pkg={pkg}
 								isInstalled={installedIds.has(pkg.id)}
 								installedVersion={installedVersionMap.get(pkg.id)}
 								onInstall={handleInstall}
 								onUninstall={handleUninstall}
+								onSelect={setSelectedPackageId}
 								isLoading={loadingPackage === pkg.id}
+								compileStatus={packageStatusMap.get(pkg.id)}
 							/>
 						))}
 					</div>
 				) : (
-					<div className="flex flex-col items-center justify-center py-12 text-center">
-						<Package className="h-12 w-12 text-muted-foreground mb-4" />
-						<p className="text-muted-foreground">No packages found</p>
-						<p className="text-sm text-muted-foreground mt-2">
-							Try a different search term or browse all packages
+					<div className="flex flex-col items-center justify-center py-20 text-center">
+						<Package className="h-8 w-8 text-muted-foreground/30 mb-3" />
+						<p className="text-sm text-muted-foreground/50">
+							No packages found
+						</p>
+						<p className="text-xs text-muted-foreground/30 mt-1">
+							Try a different search term
 						</p>
 					</div>
 				)}

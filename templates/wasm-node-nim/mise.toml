@@ -1,0 +1,18 @@
+[tools]
+nim = "latest"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "nimble install -y"
+
+[tasks.build]
+description = "Build the WASM node via Nim → C → Emscripten"
+run = "nimble build"
+
+[tasks.test]
+description = "Run unit tests (native)"
+run = "nimble test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf build/ nimcache/"

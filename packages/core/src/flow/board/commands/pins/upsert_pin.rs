@@ -1,3 +1,4 @@
+use canonical_json::ser::to_string as canonical_json_string;
 use flow_like_types::{async_trait, create_id};
 use schemars::JsonSchema;
 use std::sync::Arc;
@@ -6,10 +7,17 @@ use crate::{
     flow::{
         board::{Board, commands::Command},
         pin::Pin,
+        variable::{VariableType, infer_schema_from_json},
     },
     state::FlowLikeState,
 };
 use serde::{Deserialize, Serialize};
+
+fn normalize_schema(schema: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(schema)
+        .ok()
+        .and_then(|value| canonical_json_string(&value).ok())
+}
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpsertPinCommand {
@@ -35,6 +43,20 @@ impl Command for UpsertPinCommand {
         board: &mut Board,
         _: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
+        if self.pin.data_type == VariableType::Struct
+            && let Some(ref schema_str) = self.pin.schema
+            && !schema_str.trim().is_empty()
+            && let Ok(inferred) = infer_schema_from_json(schema_str)
+        {
+            self.pin.schema = Some(inferred);
+        }
+
+        if let Some(ref schema_str) = self.pin.schema
+            && let Some(normalized) = normalize_schema(schema_str)
+        {
+            self.pin.schema = Some(normalized);
+        }
+
         let node = match board.nodes.get_mut(&self.node_id) {
             Some(node) => node,
             None => return Err(flow_like_types::anyhow!("Node not found".to_string())),

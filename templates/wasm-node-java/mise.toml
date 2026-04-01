@@ -1,0 +1,19 @@
+[tools]
+java = "21"
+maven = "latest"
+
+[tasks.setup]
+description = "Download dependencies"
+run = "mvn dependency:resolve"
+
+[tasks.build]
+description = "Build the WASM node via TeaVM"
+run = "mvn package"
+
+[tasks.test]
+description = "Run tests"
+run = "mvn test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "mvn clean"

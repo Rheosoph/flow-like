@@ -1,39 +1,43 @@
 name: "Audit"
 
 on:
-  push:
+  pull_request:
     branches:
       - dev
-  pull_request:
-    branches: 
-      - alpha
-      - int
-      - main
-
-# This is the example from the readme.
-# On each push to the `release` branch it will create or update a GitHub release, build your app, and upload the artifacts to the release.
 
 jobs:
-  audit-application:
-    name: Audit Application
+  cargo-audit:
+    name: Cargo Audit
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}          
-      
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache cargo-audit
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/advisory-db
+          key: cargo-audit-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-audit-${{ runner.os }}-
+
+      - name: Install cargo-audit
+        run: command -v cargo-audit || cargo install --locked cargo-audit
+
       - name: Run Cargo Audit
         run: |
-          cargo install cargo-audit
-          cargo audit --json > cargo-audit-report.json
-  
+          cargo audit --json > cargo-audit-report.json || true
+          cargo audit
+
       - name: Upload cargo audit report
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cargo-audit-report
           path: cargo-audit-report.json
-  
-      # TODO: Add NPM Audit & NextJS Linting

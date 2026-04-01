@@ -1,7 +1,6 @@
 "use client";
 
-import { Tabs, TabsList, TabsTrigger } from "@tm9657/flow-like-ui";
-import { Download, Package, Search } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -14,30 +13,48 @@ export default function RegistryLayout({
 	const isExplore = pathname === "/settings/registry/explore";
 
 	return (
-		<div className="flex flex-col h-full space-y-4">
-			<div className="flex items-center gap-2">
-				<Package className="h-6 w-6" />
-				<h1 className="text-xl font-bold">Custom Nodes</h1>
-			</div>
+		<div className="flex flex-col h-full">
+			<div className="px-4 sm:px-8 pt-5 space-y-4">
+				<div>
+					<h1 className="text-2xl font-semibold tracking-tight">
+						Custom Nodes
+					</h1>
+					<p className="text-sm text-muted-foreground/70">
+						Browse and manage node packages
+					</p>
+				</div>
 
-			<Tabs value={isExplore ? "explore" : "installed"} className="w-full">
-				<TabsList>
+				<div className="flex items-center gap-1.5">
 					<Link href="/settings/registry/installed">
-						<TabsTrigger value="installed" className="gap-2">
-							<Download className="h-4 w-4" />
-							Installed
-						</TabsTrigger>
+						<div
+							className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm transition-all ${
+								!isExplore
+									? "bg-muted/40 text-foreground font-medium"
+									: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/20"
+							}`}
+						>
+							<Download className="h-3.5 w-3.5" />
+							Owned
+						</div>
 					</Link>
 					<Link href="/settings/registry/explore">
-						<TabsTrigger value="explore" className="gap-2">
-							<Search className="h-4 w-4" />
+						<div
+							className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm transition-all ${
+								isExplore
+									? "bg-muted/40 text-foreground font-medium"
+									: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/20"
+							}`}
+						>
+							<Search className="h-3.5 w-3.5" />
 							Explore
-						</TabsTrigger>
+						</div>
 					</Link>
-				</TabsList>
-			</Tabs>
+				</div>
+			</div>
 
-			<div className="flex-1 min-h-0 overflow-hidden">{children}</div>
+			<div className="flex-1 min-h-0 overflow-hidden px-4 sm:px-8 pt-4">
+				{children}
+			</div>
 		</div>
 	);
 }

@@ -58,6 +58,7 @@ const editorVariants = cva(
 		"rounded-md ring-offset-background focus-visible:outline-none",
 		"placeholder:text-muted-foreground/80 **:data-slate-placeholder:!top-1/2 **:data-slate-placeholder:-translate-y-1/2 **:data-slate-placeholder:text-muted-foreground/80 **:data-slate-placeholder:opacity-100!",
 		"[&_strong]:font-bold",
+		"[&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0",
 	),
 	{
 		defaultVariants: {

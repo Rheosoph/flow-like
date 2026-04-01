@@ -1,0 +1,164 @@
+// Flow-Like WASM Node Template (Grain)
+//
+// Build:
+//
+//   grain compile --release --no-gc --elide-type-info \
+//     -I ../wasm-sdk-grain -o build/node.wasm src/main.gr
+//
+// The compiled .wasm file will be at: build/node.wasm
+
+module Main
+
+from "sdk" include Sdk
+from "types" include Types
+from "memory" include Memory
+from "context" include Context
+
+from "string" include String
+from "runtime/unsafe/wasmi32" include WasmI32
+from "runtime/unsafe/wasmi64" include WasmI64
+
+// ---------------------------------------------------------------------------
+// Node definition builder (shared by get_node and get_nodes)
+// ---------------------------------------------------------------------------
+
+let buildDefinition = () => {
+  let mut def = Types.newNodeDefinition()
+  def.name = "my_custom_node_grain"
+  def.friendlyName = "My Custom Node (Grain)"
+  def.description = "A template WASM node built with Grain"
+  def.category = "Custom/WASM"
+
+  let def = Types.addPermission(def, "streaming")
+
+  let def = Types.addPin(
+    def,
+    Types.inputPin("exec", "Execute", "Trigger execution", Types.Exec),
+  )
+  let def = Types.addPin(
+    def,
+    Types.withDefault(
+      Types.inputPin(
+        "input_text",
+        "Input Text",
+        "Text to process",
+        Types.TypeString,
+      ),
+      "\"\"",
+    ),
+  )
+  let def = Types.addPin(
+    def,
+    Types.withDefault(
+      Types.inputPin(
+        "multiplier",
+        "Multiplier",
+        "Number of times to repeat",
+        Types.TypeI64,
+      ),
+      "1",
+    ),
+  )
+
+  let def = Types.addPin(
+    def,
+    Types.outputPin("exec_out", "Done", "Execution complete", Types.Exec),
+  )
+  let def = Types.addPin(
+    def,
+    Types.outputPin(
+      "output_text",
+      "Output Text",
+      "Processed text",
+      Types.TypeString,
+    ),
+  )
+  let def = Types.addPin(
+    def,
+    Types.outputPin(
+      "char_count",
+      "Character Count",
+      "Number of characters in output",
+      Types.TypeI64,
+    ),
+  )
+
+  def
+}
+
+// ---------------------------------------------------------------------------
+// get_node — returns the node definition as a packed i64 (ptr<<32 | len).
+// ---------------------------------------------------------------------------
+
+@unsafe
+@externalName("get_node")
+provide let _getNode = () => {
+  let def = buildDefinition()
+  Memory.packString(Types.nodeDefToJson(def))
+}
+
+// ---------------------------------------------------------------------------
+// get_nodes — returns all node definitions as a packed i64 JSON array.
+// ---------------------------------------------------------------------------
+
+@unsafe
+@externalName("get_nodes")
+provide let _getNodes = () => {
+  let def = buildDefinition()
+  let json = "[" ++ Types.nodeDefToJson(def) ++ "]"
+  Memory.packResult(json)
+}
+
+// ---------------------------------------------------------------------------
+// run — main execution function, called every time the node is triggered.
+// ---------------------------------------------------------------------------
+
+@unsafe
+@externalName("run")
+provide let _run = (ptr: WasmI32, len: WasmI32) => {
+  let inputJson = Memory.ptrToString(ptr, len)
+  let input = Types.parseExecutionInput(inputJson)
+  let ctx = Context.init(input)
+
+  let inputText = Context.getString(ctx, "input_text", "")
+  let multiplier = Context.getI64(ctx, "multiplier", 1)
+
+  Context.debug(ctx, "Processing: '" ++ inputText ++ "' x " ++ toString(multiplier))
+
+  // Repeat the input text `multiplier` times
+  let mut output = ""
+  for (let mut i = 0; i < multiplier; i += 1) {
+    output = output ++ inputText
+  }
+  let charCount = String.length(output)
+
+  Context.streamText(ctx, "Generated " ++ toString(charCount) ++ " characters")
+
+  Context.setOutput(ctx, "output_text", Types.jsonString(output))
+  Context.setOutput(ctx, "char_count", toString(charCount))
+
+  let result = Context.success(ctx)
+  Memory.packString(Types.resultToJson(result))
+}
+
+// ---------------------------------------------------------------------------
+// Re-export memory management (required by the host ABI)
+// ---------------------------------------------------------------------------
+
+@unsafe
+@externalName("alloc")
+provide let _alloc = (size: WasmI32) => {
+  Memory.wasmAlloc(size)
+}
+
+@unsafe
+@externalName("dealloc")
+provide let _dealloc = (ptr: WasmI32, size: WasmI32) => {
+  Memory.wasmDealloc(ptr, size)
+}
+
+@unsafe
+@externalName("get_abi_version")
+provide let _getAbiVersion = () => {
+  1n
+}

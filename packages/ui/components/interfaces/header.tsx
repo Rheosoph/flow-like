@@ -71,10 +71,14 @@ const HeaderInner = ({
 	ref: React.RefObject<IToolBarActions>;
 }) => {
 	const [toolbarElements, setToolbarElements] = useState<ReactNode[]>([]);
+	const [navElements, setNavElements] = useState<ReactNode[]>([]);
 
 	useImperativeHandle(ref, () => ({
 		pushToolbarElements: (elements: ReactNode[]) => {
 			setToolbarElements(elements);
+		},
+		pushNavElements: (elements: ReactNode[]) => {
+			setNavElements(elements);
 		},
 	}));
 
@@ -239,8 +243,10 @@ const HeaderInner = ({
 			);
 		}
 
+		const rightWithNav = [...navElements, ...right];
+
 		update({
-			right: right.length > 0 ? right : undefined,
+			right: rightWithNav.length > 0 ? rightWithNav : undefined,
 			left: toolbarElements.length > 0 ? toolbarElements : undefined,
 		});
 	}, [
@@ -251,6 +257,7 @@ const HeaderInner = ({
 		switchEvent,
 		usableEvents,
 		toolbarElements,
+		navElements,
 		hasRoutes,
 		routeNav,
 	]);
@@ -261,7 +268,6 @@ const HeaderInner = ({
 	const header = (
 		<div className="hidden h-0 items-center justify-between p-4 bg-background backdrop-blur-xs md:flex md:h-fit">
 			<div className="flex items-center gap-1">
-				{/* Route navigation handled by toolbar elements from interfaces */}
 				{!hasRoutes && currentEvent && sortedEvents.length > 1 && (
 					<Select value={currentEvent.id} onValueChange={switchEvent}>
 						<SelectTrigger className="max-w-[200px] flex flex-row justify-between h-8 bg-muted/20 border-transparent">
@@ -283,6 +289,13 @@ const HeaderInner = ({
 						<div key={index}>{element}</div>
 					))}
 				</div>
+				{navElements.length > 0 && (
+					<div className="flex items-center gap-1">
+						{navElements.map((element, index) => (
+							<div key={index}>{element}</div>
+						))}
+					</div>
+				)}
 			</div>
 			<div className="flex items-center gap-2">
 				<h1 className="text-lg font-semibold">{metadata?.name}</h1>

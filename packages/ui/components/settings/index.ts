@@ -10,3 +10,4 @@ export * from "./visibility-status";
 export * from "./profile";
 export * from "./sinks";
 export * from "./sales";
+export * from "./endpoints/endpoints-page";

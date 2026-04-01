@@ -35,7 +35,10 @@ fn ensure_ios_deeplink_scheme(scheme: &str) -> Result<(), String> {
 
         let mut changed = false;
         if !root.contains_key("CFBundleURLTypes") {
-            root.insert("CFBundleURLTypes".to_string(), plist::Value::Array(Vec::new()));
+            root.insert(
+                "CFBundleURLTypes".to_string(),
+                plist::Value::Array(Vec::new()),
+            );
             changed = true;
         }
 

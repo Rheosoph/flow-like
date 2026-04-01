@@ -1,0 +1,157 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+import { LuStar, LuArrowRight } from "react-icons/lu";
+const github = "https://github.com/TM9657/flow-like";
+const discord = "https://discord.com/invite/KTWMrS2/";
+const discussions = "https://github.com/TM9657/flow-like/discussions";
+---
+
+<section class="relative py-16 md:py-24 overflow-hidden" data-c1="hsl(268 84% 62% / .06)" data-c2="hsl(161 50% 45% / .06)">
+  <!-- Bg orbs -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute top-1/4 right-1/4 w-80 h-80 rounded-full bg-violet-500/5 blur-3xl"></div>
+    <div class="absolute bottom-1/4 left-1/3 w-72 h-72 rounded-full bg-emerald-500/5 blur-3xl"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 lg:px-8">
+
+    <h2 class="wb-reveal text-3xl sm:text-4xl font-bold tracking-tight mb-16 text-center">{t("v2.who.heading")}</h2>
+
+    <!-- ───── Makers: accent border block ───── -->
+    <div class="wb-reveal mb-16 max-w-4xl mx-auto">
+      <div class="relative pl-5 border-l-2 border-primary/30">
+        <span class="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary mb-4">{t("v2.who.makers.pill")}</span>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-3">
+          {t("v2.who.makers.p1")}
+        </p>
+        <p class="text-sm text-muted-foreground/70 font-medium">
+          {t("v2.who.makers.p2")}
+        </p>
+      </div>
+    </div>
+
+    <!-- ───── Industries: visual grid with colored accents ───── -->
+    <div class="wb-reveal mb-16">
+      <h3 class="text-xl sm:text-2xl font-semibold tracking-tight mb-8 text-center">{t("v2.who.teams.heading")}</h3>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
+        <a href="/industries/shopfloor" class="group relative block rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-5 transition-all duration-300 hover:border-border/60 hover:shadow-lg">
+          <div class="absolute top-5 left-0 w-0.5 h-8 rounded-full bg-amber-500/50 group-hover:h-12 transition-all duration-300"></div>
+          <p class="text-sm font-semibold text-foreground mb-1.5 group-hover:text-primary transition-colors">{t("v2.who.manufacturing.title")}</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v2.who.manufacturing.desc")}</p>
+        </a>
+        <a href="/industries/finance" class="group relative block rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-5 transition-all duration-300 hover:border-border/60 hover:shadow-lg">
+          <div class="absolute top-5 left-0 w-0.5 h-8 rounded-full bg-emerald-500/50 group-hover:h-12 transition-all duration-300"></div>
+          <p class="text-sm font-semibold text-foreground mb-1.5 group-hover:text-primary transition-colors">{t("v2.who.finance.title")}</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v2.who.finance.desc")}</p>
+        </a>
+        <a href="/industries/office" class="group relative block rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-5 transition-all duration-300 hover:border-border/60 hover:shadow-lg">
+          <div class="absolute top-5 left-0 w-0.5 h-8 rounded-full bg-sky-500/50 group-hover:h-12 transition-all duration-300"></div>
+          <p class="text-sm font-semibold text-foreground mb-1.5 group-hover:text-primary transition-colors">{t("v2.who.office.title")}</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v2.who.office.desc")}</p>
+        </a>
+        <a href="/industries/ai-agents" class="group relative block rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-5 transition-all duration-300 hover:border-border/60 hover:shadow-lg">
+          <div class="absolute top-5 left-0 w-0.5 h-8 rounded-full bg-violet-500/50 group-hover:h-12 transition-all duration-300"></div>
+          <p class="text-sm font-semibold text-foreground mb-1.5 group-hover:text-primary transition-colors">{t("v2.who.ai.title")}</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v2.who.ai.desc")}</p>
+        </a>
+        <a href="/industries/gov-defense" class="group relative block rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-5 transition-all duration-300 hover:border-border/60 hover:shadow-lg">
+          <div class="absolute top-5 left-0 w-0.5 h-8 rounded-full bg-rose-500/50 group-hover:h-12 transition-all duration-300"></div>
+          <p class="text-sm font-semibold text-foreground mb-1.5 group-hover:text-primary transition-colors">{t("v2.who.gov.title")}</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v2.who.gov.desc")}</p>
+        </a>
+      </div>
+    </div>
+
+    <!-- ───── Community: bombastic presence ───── -->
+    <div class="wb-reveal mb-20 max-w-5xl mx-auto">
+      <div class="wb-community relative rounded-3xl border border-border/30 overflow-hidden">
+        <!-- Ambient glow -->
+        <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+          <div class="absolute -top-24 -left-24 w-64 h-64 rounded-full bg-[#5865F2]/8 blur-3xl"></div>
+          <div class="absolute -bottom-16 -right-16 w-48 h-48 rounded-full bg-amber-500/6 blur-3xl"></div>
+        </div>
+
+        <div class="relative px-8 py-10 sm:px-12 sm:py-14 text-center">
+          <h3 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-3">{t("v2.who.community.title")}</h3>
+          <p class="text-base sm:text-lg text-muted-foreground max-w-lg mx-auto mb-10">
+            {t("v2.who.community.desc")}
+          </p>
+
+          <!-- Big stats -->
+          <div class="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-12 mb-10">
+            <a href={discord} target="_blank" rel="noreferrer" class="group flex flex-col items-center gap-2 transition-transform duration-200 hover:scale-105">
+              <div class="flex items-center justify-center w-16 h-16 rounded-2xl border border-[#5865F2]/20 bg-[#5865F2]/8 mb-1 transition-all duration-300 group-hover:border-[#5865F2]/40 group-hover:shadow-lg group-hover:shadow-[#5865F2]/10">
+                <svg viewBox="0 0 127.14 96.36" class="w-7 h-7 fill-[#5865F2]"><path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/></svg>
+              </div>
+              <span class="text-4xl sm:text-5xl font-extrabold tracking-tight text-foreground">200+</span>
+              <span class="text-xs font-medium text-muted-foreground tracking-wide uppercase">Discord members</span>
+            </a>
+
+            <div class="hidden sm:block w-px h-20 bg-border/30"></div>
+
+            <a href={github} target="_blank" rel="noreferrer" class="group flex flex-col items-center gap-2 transition-transform duration-200 hover:scale-105">
+              <div class="flex items-center justify-center w-16 h-16 rounded-2xl border border-amber-500/20 bg-amber-500/8 mb-1 transition-all duration-300 group-hover:border-amber-500/40 group-hover:shadow-lg group-hover:shadow-amber-500/10">
+                <LuStar className="w-7 h-7 text-amber-500" />
+              </div>
+              <span class="text-4xl sm:text-5xl font-extrabold tracking-tight text-foreground">600+</span>
+              <span class="text-xs font-medium text-muted-foreground tracking-wide uppercase">GitHub stars</span>
+            </a>
+
+            <div class="hidden sm:block w-px h-20 bg-border/30"></div>
+
+            <div class="flex flex-col items-center gap-2">
+              <div class="flex items-center justify-center w-16 h-16 rounded-2xl border border-emerald-500/20 bg-emerald-500/8 mb-1">
+                <svg viewBox="0 0 24 24" class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </div>
+              <span class="text-4xl sm:text-5xl font-extrabold tracking-tight text-foreground">100%</span>
+              <span class="text-xs font-medium text-muted-foreground tracking-wide uppercase">Open source</span>
+            </div>
+          </div>
+
+          <a href={discussions} target="_blank" rel="noreferrer" class="group inline-flex items-center gap-2 rounded-full border border-border/50 bg-card/40 px-6 py-3 text-sm font-semibold text-foreground transition-all duration-200 hover:border-border hover:bg-card/60 hover:shadow-lg">
+            {t("v2.who.community.join")}
+            <LuArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+          </a>
+        </div>
+      </div>
+    </div>
+
+
+
+  </div>
+</section>
+
+<style>
+  .wb-reveal { opacity: 0; transform: translateY(20px); transition: opacity .5s ease, transform .5s ease; }
+  .wb-reveal.is-visible { opacity: 1; transform: translateY(0); }
+
+  .wb-community {
+    background: linear-gradient(135deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wb-reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
+  }
+</style>
+
+<script>
+  const els = document.querySelectorAll<HTMLElement>(".wb-reveal");
+  if (els.length) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }
+    }, { threshold: 0.1 });
+    for (const el of els) io.observe(el);
+  }
+</script>

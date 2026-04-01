@@ -1,0 +1,9 @@
+---
+import IndustryPage from "../../../components/industries/IndustryPage.astro";
+import { tAiAgents } from "../../../i18n/locales/pages/industry-ai-agents";
+
+const lang = "sv";
+const t = (key: string) => tAiAgents(lang, key);
+---
+
+<IndustryPage lang={lang} t={t} accent="violet" accentHex="#7c3aed" slug="ai-agents" />

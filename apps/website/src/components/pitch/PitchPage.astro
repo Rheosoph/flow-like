@@ -1,0 +1,87 @@
+---
+import "@tm9657/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import PostHog from "../posthog.astro";
+import { Header } from "../header";
+import { BlogFooter } from "../blog-footer";
+
+import Hero from "./Hero.astro";
+import Problem from "./Problem.astro";
+import Solution from "./Solution.astro";
+import FlowPilot from "./FlowPilot.astro";
+import Differentiators from "./Differentiators.astro";
+import ROI from "./ROI.astro";
+import UseCases from "./UseCases.astro";
+import CTA from "./CTA.astro";
+
+import { tPitch } from "../../i18n/locales/pages/pitch";
+import { buildAlternateLinks, getOgLocale } from "../../lib/seo";
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const t = (key: string) => tPitch(lang, key);
+
+const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
+const siteUrl = typeof site === "string" ? site : site.toString();
+const canonical = new URL(Astro.url.pathname, siteUrl).toString();
+const alternateLinks = buildAlternateLinks(siteUrl, Astro.url.pathname);
+const ogLocale = getOgLocale(lang);
+
+const title = t("pitch.meta.title");
+const desc = t("pitch.meta.description");
+const cover = "/og.png";
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+
+    <title>{title}</title>
+    <meta name="description" content={desc} />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href={canonical} />
+    {alternateLinks.map((alt) => (
+      <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />
+    ))}
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flow-Like" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={desc} />
+    <meta property="og:image" content={cover} />
+    <meta property="og:locale" content={ogLocale} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={desc} />
+    <meta name="twitter:image" content={cover} />
+
+    <PostHog />
+  </head>
+  <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
+    <Header client:load />
+
+    <main class="pt-16">
+      <Hero t={t} />
+      <Problem t={t} />
+      <Solution t={t} />
+      <FlowPilot t={t} />
+      <Differentiators t={t} />
+      <ROI t={t} />
+      <UseCases t={t} />
+      <CTA t={t} />
+    </main>
+
+    <BlogFooter client:load />
+  </body>
+</html>

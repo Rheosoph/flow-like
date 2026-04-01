@@ -42,7 +42,7 @@ const langAttr = lang === "zh" ? "zh-Hans" : lang;
 		<link rel="canonical" href={canonical} />
 		<link rel="sitemap" href="/sitemap-index.xml" />
 
-		{alternateLinks.map(({ lang: l, href }) => (
+		{alternateLinks.map(({ hreflang: l, href }) => (
 			<link rel="alternate" hreflang={l} href={href} />
 		))}
 
@@ -302,6 +302,6 @@ const langAttr = lang === "zh" ? "zh-Hans" : lang;
 			</div>
 		</main>
 
-		<BlogFooter />
+		<BlogFooter client:load />
 	</body>
 </html>

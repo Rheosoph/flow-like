@@ -38,16 +38,14 @@ Static assets, like favicons, can be placed in the `public/` directory.
 
 ## 🧞 Commands
 
-All commands are run from the root of the project, from a terminal:
+All commands are run from the repository root using [mise](https://mise.jdx.dev):
 
 | Command                   | Action                                           |
 | :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+| `bun install`             | Installs dependencies                            |
+| `mise run dev:docs`       | Starts local dev server at `localhost:4321`      |
+| `mise run build:docs`     | Build your production site to `./dist/`          |
+| `mise run deploy:docs`    | Deploy docs                                      |
 
 ## 👀 Want to learn more?
 

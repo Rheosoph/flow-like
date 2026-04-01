@@ -9,6 +9,7 @@
 //! (`Copilot` for board and `A2UICopilot` for frontend) to ensure consistent behavior
 //! and avoid code duplication.
 
+pub mod prompts;
 mod types;
 mod unified;
 

@@ -1,0 +1,360 @@
+---
+import "@tm9657/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import { Header } from "../header";
+import { BlogFooter } from "../blog-footer";
+import AmbientGlow from "../ambient-glow.astro";
+import PostHog from "../posthog.astro";
+import { tSecurity } from "../../i18n/locales/pages/security";
+import { buildAlternateLinks, getOgLocale } from "../../lib/seo";
+import { LuShieldCheck, LuBox, LuUsers, LuLock, LuFileSearch, LuPackage, LuHardDrive, LuServer, LuGlobe, LuScale, LuEye, LuFileText, LuArrowRight } from "react-icons/lu";
+
+interface Props { lang?: string; }
+const { lang = "en" } = Astro.props;
+const t = (key: string) => tSecurity(lang, key);
+
+export const prerender = true;
+
+const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
+const siteUrl = typeof site === "string" ? site : site.toString();
+const canonical = new URL(Astro.url.pathname, siteUrl).toString();
+const alternateLinks = buildAlternateLinks(siteUrl, Astro.url.pathname);
+const ogLocale = getOgLocale(lang);
+
+const title = t("security.meta.title");
+const description = t("security.meta.description");
+const cover = `${siteUrl.replace(/\/$/, "")}/og.png`;
+
+const archCards = [
+  { icon: "shield", title: t("security.arch.rust.title"), desc: t("security.arch.rust.desc"), color: "emerald" },
+  { icon: "box", title: t("security.arch.wasm.title"), desc: t("security.arch.wasm.desc"), color: "blue" },
+  { icon: "users", title: t("security.arch.rbac.title"), desc: t("security.arch.rbac.desc"), color: "violet" },
+  { icon: "lock", title: t("security.arch.encryption.title"), desc: t("security.arch.encryption.desc"), color: "amber" },
+  { icon: "file-search", title: t("security.arch.audit.title"), desc: t("security.arch.audit.desc"), color: "cyan" },
+  { icon: "package", title: t("security.arch.supply.title"), desc: t("security.arch.supply.desc"), color: "pink" },
+];
+
+const dataCards = [
+  { icon: "hard-drive", title: t("security.data.local.title"), desc: t("security.data.local.desc") },
+  { icon: "server", title: t("security.data.selfhost.title"), desc: t("security.data.selfhost.desc") },
+  { icon: "globe", title: t("security.data.residency.title"), desc: t("security.data.residency.desc") },
+];
+
+const complianceCards = [
+  { icon: "scale", title: t("security.compliance.gdpr.title"), desc: t("security.compliance.gdpr.desc"), href: "/data-deletion" },
+  { icon: "shield", title: t("security.compliance.soc.title"), desc: t("security.compliance.soc.desc"), href: undefined },
+  { icon: "eye", title: t("security.compliance.open.title"), desc: t("security.compliance.open.desc"), href: "/thirdparty" },
+  { icon: "file-text", title: t("security.compliance.sbom.title"), desc: t("security.compliance.sbom.desc"), href: undefined },
+];
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href={canonical} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    {alternateLinks.map(({ hreflang: l, href }) => (
+      <link rel="alternate" hreflang={l} href={href} />
+    ))}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flow-Like" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={cover} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content={ogLocale} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={cover} />
+
+    <PostHog />
+
+    <style is:global>
+      body {
+        background-image: radial-gradient(
+          color-mix(in srgb, var(--muted) 20%, transparent) 1px,
+          transparent 1px
+        ) !important;
+        background-size: 16px 16px !important;
+        background-attachment: scroll !important;
+      }
+
+      .sec-reveal {
+        opacity: 0;
+        transform: translateY(24px);
+        transition: opacity 0.6s ease, transform 0.6s ease;
+      }
+      .sec-reveal.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .sec-reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
+      }
+    </style>
+  </head>
+  <body
+    class="bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground overflow-x-hidden max-w-full"
+  >
+    <Header client:load />
+
+    <main class="pt-16">
+      <AmbientGlow />
+
+      <!-- ═══════ HERO ═══════ -->
+      <section
+        class="relative py-24 md:py-36 overflow-hidden"
+        data-c1="hsl(161 50% 45% / .06)"
+        data-c2="hsl(222 89% 60% / .06)"
+      >
+        <div class="absolute inset-0 -z-10">
+          <div class="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(16,185,129,0.10),transparent)]"></div>
+          <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 bg-emerald-500/5 rounded-full blur-[120px]"></div>
+        </div>
+
+        <div class="max-w-5xl mx-auto px-4 text-center sec-reveal">
+          <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-linear-to-r from-emerald-500/20 via-emerald-500/10 to-emerald-500/20 backdrop-blur-sm border border-emerald-500/20 text-emerald-500 text-sm font-medium mb-8 shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+            <LuShieldCheck className="w-4 h-4" />
+            {t("security.hero.tagline")}
+          </div>
+
+          <h1 class="text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-8">
+            <span class="bg-clip-text text-transparent bg-linear-to-b from-foreground to-foreground/70">
+              {t("security.hero.headline")}{" "}
+            </span>
+            <span class="bg-clip-text text-transparent bg-linear-to-r from-emerald-500 via-primary to-emerald-500">
+              {t("security.hero.headline.highlight")}
+            </span>
+          </h1>
+
+          <p class="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto mb-12 leading-relaxed">
+            {t("security.hero.description")}
+          </p>
+
+          <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a
+              href="https://github.com/TM9657/flow-like"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/25"
+            >
+              {t("security.hero.cta")}
+              <LuArrowRight className="w-4 h-4" />
+            </a>
+            <a
+              href="mailto:security@flow-like.com"
+              class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-border/60 bg-card/60 backdrop-blur-sm text-foreground font-medium hover:bg-card/80 transition-colors"
+            >
+              {t("security.hero.cta.report")}
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ SECURITY ARCHITECTURE ═══════ -->
+      <section
+        class="relative py-20 md:py-28"
+        data-c1="hsl(161 50% 45% / .06)"
+        data-c2="hsl(268 84% 62% / .06)"
+      >
+        <div class="max-w-6xl mx-auto px-4">
+          <div class="text-center mb-16 sec-reveal">
+            <span class="inline-block px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium tracking-wider uppercase mb-4">
+              {t("security.arch.tagline")}
+            </span>
+            <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              <span class="bg-clip-text text-transparent bg-linear-to-r from-emerald-500 via-primary to-emerald-500">
+                {t("security.arch.headline")}
+              </span>
+            </h2>
+            <p class="text-muted-foreground text-lg max-w-2xl mx-auto">
+              {t("security.arch.description")}
+            </p>
+          </div>
+
+          <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {archCards.map((card, i) => (
+              <div
+                class={`sec-reveal group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-${card.color}-500/30 hover:shadow-lg hover:shadow-${card.color}-500/5`}
+                style={`transition-delay: ${i * 80}ms`}
+              >
+                <div class={`inline-flex items-center justify-center w-12 h-12 rounded-xl bg-${card.color}-500/10 text-${card.color}-500 mb-4`}>
+                  {card.icon === "shield" && <LuShieldCheck className="w-6 h-6" />}
+                  {card.icon === "box" && <LuBox className="w-6 h-6" />}
+                  {card.icon === "users" && <LuUsers className="w-6 h-6" />}
+                  {card.icon === "lock" && <LuLock className="w-6 h-6" />}
+                  {card.icon === "file-search" && <LuFileSearch className="w-6 h-6" />}
+                  {card.icon === "package" && <LuPackage className="w-6 h-6" />}
+                </div>
+                <h3 class="text-lg font-semibold text-foreground mb-2">{card.title}</h3>
+                <p class="text-sm text-muted-foreground leading-relaxed">{card.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ DATA SOVEREIGNTY ═══════ -->
+      <section
+        class="relative py-20 md:py-28"
+        data-c1="hsl(222 89% 60% / .06)"
+        data-c2="hsl(161 50% 45% / .06)"
+      >
+        <div class="max-w-6xl mx-auto px-4">
+          <div class="mb-16 sec-reveal">
+            <span class="inline-block px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium tracking-wider uppercase mb-4">
+              {t("security.data.tagline")}
+            </span>
+            <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              <span class="bg-clip-text text-transparent bg-linear-to-r from-emerald-500 via-primary to-emerald-500">
+                {t("security.data.headline")}
+              </span>
+            </h2>
+            <p class="text-muted-foreground text-lg max-w-2xl">
+              {t("security.data.description")}
+            </p>
+          </div>
+
+          <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {dataCards.map((card, i) => (
+              <div
+                class="sec-reveal group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5"
+                style={`transition-delay: ${i * 80}ms`}
+              >
+                <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-4">
+                  {card.icon === "hard-drive" && <LuHardDrive className="w-6 h-6" />}
+                  {card.icon === "server" && <LuServer className="w-6 h-6" />}
+                  {card.icon === "globe" && <LuGlobe className="w-6 h-6" />}
+                </div>
+                <h3 class="text-lg font-semibold text-foreground mb-2">{card.title}</h3>
+                <p class="text-sm text-muted-foreground leading-relaxed">{card.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ COMPLIANCE & TRANSPARENCY ═══════ -->
+      <section
+        class="relative py-20 md:py-28"
+        data-c1="hsl(268 84% 62% / .06)"
+        data-c2="hsl(222 89% 60% / .06)"
+      >
+        <div class="max-w-6xl mx-auto px-4">
+          <div class="text-center mb-16 sec-reveal">
+            <span class="inline-block px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium tracking-wider uppercase mb-4">
+              {t("security.compliance.tagline")}
+            </span>
+            <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              <span class="bg-clip-text text-transparent bg-linear-to-r from-emerald-500 via-primary to-emerald-500">
+                {t("security.compliance.headline")}
+              </span>
+            </h2>
+            <p class="text-muted-foreground text-lg max-w-2xl mx-auto">
+              {t("security.compliance.description")}
+            </p>
+          </div>
+
+          <div class="grid sm:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {complianceCards.map((card, i) => {
+              const inner = (
+                <div
+                  class="sec-reveal group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 h-full"
+                  style={`transition-delay: ${i * 80}ms`}
+                >
+                  <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-4">
+                    {card.icon === "scale" && <LuScale className="w-6 h-6" />}
+                    {card.icon === "shield" && <LuShieldCheck className="w-6 h-6" />}
+                    {card.icon === "eye" && <LuEye className="w-6 h-6" />}
+                    {card.icon === "file-text" && <LuFileText className="w-6 h-6" />}
+                  </div>
+                  <h3 class="text-lg font-semibold text-foreground mb-2">{card.title}</h3>
+                  <p class="text-sm text-muted-foreground leading-relaxed">{card.desc}</p>
+                  {card.href && (
+                    <span class="inline-flex items-center gap-1 mt-4 text-sm text-primary font-medium group-hover:underline">
+                      Learn more <LuArrowRight className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                </div>
+              );
+              return card.href ? <a href={card.href} class="block h-full">{inner}</a> : inner;
+            })}
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════ CTA ═══════ -->
+      <section
+        class="relative py-20 md:py-28 overflow-hidden"
+        data-c1="hsl(161 50% 45% / .08)"
+        data-c2="hsl(268 84% 62% / .08)"
+      >
+        <div class="absolute inset-0 -z-10">
+          <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-125 h-125 bg-emerald-500/5 rounded-full blur-[100px]"></div>
+        </div>
+
+        <div class="max-w-3xl mx-auto px-4 text-center sec-reveal">
+          <h2 class="text-3xl md:text-4xl font-bold tracking-tight mb-4">
+            <span class="bg-clip-text text-transparent bg-linear-to-r from-emerald-500 via-primary to-emerald-500">
+              {t("security.cta.headline")}
+            </span>
+          </h2>
+          <p class="text-muted-foreground text-lg mb-10 max-w-xl mx-auto">
+            {t("security.cta.description")}
+          </p>
+
+          <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a
+              href="mailto:security@flow-like.com"
+              class="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/25"
+            >
+              {t("security.cta.button")}
+              <LuArrowRight className="w-4 h-4" />
+            </a>
+            <a
+              href="/thirdparty"
+              class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-border/60 bg-card/60 backdrop-blur-sm text-foreground font-medium hover:bg-card/80 transition-colors"
+            >
+              {t("security.cta.thirdparty")}
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <BlogFooter client:load />
+
+    <script>
+      const els = document.querySelectorAll<HTMLElement>(".sec-reveal");
+      if (els.length && "IntersectionObserver" in window) {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (e.isIntersecting) {
+                e.target.classList.add("is-visible");
+                io.unobserve(e.target);
+              }
+            }
+          },
+          { threshold: 0.12 }
+        );
+        for (const el of els) io.observe(el);
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+[tasks.setup]
+description = "Verify Lua and Emscripten SDK availability"
+run = """
+echo "Checking prerequisites..."
+command -v emcc >/dev/null 2>&1 || { echo "ERROR: Emscripten SDK (emcc) not found. Install via: git clone https://github.com/emscripten-core/emsdk && cd emsdk && ./emsdk install latest && ./emsdk activate latest"; exit 1; }
+command -v luarocks >/dev/null 2>&1 || echo "WARNING: luarocks not found — needed for publishing. Install via: brew install luarocks"
+echo "Setup OK: emcc $(emcc --version | head -1)"
+"""
+
+[tasks.build]
+description = "Build the SDK (compile glue.c + embedded Lua to WASM)"
+run = """
+mkdir -p build
+echo "SDK is a library — build is done as part of the node template."
+echo "See wasm-node-lua for the full build pipeline."
+"""
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf build/"
+
+[tasks.publish]
+description = "Publish to LuaRocks"
+run = """
+echo "Publishing flow-like-wasm-sdk to LuaRocks..."
+echo "Requires: LUAROCKS_API_KEY env var (get from https://luarocks.org/settings/api-keys)"
+luarocks upload flow-like-wasm-sdk-0.1.0-1.rockspec --api-key="$LUAROCKS_API_KEY"
+"""

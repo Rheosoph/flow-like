@@ -1,0 +1,46 @@
+# Flow-Like Package Manifest
+# This file declares your package's metadata, permissions, and node entries.
+# The runtime uses this to determine capabilities and display information.
+
+manifest_version = 1
+wasm_path = "build/release.wasm"
+
+# --- Package Identity ---
+id = "com.example.custom-node-as"
+name = "Custom Node (AssemblyScript)"
+version = "0.1.0"
+description = "Template for creating Flow-Like WASM nodes in AssemblyScript"
+license = "MIT"
+repository = "https://github.com/example/flow-like-nodes"
+keywords = ["template", "example"]
+
+[[authors]]
+name = "Your Name"
+
+# --- Permissions ---
+[permissions]
+memory = "standard"
+timeout = "standard"
+
+[permissions.network]
+http_enabled = false
+allowed_hosts = []
+websocket_enabled = false
+tcp_enabled = false
+udp_enabled = false
+dns_enabled = false
+
+[permissions.filesystem]
+node_storage = false
+user_storage = false
+
+
+# --- Nodes ---
+# Each [[nodes]] entry describes a node this package provides.
+# For single-node packages, list just one. For multi-node, list all of them.
+
+[[nodes]]
+id = "my_custom_node_as"
+name = "My Custom Node (AS)"
+description = "A template WASM node built with AssemblyScript"
+category = "Custom/WASM"

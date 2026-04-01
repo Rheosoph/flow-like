@@ -16,7 +16,7 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["full"] }
-dashmap = { version="6.1.0", features = ["serde", "rayon", "inline"] }
+dashmap = { workspace = true, features = ["serde", "rayon", "inline"] }
 futures.workspace = true
 image.workspace = true
 imageproc.workspace = true

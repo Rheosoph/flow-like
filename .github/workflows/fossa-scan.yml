@@ -1,0 +1,33 @@
+name: "FOSSA Scan"
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  fossa-scan:
+    name: FOSSA Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run FOSSA Scan
+        id: fossa
+        uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          generate-report: html
+
+      - name: Save FOSSA Report
+        if: always()
+        run: echo '${{ steps.fossa.outputs.report }}' > fossa-attribution.html
+
+      - name: Upload FOSSA Report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fossa-report
+          path: fossa-attribution.html

@@ -97,10 +97,7 @@ impl ObjectStore for AndroidSafeObjectStore {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -140,11 +137,7 @@ impl ObjectStore for AndroidSafeObjectStore {
 pub struct AndroidSafeWrapper;
 
 impl WrappingObjectStore for AndroidSafeWrapper {
-    fn wrap(
-        &self,
-        _store_prefix: &str,
-        original: Arc<dyn ObjectStore>,
-    ) -> Arc<dyn ObjectStore> {
+    fn wrap(&self, _store_prefix: &str, original: Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> {
         Arc::new(AndroidSafeObjectStore::new(original))
     }
 }

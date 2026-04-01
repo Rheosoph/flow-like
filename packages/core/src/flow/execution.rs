@@ -1,4 +1,4 @@
-use super::board::ExecutionStage;
+use super::board::{ExecutionStage, LayerType};
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
@@ -252,7 +252,7 @@ impl LogMeta {
                 Ok(_) => {
                     return Ok(());
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Table is corrupted (e.g. from failed hard_link on Android), drop and recreate
                     let _ = db.drop_table("runs", &[]).await;
                 }
@@ -260,10 +260,7 @@ impl LogMeta {
         }
 
         // Create table with data (either didn't exist or was dropped due to corruption)
-        let iter = RecordBatchIterator::new(
-            vec![arrow_batch].into_iter().map(Ok),
-            schema.clone(),
-        );
+        let iter = RecordBatchIterator::new(vec![arrow_batch].into_iter().map(Ok), schema.clone());
         let mut builder = db.create_table("runs", Box::new(iter));
         if let Some(opts) = write_options {
             builder = builder.write_options(opts.clone());
@@ -519,10 +516,14 @@ impl PreparedFlush {
                 }
                 add.execute().await?;
             }
-            Err(open_err) => {
+            Err(_open_err) => {
                 // Try to drop any corrupted/partial table first
-                if let Err(e) = db.drop_table(&self.run_id, &[]).await {
-                    eprintln!("[DBG-v3] drop_table failed (expected if not exists): {:?}", e);
+                match db.drop_table(&self.run_id, &[]).await {
+                    Ok(_) => {}
+                    Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => {}
+                    Err(e) => {
+                        eprintln!("[DBG-v3] drop_table failed unexpectedly: {:?}", e);
+                    }
                 }
 
                 // Create the table WITH data in one step (avoids create_empty + add issue)
@@ -584,7 +585,7 @@ impl RunStack {
 pub type EventTrigger =
     Arc<dyn Fn(&InternalRun) -> BoxFuture<'_, flow_like_types::Result<()>> + Send + Sync>;
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// Cached immutable fields from Run to avoid locking during hot path execution
 #[derive(Clone)]
@@ -631,6 +632,8 @@ pub struct InternalRun {
     cpus: usize,
     log_level: LogLevel,
     completion_callbacks: Arc<RwLock<Vec<EventTrigger>>>,
+    /// Set to true when any node execution fails
+    has_node_errors: Arc<AtomicBool>,
 
     // Cached immutable fields from Run to avoid locking
     pub meta: RunMeta,
@@ -806,6 +809,20 @@ impl InternalRun {
             }
         }
 
+        // Also create pins for nodes inside function layers
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                for (pin_id, pin) in &node.pins {
+                    let internal_pin = InternalPin::new(pin, false);
+                    pin_to_node.insert(pin_id, (node_id, node.is_pure()));
+                    pins.insert(pin.id.clone(), Arc::new(internal_pin));
+                }
+            }
+        }
+
         for layer in board.layers.values() {
             for (pin_id, pin) in &layer.pins {
                 if pins.contains_key(pin_id) {
@@ -837,6 +854,32 @@ impl InternalRun {
                         .filter_map(|id| pins.get(id).map(Arc::downgrade))
                         .collect();
                     internal_pin.init_depends_on(depends);
+                }
+            }
+        }
+
+        // Wire connections for function layer nodes
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for node in layer.nodes.values() {
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        let connected: Vec<Weak<InternalPin>> = pin
+                            .connected_to
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_connected_to(connected);
+
+                        let depends: Vec<Weak<InternalPin>> = pin
+                            .depends_on
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_depends_on(depends);
+                    }
                 }
             }
         }
@@ -916,6 +959,39 @@ impl InternalRun {
             nodes.insert(node_id.clone(), internal_node);
         }
 
+        // Instantiate nodes inside function layers so they are available during execution
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                let logic = registry.instantiate(node)?;
+                let mut node_pins = AHashMap::new();
+                let mut pin_cache = AHashMap::new();
+
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        node_pins.insert(pin.id.clone(), internal_pin.clone());
+                        let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
+                        cached_array.push(internal_pin.clone());
+                    }
+                }
+
+                let internal_node = Arc::new(InternalNode::new(
+                    node.clone(),
+                    node_pins.clone(),
+                    logic,
+                    pin_cache.clone(),
+                ));
+
+                for internal_pin in node_pins.values() {
+                    internal_pin.init_node(Arc::downgrade(&internal_node));
+                }
+
+                nodes.insert(node_id.clone(), internal_node);
+            }
+        }
+
         if USE_DEPENDENCY_GRAPH {
             let mut recursion_filter: AHashSet<String> = AHashSet::new();
             for node_id in board.nodes.keys() {
@@ -946,7 +1022,7 @@ impl InternalRun {
             cache: Arc::new(RwLock::new(AHashMap::new())),
             stack: Arc::new(stack),
             concurrency_limit: 128_000,
-            cpus: num_cpus::get(),
+            cpus: num_cpus::get().max(4) * 4,
             callback,
             credentials: credentials.map(Arc::new),
             token,
@@ -956,6 +1032,7 @@ impl InternalRun {
             profile: Arc::new(profile.clone()),
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
+            has_node_errors: Arc::new(AtomicBool::new(false)),
             // Cached immutable fields from Run
             meta: RunMeta {
                 run_id: run_id.clone(),
@@ -996,6 +1073,7 @@ impl InternalRun {
         self.cache.write().await.clear();
         self.stack = Arc::new(RunStack::with_capacity(self.stack.len()));
         self.concurrency_limit = 128_000;
+        self.has_node_errors.store(false, Ordering::Relaxed);
         {
             let mut run = lock_with_timeout(self.run.as_ref(), "run_fork").await?;
             run.status = RunStatus::Running;
@@ -1036,6 +1114,7 @@ impl InternalRun {
         let callback = self.callback.clone();
         let meta = self.meta.clone();
         let user_context = self.user_context.clone();
+        let has_node_errors = self.has_node_errors.clone();
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
@@ -1054,6 +1133,7 @@ impl InternalRun {
                 let nodes = self.nodes.clone();
                 let oauth_tokens = self.oauth_tokens.clone();
                 let user_context = user_context.clone();
+                let has_node_errors = has_node_errors.clone();
 
                 async move {
                     step_core(
@@ -1075,25 +1155,35 @@ impl InternalRun {
                         token,
                         oauth_tokens,
                         user_context,
+                        &has_node_errors,
                     )
                     .await
                 }
             })
             .buffer_unordered(self.cpus)
             .fold(
-                RunStack::with_capacity(stack.stack.len()),
-                |mut acc: RunStack, result| async move {
-                    if let Ok(inner_iter) = result {
+                (RunStack::with_capacity(stack.stack.len()), Vec::new()),
+                |mut acc: (RunStack, Vec<Trace>), result| async move {
+                    if let Ok((inner_iter, traces)) = result {
                         for node in inner_iter {
-                            acc.push(node);
+                            acc.0.push(node);
                         }
+                        acc.1.extend(traces);
                     }
                     acc
                 },
             )
             .await;
 
-        self.stack = Arc::new(new_stack);
+        // Merge all collected traces in one lock acquisition
+        if !new_stack.1.is_empty()
+            && let Ok(mut run_locked) =
+                lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await
+        {
+            run_locked.traces.extend(new_stack.1);
+        }
+
+        self.stack = Arc::new(new_stack.0);
     }
 
     async fn step_single(
@@ -1127,13 +1217,21 @@ impl InternalRun {
             self.token.clone(),
             self.oauth_tokens.clone(),
             self.user_context.clone(),
+            &self.has_node_errors,
         )
         .await;
 
         let mut new_stack = RunStack::with_capacity(stack.len());
-        if let Ok(nodes) = connected_nodes {
+        if let Ok((nodes, traces)) = connected_nodes {
             for node in nodes {
                 new_stack.push(node);
+            }
+            // Merge traces in one lock acquisition
+            if !traces.is_empty()
+                && let Ok(mut run_locked) =
+                    lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await
+            {
+                run_locked.traces.extend(traces);
             }
         }
 
@@ -1252,6 +1350,11 @@ impl InternalRun {
                 break;
             }
             stack_hash = new_stack_hash;
+        }
+
+        // Check if any node reported an error during execution
+        if self.has_node_errors.load(Ordering::Relaxed) {
+            errored = true;
         }
 
         // Stop background flush task
@@ -1497,7 +1600,8 @@ async fn step_core(
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     user_context: Option<UserExecutionContext>,
-) -> flow_like_types::Result<Vec<ExecutionTarget>> {
+    has_node_errors: &Arc<AtomicBool>,
+) -> flow_like_types::Result<(Vec<ExecutionTarget>, Vec<Trace>)> {
     // Check Node State and Validate Execution Count (to stop infinite loops)
     {
         let calls_before = target.node.exec_calls.fetch_add(1, Ordering::Relaxed);
@@ -1544,10 +1648,7 @@ async fn step_core(
         eprintln!("[Error] executing node: {:?}", err);
     }
 
-    {
-        let mut run_locked = lock_with_timeout(run.as_ref(), "run_traces_merge").await?;
-        run_locked.traces.extend(context.take_traces());
-    }
+    let traces = context.take_traces();
 
     let state = context.get_state();
 
@@ -1562,10 +1663,14 @@ async fn step_core(
         for connected_node in connected {
             connected_nodes.push(connected_node);
         }
-        return Ok(connected_nodes);
+        return Ok((connected_nodes, traces));
     }
 
-    Err(anyhow!("Node failed"))
+    // Flag this run as having node errors so RunStatus reflects the failure
+    has_node_errors.store(true, Ordering::Relaxed);
+
+    // Return traces even on failure so error logs are not silently dropped
+    Ok((Vec::new(), traces))
 }
 
 #[derive(Deserialize)]

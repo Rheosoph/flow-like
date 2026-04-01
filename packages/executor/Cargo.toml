@@ -5,9 +5,11 @@ edition = "2021"
 description = "Environment-agnostic execution runtime for Flow-Like"
 
 [features]
-default = ["execute"]
+default = []
 execute = ["flow-like-catalog/execute"]
 all-execute = ["flow-like-catalog/all-execute"]
+server-execute = ["flow-like-catalog/server-execute"]
+all-server-execute = ["flow-like-catalog/all-server-execute"]
 local-ml = ["flow-like-catalog/local-ml"]
 tauri = ["flow-like-catalog/tauri"]
 
@@ -16,7 +18,10 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true
+flow-like-wasm.workspace = true
 
+blake3.workspace = true
+wasmtime.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
@@ -25,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["sync", "time"] }
 axum.workspace = true
 futures-util.workspace = true
+thiserror.workspace = true
 
 # JWT verification
 jsonwebtoken = "9"

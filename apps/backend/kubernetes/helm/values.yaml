@@ -77,6 +77,37 @@ web:
   tolerations: []
   affinity: {}
 
+# WASM Compiler Configuration
+compiler:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: k3d-flow-like.localhost:5000/flow-like-k8s-compiler
+    tag: latest
+    pullPolicy: Never
+  service:
+    port: 8080
+  timeoutSecs: 600
+  callbackTimeoutMs: 10000
+  callbackRetries: 3
+  # maxParallelTargets: "" # leave empty to use all CPU cores
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "4"
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Executor Configuration (for Kubernetes Jobs)
 executor:
   image:

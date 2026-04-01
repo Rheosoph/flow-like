@@ -3,6 +3,7 @@
 import { cn } from "../../../lib/utils";
 import { Checkbox } from "../../ui/checkbox";
 import { Label } from "../../ui/label";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -19,8 +20,8 @@ export function A2UICheckbox({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<CheckboxComponent>) {
+	const onAction = useOnAction();
 	const checked = useResolved<boolean>(component.checked);
 	const label = useResolved<string>(component.label);
 	const disabled = useResolved<boolean>(component.disabled);

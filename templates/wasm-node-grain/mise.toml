@@ -1,0 +1,26 @@
+# Grain is installed system-wide. See: https://grain-lang.org/docs/getting_grain
+# On macOS:  brew install --no-quarantine --cask grain-lang/tap/grain
+# Or:        sudo curl -L --output /usr/local/bin/grain https://github.com/grain-lang/grain/releases/download/grain-v0.7.2/grain-mac-x64 && sudo chmod +x /usr/local/bin/grain
+
+[tasks.setup]
+description = "Install Grain compiler"
+run = """
+if command -v grain >/dev/null 2>&1; then
+  echo "Grain $(grain --version) found"
+else
+  echo "Grain not found. Install from https://grain-lang.org/docs/getting_grain"
+  exit 1
+fi
+"""
+
+[tasks.build]
+description = "Build the WASM node"
+run = "mkdir -p build && grain compile --release --no-gc --elide-type-info -I ../wasm-sdk-grain -o build/node.wasm src/main.gr"
+
+[tasks.test]
+description = "Run unit tests"
+run = "grain test src/main.gr"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf build/ *.gr.wasm"

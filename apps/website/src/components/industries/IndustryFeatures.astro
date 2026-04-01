@@ -1,0 +1,58 @@
+---
+interface Props {
+  t: (key: string) => string;
+  accent: string;
+}
+
+const { t, accent } = Astro.props;
+
+const theme: Record<string, Record<string, string>> = {
+  orange:  { badge: "bg-orange-500/15 text-orange-300 border-orange-500/30",  dot: "bg-orange-400", border: "border-orange-500/10 hover:border-orange-500/30", topBar: "bg-gradient-to-r from-orange-500 to-amber-400" },
+  emerald: { badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30", dot: "bg-emerald-400", border: "border-emerald-500/10 hover:border-emerald-500/30", topBar: "bg-gradient-to-r from-emerald-500 to-teal-400" },
+  blue:    { badge: "bg-blue-500/15 text-blue-300 border-blue-500/30",     dot: "bg-blue-400",   border: "border-blue-500/10 hover:border-blue-500/30",   topBar: "bg-gradient-to-r from-blue-500 to-sky-400" },
+  violet:  { badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",  dot: "bg-violet-400", border: "border-violet-500/10 hover:border-violet-500/30", topBar: "bg-gradient-to-r from-violet-500 to-purple-400" },
+  red:     { badge: "bg-red-500/15 text-red-300 border-red-500/30",       dot: "bg-red-400",    border: "border-red-500/10 hover:border-red-500/30",    topBar: "bg-gradient-to-r from-red-500 to-rose-400" },
+  cyan:    { badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",     dot: "bg-cyan-400",   border: "border-cyan-500/10 hover:border-cyan-500/30",   topBar: "bg-gradient-to-r from-cyan-500 to-sky-400" },
+  amber:   { badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",   dot: "bg-amber-400",  border: "border-amber-500/10 hover:border-amber-500/30",  topBar: "bg-gradient-to-r from-amber-500 to-yellow-400" },
+};
+
+const c = theme[accent] ?? theme.orange;
+
+const features = Array.from({ length: 12 }, (_, i) => i + 1)
+  .filter((i) => {
+    const key = `ind.feature.${i}.title`;
+    return t(key) !== key;
+  })
+  .map((i) => ({
+    title: t(`ind.feature.${i}.title`),
+    desc: t(`ind.feature.${i}.desc`),
+  }));
+---
+
+<section class="relative py-24 sm:py-32">
+  <div class="max-w-7xl mx-auto px-6 lg:px-8">
+    <div class="text-center max-w-2xl mx-auto mb-16">
+      <div class={`inline-flex items-center px-3 py-1 rounded-full border text-xs font-medium mb-4 ${c.badge}`}>
+        {t("ind.features.tagline")}
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-foreground">
+        {t("ind.features.headline")}
+      </h2>
+    </div>
+
+    <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {features.map((f) => (
+        <div class={`group relative rounded-xl border bg-card/50 backdrop-blur-sm overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${c.border}`}>
+          <div class={`h-1 w-full ${c.topBar}`}></div>
+          <div class="p-6">
+            <div class="flex items-center gap-3 mb-3">
+              <span class={`w-2 h-2 rounded-full flex-shrink-0 ${c.dot}`}></span>
+              <h3 class="font-semibold text-foreground">{f.title}</h3>
+            </div>
+            <p class="text-sm text-muted-foreground leading-relaxed pl-5">{f.desc}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

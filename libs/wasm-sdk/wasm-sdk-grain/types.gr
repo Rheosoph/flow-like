@@ -1,0 +1,750 @@
+// Flow-Like WASM SDK — Type definitions and JSON builders (Grain)
+//
+// Provides NodeDefinition, PinDefinition, ExecutionInput, ExecutionResult,
+// and manual JSON serialization (avoids stdlib Json to keep binary small).
+//
+// Grain version: 0.6+
+
+module Types
+
+from "string" include String
+from "list" include List
+from "map" include Map
+from "number" include Number
+
+// -----------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------
+
+provide let logLevelDebug = 0
+provide let logLevelInfo = 1
+provide let logLevelWarn = 2
+provide let logLevelError = 3
+provide let logLevelFatal = 4
+
+// -----------------------------------------------------------------------
+// Data types (match the host ABI)
+// -----------------------------------------------------------------------
+
+provide enum DataType {
+  Exec,
+  TypeString,
+  TypeI64,
+  TypeF64,
+  TypeBool,
+  Generic,
+  TypeBytes,
+  TypeDate,
+  PathBuf,
+  Struct,
+}
+
+provide let dataTypeToString = (dt: DataType) => {
+  match (dt) {
+    Exec => "Exec",
+    TypeString => "String",
+    TypeI64 => "I64",
+    TypeF64 => "F64",
+    TypeBool => "Bool",
+    Generic => "Generic",
+    TypeBytes => "Bytes",
+    TypeDate => "Date",
+    PathBuf => "PathBuf",
+    Struct => "Struct",
+  }
+}
+
+provide enum PinDirection {
+  Input,
+  Output,
+}
+
+// -----------------------------------------------------------------------
+// Value types (how data is contained)
+// -----------------------------------------------------------------------
+
+provide enum ValueType {
+  Normal,
+  ArrayType,
+  HashMap,
+  HashSet,
+}
+
+provide let valueTypeToString = (vt: ValueType) => {
+  match (vt) {
+    Normal => "Normal",
+    ArrayType => "Array",
+    HashMap => "HashMap",
+    HashSet => "HashSet",
+  }
+}
+
+// -----------------------------------------------------------------------
+// Pin definition
+// -----------------------------------------------------------------------
+
+provide record PinDefinition {
+  name: String,
+  friendlyName: String,
+  description: String,
+  direction: PinDirection,
+  dataType: DataType,
+  mut defaultValue: Option<String>,
+  mut valueType: Option<String>,
+  mut schema: Option<String>,
+  mut validValues: Option<List<String>>,
+  mut range: Option<(Number, Number)>,
+  mut step: Option<Number>,
+  mut sensitive: Option<Bool>,
+  mut enforceSchema: Option<Bool>,
+  mut enforceGenericValueType: Option<Bool>,
+}
+
+provide let inputPin = (name, friendlyName, description, dataType) => {
+  {
+    name,
+    friendlyName,
+    description,
+    direction: Input,
+    dataType,
+    defaultValue: None,
+    valueType: None,
+    schema: None,
+    validValues: None,
+    range: None,
+    step: None,
+    sensitive: None,
+    enforceSchema: None,
+    enforceGenericValueType: None,
+  }
+}
+
+provide let outputPin = (name, friendlyName, description, dataType) => {
+  {
+    name,
+    friendlyName,
+    description,
+    direction: Output,
+    dataType,
+    defaultValue: None,
+    valueType: None,
+    schema: None,
+    validValues: None,
+    range: None,
+    step: None,
+    sensitive: None,
+    enforceSchema: None,
+    enforceGenericValueType: None,
+  }
+}
+
+provide let withDefault = (pin: PinDefinition, value: String) => {
+  { ...pin, defaultValue: Some(value) }
+}
+
+provide let withValueType = (pin: PinDefinition, vt: String) => {
+  { ...pin, valueType: Some(vt) }
+}
+
+provide let withSchema = (pin: PinDefinition, s: String) => {
+  { ...pin, schema: Some(s) }
+}
+
+provide let withValidValues = (pin: PinDefinition, values: List<String>) => {
+  { ...pin, validValues: Some(values) }
+}
+
+provide let withRange = (pin: PinDefinition, min: Number, max: Number) => {
+  { ...pin, range: Some((min, max)) }
+}
+
+provide let withStep = (pin: PinDefinition, step: Number) => {
+  { ...pin, step: Some(step) }
+}
+
+provide let withSensitive = (pin: PinDefinition, sensitive: Bool) => {
+  { ...pin, sensitive: Some(sensitive) }
+}
+
+provide let withEnforceSchema = (pin: PinDefinition, enforce: Bool) => {
+  { ...pin, enforceSchema: Some(enforce) }
+}
+
+provide let withEnforceGenericValueType = (pin: PinDefinition, enforce: Bool) => {
+  { ...pin, enforceGenericValueType: Some(enforce) }
+}
+
+// -----------------------------------------------------------------------
+// Node scores
+// -----------------------------------------------------------------------
+
+provide record NodeScores {
+  privacy: Number,
+  security: Number,
+  performance: Number,
+  governance: Number,
+  reliability: Number,
+  cost: Number,
+}
+
+// -----------------------------------------------------------------------
+// Node definition
+// -----------------------------------------------------------------------
+
+provide record NodeDefinition {
+  mut name: String,
+  mut friendlyName: String,
+  mut description: String,
+  mut category: String,
+  mut icon: Option<String>,
+  mut pins: List<PinDefinition>,
+  mut scores: Option<NodeScores>,
+  mut longRunning: Bool,
+  mut docs: Option<String>,
+  mut permissions: List<String>,
+}
+
+provide let newNodeDefinition = () => {
+  {
+    name: "",
+    friendlyName: "",
+    description: "",
+    category: "",
+    icon: None,
+    pins: [],
+    scores: None,
+    longRunning: false,
+    docs: None,
+    permissions: [],
+  }
+}
+
+provide let addPin = (def: NodeDefinition, pin: PinDefinition) => {
+  { ...def, pins: List.append(def.pins, [pin]) }
+}
+
+provide let addPermission = (def: NodeDefinition, perm: String) => {
+  { ...def, permissions: List.append(def.permissions, [perm]) }
+}
+
+// -----------------------------------------------------------------------
+// Package nodes (multi-node support)
+// -----------------------------------------------------------------------
+
+provide record PackageNodes {
+  mut nodes: List<NodeDefinition>,
+}
+
+provide let newPackageNodes = () => {
+  { nodes: [] }
+}
+
+provide let addNode = (pkg: PackageNodes, node: NodeDefinition) => {
+  { nodes: List.append(pkg.nodes, [node]) }
+}
+
+// -----------------------------------------------------------------------
+// Execution input (parsed from host JSON)
+// -----------------------------------------------------------------------
+
+provide record ExecutionInput {
+  mut nodeId: String,
+  mut nodeName: String,
+  mut runId: String,
+  mut appId: String,
+  mut boardId: String,
+  mut userId: String,
+  mut streamState: Bool,
+  mut logLevel: Number,
+  mut inputs: Map.Map<String, String>,
+}
+
+provide let newExecutionInput = () => {
+  {
+    nodeId: "",
+    nodeName: "",
+    runId: "",
+    appId: "",
+    boardId: "",
+    userId: "",
+    streamState: false,
+    logLevel: 1,
+    inputs: Map.make(),
+  }
+}
+
+// -----------------------------------------------------------------------
+// Execution result
+// -----------------------------------------------------------------------
+
+provide record ExecutionResult {
+  mut outputs: Map.Map<String, String>,
+  mut error: Option<String>,
+  mut activateExec: List<String>,
+  mut pending: Bool,
+}
+
+provide let newExecutionResult = () => {
+  {
+    outputs: Map.make(),
+    error: None,
+    activateExec: [],
+    pending: false,
+  }
+}
+
+// -----------------------------------------------------------------------
+// JSON helpers
+// -----------------------------------------------------------------------
+
+provide let escapeJson = (s: String) => {
+  // Escape backslash, double-quote, and control characters
+  let s = String.replaceAll("\\", "\\\\", s)
+  let s = String.replaceAll("\"", "\\\"", s)
+  let s = String.replaceAll("\n", "\\n", s)
+  let s = String.replaceAll("\r", "\\r", s)
+  let s = String.replaceAll("\t", "\\t", s)
+  s
+}
+
+provide let jsonString = (s: String) => {
+  "\"" ++ escapeJson(s) ++ "\""
+}
+
+let jsonField = (key: String, value: String) => {
+  "\"" ++ key ++ "\":" ++ value
+}
+
+let jsonFieldStr = (key: String, value: String) => {
+  jsonField(key, jsonString(value))
+}
+
+let optionalField = (key: String, opt: Option<String>) => {
+  match (opt) {
+    Some(v) => "," ++ jsonFieldStr(key, v),
+    None => "",
+  }
+}
+
+// -----------------------------------------------------------------------
+// Pin → JSON
+// -----------------------------------------------------------------------
+
+provide let pinToJson = (pin: PinDefinition) => {
+  let dir = match (pin.direction) {
+    Input => "Input",
+    Output => "Output",
+  }
+  let base =
+    "{" ++
+    jsonFieldStr("name", pin.name) ++
+    "," ++
+    jsonFieldStr("friendly_name", pin.friendlyName) ++
+    "," ++
+    jsonFieldStr("description", pin.description) ++
+    "," ++
+    jsonFieldStr("pin_type", dir) ++
+    "," ++
+    jsonFieldStr("data_type", dataTypeToString(pin.dataType))
+
+  let withDefault = match (pin.defaultValue) {
+    Some(v) => "," ++ jsonField("default_value", v),
+    None => "",
+  }
+  let withValueType = optionalField("value_type", pin.valueType)
+  let withSchema = optionalField("schema", pin.schema)
+
+  let withValidValues = match (pin.validValues) {
+    Some(vals) => {
+      let items = List.join(",", List.map(jsonString, vals))
+      "," ++ jsonField("valid_values", "[" ++ items ++ "]")
+    },
+    None => "",
+  }
+
+  let withRange = match (pin.range) {
+    Some((min, max)) =>
+      "," ++ jsonField("range", "[" ++ toString(min) ++ "," ++ toString(max) ++ "]"),
+    None => "",
+  }
+
+  let withStepField = match (pin.step) {
+    Some(s) => "," ++ jsonField("step", toString(s)),
+    None => "",
+  }
+
+  let withSensitiveField = match (pin.sensitive) {
+    Some(s) => "," ++ jsonField("sensitive", if (s) "true" else "false"),
+    None => "",
+  }
+
+  let withEnforceSchemaField = match (pin.enforceSchema) {
+    Some(s) => "," ++ jsonField("enforce_schema", if (s) "true" else "false"),
+    None => "",
+  }
+
+  let withEnforceGenericValueTypeField = match (pin.enforceGenericValueType) {
+    Some(s) =>
+      "," ++
+      jsonField("enforce_generic_value_type", if (s) "true" else "false"),
+    None => "",
+  }
+
+  base ++ withDefault ++ withValueType ++ withSchema ++ withValidValues ++ withRange ++ withStepField ++ withSensitiveField ++ withEnforceSchemaField ++ withEnforceGenericValueTypeField ++ "}"
+}
+
+// -----------------------------------------------------------------------
+// Scores → JSON
+// -----------------------------------------------------------------------
+
+let scoresToJson = (s: NodeScores) => {
+  "{" ++
+  jsonField("privacy", toString(s.privacy)) ++
+  "," ++
+  jsonField("security", toString(s.security)) ++
+  "," ++
+  jsonField("performance", toString(s.performance)) ++
+  "," ++
+  jsonField("governance", toString(s.governance)) ++
+  "," ++
+  jsonField("reliability", toString(s.reliability)) ++
+  "," ++
+  jsonField("cost", toString(s.cost)) ++
+  "}"
+}
+
+// -----------------------------------------------------------------------
+// NodeDefinition → JSON
+// -----------------------------------------------------------------------
+
+provide let nodeDefToJson = (def: NodeDefinition) => {
+  let pinsJson = List.join(",", List.map(pinToJson, def.pins))
+  let permsJson = List.join(",", List.map(jsonString, def.permissions))
+
+  let base =
+    "{" ++
+    jsonFieldStr("name", def.name) ++
+    "," ++
+    jsonFieldStr("friendly_name", def.friendlyName) ++
+    "," ++
+    jsonFieldStr("description", def.description) ++
+    "," ++
+    jsonFieldStr("category", def.category)
+
+  let withIcon = optionalField("icon", def.icon)
+
+  let withPins = "," ++ jsonField("pins", "[" ++ pinsJson ++ "]")
+
+  let withScores = match (def.scores) {
+    Some(s) => "," ++ jsonField("scores", scoresToJson(s)),
+    None => "",
+  }
+
+  let withLongRunning = if (def.longRunning) {
+    "," ++ jsonField("long_running", "true")
+  } else {
+    ""
+  }
+
+  let withDocs = optionalField("docs", def.docs)
+
+  let withPerms = if (List.length(def.permissions) > 0) {
+    "," ++ jsonField("permissions", "[" ++ permsJson ++ "]")
+  } else {
+    ""
+  }
+
+  base ++
+  withIcon ++
+  withPins ++
+  withScores ++
+  withLongRunning ++
+  withDocs ++
+  withPerms ++
+  "}"
+}
+
+// -----------------------------------------------------------------------
+// PackageNodes → JSON
+// -----------------------------------------------------------------------
+
+provide let packageNodesToJson = (pkg: PackageNodes) => {
+  let items = List.join(",", List.map(nodeDefToJson, pkg.nodes))
+  "[" ++ items ++ "]"
+}
+
+// -----------------------------------------------------------------------
+// ExecutionResult → JSON
+// -----------------------------------------------------------------------
+
+provide let resultToJson = (res: ExecutionResult) => {
+  let outputEntries = Map.toList(res.outputs)
+  let outputsJson = List.join(
+    ",",
+    List.map(((k, v)) => { jsonField(k, v) }, outputEntries),
+  )
+
+  let execJson = List.join(",", List.map(jsonString, res.activateExec))
+
+  let errorStr = match (res.error) {
+    Some(e) => jsonString(e),
+    None => "null",
+  }
+
+  "{" ++
+  jsonField("outputs", "{" ++ outputsJson ++ "}") ++
+  "," ++
+  jsonField("error", errorStr) ++
+  "," ++
+  jsonField("activate_exec", "[" ++ execJson ++ "]") ++
+  "," ++
+  jsonField("pending", if (res.pending) "true" else "false") ++
+  "}"
+}
+
+// -----------------------------------------------------------------------
+// Minimal JSON parser for ExecutionInput
+// -----------------------------------------------------------------------
+
+provide let parseExecutionInput = (s: String) => {
+  let mut input = newExecutionInput()
+
+  // Trim outer braces
+  let len = String.length(s)
+  if (len < 2) {
+    input
+  } else {
+    // Simple key-value extraction using string search
+    let findStringValue = (key: String) => {
+      let needle = "\"" ++ key ++ "\":"
+      match (String.indexOf(needle, s)) {
+        Some(pos) => {
+          let afterColon = pos + String.length(needle)
+          let rest = String.slice(afterColon, end=len, s)
+          let trimmed = String.trimStart(rest)
+          if (String.startsWith("\"", trimmed)) {
+            let inner = String.slice(1, end=String.length(trimmed), trimmed)
+            match (String.indexOf("\"", inner)) {
+              Some(endPos) => Some(String.slice(0, end=endPos, inner)),
+              None => None,
+            }
+          } else {
+            None
+          }
+        },
+        None => None,
+      }
+    }
+
+    let findBoolValue = (key: String) => {
+      let needle = "\"" ++ key ++ "\":"
+      match (String.indexOf(needle, s)) {
+        Some(pos) => {
+          let afterColon = pos + String.length(needle)
+          let rest = String.slice(afterColon, end=len, s)
+          let trimmed = String.trimStart(rest)
+          String.startsWith("true", trimmed)
+        },
+        None => false,
+      }
+    }
+
+    let isDigitChar = (ch: String) => {
+      ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4" ||
+        ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9"
+    }
+
+    let findNumberValue = (key: String) => {
+      let needle = "\"" ++ key ++ "\":"
+      match (String.indexOf(needle, s)) {
+        Some(pos) => {
+          let afterColon = pos + String.length(needle)
+          let rest = String.slice(afterColon, end=len, s)
+          let trimmed = String.trimStart(rest)
+          let tLen = String.length(trimmed)
+          if (tLen == 0) {
+            None
+          } else {
+            let first = String.slice(0, end=1, trimmed)
+            let mut startIdx = 0
+            let isNeg = first == "-"
+            if (isNeg) startIdx = 1
+            let mut endIdx = startIdx
+            while (endIdx < tLen) {
+              let ch = String.slice(endIdx, end=endIdx + 1, trimmed)
+              if (isDigitChar(ch)) {
+                endIdx = endIdx + 1
+              } else {
+                break
+              }
+            }
+            if (endIdx > startIdx) {
+              let numStr = String.slice(0, end=endIdx, trimmed)
+              match (Number.parseInt(numStr, 10)) {
+                Ok(n) => Some(n),
+                Err(_) => None,
+              }
+            } else {
+              None
+            }
+          }
+        },
+        None => None,
+      }
+    }
+
+    match (findStringValue("node_id")) {
+      Some(v) => input.nodeId = v,
+      None => void,
+    }
+    match (findStringValue("node_name")) {
+      Some(v) => input.nodeName = v,
+      None => void,
+    }
+    match (findStringValue("run_id")) {
+      Some(v) => input.runId = v,
+      None => void,
+    }
+    match (findStringValue("app_id")) {
+      Some(v) => input.appId = v,
+      None => void,
+    }
+    match (findStringValue("board_id")) {
+      Some(v) => input.boardId = v,
+      None => void,
+    }
+    match (findStringValue("user_id")) {
+      Some(v) => input.userId = v,
+      None => void,
+    }
+    input.streamState = findBoolValue("stream_state")
+    match (findNumberValue("log_level")) {
+      Some(v) => input.logLevel = v,
+      None => void,
+    }
+
+    // Parse "inputs" object — extract key-value pairs
+    let inputsNeedle = "\"inputs\":"
+    match (String.indexOf(inputsNeedle, s)) {
+      Some(pos) => {
+        let afterColon = pos + String.length(inputsNeedle)
+        let rest = String.slice(afterColon, end=len, s)
+        let trimmed = String.trimStart(rest)
+        if (String.startsWith("{", trimmed)) {
+          // Find matching closing brace (simple depth tracking)
+          let inner = String.slice(1, end=String.length(trimmed), trimmed)
+          let mut depth = 1
+          let mut endIdx = 0
+          let innerLen = String.length(inner)
+          let mut found = false
+          while (endIdx < innerLen && !found) {
+            let ch = String.slice(endIdx, end=endIdx + 1, inner)
+            if (ch == "{") {
+              depth = depth + 1
+            } else if (ch == "}") {
+              depth = depth - 1
+              if (depth == 0) {
+                found = true
+              }
+            }
+            if (!found) endIdx = endIdx + 1
+          }
+
+          let inputsStr = String.slice(0, end=endIdx, inner)
+          // Parse simple "key":value pairs from inputsStr
+          let mut remaining = inputsStr
+          let mut parsing = true
+          while (parsing && String.length(remaining) > 0) {
+            let trimmedR = String.trimStart(remaining)
+            if (String.startsWith("\"", trimmedR)) {
+              let afterQuote = String.slice(1, end=String.length(trimmedR), trimmedR)
+              match (String.indexOf("\"", afterQuote)) {
+                Some(keyEnd) => {
+                  let key = String.slice(0, end=keyEnd, afterQuote)
+                  let afterKey = String.slice(
+                    keyEnd + 1,
+                    end=String.length(afterQuote),
+                    afterQuote,
+                  )
+                  let afterColon2 = match (String.indexOf(":", afterKey)) {
+                    Some(cp) =>
+                      String.trimStart(
+                        String.slice(cp + 1, end=String.length(afterKey), afterKey),
+                      ),
+                    None => {
+                      parsing = false
+                      ""
+                    },
+                  }
+                  if (parsing) {
+                    // Read value (could be string, number, bool, object, array)
+                    let firstCh = String.slice(0, end=1, afterColon2)
+                    if (firstCh == "\"") {
+                      // String value — find closing quote
+                      let valInner = String.slice(
+                        1,
+                        end=String.length(afterColon2),
+                        afterColon2,
+                      )
+                      match (String.indexOf("\"", valInner)) {
+                        Some(ve) => {
+                          let value = "\"" ++
+                            String.slice(0, end=ve, valInner) ++
+                            "\""
+                          Map.set(key, value, input.inputs)
+                          remaining = String.slice(
+                            ve + 2,
+                            end=String.length(valInner),
+                            valInner,
+                          )
+                          // Skip comma
+                          let trimmedNext = String.trimStart(remaining)
+                          remaining = if (String.startsWith(",", trimmedNext)) {
+                            String.slice(
+                              1,
+                              end=String.length(trimmedNext),
+                              trimmedNext,
+                            )
+                          } else {
+                            trimmedNext
+                          }
+                        },
+                        None => parsing = false,
+                      }
+                    } else {
+                      // Non-string value — read until comma or end
+                      match (String.indexOf(",", afterColon2)) {
+                        Some(ci) => {
+                          let value = String.trimEnd(
+                            String.slice(0, end=ci, afterColon2),
+                          )
+                          Map.set(key, value, input.inputs)
+                          remaining = String.slice(
+                            ci + 1,
+                            end=String.length(afterColon2),
+                            afterColon2,
+                          )
+                        },
+                        None => {
+                          let value = String.trimEnd(afterColon2)
+                          Map.set(key, value, input.inputs)
+                          parsing = false
+                        },
+                      }
+                    }
+                  }
+                },
+                None => parsing = false,
+              }
+            } else {
+              parsing = false
+            }
+          }
+        }
+      },
+      None => void,
+    }
+
+    input
+  }
+}

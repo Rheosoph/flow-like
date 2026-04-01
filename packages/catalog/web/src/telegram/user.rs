@@ -121,6 +121,7 @@ impl NodeLogic for ToTelegramUserNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let generic_user: GenericUser = context.evaluate_pin("user_in").await?;
 
@@ -131,6 +132,13 @@ impl NodeLogic for ToTelegramUserNode {
             .await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -169,6 +177,7 @@ impl NodeLogic for GetTelegramUserIdNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let user: TelegramUser = context.evaluate_pin("user").await?;
 
@@ -176,13 +185,23 @@ impl NodeLogic for GetTelegramUserIdNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
 // Get User Chat Boosts Node
 // ============================================================================
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
 
 /// User chat boost information
@@ -260,6 +279,7 @@ impl NodeLogic for GetUserChatBoostsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let user_id: i64 = context.evaluate_pin("user_id").await?;
@@ -293,6 +313,13 @@ impl NodeLogic for GetUserChatBoostsNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -377,6 +404,7 @@ impl NodeLogic for SetUserEmojiStatusNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let user_id: i64 = context.evaluate_pin("user_id").await?;
@@ -413,6 +441,13 @@ impl NodeLogic for SetUserEmojiStatusNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 */

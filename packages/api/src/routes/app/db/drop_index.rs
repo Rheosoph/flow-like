@@ -1,10 +1,14 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 
@@ -37,11 +41,36 @@ pub async fn drop_index(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, table, index_name)): Path<(String, String, String)>,
+    Query(scope): Query<ScopeParams>,
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    validate_table_name(&table)?;
 
-    let credentials = state.master_credentials().await?;
-    let connection = credentials.to_db(&app_id).await?.execute().await?;
+    // Validate index_name with the same rules as table names
+    if index_name.is_empty() || index_name.len() > 256 {
+        return Err(ApiError::bad_request(
+            "Index name must be 1-256 characters".to_string(),
+        ));
+    }
+    if index_name.contains("..")
+        || index_name.contains('/')
+        || index_name.contains('\\')
+        || index_name.contains('\0')
+    {
+        return Err(ApiError::bad_request(
+            "Index name contains forbidden characters".to_string(),
+        ));
+    }
+    if !index_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(ApiError::bad_request(
+            "Index name contains invalid characters".to_string(),
+        ));
+    }
+
+    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let db = LanceDBVectorStore::from_connection(connection, table).await;
 
     db.drop_index(&index_name).await?;

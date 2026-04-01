@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::template, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::template, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -59,5 +59,14 @@ pub async fn delete_template(
 
     app.delete_template(&template_id).await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "template.delete",
+        "Template",
+        template_id,
+        "Template deleted"
+    );
     Ok(Json(templates))
 }

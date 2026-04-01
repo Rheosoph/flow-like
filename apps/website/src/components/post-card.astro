@@ -1,7 +1,7 @@
 ---
 const { entry, variant = "lead" } = Astro.props;
 const { title, description, date, tags, cover } = entry.data;
-const href = "/blog/" + entry.slug.split("-").slice(3).join("-") + "/";
+const href = "/blog/" + entry.id.split("-").slice(3).join("-") + "/";
 
 const formatDate = (d: Date) =>
   d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });

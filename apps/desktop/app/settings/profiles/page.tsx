@@ -1,6 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
 	type ISettingsProfile,
 	IThemes,
@@ -10,7 +11,10 @@ import {
 } from "@tm9657/flow-like-ui";
 import { ProfileSettingsPage } from "@tm9657/flow-like-ui/components/settings/profile/profile-settings-page";
 import { useDebounce } from "@uidotdev/usehooks";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "react-oidc-context";
+import { toast } from "sonner";
 import { useTauriInvoke } from "../../../components/useInvoke";
 import AMBER_MINIMAL from "./themes/amber-minimal.json";
 import AMETHYST_HAZE from "./themes/amethyst-haze.json";
@@ -90,6 +94,8 @@ const THEME_TRANSLATION: Record<IThemes, unknown> = {
 export default function SettingsProfilesPage() {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const auth = useAuth();
+	const router = useRouter();
 	const profiles = useTauriInvoke<Record<string, ISettingsProfile>>(
 		"get_profiles",
 		{},
@@ -106,9 +112,12 @@ export default function SettingsProfilesPage() {
 	);
 	const debouncedLocalProfile = useDebounce(localProfile, 500);
 	const [hasChanges, setHasChanges] = useState(false);
+	const isSavingRef = useRef(false);
+	const localProfileRef = useRef(localProfile);
+	localProfileRef.current = localProfile;
 
 	useEffect(() => {
-		if (currentProfile.data) {
+		if (currentProfile.data && !isSavingRef.current) {
 			setLocalProfile(currentProfile.data);
 			setHasChanges(false);
 		}
@@ -119,55 +128,120 @@ export default function SettingsProfilesPage() {
 		return !!id && !Object.values(IThemes).includes(id as IThemes);
 	}, [localProfile]);
 
+	const upsertProfile = useCallback(
+		async (profile: ISettingsProfile) => {
+			isSavingRef.current = true;
+			try {
+				await invoke("upsert_profile", { profile });
+				await profiles.refetch();
+				await invalidate(backend.userState.getProfile, []);
+				await currentProfile.refetch();
+			} finally {
+				isSavingRef.current = false;
+			}
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[invalidate],
+	);
+
 	useEffect(() => {
-		if (debouncedLocalProfile) {
+		if (debouncedLocalProfile && hasChanges) {
 			upsertProfile(debouncedLocalProfile);
 			setHasChanges(false);
 		}
-	}, [debouncedLocalProfile]);
+	}, [debouncedLocalProfile, hasChanges, upsertProfile]);
 
-	const updateProfile = useCallback(
-		(updates: Partial<ISettingsProfile>) => {
-			if (!localProfile) return;
-			const now = new Date().toISOString();
-			const hubProfile = updates.hub_profile
-				? { ...localProfile.hub_profile, ...updates.hub_profile, updated: now }
-				: { ...localProfile.hub_profile, updated: now };
-			const newProfile = {
-				...localProfile,
-				...updates,
-				hub_profile: hubProfile,
-				updated: now,
-			};
-			setLocalProfile(newProfile);
-			setHasChanges(true);
-		},
-		[localProfile],
-	);
-
-	const upsertProfile = useCallback(
-		async (profile: ISettingsProfile) => {
-			await invoke("upsert_profile", { profile });
-			await profiles.refetch();
-			await invalidate(backend.userState.getProfile, []);
-			await currentProfile.refetch();
-		},
-		[backend.userState.getProfile, currentProfile, invalidate, profiles],
-	);
+	const updateProfile = useCallback((updates: Partial<ISettingsProfile>) => {
+		const current = localProfileRef.current;
+		if (!current) return;
+		const now = new Date().toISOString();
+		const hubProfile = updates.hub_profile
+			? { ...current.hub_profile, ...updates.hub_profile, updated: now }
+			: { ...current.hub_profile, updated: now };
+		const newProfile = {
+			...current,
+			...updates,
+			hub_profile: hubProfile,
+			updated: now,
+		};
+		setLocalProfile(newProfile);
+		setHasChanges(true);
+	}, []);
 
 	const handleProfileImageChange = useCallback(async () => {
-		if (!localProfile) return;
-		await invoke("change_profile_image", { profile: localProfile });
+		const current = localProfileRef.current;
+		if (!current) return;
+		await invoke("change_profile_image", { profile: current });
 		await profiles.refetch();
 		await invalidate(backend.userState.getProfile, []);
 		await currentProfile.refetch();
-	}, [
-		localProfile,
-		profiles,
-		invalidate,
-		backend.userState.getProfile,
-		currentProfile,
-	]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [invalidate]);
+
+	const profileCount = Object.keys(profiles.data ?? {}).length;
+
+	const handleProfileDelete = useCallback(async () => {
+		const current = localProfileRef.current;
+		if (!current?.hub_profile.id) return;
+		if (profileCount <= 1) return;
+
+		const profileId = current.hub_profile.id;
+
+		// Delete from server if authenticated
+		if (auth.isAuthenticated && auth.user?.access_token) {
+			try {
+				const profile = await invoke<{ hub?: string; secure?: boolean }>(
+					"get_current_profile",
+				).catch(() => null);
+				const hubUrl = profile?.hub;
+				const baseUrl =
+					process.env.NEXT_PUBLIC_API_URL ?? hubUrl ?? "api.flow-like.com";
+				const protocol = profile?.secure === false ? "http" : "https";
+				const apiBase = (
+					baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
+				).replace(/\/+$/, "");
+
+				const response = await tauriFetch(
+					`${apiBase}/api/v1/profile/${encodeURIComponent(profileId)}`,
+					{
+						method: "DELETE",
+						headers: {
+							Authorization: `Bearer ${auth.user.access_token}`,
+						},
+					},
+				);
+				if (!response.ok && response.status !== 404) {
+					console.warn(
+						"[ProfileDelete] Server delete failed:",
+						response.status,
+					);
+				}
+			} catch (err) {
+				console.warn("[ProfileDelete] Server delete error:", err);
+			}
+		}
+
+		// Switch to another profile before deleting
+		const allProfiles = profiles.data ?? {};
+		const otherProfileId = Object.keys(allProfiles).find(
+			(id) => id !== profileId,
+		);
+		if (otherProfileId) {
+			await invoke("set_current_profile", { profileId: otherProfileId });
+		}
+
+		// Delete locally
+		await invoke("delete_profile", { profileId });
+
+		toast.success("Profile deleted");
+
+		await profiles.refetch();
+		await invalidate(backend.userState.getProfile, []);
+		await invalidate(backend.userState.getSettingsProfile, []);
+		await currentProfile.refetch();
+		router.push("/");
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [profileCount, auth, invalidate, router]);
 
 	if (!localProfile) {
 		return (
@@ -185,6 +259,8 @@ export default function SettingsProfilesPage() {
 			themeTranslation={THEME_TRANSLATION}
 			onProfileUpdate={updateProfile}
 			onProfileImageChange={handleProfileImageChange}
+			onProfileDelete={handleProfileDelete}
+			canDeleteProfile={profileCount > 1}
 		/>
 	);
 }

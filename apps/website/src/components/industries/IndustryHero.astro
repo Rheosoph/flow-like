@@ -1,0 +1,145 @@
+---
+import ShopfloorAnim from "./anim/ShopfloorAnim.astro";
+import FinanceAnim from "./anim/FinanceAnim.astro";
+import OfficeAnim from "./anim/OfficeAnim.astro";
+import AiAgentsAnim from "./anim/AiAgentsAnim.astro";
+import GovDefenseAnim from "./anim/GovDefenseAnim.astro";
+import IotAnim from "./anim/IotAnim.astro";
+import ProcessAutomationAnim from "./anim/ProcessAutomationAnim.astro";
+
+interface Props {
+  t: (key: string) => string;
+  accent: string;
+}
+
+const { t, accent } = Astro.props;
+
+const theme: Record<string, Record<string, string>> = {
+  orange: {
+    badge: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+    gradientText: "from-orange-400 to-amber-300",
+    btn: "bg-orange-500 hover:bg-orange-400",
+    btnGhost: "border-orange-500/40 text-orange-300 hover:bg-orange-500/10",
+    glow1: "bg-orange-500/15",
+    glow2: "bg-amber-500/10",
+    pulse: "bg-orange-400",
+    svgRing: "#ea580c", svgDot: "#fb923c", svgNode: "#ea580c", svgLine: "#ea580c",
+  },
+  emerald: {
+    badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+    gradientText: "from-emerald-400 to-teal-300",
+    btn: "bg-emerald-600 hover:bg-emerald-500",
+    btnGhost: "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10",
+    glow1: "bg-emerald-500/15",
+    glow2: "bg-teal-500/10",
+    pulse: "bg-emerald-400",
+    svgRing: "#059669", svgDot: "#34d399", svgNode: "#059669", svgLine: "#059669",
+  },
+  blue: {
+    badge: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+    gradientText: "from-blue-400 to-sky-300",
+    btn: "bg-blue-600 hover:bg-blue-500",
+    btnGhost: "border-blue-500/40 text-blue-300 hover:bg-blue-500/10",
+    glow1: "bg-blue-500/15",
+    glow2: "bg-sky-500/10",
+    pulse: "bg-blue-400",
+    svgRing: "#2563eb", svgDot: "#60a5fa", svgNode: "#2563eb", svgLine: "#2563eb",
+  },
+  violet: {
+    badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",
+    gradientText: "from-violet-400 to-purple-300",
+    btn: "bg-violet-600 hover:bg-violet-500",
+    btnGhost: "border-violet-500/40 text-violet-300 hover:bg-violet-500/10",
+    glow1: "bg-violet-500/15",
+    glow2: "bg-purple-500/10",
+    pulse: "bg-violet-400",
+    svgRing: "#7c3aed", svgDot: "#a78bfa", svgNode: "#7c3aed", svgLine: "#7c3aed",
+  },
+  red: {
+    badge: "bg-red-500/15 text-red-300 border-red-500/30",
+    gradientText: "from-red-400 to-rose-300",
+    btn: "bg-red-600 hover:bg-red-500",
+    btnGhost: "border-red-500/40 text-red-300 hover:bg-red-500/10",
+    glow1: "bg-red-500/15",
+    glow2: "bg-rose-500/10",
+    pulse: "bg-red-400",
+    svgRing: "#dc2626", svgDot: "#f87171", svgNode: "#dc2626", svgLine: "#dc2626",
+  },
+  cyan: {
+    badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+    gradientText: "from-cyan-400 to-sky-300",
+    btn: "bg-cyan-600 hover:bg-cyan-500",
+    btnGhost: "border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10",
+    glow1: "bg-cyan-500/15",
+    glow2: "bg-sky-500/10",
+    pulse: "bg-cyan-400",
+    svgRing: "#0891b2", svgDot: "#22d3ee", svgNode: "#0891b2", svgLine: "#0891b2",
+  },
+  amber: {
+    badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    gradientText: "from-amber-400 to-yellow-300",
+    btn: "bg-amber-600 hover:bg-amber-500",
+    btnGhost: "border-amber-500/40 text-amber-300 hover:bg-amber-500/10",
+    glow1: "bg-amber-500/15",
+    glow2: "bg-yellow-500/10",
+    pulse: "bg-amber-400",
+    svgRing: "#d97706", svgDot: "#fbbf24", svgNode: "#d97706", svgLine: "#d97706",
+  },
+};
+
+const c = theme[accent] ?? theme.orange;
+---
+
+<section class="relative min-h-[85vh] flex items-center overflow-hidden">
+  <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+    <div class={`absolute top-1/4 -left-32 w-96 h-96 rounded-full blur-3xl ${c.glow1}`}></div>
+    <div class={`absolute bottom-1/4 right-0 w-80 h-80 rounded-full blur-3xl ${c.glow2}`}></div>
+    <svg class="absolute inset-0 w-full h-full opacity-[0.04]" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="ind-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke={c.svgRing} stroke-width="0.5"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#ind-grid)" />
+    </svg>
+  </div>
+
+  <div class="relative max-w-7xl mx-auto px-6 lg:px-8 py-20 grid lg:grid-cols-12 gap-12 items-center">
+    <div class="lg:col-span-7 space-y-8">
+      <div class={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full border text-sm font-medium ${c.badge}`}>
+        <span class={`w-2 h-2 rounded-full ${c.pulse} animate-pulse`}></span>
+        {t("ind.hero.tagline")}
+      </div>
+
+      <h1 class="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1]">
+        <span class="text-foreground">{t("ind.hero.headline")}</span>{" "}
+        <span class={`bg-gradient-to-r ${c.gradientText} bg-clip-text text-transparent`}>
+          {t("ind.hero.headline.highlight")}
+        </span>
+      </h1>
+
+      <p class="text-lg sm:text-xl text-muted-foreground max-w-2xl leading-relaxed">
+        {t("ind.hero.description")}
+      </p>
+
+      <div class="flex flex-wrap gap-4 pt-2">
+        <a href="mailto:info@2mf.de?subject=Demo%20Request" class={`inline-flex items-center px-6 py-3 rounded-lg text-white font-semibold transition-colors ${c.btn}`}>
+          {t("ind.hero.cta.demo")}
+        </a>
+        <a href="#solution" class={`inline-flex items-center px-6 py-3 rounded-lg border font-semibold transition-colors ${c.btnGhost}`}>
+          {t("ind.hero.cta.learn")}
+        </a>
+      </div>
+    </div>
+
+    <div class="lg:col-span-5 flex justify-center" aria-hidden="true">
+      {accent === "orange" && <ShopfloorAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "emerald" && <FinanceAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "blue" && <OfficeAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "violet" && <AiAgentsAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "red" && <GovDefenseAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "cyan" && <IotAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+      {accent === "amber" && <ProcessAutomationAnim ring={c.svgRing} dot={c.svgDot} node={c.svgNode} line={c.svgLine} />}
+    </div>
+  </div>
+</section>

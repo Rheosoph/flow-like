@@ -47,7 +47,10 @@ impl LocalObjectStore {
         }
 
         let store = LocalFileSystem::new_with_prefix(prefix)?.with_automatic_cleanup(true);
-        Ok(Self { store, android_safe })
+        Ok(Self {
+            store,
+            android_safe,
+        })
     }
 
     pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {

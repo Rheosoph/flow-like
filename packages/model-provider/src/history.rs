@@ -18,6 +18,29 @@ use rig::message::{
     UserContent as RigUserContent, Video as RigVideo,
 };
 
+/// Recursively normalize string values in a JSON Value tree,
+/// removing escaped quotes (\" → ") that cause OpenAI strict mode to reject schemas.
+pub fn normalize_json_schema_strings(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            while s.contains("\\\"") {
+                *s = s.replace("\\\"", "\"");
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                normalize_json_schema_strings(item);
+            }
+        }
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                normalize_json_schema_strings(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct ToolCall {
     pub id: String,
@@ -691,6 +714,17 @@ impl History {
         None
     }
 
+    /// Extracts and removes the system prompt from messages, returning its text.
+    /// Use this to move the system prompt into preamble before rig conversion,
+    /// preventing System→User conversion that breaks role alternation.
+    pub fn take_system_prompt(&mut self) -> Option<String> {
+        let prompt = self.get_system_prompt();
+        if prompt.is_some() {
+            self.messages.retain(|msg| msg.role != Role::System);
+        }
+        prompt
+    }
+
     pub fn set_system_prompt(&mut self, prompt: String) {
         if let Some(index) = self.get_system_prompt_index() {
             self.messages[index].content = MessageContent::Contents(vec![Content::Text {
@@ -718,6 +752,66 @@ impl History {
 
     pub fn set_stream(&mut self, stream: bool) {
         self.stream = Some(stream);
+    }
+
+    /// Merges adjacent messages that share the same role into a single message.
+    /// This ensures strict role alternation (user/assistant/user/assistant/...)
+    /// required by models like Gemma loaded in LM Studio.
+    ///
+    /// Tool and Function messages are left untouched since they carry
+    /// tool_call_id metadata that must not be merged.
+    pub fn normalize_for_alternation(&mut self) {
+        if self.messages.len() <= 1 {
+            return;
+        }
+
+        let mut normalized: Vec<HistoryMessage> = Vec::with_capacity(self.messages.len());
+
+        for msg in self.messages.drain(..) {
+            let dominated_by_tool_meta =
+                matches!(msg.role, Role::Tool | Role::Function) || msg.tool_call_id.is_some();
+
+            if let Some(prev) = normalized.last_mut()
+                && prev.role == msg.role
+                && !dominated_by_tool_meta
+                && !matches!(prev.role, Role::Tool | Role::Function)
+                && prev.tool_call_id.is_none()
+            {
+                let prev_parts = match std::mem::replace(
+                    &mut prev.content,
+                    MessageContent::Contents(Vec::new()),
+                ) {
+                    MessageContent::String(s) => vec![Content::Text {
+                        content_type: ContentType::Text,
+                        text: s,
+                    }],
+                    MessageContent::Contents(c) => c,
+                };
+
+                let next_parts = match msg.content {
+                    MessageContent::String(s) => vec![Content::Text {
+                        content_type: ContentType::Text,
+                        text: s,
+                    }],
+                    MessageContent::Contents(c) => c,
+                };
+
+                let mut merged = Vec::with_capacity(prev_parts.len() + next_parts.len());
+                merged.extend(prev_parts);
+                merged.extend(next_parts);
+                prev.content = MessageContent::Contents(merged);
+
+                if let Some(next_calls) = msg.tool_calls {
+                    prev.tool_calls
+                        .get_or_insert_with(Vec::new)
+                        .extend(next_calls);
+                }
+            } else {
+                normalized.push(msg);
+            }
+        }
+
+        self.messages = normalized;
     }
 
     /// Extracts prompt and history messages suitable for rig completion
@@ -821,12 +915,16 @@ impl History {
 
         let mut definitions = Vec::with_capacity(tools.len());
         for tool in tools {
-            let parameters = json::to_value(&tool.function.parameters).map_err(|e| {
+            let mut parameters = json::to_value(&tool.function.parameters).map_err(|e| {
                 anyhow!(
                     "Failed to serialize tool parameters for '{}': {e}",
                     tool.function.name
                 )
             })?;
+
+            // Normalize schema strings to remove escaped quotes (\" → ")
+            // that cause OpenAI strict mode validation failures
+            normalize_json_schema_strings(&mut parameters);
 
             definitions.push(ToolDefinition {
                 name: tool.function.name.clone(),

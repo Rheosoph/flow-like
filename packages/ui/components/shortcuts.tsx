@@ -26,14 +26,13 @@ import {
 	GripVertical,
 	Loader2,
 	type LucideIcon,
-	PinIcon,
-	PlusIcon,
 	Sparkles,
 	Trash2,
 	WifiOff,
 	Workflow,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ComponentType } from "react";
+import { motion } from "framer-motion";
 import { isTauri } from "../lib/platform";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
@@ -57,6 +56,20 @@ import {
 	SidebarMenuItem,
 	useSidebar,
 } from "./ui/sidebar";
+import { AnimatedNewProjectIcon } from "./animated-icons/animated-plus";
+import { AutoPlayNewProjectIcon } from "./animated-icons/animated-plus-autoplay";
+import { AnimatedPinIcon } from "./animated-icons";
+
+const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
+
+const iconVariants = {
+	initial: { scale: 1, rotate: 0 },
+	hover: {
+		scale: 1.1,
+		rotate: 5,
+		transition: { type: "spring", stiffness: 400, damping: 10 },
+	},
+};
 
 export interface IShortcut {
 	id: string;
@@ -72,7 +85,7 @@ export interface IShortcut {
 interface PredefinedShortcut {
 	id: string;
 	label: string;
-	icon: LucideIcon;
+	icon: LucideIcon | ComponentType<{ className?: string }>;
 	action: () => void;
 }
 
@@ -273,7 +286,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 				{
 					id: "start-coding",
 					label: "Create Flow",
-					icon: PlusIcon,
+					icon: AnimatedNewProjectIcon,
 					action: () => {
 						if (!auth?.isAuthenticated) {
 							setIsOnline(false);
@@ -344,15 +357,19 @@ export function Shortcuts<TBackend, TAppMetadata>({
 			<SidebarGroup>
 				<SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
 				<SidebarMenu>
-					{predefinedShortcuts.map((shortcut) => (
+						{predefinedShortcuts.map((shortcut) => (
 						<SidebarMenuItem key={shortcut.id}>
-							<SidebarMenuButton
+							<MotionSidebarMenuButton
 								onClick={shortcut.action}
 								tooltip={shortcut.label}
+								initial="initial"
+								whileHover="hover"
 							>
-								<shortcut.icon />
+								<motion.div variants={iconVariants}>
+									<shortcut.icon className="size-4" />
+								</motion.div>
 								<span>{shortcut.label}</span>
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</SidebarMenuItem>
 					))}
 
@@ -381,13 +398,17 @@ export function Shortcuts<TBackend, TAppMetadata>({
 					</DndContext>
 
 					<SidebarMenuItem>
-						<SidebarMenuButton
+						<MotionSidebarMenuButton
 							onClick={handleAddCurrentLocation}
 							tooltip="Add Current Location"
+							initial="initial"
+							whileHover="hover"
 						>
-							<PinIcon />
+							<motion.div variants={iconVariants}>
+								<AnimatedPinIcon className="size-4" />
+							</motion.div>
 							<span>Add Current Location</span>
-						</SidebarMenuButton>
+						</MotionSidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>
 			</SidebarGroup>
@@ -397,7 +418,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 					<DialogContent>
 						<DialogHeader>
 							<DialogTitle className="flex items-center gap-2">
-								<PlusIcon className="h-5 w-5" />
+								<AutoPlayNewProjectIcon className="h-5 w-5"/>
 								Create Flow
 							</DialogTitle>
 							<DialogDescription>
@@ -574,15 +595,15 @@ function SortableShortcutItem({
 						<GripVertical className="h-4 w-4 text-muted-foreground" />
 					</div>
 				)}
-				<SidebarMenuButton
+				<MotionSidebarMenuButton
 					asChild
 					className="flex-1 flex-row items-center"
 					tooltip={shortcut.label}
 					variant={pathname === shortcut.path ? "outline" : "default"}
 				>
-					<a href={shortcut.path} className="flex items-center gap-2">
+					<motion.a href={shortcut.path} className="flex items-center gap-2" initial="initial" whileHover="hover">
 						{metadata ? (
-							<div className="relative shrink-0">
+							<motion.div variants={iconVariants} className="relative shrink-0">
 								<Avatar className="h-6 w-6 -left-1">
 									<AvatarImage
 										src={metadata.icon ?? "/app-logo.webp"}
@@ -598,13 +619,15 @@ function SortableShortcutItem({
 										<PageIcon className="h-2.5 w-2.5 text-muted-foreground" />
 									</div>
 								)}
-							</div>
+							</motion.div>
 						) : (
-							<Bookmark className="h-4 w-4" />
+							<motion.div variants={iconVariants}>
+								<Bookmark className="h-4 w-4" />
+							</motion.div>
 						)}
 						<span>{shortcut.label}</span>
-					</a>
-				</SidebarMenuButton>
+					</motion.a>
+				</MotionSidebarMenuButton>
 				{sidebarState === "expanded" && (
 					<Button
 						variant="ghost"

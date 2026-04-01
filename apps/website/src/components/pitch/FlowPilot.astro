@@ -1,0 +1,251 @@
+---
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section class="relative py-32 overflow-hidden">
+  <div class="absolute top-0 left-0 right-0 h-px bg-border" />
+
+  <div class="relative mx-auto max-w-6xl px-6 lg:px-8">
+    <div class="text-center mb-20">
+      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-violet-400 mb-6">
+        {t("pitch.flowpilot.badge")}
+      </p>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+        {t("pitch.flowpilot.headline")}
+      </h2>
+      <p class="text-lg text-muted-foreground max-w-2xl mx-auto">
+        {t("pitch.flowpilot.description")}
+      </p>
+    </div>
+
+    <!-- Transformation graphic — single wide canvas -->
+    <div class="fp-canvas relative rounded-3xl border border-border/60 overflow-hidden">
+      <!-- Dark blueprint background -->
+      <div class="absolute inset-0 bg-[#0c0c14]" />
+      <div class="fp-grid absolute inset-0" />
+
+      <!-- Subtle radial glow -->
+      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] rounded-full bg-violet-600/[0.07] blur-[80px] pointer-events-none" />
+
+      <div class="relative z-10 px-6 sm:px-10 lg:px-14 py-10 lg:py-14">
+        <div class="grid lg:grid-cols-[2fr_80px_3fr] items-center gap-8 lg:gap-0">
+
+          <!-- LEFT — Process description card -->
+          <div class="fp-card fp-card--input rounded-2xl p-6 lg:p-7">
+            <div class="flex items-center gap-2.5 mb-5">
+              <div class="w-7 h-7 rounded-md bg-violet-500/20 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
+              </div>
+              <span class="text-[10px] font-semibold tracking-widest uppercase text-violet-400/70">{t("pitch.flowpilot.input.label")}</span>
+            </div>
+
+            <div class="space-y-2.5 text-[13px] leading-relaxed text-white/60 font-[inherit]">
+              <p class="text-white/90 italic">{t("pitch.flowpilot.input.line1")}</p>
+              <p>{t("pitch.flowpilot.input.line2")}</p>
+              <p>{t("pitch.flowpilot.input.line3")}</p>
+              <p>{t("pitch.flowpilot.input.line4")}</p>
+            </div>
+
+            <!-- Blinking cursor -->
+            <div class="mt-4 flex items-center gap-1">
+              <div class="fp-cursor w-[2px] h-4 bg-violet-400 rounded-full" />
+            </div>
+          </div>
+
+          <!-- CENTER — Animated arrow -->
+          <div class="hidden lg:flex flex-col items-center justify-center gap-2">
+            <div class="fp-arrow relative">
+              <svg width="64" height="24" viewBox="0 0 64 24" fill="none">
+                <path d="M4 12h48m0 0l-6-6m6 6l-6 6" stroke="url(#arrow-grad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                <defs>
+                  <linearGradient id="arrow-grad" x1="4" y1="12" x2="52" y2="12" gradientUnits="userSpaceOnUse">
+                    <stop stop-color="#8b5cf6" stop-opacity="0.3" />
+                    <stop offset="1" stop-color="#c084fc" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div class="fp-arrow-dot absolute right-[6px] top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-violet-400" />
+            </div>
+            <span class="text-[9px] font-bold tracking-[0.2em] uppercase bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">FlowPilot</span>
+          </div>
+
+          <!-- Mobile arrow -->
+          <div class="flex lg:hidden justify-center">
+            <div class="flex flex-col items-center gap-2">
+              <svg width="24" height="40" viewBox="0 0 24 40" fill="none">
+                <path d="M12 0v32m0 0l-6-6m6 6l6-6" stroke="url(#arrow-grad-m)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                <defs><linearGradient id="arrow-grad-m" x1="12" y1="0" x2="12" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#8b5cf6" stop-opacity="0.3" /><stop offset="1" stop-color="#c084fc" /></linearGradient></defs>
+              </svg>
+              <span class="text-[10px] font-bold tracking-widest uppercase bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">FlowPilot</span>
+            </div>
+          </div>
+
+          <!-- RIGHT — Node-graph canvas -->
+          <div class="fp-card fp-card--output rounded-2xl p-6 lg:p-7">
+            <div class="flex items-center gap-2.5 mb-5">
+              <div class="w-7 h-7 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6z" /></svg>
+              </div>
+              <span class="text-[10px] font-semibold tracking-widest uppercase text-emerald-400/70">{t("pitch.flowpilot.output.label")}</span>
+            </div>
+
+            <!-- SVG node graph — left-to-right flow -->
+            <svg class="w-full" viewBox="0 0 520 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+
+              <!-- ── Wires (rendered first, behind nodes) ── -->
+              <!-- On Invoice output → Extract Data input -->
+              <path d="M120 50 C150 50, 145 90, 170 90" class="fp-wire" stroke="url(#w1)" />
+              <!-- Extract Data output → Condition input -->
+              <path d="M300 90 C330 90, 320 100, 340 100" class="fp-wire" stroke="url(#w2)" />
+              <!-- Condition true → Approve -->
+              <path d="M420 92 C440 92, 440 60, 450 60" class="fp-wire" stroke="url(#w3)" />
+              <!-- Condition false → Escalate -->
+              <path d="M420 108 C440 108, 440 148, 450 148" class="fp-wire" stroke="url(#w4)" />
+
+              <!-- ── Node: On Invoice ── -->
+              <g>
+                <rect x="10" y="30" width="110" height="40" rx="10" fill="#8b5cf6" fill-opacity="0.1" stroke="#8b5cf6" stroke-opacity="0.3" stroke-width="1" />
+                <text x="28" y="54" class="fp-node-label" fill="#c4b5fd">On Invoice</text>
+                <circle cx="120" cy="50" r="4" fill="#8b5cf6" class="fp-pin" />
+                <circle cx="120" cy="50" r="7" fill="none" stroke="#8b5cf6" stroke-opacity="0.2" />
+              </g>
+
+              <!-- ── Node: Extract Data ── -->
+              <g>
+                <circle cx="170" cy="90" r="4" fill="#06b6d4" class="fp-pin" />
+                <circle cx="170" cy="90" r="7" fill="none" stroke="#06b6d4" stroke-opacity="0.2" />
+                <rect x="170" y="70" width="130" height="40" rx="10" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-opacity="0.3" stroke-width="1" />
+                <text x="192" y="94" class="fp-node-label" fill="#67e8f9">Extract Data</text>
+                <circle cx="300" cy="90" r="4" fill="#06b6d4" class="fp-pin" />
+                <circle cx="300" cy="90" r="7" fill="none" stroke="#06b6d4" stroke-opacity="0.2" />
+              </g>
+
+              <!-- ── Node: > €5k? ── -->
+              <g>
+                <circle cx="340" cy="100" r="4" fill="#f59e0b" class="fp-pin" />
+                <circle cx="340" cy="100" r="7" fill="none" stroke="#f59e0b" stroke-opacity="0.2" />
+                <rect x="340" y="80" width="80" height="40" rx="10" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-opacity="0.3" stroke-width="1" />
+                <text x="358" y="105" class="fp-node-label" fill="#fcd34d">&gt; €5k?</text>
+                <circle cx="420" cy="92" r="3.5" fill="#10b981" class="fp-pin" />
+                <circle cx="420" cy="92" r="6" fill="none" stroke="#10b981" stroke-opacity="0.2" />
+                <circle cx="420" cy="108" r="3.5" fill="#ef4444" class="fp-pin" />
+                <circle cx="420" cy="108" r="6" fill="none" stroke="#ef4444" stroke-opacity="0.2" />
+              </g>
+
+              <!-- ── Node: Approve ── -->
+              <g>
+                <circle cx="450" cy="60" r="4" fill="#10b981" class="fp-pin" />
+                <circle cx="450" cy="60" r="7" fill="none" stroke="#10b981" stroke-opacity="0.2" />
+                <rect x="450" y="44" width="32" height="32" rx="10" fill="#10b981" fill-opacity="0.1" stroke="#10b981" stroke-opacity="0.3" stroke-width="1" />
+                <path d="M461 60l4 4 7-8" stroke="#34d399" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+              </g>
+
+              <!-- ── Node: Escalate ── -->
+              <g>
+                <circle cx="450" cy="148" r="4" fill="#ef4444" class="fp-pin" />
+                <circle cx="450" cy="148" r="7" fill="none" stroke="#ef4444" stroke-opacity="0.2" />
+                <rect x="450" y="132" width="32" height="32" rx="10" fill="#ef4444" fill-opacity="0.1" stroke="#ef4444" stroke-opacity="0.3" stroke-width="1" />
+                <path d="M466 153v-10m0 0l-4 4m4-4l4 4" stroke="#f87171" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+              </g>
+
+              <!-- Gradient defs -->
+              <defs>
+                <linearGradient id="w1" x1="120" y1="50" x2="170" y2="90" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#8b5cf6" /><stop offset="1" stop-color="#06b6d4" />
+                </linearGradient>
+                <linearGradient id="w2" x1="300" y1="90" x2="340" y2="100" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#06b6d4" /><stop offset="1" stop-color="#f59e0b" />
+                </linearGradient>
+                <linearGradient id="w3" x1="420" y1="92" x2="450" y2="60" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#f59e0b" /><stop offset="1" stop-color="#10b981" />
+                </linearGradient>
+                <linearGradient id="w4" x1="420" y1="108" x2="450" y2="148" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#f59e0b" /><stop offset="1" stop-color="#ef4444" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Benefits row -->
+    <div class="mt-16 grid sm:grid-cols-3 gap-8 max-w-3xl mx-auto">
+      <div class="text-center">
+        <p class="text-2xl font-bold text-violet-400 mb-1">{t("pitch.flowpilot.benefit1.title")}</p>
+        <p class="text-sm text-muted-foreground">{t("pitch.flowpilot.benefit1.description")}</p>
+      </div>
+      <div class="text-center">
+        <p class="text-2xl font-bold text-fuchsia-400 mb-1">{t("pitch.flowpilot.benefit2.title")}</p>
+        <p class="text-sm text-muted-foreground">{t("pitch.flowpilot.benefit2.description")}</p>
+      </div>
+      <div class="text-center">
+        <p class="text-2xl font-bold text-emerald-400 mb-1">{t("pitch.flowpilot.benefit3.title")}</p>
+        <p class="text-sm text-muted-foreground">{t("pitch.flowpilot.benefit3.description")}</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* --- Blueprint grid --- */
+  .fp-grid {
+    background-image:
+      linear-gradient(rgba(139,92,246,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(139,92,246,0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* --- Cards --- */
+  .fp-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    backdrop-filter: blur(12px);
+  }
+  .fp-card--input { box-shadow: inset 0 1px 0 rgba(139,92,246,0.1); }
+  .fp-card--output { box-shadow: inset 0 1px 0 rgba(16,185,129,0.1); }
+
+  /* --- Wires --- */
+  .fp-wire {
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+  }
+
+  /* --- Node labels --- */
+  .fp-node-label { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+  .fp-node-tiny  { font-size: 9px; font-weight: 600; letter-spacing: 0.03em; }
+
+  /* --- Pin pulse --- */
+  .fp-pin {
+    animation: pin-pulse 3s ease-in-out infinite;
+  }
+  @keyframes pin-pulse {
+    0%, 100% { opacity: 1; }
+    50%     { opacity: 0.5; }
+  }
+
+  /* --- Cursor blink --- */
+  .fp-cursor {
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%     { opacity: 0; }
+  }
+
+  /* --- Arrow dot travel --- */
+  .fp-arrow-dot {
+    animation: dot-travel 2s ease-in-out infinite;
+  }
+  @keyframes dot-travel {
+    0%   { opacity: 0; transform: translate(-20px, -50%); }
+    30%  { opacity: 1; }
+    70%  { opacity: 1; }
+    100% { opacity: 0; transform: translate(4px, -50%); }
+  }
+</style>

@@ -35,6 +35,15 @@
 		"premium": true,
 		"wasm_registry": true
 	},
+	"wasm_registry_config": {
+		"on_member_leave": "stale"
+	},
+	"audit": {
+		"enabled": true,
+		"log_ip": false,
+		"ip_retention_days": null,
+		"require_signing": true
+	},
 	"supported_sinks": {
 		"http": true,
 		"webhook": true,
@@ -49,7 +58,7 @@
 	},
 	"hubs": [],
 	"cdn": "https://cdn.flow-like.com",
-	"domain": "api.alpha.flow-like.com",
+	"domain": "api.flow-like.com",
 	"secure": true,
 	"app": "app.flow-like.com",
 	"web": "flow-like.com",
@@ -73,6 +82,28 @@
 	},
 	"alerting": {
 		"mail": "info@great-co.de"
+	},
+	"push_notifications": {
+		"enabled": true,
+		"allow_mobile": true,
+		"allow_desktop": false,
+		"provider": "fcm",
+		"channel_id": "workflow",
+		"fcm": {
+			"project_id": "flow-like-4de3d",
+			"service_account_json_env": "FCM_SERVICE_ACCOUNT_JSON"
+		},
+		"aws_sns": {
+			"android_platform_application_arn_env": "PUSH_SNS_ANDROID_PLATFORM_APPLICATION_ARN",
+			"ios_platform_application_arn_env": "PUSH_SNS_IOS_PLATFORM_APPLICATION_ARN",
+			"region_env": "AWS_REGION"
+		},
+		"azure_notification_hubs": {
+			"namespace": "your-notification-hub-namespace",
+			"hub_name": "your-notification-hub-name",
+			"sas_key_name_env": "AZURE_NOTIFICATION_HUB_SAS_KEY_NAME",
+			"sas_key_value_env": "AZURE_NOTIFICATION_HUB_SAS_KEY_VALUE"
+		}
 	},
 	"tiers": {
 		"FREE": {

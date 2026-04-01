@@ -11,6 +11,7 @@ use flow_like::bit::Bit;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
@@ -18,32 +19,6 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 /// Cached env var for Cloudflare account ID (LazyLock per requirement)
 static CF_ACCOUNT_ID: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("CF_ACCOUNT_ID").ok());
-
-/// Cache for dynamically resolved secrets (secret_name -> value)
-/// Uses RwLock for thread-safe access with LazyLock for initialization
-static SECRET_CACHE: LazyLock<RwLock<HashMap<String, String>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Get a secret value by name, caching the result
-/// The secret_name in bit config points to an env var name
-fn get_secret(secret_name: &str) -> Option<String> {
-    // Check cache first
-    {
-        let cache = SECRET_CACHE.read().ok()?;
-        if let Some(value) = cache.get(secret_name) {
-            return Some(value.clone());
-        }
-    }
-
-    // Fetch from env and cache
-    let value = std::env::var(secret_name).ok()?;
-    {
-        if let Ok(mut cache) = SECRET_CACHE.write() {
-            cache.insert(secret_name.to_string(), value.clone());
-        }
-    }
-    Some(value)
-}
 
 /// Bit cache entry with expiration
 struct CachedBit {
@@ -168,8 +143,6 @@ async fn enforce_embedding_tier(
         .get("tier")
         .and_then(|v| v.as_str())
         .unwrap_or("FREE");
-
-    // Check embedding tiers (reuse llm_tiers for now, can be separated later)
     if !user_tier.llm_tiers.iter().any(|t| t == tier) {
         tracing::warn!(
             "User tier {:?} does not allow access to embedding tier {}",
@@ -196,10 +169,13 @@ pub async fn embed_text(
     let start = Instant::now();
     let embeddings = match remote_config.implementation {
         Some(RemoteEmbeddingProvider::HuggingfaceEndpoint) => {
-            call_huggingface(&embedding_provider, &remote_config, &payload).await?
+            call_huggingface(&state, &embedding_provider, &remote_config, &payload).await?
         }
         Some(RemoteEmbeddingProvider::CloudflareWorkersAI) => {
-            call_cloudflare(&embedding_provider, &remote_config, &payload).await?
+            call_cloudflare(&state, &embedding_provider, &remote_config, &payload).await?
+        }
+        Some(RemoteEmbeddingProvider::Internal) => {
+            call_internal(&state, &embedding_provider, &remote_config, &payload).await?
         }
         None => {
             return Err(ApiError::bad_request(
@@ -290,18 +266,22 @@ async fn track_embedding_usage(
 }
 
 async fn call_huggingface(
+    state: &AppState,
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
 ) -> Result<Vec<Vec<f32>>, ApiError> {
-    // Use secret_name from bit config to look up the API key
+    // Use secret_name from bit config to look up the API key via SecretStore
     let secret_name = config
         .secret_name
         .as_ref()
         .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = get_secret(secret_name).ok_or_else(|| {
-        ApiError::internal(format!("Secret '{}' not found in environment", secret_name))
-    })?;
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(secret_name.as_str()))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
     let endpoint = config
         .endpoint
         .as_ref()
@@ -368,6 +348,7 @@ async fn call_huggingface(
 }
 
 async fn call_cloudflare(
+    state: &AppState,
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
@@ -376,14 +357,17 @@ async fn call_cloudflare(
         .as_ref()
         .ok_or_else(|| ApiError::internal("CF_ACCOUNT_ID not configured"))?;
 
-    // Use secret_name from bit config to look up the API key
+    // Use secret_name from bit config to look up the API key via SecretStore
     let secret_name = config
         .secret_name
         .as_ref()
         .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = get_secret(secret_name).ok_or_else(|| {
-        ApiError::internal(format!("Secret '{}' not found in environment", secret_name))
-    })?;
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(secret_name.as_str()))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
 
     let endpoint = config
         .endpoint
@@ -440,4 +424,328 @@ async fn call_cloudflare(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to parse Cloudflare response: {}", e)))?;
     Ok(cf_response.result.data)
+}
+
+/// Secret name used for the internal embedding gateway
+const INTERNAL_EMBEDDING_SECRET: &str = "INTERNAL_EMBEDDING_SECRET";
+
+/// Maximum batch size accepted by the internal gateway
+const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
+
+/// Maximum character length per text item
+const INTERNAL_MAX_TEXT_LEN: usize = 100_000;
+
+async fn call_internal(
+    state: &AppState,
+    provider: &EmbeddingModelProvider,
+    config: &RemoteExecutionConfig,
+    payload: &EmbedRequest,
+) -> Result<Vec<Vec<f32>>, ApiError> {
+    let endpoint = config
+        .endpoint
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("Endpoint not configured for Internal"))?;
+
+    let model_id = config
+        .model_id
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("model_id not configured for Internal"))?;
+
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(INTERNAL_EMBEDDING_SECRET))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| {
+            ApiError::internal(format!("Secret '{}' not found", INTERNAL_EMBEDDING_SECRET))
+        })?;
+
+    // Apply prefix based on embed_type
+    let prefixed_input: Vec<String> = payload
+        .input
+        .iter()
+        .map(|text| match payload.embed_type {
+            EmbedType::Query => format!("{}{}", provider.prefix.query, text),
+            EmbedType::Document => format!("{}{}", provider.prefix.paragraph, text),
+        })
+        .collect();
+
+    // Validate batch size and text length limits
+    if prefixed_input.len() > INTERNAL_MAX_BATCH_SIZE {
+        return Err(ApiError::bad_request(format!(
+            "Batch size {} exceeds maximum of {}",
+            prefixed_input.len(),
+            INTERNAL_MAX_BATCH_SIZE
+        )));
+    }
+    for (i, text) in prefixed_input.iter().enumerate() {
+        if text.len() > INTERNAL_MAX_TEXT_LEN {
+            return Err(ApiError::bad_request(format!(
+                "Input item {} is {} characters, exceeds maximum of {}",
+                i,
+                text.len(),
+                INTERNAL_MAX_TEXT_LEN
+            )));
+        }
+    }
+
+    let url = format!("{}/v1/embeddings", endpoint.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": model_id,
+        "input": prefixed_input,
+    });
+
+    // Retry with exponential backoff for transient errors (429, 503, 5xx)
+    // Max cold start is ~75s, so total backoff budget: 2+4+8+16+32+64 = 126s
+    const MAX_RETRIES: u32 = 6;
+    const INITIAL_BACKOFF_MS: u64 = 2000;
+
+    let mut attempt = 0;
+    loop {
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("Failed to call Internal gateway: {}", e)))?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            #[derive(Deserialize)]
+            struct InternalEmbeddingObject {
+                embedding: Vec<f32>,
+                #[allow(dead_code)]
+                index: usize,
+            }
+
+            #[derive(Deserialize)]
+            struct InternalResponse {
+                data: Vec<InternalEmbeddingObject>,
+            }
+
+            let resp: InternalResponse = response.json().await.map_err(|e| {
+                ApiError::internal(format!("Failed to parse Internal gateway response: {}", e))
+            })?;
+
+            // Sort by index to guarantee order, then extract embeddings
+            let mut items = resp.data;
+            items.sort_by_key(|item| item.index);
+            return Ok(items.into_iter().map(|item| item.embedding).collect());
+        }
+
+        // Retry on 429 (rate limit) or 503/5xx (transient server errors)
+        let retryable = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            || status.is_server_error();
+
+        if retryable && attempt < MAX_RETRIES {
+            attempt += 1;
+            let backoff_ms = INITIAL_BACKOFF_MS * (1 << (attempt - 1)); // 500ms, 1s, 2s, 4s, 8s
+            tracing::info!(
+                attempt = attempt,
+                backoff_ms = backoff_ms,
+                status = %status,
+                "Internal gateway transient error, backing off"
+            );
+            flow_like_types::tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            continue;
+        }
+
+        let error = response.text().await.unwrap_or_default();
+        tracing::error!(status = %status, error = %error, "Internal gateway upstream error");
+        return Err(ApiError::internal(format!(
+            "Internal gateway error ({}): {}",
+            status, error
+        )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MODEL_ID: &str = "gte-multilingual-base";
+    const EXPECTED_DIMS: usize = 768;
+
+    fn load_env() {
+        let _ = dotenv::from_filename(".env");
+        let _ = dotenv::from_filename("packages/api/.env");
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let _ = dotenv::from_path(manifest.join(".env"));
+        let _ = dotenv::from_path(manifest.join("../../.env"));
+    }
+
+    fn base_url() -> String {
+        load_env();
+        std::env::var("INTERNAL_EMBEDDING_ENDPOINT")
+            .expect("INTERNAL_EMBEDDING_ENDPOINT must be set in .env")
+    }
+
+    fn api_key() -> String {
+        load_env();
+        std::env::var("INTERNAL_EMBEDDING_SECRET")
+            .expect("INTERNAL_EMBEDDING_SECRET must be set in .env")
+    }
+
+    #[derive(Deserialize)]
+    struct InternalEmbeddingObject {
+        embedding: Vec<f32>,
+        index: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct InternalResponse {
+        data: Vec<InternalEmbeddingObject>,
+        model: String,
+    }
+
+    #[tokio::test]
+    #[ignore] // requires network + valid secret
+    async fn test_internal_single_text() {
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/embeddings", base_url());
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key()))
+            .json(&serde_json::json!({
+                "model": MODEL_ID,
+                "input": "Hello world",
+            }))
+            .send()
+            .await
+            .expect("request failed");
+
+        assert!(
+            resp.status().is_success(),
+            "expected 2xx, got {}",
+            resp.status()
+        );
+
+        let body: InternalResponse = resp.json().await.expect("invalid response JSON");
+        assert_eq!(body.data.len(), 1);
+        assert_eq!(body.data[0].index, 0);
+        assert_eq!(body.data[0].embedding.len(), EXPECTED_DIMS);
+        assert_eq!(body.model, MODEL_ID);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_internal_batch() {
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/embeddings", base_url());
+        let inputs = vec!["first sentence", "second sentence", "third sentence"];
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key()))
+            .json(&serde_json::json!({
+                "model": MODEL_ID,
+                "input": inputs,
+            }))
+            .send()
+            .await
+            .expect("request failed");
+
+        assert!(resp.status().is_success(), "got {}", resp.status());
+
+        let body: InternalResponse = resp.json().await.expect("invalid JSON");
+        assert_eq!(body.data.len(), 3);
+        for item in &body.data {
+            assert_eq!(item.embedding.len(), EXPECTED_DIMS);
+        }
+
+        // Verify embeddings are normalized (dot product ≈ 1.0)
+        let norm: f32 = body.data[0].embedding.iter().map(|x| x * x).sum::<f32>();
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "expected normalized embedding, got norm={}",
+            norm
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_internal_invalid_auth() {
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/embeddings", base_url());
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", "Bearer invalid-key")
+            .json(&serde_json::json!({
+                "model": MODEL_ID,
+                "input": "test",
+            }))
+            .send()
+            .await
+            .expect("request failed");
+
+        // Gateway may return 401 or 404 depending on routing layer
+        let status = resp.status().as_u16();
+        assert!(
+            status == 401 || status == 403 || status == 404,
+            "expected auth error status, got {}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_internal_unknown_model() {
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/embeddings", base_url());
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key()))
+            .json(&serde_json::json!({
+                "model": "nonexistent-model-xyz",
+                "input": "test",
+            }))
+            .send()
+            .await
+            .expect("request failed");
+
+        assert_eq!(resp.status().as_u16(), 400);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_internal_different_inputs_produce_different_embeddings() {
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/embeddings", base_url());
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key()))
+            .json(&serde_json::json!({
+                "model": MODEL_ID,
+                "input": ["cats are great pets", "quantum mechanics theory"],
+            }))
+            .send()
+            .await
+            .expect("request failed");
+
+        assert!(resp.status().is_success());
+        let body: InternalResponse = resp.json().await.unwrap();
+        assert_eq!(body.data.len(), 2);
+
+        // Cosine similarity via dot product (already normalized)
+        let dot: f32 = body.data[0]
+            .embedding
+            .iter()
+            .zip(&body.data[1].embedding)
+            .map(|(a, b)| a * b)
+            .sum();
+        assert!(
+            dot < 0.95,
+            "semantically different inputs should not be near-identical (dot={})",
+            dot
+        );
+    }
 }

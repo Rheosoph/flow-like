@@ -3,10 +3,80 @@
 import type { SlateElementProps, TEquationElement } from "platejs";
 
 import { getEquationHtml } from "@platejs/math";
+import DOMPurify from "dompurify";
 import { RadicalIcon } from "lucide-react";
 import { SlateElement } from "platejs";
 
 import { cn } from "../../../lib/utils";
+
+// MathML tags and attributes needed by KaTeX
+const KATEX_ALLOWED_TAGS = [
+	"annotation",
+	"annotation-xml",
+	"math",
+	"maction",
+	"maligngroup",
+	"malignmark",
+	"menclose",
+	"merror",
+	"mfenced",
+	"mfrac",
+	"mi",
+	"mlongdiv",
+	"mmultiscripts",
+	"mn",
+	"mo",
+	"mover",
+	"mpadded",
+	"mphantom",
+	"mroot",
+	"mrow",
+	"ms",
+	"mscarries",
+	"mscarry",
+	"msgroup",
+	"msline",
+	"mspacer",
+	"msqrt",
+	"msrow",
+	"mstack",
+	"mstyle",
+	"msub",
+	"msubsup",
+	"msup",
+	"mtable",
+	"mtd",
+	"mtext",
+	"mtr",
+	"munder",
+	"munderover",
+	"semantics",
+];
+
+const KATEX_ALLOWED_ATTR = [
+	"columnalign",
+	"columnlines",
+	"columnspacing",
+	"displaystyle",
+	"encoding",
+	"fence",
+	"lspace",
+	"mathvariant",
+	"rowalign",
+	"rowlines",
+	"rowspacing",
+	"rspace",
+	"separator",
+	"stretchy",
+];
+
+function sanitizeKatexHtml(html: string): string {
+	return DOMPurify.sanitize(html, {
+		ADD_TAGS: KATEX_ALLOWED_TAGS,
+		ADD_ATTR: KATEX_ALLOWED_ATTR,
+		FORCE_BODY: true,
+	});
+}
 
 export function EquationElementStatic(
 	props: SlateElementProps<TEquationElement>,
@@ -41,7 +111,7 @@ export function EquationElementStatic(
 				{element.texExpression.length > 0 ? (
 					<span
 						dangerouslySetInnerHTML={{
-							__html: html,
+							__html: sanitizeKatexHtml(html),
 						}}
 					/>
 				) : (
@@ -92,7 +162,7 @@ export function InlineEquationElementStatic(
 						props.element.texExpression.length === 0 && "hidden",
 						"font-mono leading-none",
 					)}
-					dangerouslySetInnerHTML={{ __html: html }}
+					dangerouslySetInnerHTML={{ __html: sanitizeKatexHtml(html) }}
 				/>
 			</div>
 			{props.children}

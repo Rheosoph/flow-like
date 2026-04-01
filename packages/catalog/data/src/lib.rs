@@ -11,13 +11,16 @@
 
 use std::sync::Arc;
 
-pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, inventory, register_node};
+pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 
 pub mod data;
 pub mod events;
+pub mod interaction;
 
 pub use data::*;
 
+include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
+
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
-    flow_like_catalog_core::get_catalog()
+    collect_nodes()
 }

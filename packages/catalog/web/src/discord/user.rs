@@ -9,6 +9,7 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use serenity::all::UserId;
 
 /// A typed Discord user
@@ -21,6 +22,7 @@ pub struct DiscordUser {
     pub avatar_url: Option<String>,
 }
 
+#[cfg(feature = "execute")]
 impl DiscordUser {
     pub fn user_id(&self) -> flow_like_types::Result<UserId> {
         Ok(UserId::new(self.id.parse()?))
@@ -88,6 +90,7 @@ impl NodeLogic for ToDiscordUserNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let user: GenericUser = context.evaluate_pin("user").await?;
 
@@ -107,5 +110,12 @@ impl NodeLogic for ToDiscordUserNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

@@ -1,6 +1,3 @@
-use flow_like::flow_like_model_provider::provider::{
-    ModelProviderConfiguration, OpenAIConfig, OpenRouterConfig,
-};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -89,33 +86,4 @@ impl ExecutorConfig {
     pub fn execution_timeout(&self) -> Duration {
         Duration::from_secs(self.execution_timeout_secs)
     }
-}
-
-/// Build model provider configuration from environment variables
-pub fn model_provider_config_from_env() -> ModelProviderConfiguration {
-    let mut config = ModelProviderConfiguration::default();
-
-    // OpenRouter configuration
-    if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
-        let endpoint = std::env::var("OPENROUTER_ENDPOINT").ok();
-        config.openrouter_config.push(OpenRouterConfig {
-            api_key: Some(api_key),
-            endpoint,
-        });
-        tracing::info!("Loaded OpenRouter configuration from environment");
-    }
-
-    // OpenAI configuration
-    if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-        let endpoint = std::env::var("OPENAI_ENDPOINT").ok();
-        config.openai_config.push(OpenAIConfig {
-            api_key: Some(api_key),
-            endpoint,
-            organization: std::env::var("OPENAI_ORGANIZATION").ok(),
-            proxy: None,
-        });
-        tracing::info!("Loaded OpenAI configuration from environment");
-    }
-
-    config
 }

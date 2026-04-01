@@ -45,9 +45,16 @@ model User {
   invitations                 Invitation[]
   transactions                Transaction[]
   notifications               Notification[]
-  authoredWasmPackages        WasmPackageAuthor[]
+  pushNotificationTargets     PushNotificationTarget[]
+  wasmPackageAccess           WasmPackageUser[]
   wasmPackageReviews          WasmPackageReview[]
+  wasmInvitesSent             WasmPackageInvitation[] @relation("WasmInviter")
+  wasmInvitesReceived         WasmPackageInvitation[] @relation("WasmInvitee")
+  wasmPackageJoinQueue        WasmPackageJoinQueue[]
+  wasmPackagePurchases        WasmPackagePurchase[]
+  wasmPackagesAuthored        WasmPackageAuthor[]
   purchases                   AppPurchase[]
+  interactions                Interaction[]
 
   status UserStatus @default(ACTIVE)
   tier   UserTier   @default(FREE)
@@ -84,10 +91,12 @@ model Profile {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   @@index([userId])
+  @@index([userId, deletedAt])
 }
 
 model PAT {

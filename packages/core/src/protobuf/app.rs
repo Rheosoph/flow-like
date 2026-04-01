@@ -30,6 +30,7 @@ impl ToProto<flow_like_types::proto::App> for App {
             widget_ids: self.widget_ids.clone(),
             page_ids: self.page_ids.clone(),
             route_mappings: std::collections::HashMap::new(),
+            packages: self.packages.clone(),
         }
     }
 }
@@ -67,6 +68,7 @@ impl FromProto<flow_like_types::proto::App> for App {
                 .unwrap_or(SystemTime::UNIX_EPOCH),
             widget_ids: proto.widget_ids,
             page_ids: proto.page_ids,
+            packages: proto.packages,
             app_state: None,
             frontend: None,
         }

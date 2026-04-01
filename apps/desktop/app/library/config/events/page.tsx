@@ -1,5 +1,11 @@
 "use client";
-import type { IOAuthProvider, IStoredOAuthToken } from "@tm9657/flow-like-ui";
+import {
+	type IOAuthProvider,
+	type IStoredOAuthToken,
+	useBackend,
+	useHub,
+	useInvoke,
+} from "@tm9657/flow-like-ui";
 import EventsPage from "@tm9657/flow-like-ui/components/settings/events/events-page";
 import { useCallback, useMemo } from "react";
 import { EVENT_CONFIG } from "../../../../lib/event-config";
@@ -7,6 +13,14 @@ import { oauthConsentStore, oauthTokenStore } from "../../../../lib/oauth-db";
 import { oauthService } from "../../../../lib/oauth-service";
 
 export default function Page() {
+	const backend = useBackend();
+	const { hub } = useHub();
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+	);
+
 	const handleStartOAuth = useCallback(async (provider: IOAuthProvider) => {
 		await oauthService.startAuthorization(provider);
 	}, []);
@@ -34,6 +48,7 @@ export default function Page() {
 			consentStore={oauthConsentStore}
 			onStartOAuth={handleStartOAuth}
 			onRefreshToken={handleRefreshToken}
+			hub={hub}
 		/>
 	);
 }

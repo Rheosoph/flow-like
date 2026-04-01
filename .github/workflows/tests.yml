@@ -1,26 +1,18 @@
 name: "Tests"
 
 on:
-  push:
-    branches:
-      - dev
   pull_request:
     branches:
       - dev
-      - main
-      - int
-
-# This is the example from the readme.
-# On each push to the `release` branch it will create or update a GitHub release, build your app, and upload the artifacts to the release.
 
 jobs:
   test-application:
     name: Test Application
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}

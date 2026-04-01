@@ -25,6 +25,7 @@ async-trait.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 parking_lot = "0.12"
 cron = "0.15"
 tokio = { workspace = true, features = ["sync"] }

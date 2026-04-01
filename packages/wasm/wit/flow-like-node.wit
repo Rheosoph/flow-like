@@ -1,0 +1,112 @@
+package flow-like:node@0.1.0;
+
+interface logging {
+    log: func(level: u8, message: string);
+}
+
+interface pins {
+    get-input: func(name: string) -> option<string>;
+    set-output: func(name: string, value: string);
+    activate-exec: func(name: string);
+}
+
+interface variables {
+    get-var: func(name: string) -> option<string>;
+    set-var: func(name: string, value: string);
+    delete-var: func(name: string);
+    has-var: func(name: string) -> bool;
+}
+
+interface cache {
+    cache-get: func(key: string) -> option<string>;
+    cache-set: func(key: string, value: string);
+    cache-delete: func(key: string);
+    cache-has: func(key: string) -> bool;
+}
+
+interface streaming {
+    emit: func(event-type: string, data: string);
+    text: func(content: string);
+}
+
+interface metadata {
+    get-node-id: func() -> string;
+    get-run-id: func() -> string;
+    get-app-id: func() -> string;
+    get-board-id: func() -> string;
+    get-user-id: func() -> string;
+    time-now: func() -> u64;
+    random: func() -> f64;
+    is-streaming: func() -> bool;
+    get-log-level: func() -> u8;
+}
+
+interface storage {
+    storage-dir: func(node-scoped: bool) -> option<string>;
+    upload-dir: func() -> option<string>;
+    cache-dir: func(node-scoped: bool, user-scoped: bool) -> option<string>;
+    user-dir: func(node-scoped: bool) -> option<string>;
+    read-file: func(flow-path: string) -> option<list<u8>>;
+    write-file: func(flow-path: string, data: list<u8>) -> bool;
+    list-files: func(flow-path: string) -> option<string>;
+}
+
+interface models {
+    embed-text: func(bit-json: string, texts-json: string) -> option<string>;
+    embed-text-query: func(model-json: string, texts-json: string) -> option<string>;
+    embed-text-document: func(model-json: string, texts-json: string) -> option<string>;
+    embed-image: func(model-json: string, image-data: list<u8>) -> option<string>;
+    llm-prompt: func(bit-json: string, messages-json: string, do-stream: bool) -> option<string>;
+}
+
+interface auth {
+    get-oauth-token: func(provider: string) -> option<string>;
+    has-oauth-token: func(provider: string) -> bool;
+}
+
+interface http {
+    request: func(method: u8, url: string, headers: string, body: option<list<u8>>) -> option<string>;
+}
+
+interface schema {
+    get-type-schema: func(type-name: string) -> option<string>;
+    list-types: func() -> option<string>;
+}
+
+interface image {
+    from-bytes: func(data: list<u8>, format: string) -> option<string>;
+    to-bytes: func(image-ref: string, format: string) -> option<list<u8>>;
+}
+
+interface db {
+    query: func(op: u32, connection-json: string, payload-json: string) -> option<string>;
+}
+
+interface websocket {
+    connect: func(url: string, headers-json: string) -> option<string>;
+    send: func(session-id: string, message: list<u8>, is-binary: bool) -> bool;
+    receive: func(session-id: string, timeout-ms: u32) -> option<string>;
+    close: func(session-id: string) -> bool;
+}
+
+world flow-like-node {
+    import logging;
+    import pins;
+    import variables;
+    import cache;
+    import streaming;
+    import metadata;
+    import storage;
+    import models;
+    import auth;
+    import http;
+    import schema;
+    import image;
+    import db;
+    import websocket;
+
+    export get-node: func() -> string;
+    export get-nodes: func() -> string;
+    export run: func(input: string) -> string;
+    export get-abi-version: func() -> u32;
+}

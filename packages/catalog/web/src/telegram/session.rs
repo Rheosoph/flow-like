@@ -6,13 +6,78 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Cacheable, async_trait, json::json};
+use flow_like_types::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::sync::Arc;
-use teloxide::prelude::*;
-use teloxide::types::ChatId;
+
+#[cfg(feature = "execute")]
+use {
+    flow_like_types::{Cacheable, json::json},
+    std::{
+        any::Any,
+        collections::HashMap,
+        sync::{Arc, OnceLock},
+    },
+    teloxide::prelude::*,
+    teloxide::types::ChatId,
+    tokio::sync::{RwLock, broadcast},
+};
+
+// ============================================================================
+// Telegram Update Broadcaster
+// ============================================================================
+// Provides a global pub/sub mechanism so that the Telegram dispatcher (which
+// owns the single `getUpdates` long-poll connection) can fan out incoming
+// updates to any interaction nodes that are waiting for replies or callbacks.
+
+/// Events broadcast from the dispatcher to interaction node subscribers.
+#[cfg(feature = "execute")]
+#[derive(Clone, Debug)]
+pub enum TelegramBroadcastEvent {
+    Message(Box<teloxide::types::Message>),
+    CallbackQuery(Box<teloxide::types::CallbackQuery>),
+}
+
+#[cfg(feature = "execute")]
+fn tg_broadcasters() -> &'static RwLock<HashMap<String, broadcast::Sender<TelegramBroadcastEvent>>>
+{
+    static INSTANCE: OnceLock<RwLock<HashMap<String, broadcast::Sender<TelegramBroadcastEvent>>>> =
+        OnceLock::new();
+    INSTANCE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Subscribe to Telegram updates for a specific bot (keyed by token).
+#[cfg(feature = "execute")]
+pub async fn subscribe_tg_updates(bot_token: &str) -> broadcast::Receiver<TelegramBroadcastEvent> {
+    {
+        let read = tg_broadcasters().read().await;
+        if let Some(sender) = read.get(bot_token) {
+            return sender.subscribe();
+        }
+    }
+    let mut write = tg_broadcasters().write().await;
+    let sender = write
+        .entry(bot_token.to_string())
+        .or_insert_with(|| broadcast::channel(512).0);
+    sender.subscribe()
+}
+
+/// Publish a Telegram update so that all interaction node subscribers receive it.
+#[cfg(feature = "execute")]
+pub async fn broadcast_tg_event(bot_token: &str, event: TelegramBroadcastEvent) {
+    {
+        let read = tg_broadcasters().read().await;
+        if let Some(sender) = read.get(bot_token) {
+            let _ = sender.send(event);
+            return;
+        }
+    }
+    let mut write = tg_broadcasters().write().await;
+    let sender = write
+        .entry(bot_token.to_string())
+        .or_insert_with(|| broadcast::channel(512).0);
+    let _ = sender.send(event);
+}
 
 /// Telegram user information
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -50,6 +115,7 @@ pub struct TelegramSession {
     pub user: Option<TelegramUser>,
 }
 
+#[cfg(feature = "execute")]
 impl TelegramSession {
     pub fn chat_id(&self) -> flow_like_types::Result<ChatId> {
         Ok(ChatId(self.chat_id.parse()?))
@@ -61,11 +127,13 @@ impl TelegramSession {
 }
 
 /// Cached Telegram bot for making API calls
+#[cfg(feature = "execute")]
 pub struct CachedTelegramBot {
     pub bot: Bot,
     pub bot_username: Option<String>,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedTelegramBot {
     fn as_any(&self) -> &dyn Any {
         self
@@ -76,6 +144,7 @@ impl Cacheable for CachedTelegramBot {
     }
 }
 
+#[cfg(feature = "execute")]
 impl CachedTelegramBot {
     pub fn new(token: &str) -> Self {
         let bot = Bot::new(token);
@@ -96,6 +165,7 @@ impl CachedTelegramBot {
 }
 
 /// Helper to get the cached Telegram bot from context
+#[cfg(feature = "execute")]
 pub async fn get_telegram_bot(
     context: &ExecutionContext,
     ref_id: &str,
@@ -170,6 +240,7 @@ impl NodeLogic for ToTelegramSessionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session_data: TelegramSessionData = context.evaluate_pin("local_session").await?;
 
@@ -198,5 +269,12 @@ impl NodeLogic for ToTelegramSessionNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }

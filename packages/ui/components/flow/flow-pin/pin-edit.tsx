@@ -26,6 +26,7 @@ interface PinEditProps {
 	readonly boardId: string;
 	readonly changeDefaultValue: (value: any) => void;
 	readonly saveDefaultValue: (value: any) => Promise<void>;
+	readonly currentLayerId?: string;
 }
 
 export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
@@ -36,6 +37,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	boardId,
 	changeDefaultValue,
 	saveDefaultValue,
+	currentLayerId,
 }: PinEditProps) {
 	const [cachedDefaultValue, setCachedDefaultValue] = useState(defaultValue);
 
@@ -124,6 +126,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				pin={pin}
 				value={cachedDefaultValue}
 				appId={appId}
+				currentLayerId={currentLayerId}
 				setValue={async (value) => {
 					setCachedDefaultValue(value);
 					await saveDefaultValue(value);
@@ -134,7 +137,6 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 
 	if (
 		pin.name.startsWith("element_ref") &&
-		pin.data_type === IVariableType.String &&
 		pin.value_type === IValueType.Normal
 	) {
 		return (

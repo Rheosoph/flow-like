@@ -1,22 +1,58 @@
 "use client";
 
-import { formatDistanceToNow } from "date-fns";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
+	BookOpen,
 	Check,
 	Download,
 	ExternalLink,
 	FileCode,
 	Github,
 	Globe,
+	HelpCircle,
+	KeyRound,
+	Loader2,
 	Package,
 	RefreshCw,
+	RotateCcw,
+	Send,
+	Settings,
 	Shield,
+	ShoppingCart,
+	Star,
 	Tag,
+	Trash2,
 	User,
 } from "lucide-react";
-import type { RegistryEntry } from "../../lib/schema/wasm";
+import { useState } from "react";
+import { toast } from "sonner";
+import { useInvoke } from "../../hooks/use-invoke";
 import {
+	isMaintainer,
+	isOwner,
+} from "../../lib/permission/wasm-package-permission";
+import {
+	type PackageMeta,
+	type PackageReview,
+	PackageStatus,
+	type RegistryEntry,
+} from "../../lib/schema/wasm";
+import { useBackend } from "../../state/backend-state";
+import type { GenericFetcher } from "../pages/store/store-package-detail";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
 	Badge,
 	Button,
 	Card,
@@ -24,12 +60,22 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	RelativeTime,
 	Skeleton,
 	Tabs,
 	TabsContent,
 	TabsList,
 	TabsTrigger,
+	TextEditor,
 } from "../ui";
+import {
+	type CompileStatus,
+	PackageStatusBadge,
+} from "../ui/package-status-badge";
+import { PackageAccessTab } from "./package-access-tab";
+import { PackageMetaTab } from "./package-meta-tab";
+import { PackageReviewsTab } from "./package-reviews-tab";
+import { PackageUsersContainer } from "./package-users-container";
 
 function PermissionBadge({
 	label,
@@ -84,12 +130,220 @@ function VersionRow({
 				{isLatest && <Badge variant="secondary">Latest</Badge>}
 				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
 			</div>
-			<span className="text-sm text-muted-foreground">
-				{formatDistanceToNow(new Date(version.publishedAt), {
-					addSuffix: true,
-				})}
-			</span>
+			<RelativeTime
+				className="text-sm text-muted-foreground"
+				value={version.publishedAt}
+			/>
 		</div>
+	);
+}
+
+function formatReviewAction(action: PackageReview["action"]) {
+	return action.replaceAll("_", " ");
+}
+
+function getReviewerLabel(review: PackageReview) {
+	return (
+		review.reviewer?.name ?? review.reviewer?.username ?? review.reviewerId
+	);
+}
+
+function PublicationReviewCard({
+	packageId,
+	status,
+	fetcher,
+	auth,
+}: {
+	packageId: string;
+	status: RegistryEntry["status"];
+	fetcher: GenericFetcher;
+	auth?: unknown;
+}) {
+	const backend = useBackend();
+	const profile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const reviewQuery = useQuery({
+		queryKey: ["package-publication-reviews", packageId],
+		queryFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return fetcher<PackageReview[]>(
+				profile.data.hub_profile,
+				`registry/package/${packageId}/publication-reviews`,
+				{ method: "GET" },
+				auth,
+			);
+		},
+		enabled: !!profile.data,
+		retry: false,
+	});
+
+	const reviews = reviewQuery.data ?? [];
+	const statusLabel =
+		status === PackageStatus.PendingReview
+			? "Pending review"
+			: status === PackageStatus.Disabled
+				? "Review outcome available"
+				: "Review history";
+
+	return (
+		<Card className="border-amber-500/30 bg-amber-500/5">
+			<CardHeader>
+				<CardTitle className="text-base flex items-center gap-2">
+					<RefreshCw className="h-4 w-4" />
+					Publication Review
+				</CardTitle>
+				<CardDescription>
+					Current status: {statusLabel}. Submission events and auditor comments
+					appear here for package maintainers.
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="space-y-4">
+				{reviewQuery.isLoading ? (
+					<Skeleton className="h-24 w-full" />
+				) : reviewQuery.isError ? (
+					<p className="text-sm text-destructive">
+						{reviewQuery.error?.message ?? "Failed to load review history"}
+					</p>
+				) : reviews.length === 0 ? (
+					<p className="text-sm text-muted-foreground">
+						No publication review events recorded yet.
+					</p>
+				) : (
+					<div className="space-y-3">
+						{reviews.map((review) => {
+							const reviewerLabel = getReviewerLabel(review);
+							const reviewerInitial = reviewerLabel.charAt(0).toUpperCase();
+
+							return (
+								<div
+									key={review.id}
+									className="rounded-lg border bg-background/80 p-4"
+								>
+									<div className="flex items-start gap-3">
+										<Avatar className="h-9 w-9">
+											{review.reviewer?.avatar ? (
+												<AvatarImage
+													src={review.reviewer.avatar}
+													alt={reviewerLabel}
+												/>
+											) : null}
+											<AvatarFallback>{reviewerInitial}</AvatarFallback>
+										</Avatar>
+										<div className="min-w-0 flex-1 space-y-1">
+											<div className="flex flex-wrap items-center gap-2">
+												<span className="font-medium capitalize">
+													{formatReviewAction(review.action)}
+												</span>
+												<span className="text-sm text-muted-foreground">
+													by {reviewerLabel}
+												</span>
+												<span className="text-sm text-muted-foreground">
+													<RelativeTime value={review.createdAt} />
+												</span>
+											</div>
+											{review.comment && (
+												<p className="text-sm text-muted-foreground">
+													{review.comment}
+												</p>
+											)}
+										</div>
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
+function PublicationRequestCard({
+	packageId,
+	fetcher,
+	auth,
+}: {
+	packageId: string;
+	fetcher: GenericFetcher;
+	auth?: unknown;
+}) {
+	const backend = useBackend();
+	const queryClient = useQueryClient();
+	const profile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const requestMutation = useMutation({
+		mutationFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return fetcher<{ message: string }>(
+				profile.data.hub_profile,
+				`registry/package/${packageId}/request-publication`,
+				{ method: "POST" },
+				auth,
+			);
+		},
+		onSuccess: () => {
+			queryClient.invalidateQueries({
+				queryKey: ["registry-package", packageId],
+			});
+			queryClient.invalidateQueries({
+				queryKey: ["admin", "packages"],
+			});
+			queryClient.invalidateQueries({
+				queryKey: ["admin", "packages", "publications"],
+			});
+		},
+	});
+
+	return (
+		<Card className="border-primary/30 bg-primary/5">
+			<CardHeader>
+				<CardTitle className="text-base flex items-center gap-2">
+					<Send className="h-4 w-4" />
+					Request Publication
+				</CardTitle>
+				<CardDescription>
+					This package is currently private. Submit it for review to make it
+					publicly available on the registry.
+				</CardDescription>
+			</CardHeader>
+			<CardContent>
+				{requestMutation.isSuccess ? (
+					<div className="flex items-center gap-2 text-sm text-green-600">
+						<Check className="h-4 w-4" />
+						Publication review requested. We will review your package and notify
+						you once a decision has been made.
+					</div>
+				) : (
+					<div className="flex items-center gap-3">
+						<Button
+							onClick={() => requestMutation.mutate()}
+							disabled={requestMutation.isPending}
+						>
+							{requestMutation.isPending ? (
+								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+							) : (
+								<Send className="mr-2 h-4 w-4" />
+							)}
+							Request Publication Review
+						</Button>
+						{requestMutation.isError && (
+							<p className="text-sm text-destructive">
+								{requestMutation.error?.message ??
+									"Failed to request publication"}
+							</p>
+						)}
+					</div>
+				)}
+			</CardContent>
+		</Card>
 	);
 }
 
@@ -102,18 +356,115 @@ export interface PackageDetailViewProps {
 	onUninstall: () => void;
 	isInstalling?: boolean;
 	isUninstalling?: boolean;
+	compileStatus?: CompileStatus;
+	price?: number;
+	visibility?: string;
+	priceLabel?: string;
+	hasAccess?: boolean;
+	isPurchasing?: boolean;
+	isRequesting?: boolean;
+	onBuy?: () => void;
+	onGetOrBuy?: () => void;
+	onDeleteSuccess?: () => void;
+	currentUserPermission?: number;
+	fetcher?: GenericFetcher;
+	auth?: unknown;
 }
 
-export function PackageDetailView({
-	pkg,
-	isLoading,
-	installedVersion,
-	onBack,
-	onInstall,
-	onUninstall,
-	isInstalling,
-	isUninstalling,
-}: PackageDetailViewProps) {
+export function PackageDetailView(props: PackageDetailViewProps) {
+	const {
+		pkg,
+		isLoading,
+		installedVersion,
+		onBack,
+		onInstall,
+		onUninstall,
+		isInstalling,
+		isUninstalling,
+		compileStatus,
+		price,
+		visibility,
+		priceLabel,
+		hasAccess,
+		isPurchasing,
+		isRequesting,
+		onBuy,
+		onGetOrBuy,
+		onDeleteSuccess,
+		currentUserPermission,
+		fetcher,
+		auth,
+	} = props;
+
+	const backend = useBackend();
+	const queryClient = useQueryClient();
+	const profile = useInvoke(
+		backend.userState.getSettingsProfile,
+		backend.userState,
+		[],
+	);
+
+	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+	const deleteMutation = useMutation({
+		mutationFn: async () => {
+			if (!profile.data || !pkg?.id || !fetcher)
+				throw new Error("Missing context");
+			return fetcher<{ message: string }>(
+				profile.data.hub_profile,
+				`registry/package/${pkg.id}`,
+				{ method: "DELETE" },
+				auth,
+			);
+		},
+		onSuccess: (data) => {
+			toast.success(data.message);
+			onDeleteSuccess?.();
+		},
+		onError: (err: Error) =>
+			toast.error(`Failed to delete package: ${err.message}`),
+	});
+
+	const restoreMutation = useMutation({
+		mutationFn: async () => {
+			if (!profile.data || !pkg?.id || !fetcher)
+				throw new Error("Missing context");
+			return fetcher<{ message: string }>(
+				profile.data.hub_profile,
+				`registry/package/${pkg.id}/restore`,
+				{ method: "POST" },
+				auth,
+			);
+		},
+		onSuccess: (data) => {
+			toast.success(data.message);
+			queryClient.invalidateQueries({
+				queryKey: ["registry-package", pkg?.id],
+			});
+			onDeleteSuccess?.();
+		},
+		onError: (err: Error) =>
+			toast.error(`Failed to restore package: ${err.message}`),
+	});
+
+	const { data: meta } = useQuery<PackageMeta | null>({
+		queryKey: ["package-meta", pkg?.id],
+		queryFn: async () => {
+			if (!profile.data || !pkg?.id || !fetcher) return null;
+			try {
+				return await fetcher<PackageMeta>(
+					profile.data.hub_profile,
+					`registry/package/${pkg.id}/meta`,
+					{ method: "GET" },
+					auth,
+				);
+			} catch {
+				return null;
+			}
+		},
+		enabled: !!profile.data && !!pkg?.id && !!fetcher,
+	});
+
 	if (isLoading || !pkg) {
 		return (
 			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -133,6 +484,20 @@ export function PackageDetailView({
 		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
 	const isInstalled = !!installedVersion;
 	const hasUpdate = isInstalled && installedVersion !== latestVersion;
+	const canManagePublication =
+		currentUserPermission != null &&
+		isMaintainer(currentUserPermission) &&
+		!!fetcher;
+	const showPublicationAudit =
+		canManagePublication &&
+		visibility === "private" &&
+		pkg.status !== PackageStatus.Active;
+	const showPublicationRequest =
+		currentUserPermission != null &&
+		isOwner(currentUserPermission) &&
+		visibility === "private" &&
+		pkg.status === PackageStatus.Active &&
+		!!fetcher;
 
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -148,12 +513,28 @@ export function PackageDetailView({
 					<CardHeader>
 						<div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
 							<div className="flex items-start gap-4">
-								<div className="p-3 rounded-lg bg-muted">
-									<Package className="h-8 w-8" />
-								</div>
+								<Avatar className="h-14 w-14 rounded-lg">
+									{meta?.icon ? (
+										<AvatarImage
+											src={meta.icon}
+											alt={meta.name ?? manifest.name}
+											className="object-cover"
+										/>
+									) : null}
+									<AvatarFallback className="rounded-lg bg-muted">
+										<Package className="h-7 w-7" />
+									</AvatarFallback>
+								</Avatar>
 								<div>
 									<div className="flex items-center gap-2 flex-wrap">
-										<CardTitle className="text-2xl">{manifest.name}</CardTitle>
+										<CardTitle className="text-2xl">
+											{meta?.name || manifest.name}
+										</CardTitle>
+										{pkg.status === PackageStatus.Disabled && (
+											<Badge variant="destructive" className="gap-1">
+												Disabled
+											</Badge>
+										)}
 										{pkg.verified && (
 											<Badge variant="secondary" className="gap-1">
 												<Shield className="h-3 w-3" />
@@ -162,7 +543,7 @@ export function PackageDetailView({
 										)}
 									</div>
 									<CardDescription className="mt-1">
-										{manifest.description}
+										{meta?.description || manifest.description}
 									</CardDescription>
 									<div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
 										<span className="flex items-center gap-1">
@@ -170,8 +551,27 @@ export function PackageDetailView({
 										</span>
 										<span className="flex items-center gap-1">
 											<Download className="h-4 w-4" />
-											{pkg.downloadCount.toLocaleString()} downloads
+											{(pkg.downloadCount ?? 0).toLocaleString()} downloads
 										</span>
+										{(pkg.ratingCount ?? 0) > 0 && (
+											<span className="flex items-center gap-1">
+												<Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+												{(pkg.avgRating ?? 0).toFixed(1)}
+												<span className="text-xs">({pkg.ratingCount})</span>
+											</span>
+										)}
+										{price != null && price > 0 ? (
+											<span className="flex items-center gap-1 font-medium">
+												{priceLabel}
+											</span>
+										) : priceLabel ? (
+											<span className="flex items-center gap-1 font-medium">
+												Free
+											</span>
+										) : null}
+										{compileStatus && compileStatus !== "idle" && (
+											<PackageStatusBadge status={compileStatus} />
+										)}
 									</div>
 								</div>
 							</div>
@@ -204,6 +604,40 @@ export function PackageDetailView({
 											Uninstall
 										</Button>
 									</>
+								) : hasAccess === false && price != null && price > 0 ? (
+									<Button onClick={onBuy} disabled={isPurchasing}>
+										{isPurchasing ? (
+											"Processing..."
+										) : (
+											<>
+												<ShoppingCart className="mr-2 h-4 w-4" />
+												{priceLabel || `€${(price / 100).toFixed(2)}`}
+											</>
+										)}
+									</Button>
+								) : hasAccess === false &&
+									visibility === "public_request_access" ? (
+									<Button onClick={onGetOrBuy} disabled={isRequesting}>
+										{isRequesting ? (
+											"Requesting..."
+										) : (
+											<>
+												<KeyRound className="mr-2 h-4 w-4" />
+												Request access
+											</>
+										)}
+									</Button>
+								) : hasAccess === false ? (
+									<Button onClick={onGetOrBuy} disabled={isRequesting}>
+										{isRequesting ? (
+											"Processing..."
+										) : (
+											<>
+												<Download className="mr-2 h-4 w-4" />
+												Get
+											</>
+										)}
+									</Button>
 								) : (
 									<Button
 										onClick={() => onInstall(undefined)}
@@ -224,18 +658,67 @@ export function PackageDetailView({
 
 				{/* Main Content */}
 				<Tabs defaultValue="overview" className="w-full">
-					<TabsList>
+					<TabsList className="h-auto flex-wrap justify-start">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">
-							Nodes ({manifest.nodes.length})
+							Nodes ({pkg.nodes?.length ?? 0})
 						</TabsTrigger>
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
 						</TabsTrigger>
+						<TabsTrigger value="reviews">Reviews</TabsTrigger>
+						{currentUserPermission != null &&
+							isMaintainer(currentUserPermission) &&
+							fetcher && (
+								<>
+									<TabsTrigger value="access">Access Requests</TabsTrigger>
+									<TabsTrigger value="users">Users</TabsTrigger>
+									<TabsTrigger value="metadata" className="gap-1">
+										<Settings className="h-3.5 w-3.5" />
+										Metadata
+									</TabsTrigger>
+								</>
+							)}
 					</TabsList>
 
 					<TabsContent value="overview" className="space-y-4">
+						{/* Long Description */}
+						{meta?.longDescription && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="text-base">About</CardTitle>
+								</CardHeader>
+								<CardContent>
+									<div className="leading-relaxed">
+										<TextEditor
+											initialContent={meta.longDescription}
+											isMarkdown
+											minimal
+										/>
+									</div>
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Use Case */}
+						{meta?.useCase && (
+							<Card className="border-primary/20 bg-primary/5">
+								<CardContent className="pt-6">
+									<p className="text-sm font-medium text-primary mb-1">
+										Use Case
+									</p>
+									<div className="text-sm text-muted-foreground">
+										<TextEditor
+											initialContent={meta.useCase}
+											isMarkdown
+											minimal
+										/>
+									</div>
+								</CardContent>
+							</Card>
+						)}
+
 						<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 							{/* Info Card */}
 							<Card className="md:col-span-2">
@@ -245,24 +728,30 @@ export function PackageDetailView({
 									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
-									{manifest.keywords.length > 0 && (
-										<div>
-											<h4 className="text-sm font-medium mb-2">Keywords</h4>
-											<div className="flex flex-wrap gap-1">
-												{manifest.keywords.map((kw) => (
-													<Badge key={kw} variant="outline">
-														{kw}
-													</Badge>
-												))}
+									{(() => {
+										const tags = meta?.tags?.length
+											? meta.tags
+											: manifest.keywords;
+										if (!tags.length) return null;
+										return (
+											<div>
+												<h4 className="text-sm font-medium mb-2">Tags</h4>
+												<div className="flex flex-wrap gap-1">
+													{tags.map((t) => (
+														<Badge key={t} variant="outline">
+															{t}
+														</Badge>
+													))}
+												</div>
 											</div>
-										</div>
-									)}
+										);
+									})()}
 
-									{manifest.authors.length > 0 && (
+									{(manifest.authors?.length ?? 0) > 0 && (
 										<div>
 											<h4 className="text-sm font-medium mb-2">Authors</h4>
 											<div className="flex flex-wrap gap-2">
-												{manifest.authors.map((author, idx) => (
+												{manifest.authors?.map((author, idx) => (
 													<div
 														key={idx}
 														className="flex items-center gap-1 text-sm"
@@ -313,23 +802,51 @@ export function PackageDetailView({
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
-									{manifest.homepage && (
+									{(meta?.website || manifest.homepage) && (
 										<a
-											href={manifest.homepage}
+											href={meta?.website || manifest.homepage}
 											target="_blank"
 											rel="noopener noreferrer"
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Globe className="h-4 w-4" />
-											Homepage
+											Website
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
-									{!manifest.repository && !manifest.homepage && (
-										<p className="text-sm text-muted-foreground">
-											No external links provided
-										</p>
+									{meta?.docsUrl && (
+										<a
+											href={meta.docsUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-2 text-sm hover:underline"
+										>
+											<BookOpen className="h-4 w-4" />
+											Documentation
+											<ExternalLink className="h-3 w-3" />
+										</a>
 									)}
+									{meta?.supportUrl && (
+										<a
+											href={meta.supportUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-2 text-sm hover:underline"
+										>
+											<HelpCircle className="h-4 w-4" />
+											Support
+											<ExternalLink className="h-3 w-3" />
+										</a>
+									)}
+									{!manifest.repository &&
+										!manifest.homepage &&
+										!meta?.website &&
+										!meta?.docsUrl &&
+										!meta?.supportUrl && (
+											<p className="text-sm text-muted-foreground">
+												No external links provided
+											</p>
+										)}
 								</CardContent>
 							</Card>
 						</div>
@@ -343,7 +860,7 @@ export function PackageDetailView({
 								<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
 									<div>
 										<p className="text-2xl font-bold">
-											{pkg.downloadCount.toLocaleString()}
+											{(pkg.downloadCount ?? 0).toLocaleString()}
 										</p>
 										<p className="text-sm text-muted-foreground">
 											Total Downloads
@@ -355,35 +872,160 @@ export function PackageDetailView({
 									</div>
 									<div>
 										<p className="text-2xl font-bold">
-											{manifest.nodes.length}
+											{pkg.nodes?.length ?? 0}
 										</p>
 										<p className="text-sm text-muted-foreground">Nodes</p>
 									</div>
 									<div>
-										<p className="text-sm text-muted-foreground">Created</p>
-										<p className="text-sm">
-											{formatDistanceToNow(new Date(pkg.createdAt), {
-												addSuffix: true,
-											})}
+										<p className="text-2xl font-bold">
+											{(pkg.ratingCount ?? 0) > 0
+												? (pkg.avgRating ?? 0).toFixed(1)
+												: "N/A"}
+										</p>
+										<p className="text-sm text-muted-foreground">
+											Avg Rating
+											{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
 										</p>
 									</div>
 								</div>
 							</CardContent>
 						</Card>
+
+						{/* Publication review state for maintainers */}
+						{showPublicationAudit && fetcher && (
+							<PublicationReviewCard
+								packageId={pkg.id}
+								status={pkg.status}
+								fetcher={fetcher}
+								auth={auth}
+							/>
+						)}
+
+						{/* Request Publication - visible to owners of eligible private packages */}
+						{showPublicationRequest && fetcher && (
+							<PublicationRequestCard
+								packageId={pkg.id}
+								fetcher={fetcher}
+								auth={auth}
+							/>
+						)}
+
+						{/* Package Management - visible to owners */}
+						{currentUserPermission != null &&
+							isOwner(currentUserPermission) &&
+							fetcher &&
+							pkg.status === PackageStatus.Disabled && (
+								<Card className="border-primary/30">
+									<CardHeader>
+										<CardTitle className="text-base flex items-center gap-2">
+											<RotateCcw className="h-4 w-4" />
+											Package Disabled
+										</CardTitle>
+									</CardHeader>
+									<CardContent className="flex items-center justify-between">
+										<div>
+											<p className="text-sm font-medium">
+												Restore this package
+											</p>
+											<p className="text-sm text-muted-foreground">
+												This package is currently disabled and hidden from
+												search. Restore it to make it active again.
+											</p>
+										</div>
+										<Button
+											size="sm"
+											className="gap-1.5 shrink-0 ml-4"
+											onClick={() => restoreMutation.mutate()}
+											disabled={restoreMutation.isPending}
+										>
+											{restoreMutation.isPending ? (
+												<Loader2 className="h-4 w-4 animate-spin" />
+											) : (
+												<RotateCcw className="h-4 w-4" />
+											)}
+											Restore
+										</Button>
+									</CardContent>
+								</Card>
+							)}
+
+						{/* Delete Package - visible to owners, only when not already disabled */}
+						{currentUserPermission != null &&
+							isOwner(currentUserPermission) &&
+							fetcher &&
+							pkg.status !== PackageStatus.Disabled && (
+								<Card className="border-destructive/30">
+									<CardHeader>
+										<CardTitle className="text-base text-destructive">
+											Danger Zone
+										</CardTitle>
+									</CardHeader>
+									<CardContent className="flex items-center justify-between">
+										<div>
+											<p className="text-sm font-medium">Delete this package</p>
+											<p className="text-sm text-muted-foreground">
+												The package will be disabled and hidden from search.
+												Existing installs will keep working.
+											</p>
+										</div>
+										<AlertDialog
+											open={showDeleteDialog}
+											onOpenChange={setShowDeleteDialog}
+										>
+											<AlertDialogTrigger asChild>
+												<Button
+													variant="destructive"
+													size="sm"
+													className="gap-1.5 shrink-0 ml-4"
+												>
+													<Trash2 className="h-4 w-4" />
+													Delete
+												</Button>
+											</AlertDialogTrigger>
+											<AlertDialogContent>
+												<AlertDialogHeader>
+													<AlertDialogTitle>Delete package?</AlertDialogTitle>
+													<AlertDialogDescription>
+														This will disable{" "}
+														<strong>{meta?.name || manifest.name}</strong> and
+														remove it from search results. Existing installs and
+														offline projects will continue to work.
+													</AlertDialogDescription>
+												</AlertDialogHeader>
+												<AlertDialogFooter>
+													<AlertDialogCancel>Cancel</AlertDialogCancel>
+													<AlertDialogAction
+														className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+														onClick={() => deleteMutation.mutate()}
+														disabled={deleteMutation.isPending}
+													>
+														{deleteMutation.isPending ? (
+															<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+														) : (
+															<Trash2 className="mr-2 h-4 w-4" />
+														)}
+														Delete Package
+													</AlertDialogAction>
+												</AlertDialogFooter>
+											</AlertDialogContent>
+										</AlertDialog>
+									</CardContent>
+								</Card>
+							)}
 					</TabsContent>
 
 					<TabsContent value="nodes" className="space-y-4">
-						{manifest.nodes.length === 0 ? (
+						{!pkg.nodes?.length ? (
 							<Card className="p-8 text-center">
 								<FileCode className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
 								<h3 className="font-semibold">No nodes declared</h3>
 								<p className="text-muted-foreground text-sm">
-									This package doesn&apos;t declare any nodes in its manifest
+									This package doesn&apos;t have any extracted nodes yet
 								</p>
 							</Card>
 						) : (
 							<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-								{manifest.nodes.map((node) => (
+								{pkg.nodes?.map((node) => (
 									<NodeCard key={node.id} node={node} />
 								))}
 							</div>
@@ -400,13 +1042,13 @@ export function PackageDetailView({
 									<div>
 										<p className="text-sm font-medium">Memory</p>
 										<Badge variant="outline" className="mt-1">
-											{manifest.permissions.memory}
+											{manifest.permissions?.memory}
 										</Badge>
 									</div>
 									<div>
 										<p className="text-sm font-medium">Timeout</p>
 										<Badge variant="outline" className="mt-1">
-											{manifest.permissions.timeout}
+											{manifest.permissions?.timeout}
 										</Badge>
 									</div>
 								</div>
@@ -421,48 +1063,49 @@ export function PackageDetailView({
 								<div className="flex flex-wrap gap-2">
 									<PermissionBadge
 										label="HTTP Requests"
-										enabled={manifest.permissions.network.httpEnabled}
+										enabled={manifest.permissions?.network?.httpEnabled}
 									/>
 									<PermissionBadge
 										label="WebSocket"
-										enabled={manifest.permissions.network.websocketEnabled}
+										enabled={manifest.permissions?.network?.websocketEnabled}
 									/>
 									<PermissionBadge
 										label="Node Storage"
-										enabled={manifest.permissions.filesystem.nodeStorage}
+										enabled={manifest.permissions?.filesystem?.nodeStorage}
 									/>
 									<PermissionBadge
 										label="User Storage"
-										enabled={manifest.permissions.filesystem.userStorage}
+										enabled={manifest.permissions?.filesystem?.userStorage}
 									/>
 									<PermissionBadge
 										label="Variables"
-										enabled={manifest.permissions.variables}
+										enabled={manifest.permissions?.variables}
 									/>
 									<PermissionBadge
 										label="Cache"
-										enabled={manifest.permissions.cache}
+										enabled={manifest.permissions?.cache}
 									/>
 									<PermissionBadge
 										label="Streaming"
-										enabled={manifest.permissions.streaming}
+										enabled={manifest.permissions?.streaming}
 									/>
 									<PermissionBadge
 										label="A2UI"
-										enabled={manifest.permissions.a2ui}
+										enabled={manifest.permissions?.a2ui}
 									/>
 									<PermissionBadge
 										label="Models/LLM"
-										enabled={manifest.permissions.models}
+										enabled={manifest.permissions?.models}
 									/>
 								</div>
 
-								{manifest.permissions.network.httpEnabled &&
-									manifest.permissions.network.allowedHosts.length > 0 && (
+								{manifest.permissions?.network?.httpEnabled &&
+									(manifest.permissions?.network?.allowedHosts?.length ?? 0) >
+										0 && (
 										<div className="mt-4">
 											<p className="text-sm font-medium mb-2">Allowed Hosts</p>
 											<div className="flex flex-wrap gap-1">
-												{manifest.permissions.network.allowedHosts.map(
+												{manifest.permissions?.network?.allowedHosts?.map(
 													(host) => (
 														<Badge
 															key={host}
@@ -477,10 +1120,10 @@ export function PackageDetailView({
 										</div>
 									)}
 
-								{manifest.permissions.oauthScopes.length > 0 && (
+								{(manifest.permissions?.oauthScopes?.length ?? 0) > 0 && (
 									<div className="mt-4">
 										<p className="text-sm font-medium mb-2">OAuth Scopes</p>
-										{manifest.permissions.oauthScopes.map((oauth, idx) => (
+										{manifest.permissions?.oauthScopes?.map((oauth, idx) => (
 											<div key={idx} className="p-3 rounded-lg bg-muted mt-2">
 												<div className="flex items-center gap-2">
 													<Badge>{oauth.provider}</Badge>
@@ -532,6 +1175,39 @@ export function PackageDetailView({
 							</CardContent>
 						</Card>
 					</TabsContent>
+
+					<TabsContent value="reviews" className="space-y-4">
+						<PackageReviewsTab packageId={pkg.id} />
+					</TabsContent>
+
+					{currentUserPermission != null &&
+						isMaintainer(currentUserPermission) &&
+						fetcher && (
+							<>
+								<TabsContent value="access" className="space-y-4">
+									<PackageAccessTab
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+									/>
+								</TabsContent>
+								<TabsContent value="users" className="space-y-4">
+									<PackageUsersContainer
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+										currentUserPermission={currentUserPermission}
+									/>
+								</TabsContent>
+								<TabsContent value="metadata" className="space-y-4">
+									<PackageMetaTab
+										packageId={pkg.id}
+										fetcher={fetcher}
+										auth={auth}
+									/>
+								</TabsContent>
+							</>
+						)}
 				</Tabs>
 			</div>
 		</main>

@@ -11,4 +11,5 @@ pub use text_splitter;
 pub use tokenizers;
 pub mod ml;
 pub mod provider;
+pub mod summarization;
 pub mod tokenizer;

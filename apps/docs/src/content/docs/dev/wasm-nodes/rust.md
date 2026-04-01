@@ -1,8 +1,8 @@
 ---
 title: Rust WASM Nodes
-description: Create custom WASM nodes using Rust
+description: Create custom WASM nodes using Rust with the WASM Component Model
 sidebar:
-  order: 3
+  order: 1
   badge:
     text: Recommended
     variant: tip

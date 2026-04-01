@@ -11,7 +11,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::{
-    history::History, response::Response, response_chunk::ResponseChunk,
+    history::History,
+    response::{LLMUsageStats, Response},
+    response_chunk::ResponseChunk,
 };
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
@@ -40,7 +42,7 @@ impl NodeLogic for StreamInvokeAgentNode {
             "AI/Agents",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()
@@ -119,6 +121,15 @@ impl NodeLogic for StreamInvokeAgentNode {
         .set_schema::<History>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -174,6 +185,9 @@ impl NodeLogic for StreamInvokeAgentNode {
             .await?;
         context
             .set_pin_value("history_out", json::json!(result.history))
+            .await?;
+        context
+            .set_pin_value("stats", json::json!(result.stats))
             .await?;
 
         context.activate_exec_pin("exec_done").await?;

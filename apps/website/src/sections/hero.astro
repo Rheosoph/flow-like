@@ -20,15 +20,19 @@ const webAppUrl = "https://app.flow-like.com";
 const studioName = "Flow-Like Studio";
 ---
 
-<section class="relative py-8 md:py-12 lg:py-16 mt-8 max-w-screen overflow-hidden">
+<section
+  class="relative isolate py-8 md:py-12 lg:py-16 mt-8"
+  data-c1="hsl(222 89% 60% / .06)"
+  data-c2="hsl(161 50% 45% / .06)"
+>
     <div
-        id="hero-connection-layer"
-        class="pointer-events-none absolute inset-0 w-full h-full -z-1 overflow-hidden contain-[layout_paint]"
-    >
+    id="hero-connection-layer"
+    class="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-screen h-full -z-1 overflow-visible"
+>
         <svg
             id="hero-connections"
             class="hidden lg:block absolute inset-0"
-            style="overflow:visible;width:100%"
+            style="overflow:visible;width:100vw"
             aria-hidden="true"
         >
             <path id="hero-right-conn" class="pin-conn text-primary" fill="none"
@@ -202,137 +206,109 @@ const studioName = "Flow-Like Studio";
     }
 </style>
 
-<script>
-    const $ = (s: string, r = document) => r.querySelector(s);
-
+<script >
+  function initHeroConnections() {
+    const $ = (s: string) => document.querySelector(s);
     const heroEl = document.getElementById("hero-cover");
-    const sectionEl =
-        document.currentScript?.closest("section") ||
-        document.querySelector("section.relative");
+    if (!heroEl) return;
+
+    const sectionEl = heroEl.closest("section");
     const layer = document.getElementById("hero-connection-layer");
     const svg = document.getElementById("hero-connections");
+    if (!sectionEl || !layer || !svg) return;
+
     const rp = document.getElementById("hero-right-pin");
     const lp = document.getElementById("hero-left-pin");
     const rpt = document.getElementById("hero-right-pin-top");
     const lpt = document.getElementById("hero-left-pin-top");
 
-    // Calibration (tweak if still off):
-    const CAL_LEFT_X = 0; // positive moves paths right
-    const CAL_RIGHT_X = 0; // positive moves paths right
     const setSvgFrame = () => {
-        if (!heroEl || !svg || !layer) return;
-        const hr = heroEl.getBoundingClientRect();
-        const secRect = sectionEl?.getBoundingClientRect();
-        const containerWidth = secRect?.width || window.innerWidth;
-        const h = hr.height;
-        layer.style.height = `${h}px`; // width inherited (no manual setting -> prevents 100vw rounding overflow)
-        svg.style.width = "100%"; // responsive to container
-        svg.setAttribute("viewBox", `0 0 ${containerWidth} ${h}`);
-        svg.setAttribute("width", String(containerWidth));
-        svg.setAttribute("height", String(h));
+      if (!heroEl || !svg || !layer) return;
+      const hr = heroEl.getBoundingClientRect();
+      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+      const h = hr.height;
+      layer.style.height = `${h}px`;
+      layer.style.width = vw + "px";
+      svg.style.width = vw + "px";
+      svg.setAttribute("viewBox", `0 0 ${vw} ${h}`);
+      svg.setAttribute("width", String(vw));
+      svg.setAttribute("height", String(h));
     };
 
     const bezier = (pin: HTMLElement, isRight: boolean, yOffset = 60) => {
-        const baseRect = sectionEl?.getBoundingClientRect() ||
-            heroEl?.getBoundingClientRect() || {
-                left: 0,
-                top: 0,
-                width: 0,
-                height: 0,
-                right: 0,
-            };
-        const pr = pin.getBoundingClientRect();
-        const layerRect = layer?.getBoundingClientRect();
-        const layerLeft = layerRect ? layerRect.left : 0;
-        let sx = pr.left - layerLeft + pr.width / 2;
-        sx += isRight ? CAL_RIGHT_X : CAL_LEFT_X;
-        const sy = pr.top - baseRect.top + pr.height / 2;
+      const baseRect = sectionEl?.getBoundingClientRect() || heroEl!.getBoundingClientRect();
+      const pr = pin.getBoundingClientRect();
+      const layerRect = layer!.getBoundingClientRect();
+      const sx = pr.left - layerRect.left + pr.width / 2;
+      const sy = pr.top - baseRect.top + pr.height / 2;
 
-        const isMobile = window.innerWidth < 768;
-        const extra = isMobile ? 0 : 220;
-        const vw = Math.max(
-            document.documentElement.clientWidth,
-            window.innerWidth || 0,
-        );
+      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+      const extra = window.innerWidth < 768 ? 50 : 220;
+      const ex = isRight ? vw + extra : -extra;
+      const ey = sy + (isRight ? yOffset : yOffset * 1.35);
 
-        // Extend beyond screen edges for pleasant overshoot
-        const ex = isRight ? vw + extra : -extra;
-        const ey = sy + (isRight ? yOffset : yOffset * 1.35);
-
-        const dx = ex - sx;
-        const cp1x = sx + dx * 0.42;
-        const cp2x = sx + dx * 0.82;
-        return `M${sx},${sy} C${cp1x},${sy} ${cp2x},${ey} ${ex},${ey}`;
+      const dx = ex - sx;
+      const cp1x = sx + dx * 0.42;
+      const cp2x = sx + dx * 0.82;
+      return `M${sx},${sy} C${cp1x},${sy} ${cp2x},${ey} ${ex},${ey}`;
     };
 
     const quad = (pin: HTMLElement, isRight: boolean, yOffset = -20) => {
-        const baseRect = sectionEl?.getBoundingClientRect() ||
-            heroEl?.getBoundingClientRect() || {
-                left: 0,
-                top: 0,
-                width: 0,
-                height: 0,
-                right: 0,
-            };
-        const pr = pin.getBoundingClientRect();
-        const layerRect = layer?.getBoundingClientRect();
-        const layerLeft = layerRect ? layerRect.left : 0;
-        let sx = pr.left - layerLeft + pr.width / 2;
-        sx += isRight ? CAL_RIGHT_X : CAL_LEFT_X;
-        const sy = pr.top - baseRect.top + pr.height / 2;
+      const baseRect = sectionEl?.getBoundingClientRect() || heroEl!.getBoundingClientRect();
+      const pr = pin.getBoundingClientRect();
+      const layerRect = layer!.getBoundingClientRect();
+      const sx = pr.left - layerRect.left + pr.width / 2;
+      const sy = pr.top - baseRect.top + pr.height / 2;
 
-        const isMobile = window.innerWidth < 768;
-        const extra = isMobile ? 0 : 300; // remove overshoot on mobile
-        const vw = Math.max(
-            document.documentElement.clientWidth,
-            window.innerWidth || 0,
-        );
-
-        const ex = isRight ? vw + extra : -extra;
-        const ey = sy + (isRight ? yOffset : -yOffset);
-        const cp1x = sx + (ex - sx) * 0.6;
-        return `M${sx},${sy} Q${cp1x},${sy} ${ex},${ey}`;
+      const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+      const extra = window.innerWidth < 768 ? 50 : 300;
+      const ex = isRight ? vw + extra : -extra;
+      const ey = sy + (isRight ? yOffset : -yOffset);
+      const cp1x = sx + (ex - sx) * 0.6;
+      return `M${sx},${sy} Q${cp1x},${sy} ${ex},${ey}`;
     };
 
     const updatePaths = () => {
-        if (!heroEl || !svg) return;
-        setSvgFrame();
-        const rc = $("#hero-right-conn");
-        const lc = $("#hero-left-conn");
-        const rct = $("#hero-right-conn-top");
-        const lct = $("#hero-left-conn-top");
-        if (rp && rc) rc.setAttribute("d", bezier(rp, true));
-        if (lp && lc) lc.setAttribute("d", bezier(lp, false, 80));
-        if (rpt && rct) rct.setAttribute("d", quad(rpt, true));
-        if (lpt && lct) lct.setAttribute("d", quad(lpt, false));
+      if (!heroEl || !svg) return;
+      setSvgFrame();
+      const rc = $("#hero-right-conn");
+      const lc = $("#hero-left-conn");
+      const rct = $("#hero-right-conn-top");
+      const lct = $("#hero-left-conn-top");
+      if (rp && rc) rc.setAttribute("d", bezier(rp, true));
+      if (lp && lc) lc.setAttribute("d", bezier(lp, false, 80));
+      if (rpt && rct) rct.setAttribute("d", quad(rpt, true));
+      if (lpt && lct) lct.setAttribute("d", quad(lpt, false));
     };
-
-    const revealEls = Array.from(document.querySelectorAll(".reveal"));
-    const io: any =
-        "IntersectionObserver" in window
-            ? new IntersectionObserver(
-                  (entries) => {
-                      for (const e of entries)
-                          if (e.isIntersecting) {
-                              e.target.classList.add("is-visible");
-                              io.unobserve(e.target);
-                          }
-                  },
-                  { rootMargin: "0px 0px -10% 0px", threshold: 0.15 },
-              )
-            : null;
-    if (io) revealEls.forEach((el) => io.observe(el));
-    else revealEls.forEach((el) => el.classList.add("is-visible"));
 
     const raf = (fn: FrameRequestCallback) => requestAnimationFrame(fn);
     addEventListener("resize", () => raf(updatePaths));
-    // Include scroll updates so vertical offset stays correct when page is scrolled before images/fonts settle.
     addEventListener("scroll", () => raf(updatePaths), { passive: true });
     addEventListener("load", () => raf(updatePaths));
-    setTimeout(() => raf(updatePaths), 50);
 
-    if (window.ResizeObserver && heroEl) {
-        const ro = new ResizeObserver(() => raf(updatePaths));
-        ro.observe(heroEl);
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => raf(updatePaths)).observe(heroEl);
     }
+
+    // Initial draw
+    raf(updatePaths);
+    setTimeout(() => raf(updatePaths), 100);
+  }
+
+  // Reveal animations (independent of connections)
+  const revealEls = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries)
+          if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.15 },
+    );
+    revealEls.forEach((el) => io.observe(el));
+  } else {
+    revealEls.forEach((el) => el.classList.add("is-visible"));
+  }
+
+  initHeroConnections();
 </script>

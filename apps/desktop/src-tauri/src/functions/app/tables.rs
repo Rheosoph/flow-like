@@ -17,20 +17,67 @@ use tauri::AppHandle;
 
 use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
 
-async fn db_connection(
+/// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
+fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
+    if name.is_empty() || name.len() > 256 {
+        return Err(flow_like_types::anyhow!(
+            "Table name must be 1-256 characters"
+        ));
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(flow_like_types::anyhow!(
+            "Table name contains forbidden characters"
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(flow_like_types::anyhow!(
+            "Table name contains invalid characters (allowed: alphanumeric, -, _, .)"
+        ));
+    }
+    Ok(())
+}
+
+/// Max offset to prevent unbounded scans.
+const MAX_OFFSET: u64 = 100_000;
+
+async fn db_connection_inner(
     app_handle: &AppHandle,
     app_id: String,
     table_name: Option<String>,
     credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: bool,
+    sub: Option<String>,
 ) -> flow_like_types::Result<LanceDBVectorStore> {
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     let table_name = table_name.unwrap_or("default".to_string());
+    validate_table_name(&table_name)?;
     let board_dir = Path::from("apps")
         .child(app_id.clone())
         .child("storage")
         .child("db");
     let db = if let Some(credentials) = &credentials {
-        credentials.to_db(&app_id).await?
+        if user_scoped {
+            let sub = sub.ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "User subject (sub) is required for user-scoped database access"
+                )
+            })?;
+            credentials.to_db_scoped(&sub, &app_id).await?
+        } else {
+            credentials.to_db(&app_id).await?
+        }
+    } else if user_scoped {
+        flow_like_state
+            .config
+            .read()
+            .await
+            .callbacks
+            .build_user_database
+            .clone()
+            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(board_dir)
     } else {
         flow_like_state
             .config
@@ -63,7 +110,20 @@ pub async fn db_table_names(
     table_name: Option<String>,
     credentials: Option<Arc<SharedCredentials>>,
 ) -> Result<Vec<String>, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, table_name, credentials).await?;
+    let db = db_connection_inner(&app_handle, app_id, table_name, credentials, false, None).await?;
+    let table_names = db.list_tables().await?;
+    Ok(table_names)
+}
+
+#[tauri::command(async)]
+pub async fn db_table_names_user(
+    app_handle: AppHandle,
+    app_id: String,
+    table_name: Option<String>,
+    credentials: Option<Arc<SharedCredentials>>,
+    sub: Option<String>,
+) -> Result<Vec<String>, TauriFunctionError> {
+    let db = db_connection_inner(&app_handle, app_id, table_name, credentials, true, sub).await?;
     let table_names = db.list_tables().await?;
     Ok(table_names)
 }
@@ -74,8 +134,18 @@ pub async fn db_count(
     app_id: String,
     table_name: Option<String>,
     credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<usize, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, table_name, credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        table_name,
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     let cnt = db.count(None).await?;
     Ok(cnt)
 }
@@ -86,8 +156,18 @@ pub async fn db_schema(
     app_id: String,
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<Schema, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     let schema = db.schema().await?;
     Ok(schema)
 }
@@ -100,10 +180,20 @@ pub async fn db_list(
     credentials: Option<Arc<SharedCredentials>>,
     limit: Option<u64>,
     offset: Option<u64>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<Vec<flow_like_types::Value>, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
-    let limit = limit.unwrap_or(100).min(250) as usize;
-    let offset = offset.unwrap_or(0) as usize;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
+    let limit = limit.unwrap_or(25).min(250) as usize;
+    let offset = offset.unwrap_or(0).min(MAX_OFFSET) as usize;
     let items = db.list(None, limit, offset).await?;
     Ok(items)
 }
@@ -133,10 +223,20 @@ pub async fn db_query(
     limit: Option<u64>,
     offset: Option<u64>,
     payload: QueryTablePayload,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<Vec<flow_like_types::Value>, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name.clone()), credentials).await?;
-    let limit = limit.unwrap_or(100).min(250) as usize;
-    let offset = offset.unwrap_or(0) as usize;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name.clone()),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
+    let limit = limit.unwrap_or(25).min(250) as usize;
+    let offset = offset.unwrap_or(0).min(MAX_OFFSET) as usize;
     if let Some(sql) = payload.sql {
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
@@ -200,8 +300,18 @@ pub async fn db_indices(
     app_id: String,
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<Vec<IndexConfigDto>, TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     let indices = db.list_indices().await?;
     Ok(indices)
 }
@@ -213,8 +323,18 @@ pub async fn db_delete(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     query: String,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.delete(&query).await?;
     Ok(())
 }
@@ -226,8 +346,18 @@ pub async fn db_add(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     items: Vec<flow_like_types::Value>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let mut db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let mut db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.insert(items).await?;
     Ok(())
 }
@@ -240,10 +370,23 @@ pub async fn build_index(
     credentials: Option<Arc<SharedCredentials>>,
     column: String,
     index_type: String,
-    _optimize: Option<bool>,
+    optimize: Option<bool>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.index(&column, Some(&index_type)).await?;
+    if optimize.unwrap_or(false) {
+        db.optimize(false).await?;
+    }
     Ok(())
 }
 
@@ -254,8 +397,18 @@ pub async fn db_optimize(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     keep_versions: Option<bool>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.optimize(keep_versions.unwrap_or(false)).await?;
     Ok(())
 }
@@ -268,8 +421,18 @@ pub async fn db_update(
     credentials: Option<Arc<SharedCredentials>>,
     filter: String,
     updates: std::collections::HashMap<String, flow_like_types::Value>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.update(&filter, updates).await?;
     Ok(())
 }
@@ -281,8 +444,18 @@ pub async fn db_drop_columns(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     columns: Vec<String>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     let column_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
     db.drop_columns(&column_refs).await?;
     Ok(())
@@ -301,8 +474,18 @@ pub async fn db_add_column(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     column: AddColumnPayload,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.add_column(&column.name, &column.sql_expression).await?;
     Ok(())
 }
@@ -315,8 +498,18 @@ pub async fn db_alter_column(
     credentials: Option<Arc<SharedCredentials>>,
     column: String,
     nullable: bool,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.make_column_nullable(&column, nullable).await?;
     Ok(())
 }
@@ -328,8 +521,18 @@ pub async fn db_drop_index(
     table_name: String,
     credentials: Option<Arc<SharedCredentials>>,
     index_name: String,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
 ) -> Result<(), TauriFunctionError> {
-    let db = db_connection(&app_handle, app_id, Some(table_name), credentials).await?;
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
     db.drop_index(&index_name).await?;
     Ok(())
 }

@@ -1,0 +1,354 @@
+// Flow-Like WASM SDK — Execution context (Grain)
+//
+// Provides a high-level Context type that wraps ExecutionInput + ExecutionResult,
+// offering convenient getters, setters, logging, and streaming helpers.
+//
+// Grain version: 0.6+
+
+module Context
+
+from "types" include Types
+from "host" include Host
+from "map" include Map
+from "string" include String
+from "number" include Number
+from "list" include List
+
+provide record Context {
+  input: Types.ExecutionInput,
+  mut result: Types.ExecutionResult,
+}
+
+provide let init = (input: Types.ExecutionInput) => {
+  { input, result: Types.newExecutionResult() }
+}
+
+// -----------------------------------------------------------------------
+// Input getters
+// -----------------------------------------------------------------------
+
+provide let getString = (ctx: Context, pinName: String, fallback: String) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => {
+      // Strip surrounding quotes if present: "\"value\"" → "value"
+      let len = String.length(raw)
+      if (len >= 2 && String.startsWith("\"", raw) && String.endsWith("\"", raw)) {
+        String.slice(1, end=len - 1, raw)
+      } else {
+        raw
+      }
+    },
+    None => fallback,
+  }
+}
+
+provide let getI64 = (ctx: Context, pinName: String, fallback: Number) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => {
+      let trimmed = String.trim(raw)
+      // Simple integer parsing
+      match (Number.parseInt(trimmed, 10)) {
+        Ok(n) => n,
+        Err(_) => fallback,
+      }
+    },
+    None => fallback,
+  }
+}
+
+provide let getF64 = (ctx: Context, pinName: String, fallback: Number) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => {
+      match (Number.parseFloat(String.trim(raw))) {
+        Ok(n) => n,
+        Err(_) => fallback,
+      }
+    },
+    None => fallback,
+  }
+}
+
+provide let getBool = (ctx: Context, pinName: String, fallback: Bool) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => String.trim(raw) == "true",
+    None => fallback,
+  }
+}
+
+provide let getInput = (ctx: Context, pinName: String) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => raw,
+    None => "",
+  }
+}
+
+// -----------------------------------------------------------------------
+// Output setters
+// -----------------------------------------------------------------------
+
+provide let setOutput = (ctx: Context, pinName: String, value: String) => {
+  Map.set(pinName, value, ctx.result.outputs)
+}
+
+provide let activateExec = (ctx: Context, pinName: String) => {
+  ctx.result = {
+    ...ctx.result,
+    activateExec: List.append(ctx.result.activateExec, [pinName]),
+  }
+}
+
+provide let setPending = (ctx: Context) => {
+  ctx.result = { ...ctx.result, pending: true }
+}
+
+provide let setError = (ctx: Context, message: String) => {
+  ctx.result = { ...ctx.result, error: Some(message) }
+}
+
+// -----------------------------------------------------------------------
+// Logging (level-gated)
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let debug = (ctx: Context, msg: String) => {
+  if (ctx.input.logLevel <= Types.logLevelDebug) {
+    Host.logDebug(msg)
+  }
+}
+
+@unsafe
+provide let logInfo = (ctx: Context, msg: String) => {
+  if (ctx.input.logLevel <= Types.logLevelInfo) {
+    Host.logInfo(msg)
+  }
+}
+
+@unsafe
+provide let warn = (ctx: Context, msg: String) => {
+  if (ctx.input.logLevel <= Types.logLevelWarn) {
+    Host.logWarn(msg)
+  }
+}
+
+@unsafe
+provide let logError = (ctx: Context, msg: String) => {
+  if (ctx.input.logLevel <= Types.logLevelError) {
+    Host.logError(msg)
+  }
+}
+
+// -----------------------------------------------------------------------
+// Streaming
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let streamText = (ctx: Context, text: String) => {
+  if (ctx.input.streamState) {
+    Host.streamText(text)
+  }
+}
+
+@unsafe
+provide let streamJson = (ctx: Context, eventType: String, data: String) => {
+  if (ctx.input.streamState) {
+    Host.streamEmit(eventType, data)
+  }
+}
+
+// -----------------------------------------------------------------------
+// Variables
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let getVariable = (_ctx: Context, name: String) => {
+  Host.getVariable(name)
+}
+
+@unsafe
+provide let setVariable = (_ctx: Context, name: String, value: String) => {
+  Host.setVariable(name, value)
+}
+
+@unsafe
+provide let deleteVariable = (_ctx: Context, name: String) => {
+  Host.deleteVariable(name)
+}
+
+@unsafe
+provide let hasVariable = (_ctx: Context, name: String) => {
+  Host.hasVariable(name)
+}
+
+// -----------------------------------------------------------------------
+// Meta accessors
+// -----------------------------------------------------------------------
+
+provide let nodeId = (ctx: Context) => ctx.input.nodeId
+provide let nodeName = (ctx: Context) => ctx.input.nodeName
+provide let runId = (ctx: Context) => ctx.input.runId
+provide let appId = (ctx: Context) => ctx.input.appId
+provide let boardId = (ctx: Context) => ctx.input.boardId
+provide let userId = (ctx: Context) => ctx.input.userId
+provide let streamEnabled = (ctx: Context) => ctx.input.streamState
+provide let logLevel = (ctx: Context) => ctx.input.logLevel
+
+// -----------------------------------------------------------------------
+// Storage
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let storageRead = (_ctx: Context, path: String) => {
+  Host.storageRead(path)
+}
+
+@unsafe
+provide let storageWrite = (_ctx: Context, path: String, data: String) => {
+  Host.storageWrite(path, data)
+}
+
+@unsafe
+provide let storageList = (_ctx: Context, flowPathJson: String) => {
+  Host.storageList(flowPathJson)
+}
+
+@unsafe
+provide let storageDir = (_ctx: Context, nodeScoped: Bool) => {
+  Host.storageDir(nodeScoped)
+}
+
+@unsafe
+provide let uploadDir = (_ctx: Context) => {
+  Host.uploadDir()
+}
+
+@unsafe
+provide let cacheDirPath = (_ctx: Context, nodeScoped: Bool, userScoped: Bool) => {
+  Host.cacheDirPath(nodeScoped, userScoped)
+}
+
+@unsafe
+provide let userDir = (_ctx: Context, nodeScoped: Bool) => {
+  Host.userDir(nodeScoped)
+}
+
+// -----------------------------------------------------------------------
+// Cache
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let cacheGet = (_ctx: Context, key: String) => {
+  Host.cacheGet(key)
+}
+
+@unsafe
+provide let cacheSet = (_ctx: Context, key: String, value: String) => {
+  Host.cacheSet(key, value)
+}
+
+@unsafe
+provide let cacheDelete = (_ctx: Context, key: String) => {
+  Host.cacheDelete(key)
+}
+
+@unsafe
+provide let cacheHas = (_ctx: Context, key: String) => {
+  Host.cacheHas(key)
+}
+
+// -----------------------------------------------------------------------
+// Models
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let embedText = (_ctx: Context, bitJson: String, textsJson: String) => {
+  Host.embedText(bitJson, textsJson)
+}
+
+// -----------------------------------------------------------------------
+// HTTP
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let httpRequest = (
+  _ctx: Context,
+  method: Number,
+  url: String,
+  headers: String,
+  body: String,
+) => {
+  Host.httpRequest(method, url, headers, body)
+}
+
+// -----------------------------------------------------------------------
+// Auth
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let getOauthToken = (_ctx: Context, provider: String) => {
+  Host.getOauthToken(provider)
+}
+
+@unsafe
+provide let hasOauthToken = (_ctx: Context, provider: String) => {
+  Host.hasOauthToken(provider)
+}
+
+// -----------------------------------------------------------------------
+// Stream progress
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let streamProgress = (ctx: Context, progress: Number, message: String) => {
+  if (ctx.input.streamState) {
+    let data =
+      "{\"progress\":" ++
+      toString(progress) ++
+      ",\"message\":" ++
+      Types.jsonString(message) ++
+      "}"
+    Host.streamEmit("progress", data)
+  }
+}
+
+// -----------------------------------------------------------------------
+// Time & Random
+// -----------------------------------------------------------------------
+
+@unsafe
+provide let timeNow = (_ctx: Context) => {
+  Host.timeNow()
+}
+
+@unsafe
+provide let random = (_ctx: Context) => {
+  Host.random()
+}
+
+// -----------------------------------------------------------------------
+// Require input (returns Result)
+// -----------------------------------------------------------------------
+
+provide let requireInput = (ctx: Context, pinName: String) => {
+  match (Map.get(pinName, ctx.input.inputs)) {
+    Some(raw) => Ok(raw),
+    None => Err("Missing required input: " ++ pinName),
+  }
+}
+
+// -----------------------------------------------------------------------
+// Finalize
+// -----------------------------------------------------------------------
+
+provide let finish = (ctx: Context) => {
+  ctx.result
+}
+
+provide let success = (ctx: Context) => {
+  activateExec(ctx, "exec_out")
+  ctx.result
+}
+
+provide let fail = (ctx: Context, message: String) => {
+  setError(ctx, message)
+  ctx.result
+}

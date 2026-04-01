@@ -169,16 +169,24 @@ impl FlowNodeRegistryInner {
         let node = self.registry.get(node_id);
         match node {
             Some(node) => Ok(node.0.clone()),
-            None => Err(flow_like_types::anyhow!("Node not found - Get Node")),
+            None => Err(flow_like_types::anyhow!(
+                "Node not found - Get Node: '{}'",
+                node_id
+            )),
         }
     }
 
     #[inline]
     pub fn instantiate(&self, node: &Node) -> flow_like_types::Result<Arc<dyn NodeLogic>> {
-        let node = self.registry.get(&node.name);
-        match node {
-            Some(node) => Ok(node.1.clone()),
-            None => Err(flow_like_types::anyhow!("Node not found - Instancing")),
+        let result = self.registry.get(&node.name);
+        match result {
+            Some(entry) => Ok(entry.1.clone()),
+            None => Err(flow_like_types::anyhow!(
+                "Node not found - Instancing: '{}' (id: {}, category: {})",
+                node.name,
+                node.id,
+                node.category
+            )),
         }
     }
 }

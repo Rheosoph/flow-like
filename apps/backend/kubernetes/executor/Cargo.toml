@@ -8,7 +8,7 @@ description = "Flow-Like Kubernetes Workflow Executor"
 flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog = { workspace = true, features = ["all-execute", "local-ml"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "local-ml", "remote"] }
 flow-like-executor = { workspace = true, features = ["all-execute"] }
 mimalloc.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
@@ -29,7 +29,7 @@ base64 = "0.22"
 axum.workspace = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

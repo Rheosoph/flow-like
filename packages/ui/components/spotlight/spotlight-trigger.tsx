@@ -17,6 +17,19 @@ interface SpotlightTriggerProps {
 	variant?: "button" | "sidebar" | "minimal";
 }
 
+import { motion } from "framer-motion";
+
+const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
+
+const iconVariants = {
+	initial: { scale: 1, rotate: 0 },
+	hover: {
+		scale: 1.1,
+		rotate: 5,
+		transition: { type: "spring", stiffness: 400, damping: 10 },
+	},
+};
+
 export function SpotlightTrigger({
 	className,
 	variant = "sidebar",
@@ -77,7 +90,7 @@ export function SpotlightTrigger({
 	return (
 		<SidebarMenu>
 			<SidebarMenuItem>
-				<SidebarMenuButton
+				<MotionSidebarMenuButton
 					onClick={open}
 					tooltip="Quick Search (⌘K)"
 					className={cn(
@@ -85,10 +98,12 @@ export function SpotlightTrigger({
 						"hover:bg-accent/80",
 						className,
 					)}
+					initial="initial"
+					whileHover="hover"
 				>
-					<div className="flex items-center justify-center h-4 w-4 rounded-sm bg-linear-to-br">
+					<motion.div variants={iconVariants} className="flex items-center justify-center h-4 w-4 rounded-sm bg-linear-to-br">
 						<SparklesIcon className="h-5 w-5 text-primary-foreground" />
-					</div>
+					</motion.div>
 					{sidebarOpen && (
 						<>
 							<span className="flex-1">Quick Search</span>
@@ -97,7 +112,7 @@ export function SpotlightTrigger({
 							</kbd>
 						</>
 					)}
-				</SidebarMenuButton>
+				</MotionSidebarMenuButton>
 			</SidebarMenuItem>
 		</SidebarMenu>
 	);

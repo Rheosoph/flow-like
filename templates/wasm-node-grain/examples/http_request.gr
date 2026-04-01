@@ -1,0 +1,106 @@
+// Flow-Like WASM Node Example — HTTP Request (Grain)
+//
+// Demonstrates making an HTTP request from a WASM node.
+// To use HTTP, add the "http" permission to your node definition.
+
+module HttpExample
+
+from "sdk" include Sdk
+from "types" include Types
+from "memory" include Memory
+from "context" include Context
+from "host" include Host
+
+from "runtime/unsafe/wasmi32" include WasmI32
+from "runtime/unsafe/wasmi64" include WasmI64
+
+let buildDefinition = () => {
+  let mut def = Types.newNodeDefinition()
+  def.name = "http_request_grain"
+  def.friendlyName = "HTTP Request (Grain)"
+  def.description = "Makes an HTTP GET request and returns the response"
+  def.category = "Custom/WASM"
+
+  let def = Types.addPermission(def, "http")
+  let def = Types.addPermission(def, "streaming")
+
+  let def = Types.addPin(
+    def,
+    Types.inputPin("exec", "Execute", "Trigger execution", Types.Exec),
+  )
+  let def = Types.addPin(
+    def,
+    Types.withDefault(
+      Types.inputPin("url", "URL", "URL to request", Types.TypeString),
+      "\"https://httpbin.org/get\"",
+    ),
+  )
+
+  let def = Types.addPin(
+    def,
+    Types.outputPin("exec_out", "Done", "Request complete", Types.Exec),
+  )
+  let def = Types.addPin(
+    def,
+    Types.outputPin("response", "Response", "Response body", Types.TypeString),
+  )
+  let def = Types.addPin(
+    def,
+    Types.outputPin("success", "Success", "Whether the request succeeded", Types.TypeBool),
+  )
+
+  def
+}
+
+@unsafe
+@externalName("get_node")
+provide let _getNode = () => {
+  Memory.packString(Types.nodeDefToJson(buildDefinition()))
+}
+
+@unsafe
+@externalName("get_nodes")
+provide let _getNodes = () => {
+  let json = "[" ++ Types.nodeDefToJson(buildDefinition()) ++ "]"
+  Memory.packResult(json)
+}
+
+@unsafe
+@externalName("run")
+provide let _run = (ptr: WasmI32, len: WasmI32) => {
+  let inputJson = Memory.ptrToString(ptr, len)
+  let input = Types.parseExecutionInput(inputJson)
+  let ctx = Context.init(input)
+
+  let url = Context.getString(ctx, "url", "https://httpbin.org/get")
+
+  Context.logInfo(ctx, "Making HTTP GET request to: " ++ url)
+
+  // HTTP method 0 = GET, headers and body are empty JSON
+  let ok = Host.httpRequest(0, url, "{}", "")
+
+  Context.setOutput(ctx, "success", if (ok) "true" else "false")
+
+  if (ok) {
+    Context.streamText(ctx, "Request succeeded")
+    Context.setOutput(ctx, "response", Types.jsonString("Request completed"))
+  } else {
+    Context.streamText(ctx, "Request failed")
+    Context.setOutput(ctx, "response", Types.jsonString("Request failed"))
+  }
+
+  let result = Context.success(ctx)
+  Memory.packString(Types.resultToJson(result))
+}
+
+@unsafe
+@externalName("alloc")
+provide let _alloc = (size: WasmI32) => Memory.wasmAlloc(size)
+
+@unsafe
+@externalName("dealloc")
+provide let _dealloc = (ptr: WasmI32, size: WasmI32) => Memory.wasmDealloc(ptr, size)
+
+@unsafe
+@externalName("get_abi_version")
+provide let _getAbiVersion = () => 1n

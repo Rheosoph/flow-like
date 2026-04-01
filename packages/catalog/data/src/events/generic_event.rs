@@ -99,7 +99,7 @@ async fn process_payload(
     let mut payload = payload_data
         .payload
         .clone()
-        .ok_or_else(|| flow_like_types::anyhow!("Payload is missing"))?;
+        .unwrap_or_else(|| flow_like_types::Value::Object(flow_like_types::json::Map::new()));
 
     if let Some(obj) = payload.as_object_mut() {
         map_payload_to_pins(context, obj, output_pins).await?;

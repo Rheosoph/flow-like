@@ -1,0 +1,129 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+---
+
+<section class="relative py-14 md:py-20" data-c1="hsl(161 50% 45% / .06)" data-c2="hsl(222 89% 60% / .06)">
+  <div class="mx-auto max-w-3xl px-4 lg:px-8 text-center">
+
+    <!-- Merge strip: 4 labels → 1 -->
+    <div class="ca-reveal mb-10">
+      <div class="ca-strip">
+        <span class="ca-chip ca-chip-1">{t("v2.combine.chip.auto")}</span>
+        <span class="ca-plus">+</span>
+        <span class="ca-chip ca-chip-2">{t("v2.combine.chip.ai")}</span>
+        <span class="ca-plus">+</span>
+        <span class="ca-chip ca-chip-3">{t("v2.combine.chip.dash")}</span>
+        <span class="ca-plus">+</span>
+        <span class="ca-chip ca-chip-4">{t("v2.combine.chip.app")}</span>
+        <span class="ca-equals">=</span>
+        <span class="ca-result">{t("v2.combine.chip.result")}</span>
+      </div>
+    </div>
+
+    <p class="ca-reveal text-2xl sm:text-3xl font-semibold tracking-tight mb-5">
+      {t("v2.combine.heading")}
+    </p>
+    <p class="ca-reveal text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+      {t("v2.combine.p1")}
+    </p>
+    <p class="ca-reveal text-base sm:text-lg text-muted-foreground leading-relaxed mb-5">
+      {t("v2.combine.p2")}
+    </p>
+    <a href="/compare" class="ca-reveal text-sm font-medium text-primary hover:text-primary/80 transition-colors">
+      {t("v2.combine.link")}
+    </a>
+  </div>
+</section>
+
+<style>
+  .ca-reveal { opacity: 0; transform: translateY(16px); transition: opacity .5s ease, transform .5s ease; }
+  .ca-reveal.is-visible { opacity: 1; transform: translateY(0); }
+
+  .ca-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px 8px;
+  }
+
+  .ca-chip {
+    display: inline-flex;
+    padding: 5px 14px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid;
+  }
+  .ca-chip-1 { color: hsl(var(--primary)); border-color: hsl(var(--primary) / .25); background: hsl(var(--primary) / .08); }
+  .ca-chip-2 { color: hsl(268 84% 62%); border-color: hsl(268 84% 62% / .25); background: hsl(268 84% 62% / .08); }
+  .ca-chip-3 { color: hsl(161 50% 45%); border-color: hsl(161 50% 45% / .25); background: hsl(161 50% 45% / .08); }
+  .ca-chip-4 { color: hsl(35 92% 50%); border-color: hsl(35 92% 50% / .25); background: hsl(35 92% 50% / .08); }
+
+  .ca-plus {
+    font-size: 14px;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground) / .35);
+  }
+
+  .ca-equals {
+    font-size: 18px;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground) / .3);
+    margin: 0 4px;
+  }
+
+  .ca-result {
+    display: inline-flex;
+    padding: 5px 16px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: hsl(var(--primary-foreground));
+    background: hsl(var(--primary));
+    position: relative;
+    overflow: hidden;
+  }
+  .ca-result::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.2) 50%, transparent 100%);
+    transform: translateX(-100%);
+    animation: ca-shimmer 3s ease-in-out infinite;
+  }
+
+  @keyframes ca-shimmer {
+    0%   { transform: translateX(-100%); }
+    40%  { transform: translateX(100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ca-result::after { animation: none !important; }
+    .ca-reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
+  }
+</style>
+
+<script>
+  const caEls = document.querySelectorAll<HTMLElement>(".ca-reveal");
+  if (caEls.length) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }
+    }, { threshold: 0.1 });
+    for (const el of caEls) io.observe(el);
+  }
+</script>

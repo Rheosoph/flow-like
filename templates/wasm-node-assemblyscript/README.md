@@ -30,7 +30,7 @@ This template provides a starting point for creating custom WASM nodes using Ass
 wasm-node-assemblyscript/
 ├── assembly/
 │   ├── index.ts      # Main node implementation
-│   └── sdk.ts        # SDK types and utilities
+│   └── examples.ts   # Example node bundle entrypoint
 ├── examples/
 │   ├── math_nodes.ts     # Arithmetic operations (add, subtract, multiply, divide)
 │   ├── string_nodes.ts   # Text manipulation (uppercase, trim, replace, concat)
@@ -155,7 +155,7 @@ export function run(ptr: i32, len: i32): i64 {
 ### Logging
 
 ```typescript
-import { debug, info, warn, error } from "./sdk";
+import { debug, info, warn, error } from "@flow-like/wasm-sdk/assembly/index";
 
 debug("Debug message");
 info("Info message");
@@ -166,7 +166,7 @@ error("Error message");
 ### Streaming
 
 ```typescript
-import { streamText, streamProgress } from "./sdk";
+import { streamText, streamProgress } from "@flow-like/wasm-sdk/assembly/index";
 
 streamText("Processing...");
 streamProgress(0.5, "Halfway done");
@@ -175,7 +175,7 @@ streamProgress(0.5, "Halfway done");
 ### Utilities
 
 ```typescript
-import { now, random } from "./sdk";
+import { now, random } from "@flow-like/wasm-sdk/assembly/index";
 
 const timestamp = now();  // Current time in ms
 const rand = random();    // Random i64

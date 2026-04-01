@@ -22,7 +22,7 @@
 		"unauthorized_read": true,
 		"admin_interface": true,
 		"premium": false,
-		"wasm_registry": false
+		"wasm_registry": true
 	},
 	"supported_sinks": {
 		"http": true,

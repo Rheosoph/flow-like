@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{app, join_queue, membership, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -135,6 +135,15 @@ pub async fn accept_join_request(
         user.sub()?
     );
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.accept",
+        "JoinRequest",
+        request_id,
+        "Join request accepted"
+    );
     Ok(Json(()))
 }
 
@@ -188,5 +197,14 @@ pub async fn reject_join_request(
         user.sub()?
     );
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.reject",
+        "JoinRequest",
+        request_id,
+        "Join request rejected"
+    );
     Ok(Json(()))
 }

@@ -10,9 +10,11 @@ pub mod invoke_board_async;
 pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
+pub mod summaries;
 pub mod undo_redo_board;
 pub mod upsert_board;
 pub mod version_board;
+pub mod workspace;
 
 use axum::{
     Router,
@@ -24,6 +26,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_boards::get_boards))
+        .route("/summaries", get(summaries::board_summaries))
         .route(
             "/{board_id}",
             get(get_board::get_board)
@@ -54,4 +57,5 @@ pub fn routes() -> Router<AppState> {
             "/{board_id}/invoke/async",
             post(invoke_board_async::invoke_board_async),
         )
+        .route("/{board_id}/workspace", get(workspace::workspace))
 }

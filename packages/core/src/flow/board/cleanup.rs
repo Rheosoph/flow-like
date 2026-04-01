@@ -128,6 +128,22 @@ impl Board {
                     (*step).initial_pin_iteration(pin, NodeOrLayerRef::Layer(layer));
                 }
             }
+
+            for node in layer.nodes.values() {
+                for step in steps.iter_mut() {
+                    (*step).initial_node_iteration(node);
+                }
+
+                for pin in node.pins.values() {
+                    pins.insert(
+                        pin.id.clone(),
+                        (Arc::new(pin.clone()), NodeOrLayer::Node(node.id.clone())),
+                    );
+                    for step in steps.iter_mut() {
+                        (*step).initial_pin_iteration(pin, NodeOrLayerRef::Node(node));
+                    }
+                }
+            }
         }
 
         // Main Processing
@@ -153,11 +169,31 @@ impl Board {
                     (*step).main_pin_iteration(pin, &pins);
                 }
             }
+
+            for node in layer.nodes.values_mut() {
+                for step in steps.iter_mut() {
+                    (*step).main_node_iteration(node, &pins);
+                }
+
+                for pin in node.pins.values_mut() {
+                    for step in steps.iter_mut() {
+                        (*step).main_pin_iteration(pin, &pins);
+                    }
+                }
+            }
         }
 
         for variable in self.variables.values_mut() {
             for step in steps.iter_mut() {
                 (*step).main_variable_iteration(variable, &pins);
+            }
+        }
+
+        for layer in self.layers.values_mut() {
+            for variable in layer.variables.values_mut() {
+                for step in steps.iter_mut() {
+                    (*step).main_variable_iteration(variable, &pins);
+                }
             }
         }
 

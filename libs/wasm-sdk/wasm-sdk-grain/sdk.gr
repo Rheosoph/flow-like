@@ -1,0 +1,49 @@
+// Flow-Like WASM SDK — Top-level entry point (Grain)
+//
+// Re-exports all SDK modules for convenient single-import usage:
+//   from "sdk" include Sdk
+//
+// Grain version: 0.6+
+
+module Sdk
+
+from "memory" include Memory
+from "host" include Host
+from "types" include Types
+from "context" include Context
+
+// -----------------------------------------------------------------------
+// Convenience aliases — import individual items, no module re-exports
+// (Grain 0.7 does not support `provide module X` for re-exporting)
+// -----------------------------------------------------------------------
+
+provide let abiVersion = Memory.abiVersion
+
+provide let parseInput = Memory.ptrToString
+
+@unsafe
+provide let serializeDefinition = (def: Types.NodeDefinition) => {
+  Memory.packString(Types.nodeDefToJson(def))
+}
+
+@unsafe
+provide let serializeResult = (res: Types.ExecutionResult) => {
+  Memory.packString(Types.resultToJson(res))
+}
+
+provide let jsonString = Types.jsonString
+provide let newNodeDefinition = Types.newNodeDefinition
+provide let inputPin = Types.inputPin
+provide let outputPin = Types.outputPin
+provide let addPin = Types.addPin
+provide let addPermission = Types.addPermission
+provide let withDefault = Types.withDefault
+provide let withValueType = Types.withValueType
+provide let withSchema = Types.withSchema
+provide let withValidValues = Types.withValidValues
+provide let withRange = Types.withRange
+provide let newPackageNodes = Types.newPackageNodes
+provide let addNode = Types.addNode
+provide let packageNodesToJson = Types.packageNodesToJson
+provide let newContext = Context.init
+provide let parseExecutionInput = Types.parseExecutionInput

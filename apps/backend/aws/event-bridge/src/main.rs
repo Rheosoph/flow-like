@@ -1,7 +1,6 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use aws_lambda_events::cloudwatch_events::CloudWatchEvent;
 use flow_like_types::tokio;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
@@ -59,16 +58,11 @@ async fn main() -> Result<(), Error> {
     run(service_fn(event_bridge_handler)).await
 }
 
-async fn event_bridge_handler(
-    event: LambdaEvent<CloudWatchEvent<EventDetail>>,
-) -> Result<(), Error> {
+async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Error> {
     let api_base_url = get_api_base_url()?;
     let sink_jwt = get_sink_jwt()?;
 
-    let detail = event
-        .payload
-        .detail
-        .ok_or_else(|| Error::from("Missing event detail"))?;
+    let detail = event.payload;
 
     tracing::info!(event_id = %detail.event_id, "Processing scheduled event");
 
@@ -93,7 +87,10 @@ async fn event_bridge_handler(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
         tracing::error!(status = %status, body = %body, "API returned error");
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }

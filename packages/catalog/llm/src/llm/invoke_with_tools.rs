@@ -10,12 +10,13 @@ use flow_like::{
 };
 use flow_like_model_provider::{
     history::{History, Tool, ToolChoice},
-    response::{Response, ResponseFunction},
+    response::{LLMUsageStats, Response, ResponseFunction},
 };
 use flow_like_types::{Error, Value, anyhow, async_trait, json, regex::Regex};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Instant,
 };
 
 const SP_TEMPLATE_AUTO: &str = r#"
@@ -196,6 +197,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -281,6 +283,15 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             VariableType::Struct,
         );
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -347,12 +358,20 @@ impl NodeLogic for InvokeLLMWithToolsNode {
                 .build(&model_bit, context.app_state.clone(), context.token.clone())
                 .await?;
 
+            let start = Instant::now();
+
             if !is_local_provider && !tools.is_empty() && !matches!(tool_choice, ToolChoice::None) {
-                model.invoke(&history, None).await?
+                let res = model.invoke(&history, None).await?;
+                let duration_ms = start.elapsed().as_millis() as u64;
+                (res, duration_ms)
             } else {
-                model.invoke(&history, None).await?
+                let res = model.invoke(&history, None).await?;
+                let duration_ms = start.elapsed().as_millis() as u64;
+                (res, duration_ms)
             }
         };
+
+        let (response, duration_ms) = response;
 
         // --- Parse response
         let mut response_string = String::new();
@@ -451,6 +470,11 @@ impl NodeLogic for InvokeLLMWithToolsNode {
         }
 
         context.activate_exec_pin("exec_done").await?;
+
+        let mut stats = LLMUsageStats::from_response(&response);
+        stats.set_duration_ms(duration_ms);
+        context.set_pin_value("stats", json::json!(stats)).await?;
+
         Ok(())
     }
 

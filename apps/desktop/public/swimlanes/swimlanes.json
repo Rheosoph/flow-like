@@ -41,13 +41,13 @@
 				"id": "model-1",
 				"type": "model",
 				"modelId": "dt7121ak3swi6l45s3ei0g3e",
-				"hub": "api.alpha.flow-like.com"
+				"hub": "api.flow-like.com"
 			},
 			{
 				"id": "model-2",
 				"type": "model",
 				"modelId": "jpjaryxwugonzra14ckj8a1f",
-				"hub": "api.alpha.flow-like.com"
+				"hub": "api.flow-like.com"
 			},
 			{
 				"id": "model-spotlight",

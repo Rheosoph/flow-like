@@ -1,0 +1,61 @@
+---
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+
+const steps = [
+  { key: "step1", color: "primary" },
+  { key: "step2", color: "muted" },
+  { key: "step3", color: "emerald" },
+] as const;
+---
+
+<section id="solution" class="relative py-28">
+  <div class="absolute top-0 left-0 right-0 h-px bg-border" />
+
+  <div class="mx-auto max-w-5xl px-6 lg:px-8">
+    <div class="mb-20">
+      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-4">
+        {t("pitch.solution.tagline")}
+      </p>
+      <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight">
+        {t("pitch.solution.headline")}
+      </h2>
+    </div>
+
+    <div class="relative">
+      <div class="absolute left-0 lg:left-16 top-0 bottom-0 w-px bg-border" />
+
+      <div class="space-y-20">
+        {steps.map(({ key, color }) => (
+          <div class="relative pl-10 lg:pl-36">
+            <div class:list={[
+              "absolute left-0 lg:left-16 top-2 -translate-x-1/2 w-3 h-3 rounded-full ring-4 ring-background",
+              color === "primary" && "bg-primary",
+              color === "muted" && "bg-muted-foreground/50",
+              color === "emerald" && "bg-emerald-500",
+            ]} />
+            <div class="absolute left-0 lg:left-4 top-0 w-10 text-right hidden lg:block">
+              <span class:list={[
+                "text-2xl font-bold",
+                color === "primary" && "text-primary",
+                color === "muted" && "text-muted-foreground/50",
+                color === "emerald" && "text-emerald-500",
+              ]}>{t(`pitch.solution.${key}.number`)}</span>
+            </div>
+            <span class:list={[
+              "lg:hidden text-sm font-bold mb-2 block",
+              color === "primary" && "text-primary",
+              color === "muted" && "text-muted-foreground/50",
+              color === "emerald" && "text-emerald-500",
+            ]}>{t(`pitch.solution.${key}.number`)}</span>
+            <h3 class="text-xl font-semibold mb-3">{t(`pitch.solution.${key}.title`)}</h3>
+            <p class="text-muted-foreground max-w-lg leading-relaxed">{t(`pitch.solution.${key}.description`)}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>

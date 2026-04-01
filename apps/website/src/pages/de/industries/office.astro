@@ -1,0 +1,9 @@
+---
+import IndustryPage from "../../../components/industries/IndustryPage.astro";
+import { tOffice } from "../../../i18n/locales/pages/industry-office";
+
+const lang = "de";
+const t = (key: string) => tOffice(lang, key);
+---
+
+<IndustryPage lang={lang} t={t} accent="blue" accentHex="#2563eb" slug="office" />

@@ -1,0 +1,14 @@
+{
+	"targets": {
+		"release": {
+			"outFile": "build/sdk.wasm",
+			"optimizeLevel": 3,
+			"shrinkLevel": 2,
+			"noAssert": true
+		}
+	},
+	"options": {
+		"runtime": "stub",
+		"disableWarning": ["235"]
+	}
+}

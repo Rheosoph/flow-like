@@ -23,7 +23,10 @@ pub(crate) async fn generate_upload_url(
     extension: &str,
 ) -> Result<(String, String), ApiError> {
     let id = create_id();
-    let upload_extension = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+    let upload_extension = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
     let upload_extension = if upload_extension.is_empty() {
         "webp".to_string()
     } else {

@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub mod annotate;
 pub mod content;
 pub mod metadata;
+pub mod overlay;
 pub mod pdf;
 pub mod transform;
 

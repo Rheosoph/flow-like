@@ -32,6 +32,8 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     App,
+    #[sea_orm(has_many = "super::app_package::Entity")]
+    AppPackage,
     #[sea_orm(has_many = "super::invitation::Entity")]
     Invitation,
     #[sea_orm(
@@ -55,6 +57,12 @@ pub enum Relation {
 impl Related<super::app::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::App.def()
+    }
+}
+
+impl Related<super::app_package::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppPackage.def()
     }
 }
 

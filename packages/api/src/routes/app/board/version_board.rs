@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -51,5 +51,17 @@ pub async fn version_board(
         .create_version(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "board.version",
+        "board",
+        board_id,
+        format!(
+            "Board versioned to {}.{}.{}",
+            version.0, version.1, version.2
+        )
+    );
     Ok(Json(version))
 }

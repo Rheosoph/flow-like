@@ -103,6 +103,7 @@ export const fr24h = {
 
 	// FAQ
 	"24h.faq.tagline": "Questions",
+	"24h.faq.headline": "Questions Fréquentes",
 	"24h.faq.q1": "Et si mon projet est trop complexe ?",
 	"24h.faq.a1":
 		"On vous le dit d'emblée. Si votre projet a besoin de plus de temps, on propose un planning réaliste et un prix ajusté. Pas de surprises.",

@@ -1,0 +1,64 @@
+---
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+
+const cases = ["case1", "case2", "case3", "case4"] as const;
+
+const icons: Record<string, string> = {
+  case1: "document",
+  case2: "database",
+  case3: "cpu",
+  case4: "clipboard",
+};
+---
+
+<section class="relative py-28">
+  <div class="absolute top-0 left-0 right-0 h-px bg-border" />
+
+  <div class="mx-auto max-w-5xl px-6 lg:px-8">
+    <div class="mb-16">
+      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-4">
+        {t("pitch.usecases.tagline")}
+      </p>
+      <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight">
+        {t("pitch.usecases.headline")}
+      </h2>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      {cases.map((key) => (
+        <div class="flex gap-5 p-6 rounded-2xl border border-border bg-card hover:border-primary/30 transition-colors">
+          <div class="shrink-0 w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+            {icons[key] === "document" && (
+              <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            )}
+            {icons[key] === "database" && (
+              <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+            )}
+            {icons[key] === "cpu" && (
+              <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+              </svg>
+            )}
+            {icons[key] === "clipboard" && (
+              <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+            )}
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold mb-2">{t(`pitch.usecases.${key}.title`)}</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">{t(`pitch.usecases.${key}.description`)}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

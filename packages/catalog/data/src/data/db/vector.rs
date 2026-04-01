@@ -3,65 +3,34 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
-use flow_like_types::{
-    Cacheable, JsonSchema, Value, async_trait,
-    json::{Deserialize, Serialize},
-    sync::RwLock,
+use flow_like_storage::databases::vector::{
+    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
+use flow_like_types::{Cacheable, Value, async_trait, sync::RwLock};
 use std::sync::Arc;
 
+pub use flow_like_catalog_core::{CachedDB, NodeDBConnection};
+
+pub mod add_column;
 pub mod count;
 pub mod delete;
+pub mod drop_column;
+pub mod drop_index;
 pub mod filter;
+pub mod flush;
 pub mod fts_search;
 pub mod hybrid_search;
 pub mod index;
 pub mod insert;
 pub mod list;
+pub mod list_indices;
 pub mod list_tables;
+pub mod make_column_optional;
 pub mod optimize;
 pub mod purge;
 pub mod schema;
 pub mod upsert;
 pub mod vector_search;
-
-#[derive(Default, Serialize, Deserialize, JsonSchema, Clone)]
-pub struct NodeDBConnection {
-    pub cache_key: String,
-}
-
-#[derive(Clone)]
-pub struct CachedDB {
-    pub db: Arc<RwLock<LanceDBVectorStore>>,
-}
-
-impl Cacheable for CachedDB {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-impl NodeDBConnection {
-    pub async fn load(&self, context: &mut ExecutionContext) -> flow_like_types::Result<CachedDB> {
-        let cached = context
-            .cache
-            .read()
-            .await
-            .get(self.cache_key.as_str())
-            .cloned()
-            .ok_or(flow_like_types::anyhow!("No cache found"))?;
-        let db = cached
-            .as_any()
-            .downcast_ref::<CachedDB>()
-            .ok_or(flow_like_types::anyhow!("Could not downcast"))?;
-        Ok(db.clone())
-    }
-}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -83,6 +52,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
             "Data/Database",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -98,6 +68,14 @@ impl NodeLogic for CreateLocalDatabaseNode {
             VariableType::Boolean,
         )
         .set_default_value(Some(flow_like_types::json::json!(false)));
+
+        node.add_input_pin(
+            "batch_size",
+            "Batch Size",
+            "Number of items to buffer before flushing writes to storage. 0 = no buffering.",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(flow_like_types::json::json!(1000)));
 
         node.add_output_pin(
             "exec_out",
@@ -122,6 +100,8 @@ impl NodeLogic for CreateLocalDatabaseNode {
 
         let table: String = context.evaluate_pin("name").await?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
+        let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(1000);
+        let batch_size = batch_size.max(0) as usize;
         let cache_key = if user_scoped {
             format!("db_user_{}", table)
         } else {
@@ -137,7 +117,9 @@ impl NodeLogic for CreateLocalDatabaseNode {
 
             let db = if let Some(credentials) = &context.credentials {
                 if user_scoped {
-                    credentials.to_db_scoped(&app_id).await?
+                    credentials
+                        .to_db_scoped(&context_cache.sub, &app_id)
+                        .await?
                 } else {
                     credentials.to_db(&app_id).await?
                 }
@@ -172,7 +154,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
             };
 
             let db = db.execute().await?;
-            let mut intermediate = LanceDBVectorStore::from_connection(db, table).await;
+            let mut lance_store = LanceDBVectorStore::from_connection(db, table).await;
             if let Some(opts) = &context
                 .app_state
                 .config
@@ -181,12 +163,29 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 .callbacks
                 .lance_write_options
             {
-                intermediate.set_write_options(opts.clone());
+                lance_store.set_write_options(opts.clone());
             }
-            let intermediate = CachedDB {
-                db: Arc::new(RwLock::new(intermediate)),
+            let buffered = BufferedVectorStore::new(lance_store, batch_size);
+            let cached = CachedDB {
+                db: Arc::new(RwLock::new(buffered)),
             };
-            let cacheable: Arc<dyn Cacheable> = Arc::new(intermediate.clone());
+
+            // Register a completion callback to flush remaining buffered writes
+            let db_ref = cached.db.clone();
+            context
+                .hook_completion_event(Arc::new(move |_run| {
+                    let db = db_ref.clone();
+                    Box::pin(async move {
+                        let mut guard = db.write().await;
+                        if guard.is_dirty() {
+                            guard.flush().await?;
+                        }
+                        Ok(())
+                    })
+                }))
+                .await;
+
+            let cacheable: Arc<dyn Cacheable> = Arc::new(cached.clone());
             context
                 .cache
                 .write()

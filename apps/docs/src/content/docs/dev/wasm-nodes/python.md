@@ -1,16 +1,12 @@
 ---
 title: Python WASM Nodes
-description: Create custom WASM nodes using Python
+description: Create custom WASM nodes using Python with the WASM Component Model
 sidebar:
   order: 4
   badge:
-    text: Planned
-    variant: note
+    text: Component Model
+    variant: success
 ---
-
-:::note[Planned]
-Python WASM support is planned but not yet implemented. This page outlines the expected approach.
-:::
 
 Python can run in WASM through several projects, each with trade-offs.
 

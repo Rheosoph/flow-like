@@ -1,0 +1,6 @@
+.zig-cache/
+zig-out/
+gen/
+node.wasm
+wasi_snapshot_preview1.reactor.wasm
+.DS_Store

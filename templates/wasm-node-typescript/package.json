@@ -1,0 +1,29 @@
+{
+	"name": "flow-like-wasm-node-typescript",
+	"version": "0.1.0",
+	"description": "Template for creating Flow-Like WASM nodes in TypeScript",
+	"main": "build/node.wasm",
+	"type": "module",
+	"scripts": {
+		"build": "node build.mjs",
+		"build:bundle": "npx esbuild src/app.ts --bundle --outfile=dist/app.js --format=esm --target=es2022 --platform=neutral --external:flow-like:*",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"clean": "rm -rf dist build"
+	},
+	"dependencies": {
+		"@flow-like/wasm-sdk-typescript": "^0.1.0"
+	},
+	"devDependencies": {
+		"@bytecodealliance/componentize-js": "^0.19.3",
+		"@bytecodealliance/jco": "^1.17.0",
+		"esbuild": "^0.24.0",
+		"typescript": "^5.7.0",
+		"vitest": "^3.0.0"
+	},
+	"exports": {
+		".": {
+			"import": "./build/node.wasm"
+		}
+	}
+}

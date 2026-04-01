@@ -23,9 +23,9 @@ export default function DesktopLibraryPage() {
 	const queryClient = useQueryClient();
 	const router = useRouter();
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
-	const [encryptedImportPath, setEncryptedImportPath] = useState<
-		string | null
-	>(null);
+	const [encryptedImportPath, setEncryptedImportPath] = useState<string | null>(
+		null,
+	);
 
 	const isMobileDevice = useMemo(() => {
 		if (typeof navigator === "undefined") return false;
@@ -37,8 +37,8 @@ export default function DesktopLibraryPage() {
 			return true;
 		const platform = navigator.platform?.toLowerCase() ?? "";
 		const maxTouchPoints =
-			(navigator as Navigator & { maxTouchPoints?: number })
-				.maxTouchPoints ?? 0;
+			(navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints ??
+			0;
 		return /mac/.test(platform) && maxTouchPoints > 1;
 	}, []);
 

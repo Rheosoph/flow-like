@@ -1,0 +1,19 @@
+{
+	"name": "@flow-like/wasm-sdk-assemblyscript",
+	"version": "0.1.1",
+	"description": "SDK for building Flow-Like WASM nodes in AssemblyScript",
+	"license": "MIT",
+	"repository": "https://github.com/TM9657/flow-like",
+	"type": "module",
+	"main": "assembly/index.ts",
+	"files": ["assembly/"],
+	"scripts": {
+		"build": "asc assembly/index.ts --config asconfig.json --target release",
+		"build:publish": "asc assembly/index.ts --config asconfig.json --target release",
+		"prepublishOnly": "bun run build:publish",
+		"publish:npm": "bun run build:publish && bun publish --access public"
+	},
+	"peerDependencies": {
+		"assemblyscript": "^0.28.0"
+	}
+}

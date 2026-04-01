@@ -1,0 +1,1353 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const github = "https://github.com/TM9657/flow-like";
+const webAppUrl = "https://app.flow-like.com";
+
+
+
+const tabs = [
+  { key: "automation", translation: "v3.hero.tab.automation" as TranslationKey },
+  { key: "aiAgent", translation: "v3.hero.tab.aiAgent" as TranslationKey },
+  { key: "dashboard", translation: "v3.hero.tab.dashboard" as TranslationKey },
+  { key: "dataPipeline", translation: "v3.hero.tab.dataPipeline" as TranslationKey },
+  { key: "app", translation: "v3.hero.tab.app" as TranslationKey },
+] as const;
+
+const trustPills = [
+  "v3.hero.trust.free",
+  "v3.hero.trust.noAccount",
+  "v3.hero.trust.noCode",
+  "v3.hero.trust.offline",
+  "v3.hero.trust.openSource",
+  "v3.hero.trust.onPrem",
+] as const;
+---
+
+<section class="hero-section" id="hero-section">
+  <div class="hero-bg" aria-hidden="true">
+
+    <svg class="hero-wave-bg" id="wave-wrap" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMin slice" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="grad-w1" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="hsl(350 65% 50% / 0.8)" />
+          <stop offset="50%" stop-color="hsl(25 90% 55% / 0.6)" />
+          <stop offset="100%" stop-color="hsl(12 80% 55% / 0.8)" />
+        </linearGradient>
+        <linearGradient id="grad-w2" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="hsl(12 80% 55% / 0.7)" />
+          <stop offset="50%" stop-color="hsl(350 65% 50% / 0.5)" />
+          <stop offset="100%" stop-color="hsl(25 90% 55% / 0.7)" />
+        </linearGradient>
+        <linearGradient id="grad-w3" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="hsl(25 90% 55% / 0.8)" />
+          <stop offset="50%" stop-color="hsl(12 80% 55% / 0.5)" />
+          <stop offset="100%" stop-color="hsl(350 65% 50% / 0.8)" />
+        </linearGradient>
+
+        <filter id="glow-wave" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="12" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+      </defs>
+      <g id="strands-group" filter="url(#glow-wave)"></g>
+    </svg>
+
+    <div class="hero-grain"></div>
+  </div>
+
+  <div class="hero-content">
+    <div class="hero-content__inner">
+
+      <div class="hero-reveal" style="--delay: 0s">
+        <a href="#hero-showcase" class="hero-badge">
+          <span class="hero-badge__live"></span>
+          {t("v3.hero.badge")}
+          <svg class="hero-badge__arrow" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+
+      <h1 class="hero-headline hero-reveal" style="--delay: 0.1s">
+        <span class="hero-gradient">{t("v3.hero.headline")}</span>
+      </h1>
+
+      <p class="hero-reveal hero-subtitle" style="--delay: 0.5s">
+        {t("v3.hero.subtitle")}
+      </p>
+
+      <div class="hero-reveal hero-ctas" style="--delay: 0.65s">
+        <a href="/download" class="hero-btn-primary group">
+          <span class="hero-btn-primary__bg"></span>
+          <span class="hero-btn-primary__shimmer"></span>
+          <span class="hero-btn-primary__text">
+            {t("v3.hero.cta.download")}
+            <svg class="inline-block w-4 h-4 ml-1 transition-transform group-hover:translate-x-0.5" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+        </a>
+        <a href={webAppUrl} target="_blank" rel="noreferrer" class="hero-btn-secondary">
+          {t("v3.hero.cta.web")}
+        </a>
+        <a href={github} target="_blank" rel="noreferrer" class="hero-btn-ghost">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+          {t("v3.hero.cta.github")}
+          <span id="hero-star-badge" class="hero-star-badge">
+            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <span id="hero-star-count">600+</span>
+          </span>
+        </a>
+      </div>
+
+      <div class="hero-reveal hero-trust" style="--delay: 0.8s" id="hero-trust-pills">
+        {trustPills.map((key) => (
+          <span class="hero-pill">
+            <span class="hero-pill__dot"></span>
+            {t(key)}
+          </span>
+        ))}
+      </div>
+    </div>
+
+    <div class="hero-reveal hero-showcase-wrap" style="--delay: 0.9s" id="hero-showcase">
+      <div class="hero-tabbar" role="tablist" aria-label="Product showcase">
+        {tabs.map((tab, i) => (
+          <button
+            role="tab"
+            aria-selected={i === 0 ? "true" : "false"}
+            aria-controls={`hero-panel-${tab.key}`}
+            data-tab={tab.key}
+            class:list={["hero-tab", i === 0 && "is-active"]}
+          >
+            {t(tab.translation)}
+            <span class="hero-tab__progress"></span>
+          </button>
+        ))}
+      </div>
+
+      <div class="hero-tilt" id="hero-tilt">
+        <div class="hero-float hero-float--a" aria-hidden="true">
+          <span class="hero-float__value">42</span>
+          <span class="hero-float__label">active nodes</span>
+        </div>
+        <div class="hero-float hero-float--b" aria-hidden="true">
+          <span class="hero-float__value">12ms</span>
+          <span class="hero-float__label">avg latency</span>
+        </div>
+        <div class="hero-float hero-float--c" aria-hidden="true">
+          <span class="hero-float__value">99.9%</span>
+          <span class="hero-float__label">uptime</span>
+        </div>
+
+        <div class="hero-frame">
+          <div class="hero-frame__glow"></div>
+          <div class="hero-frame__card">
+            <div class="hero-chrome">
+              <span class="hero-chrome__dot hero-chrome__dot--r"></span>
+              <span class="hero-chrome__dot hero-chrome__dot--y"></span>
+              <span class="hero-chrome__dot hero-chrome__dot--g"></span>
+              <span class="hero-chrome__title">Flow-Like Studio</span>
+            </div>
+
+            <div class="hero-panels">
+
+              <div id="hero-panel-automation" role="tabpanel" data-panel="automation" class="hero-panel is-active">
+                <svg class="w-full h-full" viewBox="0 0 800 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="auto-grad" x1="0" y1="0" x2="800" y2="450" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="hsl(12 80% 55% / 0.05)"/>
+                      <stop offset="100%" stop-color="hsl(25 85% 55% / 0.05)"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="800" height="450" fill="url(#auto-grad)"/>
+                  <path d="M200 150 C260 150, 280 225, 340 225" stroke="hsl(12 80% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <path d="M200 300 C260 300, 280 225, 340 225" stroke="hsl(25 85% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <path d="M440 225 C500 225, 520 150, 580 150" stroke="hsl(12 80% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <path d="M440 225 C500 225, 520 300, 580 300" stroke="hsl(25 85% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <rect x="100" y="120" width="100" height="60" rx="12" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="150" y="147" text-anchor="middle" fill="hsl(12 80% 55% / 0.7)" font-size="11" font-family="system-ui">Trigger</text>
+                  <text x="150" y="165" text-anchor="middle" fill="hsl(12 80% 55% / 0.4)" font-size="9" font-family="system-ui">on schedule</text>
+                  <rect x="100" y="270" width="100" height="60" rx="12" fill="hsl(25 85% 55% / 0.08)" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="150" y="297" text-anchor="middle" fill="hsl(25 85% 55% / 0.7)" font-size="11" font-family="system-ui">Fetch Data</text>
+                  <text x="150" y="315" text-anchor="middle" fill="hsl(25 85% 55% / 0.4)" font-size="9" font-family="system-ui">REST API</text>
+                  <rect x="340" y="195" width="100" height="60" rx="12" fill="hsl(350 65% 50% / 0.08)" stroke="hsl(350 65% 50% / 0.3)" stroke-width="1.5"/>
+                  <text x="390" y="222" text-anchor="middle" fill="hsl(350 65% 50% / 0.7)" font-size="11" font-family="system-ui">Transform</text>
+                  <text x="390" y="240" text-anchor="middle" fill="hsl(350 65% 50% / 0.4)" font-size="9" font-family="system-ui">map + filter</text>
+                  <rect x="580" y="120" width="100" height="60" rx="12" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="630" y="147" text-anchor="middle" fill="hsl(12 80% 55% / 0.7)" font-size="11" font-family="system-ui">Store</text>
+                  <text x="630" y="165" text-anchor="middle" fill="hsl(12 80% 55% / 0.4)" font-size="9" font-family="system-ui">database</text>
+                  <rect x="580" y="270" width="100" height="60" rx="12" fill="hsl(25 85% 55% / 0.08)" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="630" y="297" text-anchor="middle" fill="hsl(25 85% 55% / 0.7)" font-size="11" font-family="system-ui">Notify</text>
+                  <text x="630" y="315" text-anchor="middle" fill="hsl(25 85% 55% / 0.4)" font-size="9" font-family="system-ui">webhook</text>
+                  <rect x="330" y="370" width="140" height="34" rx="17" fill="hsl(25 85% 55% / 0.12)" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1"/>
+                  <text x="400" y="392" text-anchor="middle" fill="hsl(25 85% 55% / 0.8)" font-size="12" font-family="system-ui" font-weight="600">&#x2713; All Steps Executed</text>
+                </svg>
+              </div>
+
+              <div id="hero-panel-aiAgent" role="tabpanel" data-panel="aiAgent" class="hero-panel">
+                <svg class="w-full h-full" viewBox="0 0 800 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="ai-grad" x1="0" y1="0" x2="800" y2="450" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="hsl(350 65% 50% / 0.05)"/>
+                      <stop offset="100%" stop-color="hsl(12 80% 55% / 0.05)"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="800" height="450" fill="url(#ai-grad)"/>
+                  <rect x="40" y="30" width="200" height="390" rx="12" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1"/>
+                  <text x="60" y="60" fill="hsl(0 0% 60% / 0.7)" font-size="11" font-family="system-ui" font-weight="600">Model Selector</text>
+                  <rect x="55" y="78" width="170" height="32" rx="8" fill="hsl(350 65% 50% / 0.1)" stroke="hsl(350 65% 50% / 0.3)" stroke-width="1"/>
+                  <text x="70" y="99" fill="hsl(350 65% 50% / 0.8)" font-size="10" font-family="system-ui">&#x25CF; GPT-4o</text>
+                  <rect x="55" y="120" width="170" height="32" rx="8" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+                  <text x="70" y="141" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">&#x25CB; Claude 3.5</text>
+                  <rect x="55" y="162" width="170" height="32" rx="8" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+                  <text x="70" y="183" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">&#x25CB; Llama 3</text>
+                  <text x="60" y="225" fill="hsl(0 0% 60% / 0.7)" font-size="11" font-family="system-ui" font-weight="600">Parameters</text>
+                  <rect x="55" y="240" width="170" height="24" rx="6" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+                  <text x="65" y="257" fill="hsl(0 0% 60% / 0.4)" font-size="9" font-family="system-ui">temp: 0.7 &#xB7; top_p: 0.9</text>
+                  <path d="M340 100 C380 100, 380 180, 420 180" stroke="hsl(350 65% 50% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <path d="M520 180 C560 180, 560 100, 600 100" stroke="hsl(12 80% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <path d="M520 180 C560 180, 560 260, 600 260" stroke="hsl(25 85% 55% / 0.4)" stroke-width="2" stroke-dasharray="6 4"/>
+                  <rect x="270" y="70" width="80" height="60" rx="12" fill="hsl(350 65% 50% / 0.08)" stroke="hsl(350 65% 50% / 0.3)" stroke-width="1.5"/>
+                  <text x="310" y="97" text-anchor="middle" fill="hsl(350 65% 50% / 0.7)" font-size="11" font-family="system-ui">Prompt</text>
+                  <text x="310" y="115" text-anchor="middle" fill="hsl(350 65% 50% / 0.4)" font-size="9" font-family="system-ui">system + user</text>
+                  <rect x="420" y="150" width="100" height="60" rx="12" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="470" y="177" text-anchor="middle" fill="hsl(12 80% 55% / 0.7)" font-size="11" font-family="system-ui">LLM Call</text>
+                  <text x="470" y="195" text-anchor="middle" fill="hsl(12 80% 55% / 0.4)" font-size="9" font-family="system-ui">GPT-4o</text>
+                  <rect x="600" y="70" width="80" height="60" rx="12" fill="hsl(25 85% 55% / 0.08)" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="640" y="97" text-anchor="middle" fill="hsl(25 85% 55% / 0.7)" font-size="11" font-family="system-ui">Tool Call</text>
+                  <text x="640" y="115" text-anchor="middle" fill="hsl(25 85% 55% / 0.4)" font-size="9" font-family="system-ui">search()</text>
+                  <rect x="600" y="230" width="80" height="60" rx="12" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="640" y="257" text-anchor="middle" fill="hsl(12 80% 55% / 0.7)" font-size="11" font-family="system-ui">Response</text>
+                  <text x="640" y="275" text-anchor="middle" fill="hsl(12 80% 55% / 0.4)" font-size="9" font-family="system-ui">structured</text>
+                  <rect x="270" y="310" width="440" height="110" rx="10" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+                  <text x="290" y="336" fill="hsl(0 0% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="600">Execution Trace</text>
+                  <text x="290" y="358" fill="hsl(25 85% 55% / 0.6)" font-size="9" font-family="monospace">&#x2713; prompt_built     12ms</text>
+                  <text x="290" y="376" fill="hsl(25 85% 55% / 0.6)" font-size="9" font-family="monospace">&#x2713; llm_called       847ms</text>
+                  <text x="290" y="394" fill="hsl(12 80% 55% / 0.6)" font-size="9" font-family="monospace">&#x21BB; tool_executed    203ms</text>
+                  <text x="290" y="412" fill="hsl(0 0% 50% / 0.4)" font-size="9" font-family="monospace">&#x25E6; response_built   pending</text>
+                </svg>
+              </div>
+
+              <div id="hero-panel-dashboard" role="tabpanel" data-panel="dashboard" class="hero-panel">
+                <svg class="w-full h-full" viewBox="0 0 800 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="dash-grad" x1="0" y1="0" x2="800" y2="450" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="hsl(25 85% 55% / 0.05)"/>
+                      <stop offset="100%" stop-color="hsl(12 80% 55% / 0.03)"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="800" height="450" fill="url(#dash-grad)"/>
+                  <rect x="40" y="30" width="170" height="80" rx="10" fill="hsl(12 80% 55% / 0.06)" stroke="hsl(12 80% 55% / 0.2)" stroke-width="1"/>
+                  <text x="60" y="56" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">Total Runs</text>
+                  <text x="60" y="86" fill="hsl(12 80% 55% / 0.8)" font-size="24" font-family="system-ui" font-weight="700">12,847</text>
+                  <rect x="230" y="30" width="170" height="80" rx="10" fill="hsl(25 85% 55% / 0.06)" stroke="hsl(25 85% 55% / 0.2)" stroke-width="1"/>
+                  <text x="250" y="56" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">Success Rate</text>
+                  <text x="250" y="86" fill="hsl(25 85% 55% / 0.8)" font-size="24" font-family="system-ui" font-weight="700">99.2%</text>
+                  <rect x="420" y="30" width="170" height="80" rx="10" fill="hsl(350 65% 50% / 0.06)" stroke="hsl(350 65% 50% / 0.2)" stroke-width="1"/>
+                  <text x="440" y="56" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">Avg Latency</text>
+                  <text x="440" y="86" fill="hsl(350 65% 50% / 0.8)" font-size="24" font-family="system-ui" font-weight="700">142ms</text>
+                  <rect x="610" y="30" width="170" height="80" rx="10" fill="hsl(30 80% 55% / 0.06)" stroke="hsl(30 80% 55% / 0.2)" stroke-width="1"/>
+                  <text x="630" y="56" fill="hsl(0 0% 60% / 0.5)" font-size="10" font-family="system-ui">Active Flows</text>
+                  <text x="630" y="86" fill="hsl(30 80% 55% / 0.8)" font-size="24" font-family="system-ui" font-weight="700">34</text>
+                  <rect x="40" y="130" width="460" height="200" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+                  <text x="60" y="158" fill="hsl(0 0% 60% / 0.6)" font-size="10" font-family="system-ui" font-weight="600">Execution Volume</text>
+                  <rect x="80" y="250" width="30" height="60" rx="4" fill="hsl(12 80% 55% / 0.25)"/>
+                  <rect x="125" y="220" width="30" height="90" rx="4" fill="hsl(12 80% 55% / 0.3)"/>
+                  <rect x="170" y="200" width="30" height="110" rx="4" fill="hsl(12 80% 55% / 0.35)"/>
+                  <rect x="215" y="240" width="30" height="70" rx="4" fill="hsl(12 80% 55% / 0.25)"/>
+                  <rect x="260" y="190" width="30" height="120" rx="4" fill="hsl(12 80% 55% / 0.4)"/>
+                  <rect x="305" y="175" width="30" height="135" rx="4" fill="hsl(12 80% 55% / 0.5)"/>
+                  <rect x="350" y="210" width="30" height="100" rx="4" fill="hsl(12 80% 55% / 0.35)"/>
+                  <rect x="395" y="185" width="30" height="125" rx="4" fill="hsl(25 85% 55% / 0.4)"/>
+                  <rect x="440" y="170" width="30" height="140" rx="4" fill="hsl(25 85% 55% / 0.5)"/>
+                  <rect x="520" y="130" width="250" height="200" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+                  <text x="540" y="158" fill="hsl(0 0% 60% / 0.6)" font-size="10" font-family="system-ui" font-weight="600">Connected Workflow</text>
+                  <path d="M590 200 L680 200" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <path d="M680 200 L720 250" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <rect x="560" y="180" width="60" height="40" rx="8" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.25)" stroke-width="1"/>
+                  <text x="590" y="205" text-anchor="middle" fill="hsl(12 80% 55% / 0.6)" font-size="9" font-family="system-ui">Query</text>
+                  <rect x="650" y="180" width="60" height="40" rx="8" fill="hsl(350 65% 50% / 0.08)" stroke="hsl(350 65% 50% / 0.25)" stroke-width="1"/>
+                  <text x="680" y="205" text-anchor="middle" fill="hsl(350 65% 50% / 0.6)" font-size="9" font-family="system-ui">Agg</text>
+                  <rect x="690" y="235" width="60" height="40" rx="8" fill="hsl(25 85% 55% / 0.08)" stroke="hsl(25 85% 55% / 0.25)" stroke-width="1"/>
+                  <text x="720" y="260" text-anchor="middle" fill="hsl(25 85% 55% / 0.6)" font-size="9" font-family="system-ui">Render</text>
+                  <rect x="40" y="350" width="740" height="80" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+                  <text x="60" y="378" fill="hsl(0 0% 60% / 0.6)" font-size="10" font-family="system-ui" font-weight="600">Recent Activity</text>
+                  <text x="60" y="400" fill="hsl(25 85% 55% / 0.5)" font-size="9" font-family="monospace">&#x2713; data-sync 2m  &#x2713; report-gen 5m  &#x2713; etl-daily 12m  &#x26A0; alert-check 18m</text>
+                  <text x="60" y="418" fill="hsl(25 85% 55% / 0.5)" font-size="9" font-family="monospace">&#x2713; user-onboard 23m  &#x2713; cache-refresh 31m  &#x2713; backup 45m  &#x2713; health 1h</text>
+                </svg>
+              </div>
+
+              <div id="hero-panel-dataPipeline" role="tabpanel" data-panel="dataPipeline" class="hero-panel">
+                <svg class="w-full h-full" viewBox="0 0 800 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="pipe-grad" x1="0" y1="0" x2="800" y2="450" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="hsl(30 80% 55% / 0.04)"/>
+                      <stop offset="100%" stop-color="hsl(12 80% 55% / 0.04)"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="800" height="450" fill="url(#pipe-grad)"/>
+                  <path d="M180 120 L300 120" stroke="hsl(12 80% 55% / 0.35)" stroke-width="2"/>
+                  <path d="M180 225 L300 225" stroke="hsl(25 85% 55% / 0.35)" stroke-width="2"/>
+                  <path d="M180 330 L300 330" stroke="hsl(350 65% 50% / 0.35)" stroke-width="2"/>
+                  <path d="M420 120 L520 225" stroke="hsl(12 80% 55% / 0.35)" stroke-width="2"/>
+                  <path d="M420 225 L520 225" stroke="hsl(25 85% 55% / 0.35)" stroke-width="2"/>
+                  <path d="M420 330 L520 225" stroke="hsl(350 65% 50% / 0.35)" stroke-width="2"/>
+                  <path d="M640 225 L740 225" stroke="hsl(12 80% 55% / 0.35)" stroke-width="2"/>
+                  <rect x="60" y="90" width="120" height="60" rx="12" fill="hsl(12 80% 55% / 0.08)" stroke="hsl(12 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="120" y="117" text-anchor="middle" fill="hsl(12 80% 55% / 0.7)" font-size="11" font-family="system-ui">PostgreSQL</text>
+                  <text x="120" y="135" text-anchor="middle" fill="hsl(12 80% 55% / 0.4)" font-size="9" font-family="system-ui">source</text>
+                  <rect x="60" y="195" width="120" height="60" rx="12" fill="hsl(25 85% 55% / 0.08)" stroke="hsl(25 85% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="120" y="222" text-anchor="middle" fill="hsl(25 85% 55% / 0.7)" font-size="11" font-family="system-ui">Kafka</text>
+                  <text x="120" y="240" text-anchor="middle" fill="hsl(25 85% 55% / 0.4)" font-size="9" font-family="system-ui">streaming</text>
+                  <rect x="60" y="300" width="120" height="60" rx="12" fill="hsl(350 65% 50% / 0.08)" stroke="hsl(350 65% 50% / 0.3)" stroke-width="1.5"/>
+                  <text x="120" y="327" text-anchor="middle" fill="hsl(350 65% 50% / 0.7)" font-size="11" font-family="system-ui">REST API</text>
+                  <text x="120" y="345" text-anchor="middle" fill="hsl(350 65% 50% / 0.4)" font-size="9" font-family="system-ui">batch</text>
+                  <rect x="300" y="90" width="120" height="60" rx="12" fill="hsl(12 80% 55% / 0.06)" stroke="hsl(12 80% 55% / 0.2)" stroke-width="1.5"/>
+                  <text x="360" y="117" text-anchor="middle" fill="hsl(12 80% 55% / 0.6)" font-size="10" font-family="system-ui">Validate</text>
+                  <text x="360" y="133" text-anchor="middle" fill="hsl(12 80% 55% / 0.35)" font-size="8" font-family="system-ui">schema check</text>
+                  <rect x="300" y="195" width="120" height="60" rx="12" fill="hsl(25 85% 55% / 0.06)" stroke="hsl(25 85% 55% / 0.2)" stroke-width="1.5"/>
+                  <text x="360" y="222" text-anchor="middle" fill="hsl(25 85% 55% / 0.6)" font-size="10" font-family="system-ui">Deduplicate</text>
+                  <text x="360" y="238" text-anchor="middle" fill="hsl(25 85% 55% / 0.35)" font-size="8" font-family="system-ui">hash-based</text>
+                  <rect x="300" y="300" width="120" height="60" rx="12" fill="hsl(350 65% 50% / 0.06)" stroke="hsl(350 65% 50% / 0.2)" stroke-width="1.5"/>
+                  <text x="360" y="327" text-anchor="middle" fill="hsl(350 65% 50% / 0.6)" font-size="10" font-family="system-ui">Normalize</text>
+                  <text x="360" y="343" text-anchor="middle" fill="hsl(350 65% 50% / 0.35)" font-size="8" font-family="system-ui">flatten JSON</text>
+                  <rect x="520" y="195" width="120" height="60" rx="12" fill="hsl(30 80% 55% / 0.08)" stroke="hsl(30 80% 55% / 0.3)" stroke-width="1.5"/>
+                  <text x="580" y="222" text-anchor="middle" fill="hsl(30 80% 55% / 0.7)" font-size="11" font-family="system-ui">Join &amp; Merge</text>
+                  <text x="580" y="240" text-anchor="middle" fill="hsl(30 80% 55% / 0.4)" font-size="9" font-family="system-ui">union all</text>
+                  <rect x="740" y="195" width="100" height="60" rx="12" fill="hsl(12 80% 55% / 0.1)" stroke="hsl(12 80% 55% / 0.4)" stroke-width="2"/>
+                  <text x="790" y="222" text-anchor="middle" fill="hsl(12 80% 55% / 0.8)" font-size="11" font-family="system-ui" font-weight="600">Data Lake</text>
+                  <text x="790" y="240" text-anchor="middle" fill="hsl(12 80% 55% / 0.5)" font-size="9" font-family="system-ui">parquet</text>
+                </svg>
+              </div>
+
+              <div id="hero-panel-app" role="tabpanel" data-panel="app" class="hero-panel">
+                <svg class="w-full h-full" viewBox="0 0 800 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="app-grad" x1="0" y1="0" x2="800" y2="450" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="hsl(12 80% 55% / 0.04)"/>
+                      <stop offset="100%" stop-color="hsl(25 85% 55% / 0.04)"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="800" height="450" fill="url(#app-grad)"/>
+                  <rect x="40" y="50" width="200" height="360" rx="20" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1.5"/>
+                  <rect x="100" y="55" width="80" height="16" rx="8" fill="hsl(0 0% 50% / 0.08)"/>
+                  <text x="75" y="100" fill="hsl(0 0% 60% / 0.6)" font-size="11" font-family="system-ui" font-weight="600">Dashboard</text>
+                  <rect x="60" y="112" width="160" height="50" rx="8" fill="hsl(12 80% 55% / 0.06)" stroke="hsl(12 80% 55% / 0.15)" stroke-width="1"/>
+                  <text x="75" y="132" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Revenue</text>
+                  <text x="75" y="150" fill="hsl(12 80% 55% / 0.7)" font-size="14" font-family="system-ui" font-weight="700">$84.2k</text>
+                  <rect x="60" y="172" width="160" height="50" rx="8" fill="hsl(25 85% 55% / 0.06)" stroke="hsl(25 85% 55% / 0.15)" stroke-width="1"/>
+                  <text x="75" y="192" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Active Flows</text>
+                  <text x="75" y="210" fill="hsl(25 85% 55% / 0.7)" font-size="14" font-family="system-ui" font-weight="700">34 running</text>
+                  <rect x="60" y="232" width="160" height="80" rx="8" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.08)" stroke-width="1"/>
+                  <text x="75" y="252" fill="hsl(0 0% 60% / 0.5)" font-size="8" font-family="system-ui">Latest</text>
+                  <text x="75" y="270" fill="hsl(0 0% 60% / 0.3)" font-size="7" font-family="monospace">ORD-4821  Processing</text>
+                  <text x="75" y="284" fill="hsl(0 0% 60% / 0.3)" font-size="7" font-family="monospace">ORD-4820  Shipped</text>
+                  <text x="75" y="298" fill="hsl(0 0% 60% / 0.3)" font-size="7" font-family="monospace">ORD-4819  Delivered</text>
+                  <rect x="60" y="340" width="160" height="36" rx="8" fill="hsl(0 0% 50% / 0.04)" stroke="hsl(0 0% 50% / 0.08)" stroke-width="0.5"/>
+                  <text x="90" y="363" text-anchor="middle" fill="hsl(12 80% 55% / 0.6)" font-size="8" font-family="system-ui">Home</text>
+                  <text x="140" y="363" text-anchor="middle" fill="hsl(0 0% 60% / 0.3)" font-size="8" font-family="system-ui">Flows</text>
+                  <text x="190" y="363" text-anchor="middle" fill="hsl(0 0% 60% / 0.3)" font-size="8" font-family="system-ui">More</text>
+                  <path d="M245 230 C275 230, 295 170, 320 170" stroke="hsl(12 80% 55% / 0.2)" stroke-width="1.5" stroke-dasharray="4 4"/>
+                  <text x="277" y="190" fill="hsl(12 80% 55% / 0.4)" font-size="8" font-family="system-ui" transform="rotate(-20 277 190)">sync</text>
+                  <rect x="320" y="20" width="450" height="280" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1.5"/>
+                  <rect x="320" y="20" width="450" height="28" rx="10" fill="hsl(0 0% 50% / 0.06)"/>
+                  <circle cx="339" cy="34" r="4" fill="hsl(0 60% 55% / 0.4)"/>
+                  <circle cx="353" cy="34" r="4" fill="hsl(45 80% 55% / 0.4)"/>
+                  <circle cx="367" cy="34" r="4" fill="hsl(25 85% 55% / 0.4)"/>
+                  <text x="545" y="38" text-anchor="middle" fill="hsl(0 0% 60% / 0.4)" font-size="9" font-family="system-ui">app.flow-like.com</text>
+                  <rect x="320" y="48" width="100" height="252" fill="hsl(0 0% 50% / 0.03)"/>
+                  <line x1="420" y1="48" x2="420" y2="300" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+                  <rect x="332" y="62" width="76" height="22" rx="6" fill="hsl(12 80% 55% / 0.1)" stroke="hsl(12 80% 55% / 0.2)" stroke-width="0.5"/>
+                  <text x="370" y="77" text-anchor="middle" fill="hsl(12 80% 55% / 0.6)" font-size="8" font-family="system-ui">Dashboard</text>
+                  <rect x="332" y="92" width="76" height="22" rx="6" fill="hsl(0 0% 50% / 0.04)"/>
+                  <text x="370" y="107" text-anchor="middle" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Workflows</text>
+                  <rect x="332" y="122" width="76" height="22" rx="6" fill="hsl(0 0% 50% / 0.04)"/>
+                  <text x="370" y="137" text-anchor="middle" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Settings</text>
+                  <rect x="435" y="62" width="150" height="70" rx="8" fill="hsl(12 80% 55% / 0.06)" stroke="hsl(12 80% 55% / 0.15)" stroke-width="1"/>
+                  <text x="450" y="82" fill="hsl(0 0% 60% / 0.5)" font-size="8" font-family="system-ui">Orders</text>
+                  <text x="450" y="108" fill="hsl(12 80% 55% / 0.7)" font-size="18" font-family="system-ui" font-weight="700">2,451</text>
+                  <rect x="600" y="62" width="150" height="70" rx="8" fill="hsl(25 85% 55% / 0.06)" stroke="hsl(25 85% 55% / 0.15)" stroke-width="1"/>
+                  <text x="615" y="82" fill="hsl(0 0% 60% / 0.5)" font-size="8" font-family="system-ui">Revenue</text>
+                  <text x="615" y="108" fill="hsl(25 85% 55% / 0.7)" font-size="18" font-family="system-ui" font-weight="700">$84.2k</text>
+                  <rect x="435" y="146" width="315" height="140" rx="8" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+                  <text x="450" y="168" fill="hsl(0 0% 60% / 0.5)" font-size="8" font-family="system-ui">Recent Entries</text>
+                  <line x1="435" y1="180" x2="750" y2="180" stroke="hsl(0 0% 50% / 0.08)" stroke-width="0.5"/>
+                  <text x="450" y="198" fill="hsl(0 0% 60% / 0.35)" font-size="8" font-family="monospace">ORD-4821  Processing  $142.00</text>
+                  <text x="450" y="216" fill="hsl(0 0% 60% / 0.35)" font-size="8" font-family="monospace">ORD-4820  Shipped     $89.50</text>
+                  <text x="450" y="234" fill="hsl(0 0% 60% / 0.35)" font-size="8" font-family="monospace">ORD-4819  Delivered   $215.00</text>
+                  <text x="450" y="252" fill="hsl(0 0% 60% / 0.35)" font-size="8" font-family="monospace">ORD-4818  Processing  $67.80</text>
+                </svg>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-dots">
+        {tabs.map((tab, i) => (
+          <button
+            data-dot={tab.key}
+            class:list={["hero-dot", i === 0 && "is-active"]}
+            aria-label={`Go to ${t(tab.translation)}`}
+          ></button>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* ═════════════════════════════════════════════
+     Root section
+     ═════════════════════════════════════════════ */
+  .hero-section {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    min-height: 100dvh;
+    background-color: var(--background);
+  }
+
+  /* ═════════════════════════════════════════════
+     Background Elements
+     ═════════════════════════════════════════════ */
+  .hero-bg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 1000px;
+    z-index: -1;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .hero-wave-bg {
+    width: 100%;
+    height: 100%;
+    opacity: 0.85;
+  }
+
+  /* ═════════════════════════════════════════════
+     Background: Grain
+     ═════════════════════════════════════════════ */
+  .hero-grain {
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
+    opacity: 0.5;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* ═════════════════════════════════════════════
+     Content layout
+     ═════════════════════════════════════════════ */
+  .hero-content {
+    position: relative;
+    z-index: 10;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 7rem 1.5rem 4rem;
+  }
+
+  @media (min-width: 768px) {
+    .hero-content { padding: 9rem 2rem 5rem; }
+  }
+
+  .hero-content__inner {
+    max-width: 52rem;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  /* ═════════════════════════════════════════════
+     Entrance animation
+     ═════════════════════════════════════════════ */
+  .hero-reveal {
+    opacity: 0;
+    transform: translateY(32px);
+    filter: blur(6px);
+  }
+
+  .hero-reveal.is-visible {
+    animation: hero-enter 1s cubic-bezier(0.16, 1, 0.3, 1) var(--delay, 0s) forwards;
+  }
+
+  @keyframes hero-enter {
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
+  }
+
+  /* ═════════════════════════════════════════════
+     Badge
+     ═════════════════════════════════════════════ */
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 1rem 0.375rem 0.75rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
+    background: color-mix(in oklch, var(--primary) 6%, transparent);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--primary);
+    text-decoration: none;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .hero-badge:hover {
+    background: color-mix(in oklch, var(--primary) 12%, transparent);
+    border-color: color-mix(in oklch, var(--primary) 50%, transparent);
+  }
+
+  .hero-badge__live {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary);
+    flex-shrink: 0;
+  }
+
+  .hero-badge__live::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    background: color-mix(in oklch, var(--primary) 50%, transparent);
+    animation: badge-pulse 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes badge-pulse {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(2.5); opacity: 0; }
+  }
+
+  .hero-badge__arrow {
+    width: 12px;
+    height: 12px;
+    transition: transform 0.2s;
+  }
+
+  .hero-badge:hover .hero-badge__arrow {
+    transform: translateX(2px);
+  }
+
+  /* ═════════════════════════════════════════════
+     Headline
+     ═════════════════════════════════════════════ */
+  .hero-headline {
+    font-size: clamp(2.5rem, 6vw, 4.25rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.08;
+    margin-top: 1.5rem;
+    margin-bottom: 1.25rem;
+    text-align: center;
+  }
+
+  .hero-gradient {
+    background: linear-gradient(
+      135deg,
+      var(--primary) 0%,
+      var(--foreground) 20%,
+      var(--foreground) 40%,
+      hsl(350 65% 50%) 60%,
+      hsl(25 90% 55%) 80%,
+      var(--foreground) 100%
+    );
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: headline-gradient 6s ease infinite;
+  }
+
+  @keyframes headline-gradient {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  /* ═════════════════════════════════════════════
+     Subtitle
+     ═════════════════════════════════════════════ */
+  .hero-subtitle {
+    font-size: 1.125rem;
+    line-height: 1.6;
+    color: var(--muted-foreground);
+    max-width: 38rem;
+    margin: 0 auto 2rem;
+  }
+
+  @media (min-width: 640px) {
+    .hero-subtitle { font-size: 1.25rem; }
+  }
+
+  /* ═════════════════════════════════════════════
+     CTAs
+     ═════════════════════════════════════════════ */
+  .hero-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-btn-primary {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.875rem 2rem;
+    border-radius: 9999px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: white;
+    text-decoration: none;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.3s;
+    box-shadow:
+      0 0 0 1px hsl(12 80% 50% / 0.3),
+      0 4px 24px -4px hsl(12 80% 50% / 0.4),
+      0 8px 48px -12px hsl(350 65% 50% / 0.2);
+  }
+
+  .hero-btn-primary__bg {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(135deg, hsl(12 80% 50%), hsl(350 65% 45%), hsl(25 85% 50%));
+    background-size: 200% 200%;
+    animation: btn-bg-shift 4s ease infinite;
+  }
+
+  @keyframes btn-bg-shift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  .hero-btn-primary__shimmer {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent 0%, hsl(0 0% 100% / 0.2) 50%, transparent 100%);
+    transform: translateX(-100%);
+    animation: btn-shimmer 3s ease-in-out 1.5s infinite;
+  }
+
+  @keyframes btn-shimmer {
+    0% { transform: translateX(-100%); }
+    60%, 100% { transform: translateX(100%); }
+  }
+
+  .hero-btn-primary__text {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .hero-btn-primary:hover {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow:
+      0 0 0 1px hsl(12 80% 50% / 0.4),
+      0 8px 32px -4px hsl(12 80% 50% / 0.5),
+      0 16px 64px -12px hsl(350 65% 50% / 0.3);
+  }
+
+  .hero-btn-primary:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .hero-btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.875rem 1.75rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+    background: color-mix(in oklch, var(--background) 60%, transparent);
+    backdrop-filter: blur(12px);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--foreground);
+    text-decoration: none;
+    transition: background 0.2s, border-color 0.2s, transform 0.2s;
+  }
+
+  .hero-btn-secondary:hover {
+    background: color-mix(in oklch, var(--muted) 60%, transparent);
+    border-color: var(--border);
+    transform: translateY(-1px);
+  }
+
+  .hero-btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+
+  .hero-btn-ghost:hover {
+    color: var(--foreground);
+  }
+
+  .hero-star-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem 0.125rem 0.375rem;
+    border-radius: 9999px;
+    background: hsl(var(--muted) / 0.5);
+    border: 1px solid var(--border);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted-foreground);
+    line-height: 1;
+  }
+
+  /* ═════════════════════════════════════════════
+     Trust pills
+     ═════════════════════════════════════════════ */
+  .hero-trust {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .hero-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+    background: color-mix(in oklch, var(--background) 60%, transparent);
+    backdrop-filter: blur(6px);
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+  }
+
+  .hero-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: hsl(25 85% 50%);
+    flex-shrink: 0;
+  }
+
+  /* ═════════════════════════════════════════════
+     Showcase wrapper
+     ═════════════════════════════════════════════ */
+  .hero-showcase-wrap {
+    margin-top: 3rem;
+  }
+
+  @media (min-width: 768px) {
+    .hero-showcase-wrap { margin-top: 5rem; }
+  }
+
+  /* ═════════════════════════════════════════════
+     Tabs
+     ═════════════════════════════════════════════ */
+  .hero-tabbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0 auto 1.5rem; /* Increased bottom margin slightly */
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 0.375rem; /* Slightly more padding */
+    border-radius: 1rem; /* Rounder edges */
+    border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+
+    /* Make it 95% solid background instead of 80% */
+    background: color-mix(in oklch, var(--background) 95%, transparent);
+
+    /* Double the blur to wash out the lines behind it */
+    backdrop-filter: blur(24px);
+
+    /* Add a soft shadow to lift it off the canvas */
+    box-shadow: 0 4px 24px -6px hsl(0 0% 0% / 0.08);
+    scrollbar-width: none;
+  }
+
+  .hero-tabbar::-webkit-scrollbar { display: none; }
+
+  .hero-tab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    white-space: nowrap;
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600; /* Bumped from 500 to 600 for better contrast */
+    color: var(--muted-foreground);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s;
+  }
+
+  .hero-tab:hover {
+    color: var(--foreground);
+    background: hsl(0 0% 50% / 0.06);
+  }
+
+  .hero-tab.is-active {
+    color: var(--foreground);
+    background: hsl(0 0% 50% / 0.1);
+  }
+
+  .hero-tab__progress {
+    position: absolute;
+    bottom: 0;
+    left: 0.5rem;
+    right: 0.5rem;
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(90deg, var(--primary), hsl(25 90% 55% / 0.6));
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+
+  .hero-tab.is-active .hero-tab__progress {
+    transition: transform 5s linear;
+    transform: scaleX(1);
+  }
+
+  /* ═════════════════════════════════════════════
+     3D Tilt container
+     ═════════════════════════════════════════════ */
+  .hero-tilt {
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.5s cubic-bezier(0.03, 0.98, 0.52, 0.99);
+    will-change: transform;
+  }
+
+  /* Floating metric cards */
+  .hero-float {
+    position: absolute;
+    z-index: 30;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid hsl(0 0% 100% / 0.15);
+    background: color-mix(in oklch, var(--background) 70%, transparent);
+    backdrop-filter: blur(16px);
+    box-shadow:
+      0 8px 32px hsl(0 0% 0% / 0.08),
+      0 0 0 1px hsl(0 0% 100% / 0.05) inset;
+    transform: translateZ(40px);
+  }
+
+  @media (min-width: 1024px) {
+    .hero-float { display: flex; }
+  }
+
+  .hero-float__value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--foreground);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hero-float__label {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted-foreground);
+    margin-top: 0.125rem;
+  }
+
+  .hero-float--a {
+    top: 8%;
+    left: -80px;
+    animation: float-bob 7s ease-in-out infinite;
+  }
+
+  .hero-float--a .hero-float__value { color: var(--primary); }
+
+  .hero-float--b {
+    top: 45%;
+    right: -90px;
+    animation: float-bob 8s ease-in-out 0.8s infinite;
+  }
+
+  .hero-float--b .hero-float__value { color: hsl(25 90% 55%); }
+
+  .hero-float--c {
+    bottom: 12%;
+    left: -65px;
+    animation: float-bob 6.5s ease-in-out 1.5s infinite;
+  }
+
+  .hero-float--c .hero-float__value { color: hsl(350 65% 50%); }
+
+  @keyframes float-bob {
+    0%, 100% { transform: translateZ(40px) translateY(0); }
+    50% { transform: translateZ(40px) translateY(-12px); }
+  }
+
+  /* ═════════════════════════════════════════════
+     Frame (Lean & Professional)
+     ═════════════════════════════════════════════ */
+  .hero-frame {
+    position: relative;
+    width: 100%;
+  }
+
+  @media (min-width: 768px) {
+    .hero-frame { width: 90%; margin: 0 auto; }
+  }
+
+  @media (min-width: 1024px) {
+    .hero-frame { width: 65vw; max-width: 1000px; }
+  }
+
+  /* Deep, soft ambient glow */
+  .hero-frame__glow {
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    z-index: -1;
+    /* Rich, diffused multi-layered shadow using your brand colors */
+    box-shadow:
+      0 20px 80px -20px hsl(12 80% 55% / 0.15),
+      0 40px 120px -30px hsl(350 65% 50% / 0.15);
+    animation: frame-breathe 6s ease-in-out infinite alternate;
+  }
+
+  /* Extremely subtle, slow pulse for a living feel */
+  @keyframes frame-breathe {
+    0% { opacity: 0.6; transform: translateY(0); }
+    100% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  .hero-frame__card {
+    border-radius: 14px;
+    overflow: hidden;
+    /* Cleaner, slightly more opaque glass effect */
+    background: color-mix(in oklch, var(--background) 95%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+    /* Subtle inner highlight to make the glass pop */
+    box-shadow: inset 0 1px 0 0 hsl(0 0% 100% / 0.4);
+  }
+
+  /* Window chrome */
+  .hero-chrome {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
+    background: color-mix(in oklch, var(--muted) 20%, transparent);
+  }
+
+  .hero-chrome__dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+
+  .hero-chrome__dot--r { background: hsl(0 70% 60% / 0.7); }
+  .hero-chrome__dot--y { background: hsl(45 80% 55% / 0.7); }
+  .hero-chrome__dot--g { background: hsl(25 85% 50% / 0.7); }
+
+  .hero-chrome__title {
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    font-family: ui-monospace, monospace;
+    color: var(--muted-foreground);
+    opacity: 0.5;
+  }
+
+  /* Panels */
+  .hero-panels {
+    position: relative;
+    aspect-ratio: 16 / 9;
+  }
+
+  .hero-panel {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    z-index: 0;
+    transition: opacity 400ms ease;
+  }
+
+  .hero-panel.is-active {
+    opacity: 1;
+    z-index: 10;
+  }
+
+  /* Mobile dots */
+  .hero-dots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .hero-dots { display: none; }
+  }
+
+  .hero-dot {
+    height: 8px;
+    width: 8px;
+    border-radius: 9999px;
+    border: none;
+    background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.3s;
+  }
+
+  .hero-dot.is-active {
+    width: 24px;
+    background: var(--primary);
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .hero-reveal {
+      opacity: 1 !important;
+      transform: none !important;
+      filter: none !important;
+      animation: none !important;
+    }
+    .hero-reveal.is-visible { animation: none !important; }
+    .hero-btn-primary__bg,
+    .hero-btn-primary__shimmer,
+    .hero-badge__live::after,
+    .hero-frame__glow,
+    .hero-float {
+      animation: none !important;
+    }
+    .hero-panel { transition: none !important; }
+    .hero-tab__progress { transition: none !important; }
+  }
+</style>
+
+<script>
+  function initHero() {
+    const section = document.getElementById("hero-section");
+    if (!section) return;
+    const showcase = document.getElementById("hero-showcase");
+    if (!showcase) return;
+
+    const tabs = showcase.querySelectorAll<HTMLButtonElement>(".hero-tab");
+    const panels = showcase.querySelectorAll<HTMLDivElement>(".hero-panel");
+    const dots = document.querySelectorAll<HTMLButtonElement>(".hero-dot");
+    const INTERVAL = 5000;
+    let active = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let paused = false;
+
+    function activate(i: number) {
+      active = i;
+      tabs.forEach((t, j) => {
+        const on = j === i;
+        t.classList.toggle("is-active", on);
+        t.setAttribute("aria-selected", String(on));
+        const bar = t.querySelector<HTMLSpanElement>(".hero-tab__progress");
+        if (bar) {
+          bar.style.transition = "none";
+          bar.style.transform = "scaleX(0)";
+          if (on) {
+            void bar.offsetWidth;
+            bar.style.transition = `transform ${INTERVAL}ms linear`;
+            bar.style.transform = "scaleX(1)";
+          }
+        }
+      });
+      panels.forEach((p, j) => {
+        p.classList.toggle("is-active", j === i);
+      });
+      dots.forEach((d, j) => d.classList.toggle("is-active", j === i));
+    }
+
+    function startAuto() {
+      stopAuto();
+      if (!paused) {
+        timer = setTimeout(() => {
+          activate((active + 1) % tabs.length);
+          startAuto();
+        }, INTERVAL);
+      }
+    }
+
+    function stopAuto() {
+      if (timer) { clearTimeout(timer); timer = null; }
+    }
+
+    tabs.forEach((t, i) => t.addEventListener("click", () => { activate(i); paused = false; startAuto(); }));
+    dots.forEach((d, i) => d.addEventListener("click", () => { activate(i); paused = false; startAuto(); }));
+
+    const hoverTargets = [showcase.querySelector(".hero-frame"), showcase.querySelector(".hero-tabbar")];
+    for (const el of hoverTargets) {
+      if (!el) continue;
+      el.addEventListener("mouseenter", () => { paused = true; stopAuto(); });
+      el.addEventListener("mouseleave", () => { paused = false; startAuto(); });
+      el.addEventListener("focusin", () => { paused = true; stopAuto(); });
+      el.addEventListener("focusout", () => { paused = false; startAuto(); });
+    }
+
+    activate(0);
+    startAuto();
+  }
+
+  function initTilt() {
+    const el = document.getElementById("hero-tilt");
+    if (!el || !matchMedia("(pointer: fine)").matches) return;
+
+    el.addEventListener("mousemove", (e) => {
+      const r = el.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width - 0.5;
+      const y = (e.clientY - r.top) / r.height - 0.5;
+      el.style.transition = "transform 0.15s ease-out";
+      el.style.transform = `perspective(1200px) rotateY(${x * 8}deg) rotateX(${-y * 8}deg)`;
+    });
+
+    el.addEventListener("mouseleave", () => {
+      el.style.transition = "transform 0.6s cubic-bezier(0.03, 0.98, 0.52, 0.99)";
+      el.style.transform = "perspective(1200px) rotateY(0deg) rotateX(0deg)";
+    });
+  }
+
+  function initInteractiveWaves() {
+    if (!matchMedia("(pointer: fine)").matches) return;
+    const section = document.getElementById("hero-section");
+    const group = document.getElementById("strands-group");
+    const svgBg = document.getElementById("wave-wrap");
+
+    if (!section || !group || !svgBg) return;
+
+    let mouseX = -1000;
+    let mouseY = -1000;
+
+    section.addEventListener("mousemove", (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    section.addEventListener("mouseleave", () => {
+      mouseX = -1000;
+      mouseY = -1000;
+    });
+
+    const svgWidth = 1440;
+    const svgHeight = 900;
+    const numStrands = 10;
+    const pointsPerStrand = 24;
+    const pullRadius = 250;
+    const stiffness = 0.05;
+    const damping = 0.85;
+
+    // Helper to generate a U-shape looping under the Trust Pills
+    function createStrands() {
+      const strands = [];
+      const gradients = ["grad-w1", "grad-w2", "grad-w3"];
+
+      for (let i = 0; i < numStrands; i++) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        const grad = gradients[i % gradients.length];
+        path.setAttribute("stroke", `url(#${grad})`);
+        path.setAttribute("stroke-width", (Math.random() * 3 + 2).toString());
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke-linecap", "round");
+        group!.appendChild(path);
+
+        // Calculate a dynamically dipped U-shape
+        const dipY = 650 + Math.random() * 150; // Dips beneath the pills
+        const startY = Math.random() * 300 - 100; // Top Left Start
+        const endY = Math.random() * 300 - 100; // Top Right End
+
+        // Quadratic bezier calculation
+        const controlY = 2 * dipY - 0.5 * startY - 0.5 * endY;
+
+        const points = [];
+        for (let j = 0; j < pointsPerStrand; j++) {
+          const t = j / (pointsPerStrand - 1);
+          const baseX = -100 + t * (svgWidth + 200); // Stretch off screen
+          const baseY = Math.pow(1-t, 2) * startY + 2*(1-t)*t * controlY + Math.pow(t, 2) * endY;
+
+          points.push({
+            baseX,
+            baseY,
+            x: baseX,
+            y: baseY,
+            vx: 0,
+            vy: 0,
+            phase: Math.random() * Math.PI * 2,
+            speed: Math.random() * 0.4 + 0.3
+          });
+        }
+        strands.push({ el: path, points });
+      }
+      return strands;
+    }
+
+    const strands = createStrands();
+
+    // Quadratic bezier curve builder for path segments
+    function generateSmoothPath(points: any[]) {
+      let d = `M ${points[0].x} ${points[0].y}`;
+      for (let i = 0; i < points.length - 1; i++) {
+        const xc = (points[i].x + points[i + 1].x) / 2;
+        const yc = (points[i].y + points[i + 1].y) / 2;
+        d += ` Q ${points[i].x} ${points[i].y}, ${xc} ${yc}`;
+      }
+      d += ` T ${points[points.length - 1].x} ${points[points.length - 1].y}`;
+      return d;
+    }
+
+    function renderWaves() {
+      const time = Date.now() * 0.001;
+      const bounds = svgBg!.getBoundingClientRect();
+
+      // Localize mouse to SVG internal viewBox mapping
+      const localMouseX = (mouseX - bounds.left) * (svgWidth / bounds.width);
+      const localMouseY = (mouseY - bounds.top) * (svgHeight / bounds.height);
+
+      strands.forEach((strand) => {
+        strand.points.forEach((p: any, j: number) => {
+          // Less movement near the anchors, high movement at the dip
+          const edgeFactor = Math.sin((j / (pointsPerStrand - 1)) * Math.PI);
+
+          const waveX = p.baseX + Math.sin(time * p.speed + p.phase + j * 0.2) * 20 * edgeFactor;
+          const waveY = p.baseY + Math.cos(time * p.speed + p.phase + j * 0.2) * 30 * edgeFactor;
+
+          let targetX = waveX;
+          let targetY = waveY;
+
+          // Mouse interaction (repel/bend)
+          const dx = waveX - localMouseX;
+          const dy = waveY - localMouseY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < pullRadius) {
+            const force = Math.pow((pullRadius - dist) / pullRadius, 2);
+            targetX += (dx / dist) * force * 120 * edgeFactor;
+            targetY += (dy / dist) * force * 120 * edgeFactor;
+          }
+
+          // Spring physics
+          p.vx += (targetX - p.x) * stiffness;
+          p.vx *= damping;
+          p.x += p.vx;
+
+          p.vy += (targetY - p.y) * stiffness;
+          p.vy *= damping;
+          p.y += p.vy;
+        });
+        strand.el.setAttribute("d", generateSmoothPath(strand.points));
+      });
+
+      requestAnimationFrame(renderWaves);
+    }
+
+    requestAnimationFrame(renderWaves);
+  }
+
+  function initReveal() {
+    const els = document.querySelectorAll<HTMLElement>("#hero-section .hero-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach(el => el.classList.add("is-visible"));
+      return;
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -5% 0px", threshold: 0.05 },
+    );
+
+    els.forEach(el => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        el.classList.add("is-visible");
+      } else {
+        io.observe(el);
+      }
+    });
+  }
+
+  initReveal();
+  initHero();
+  initTilt();
+  initInteractiveWaves();
+
+  // Fetch GitHub stars (fallback "600+" baked into HTML)
+  (function() {
+    const CACHE_KEY = "gh_stars";
+    const CACHE_TTL = 3600000;
+    const countEl = document.getElementById("hero-star-count");
+    if (!countEl) return;
+
+    function show(count: number) {
+      countEl!.textContent = count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
+    }
+
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { count, ts } = JSON.parse(cached);
+        if (Date.now() - ts < CACHE_TTL) { show(count); return; }
+      }
+    } catch {}
+
+    fetch("https://api.github.com/repos/TM9657/flow-like", {
+      headers: { Accept: "application/vnd.github.v3+json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        const count = data?.stargazers_count;
+        if (typeof count === "number" && count > 0) {
+          show(count);
+          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ count, ts: Date.now() })); } catch {}
+        }
+      })
+      .catch(() => {});
+  })();
+</script>

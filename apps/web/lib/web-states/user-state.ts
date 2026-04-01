@@ -50,6 +50,7 @@ interface ApiProfile {
 	user_id: string;
 	created_at: string;
 	updated_at: string;
+	deleted_at?: string | null;
 }
 
 function transformApiProfile(apiProfile: ApiProfile): IProfile {
@@ -183,12 +184,13 @@ export class WebUserState implements IUserState {
 	}
 
 	async getProfile(): Promise<IProfile> {
-		const apiProfiles = await apiGet<ApiProfile[]>(
+		const allApiProfiles = await apiGet<ApiProfile[]>(
 			"profile",
 			this.backend.auth,
 		);
+		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
 
-		if (apiProfiles && apiProfiles.length > 0) {
+		if (apiProfiles.length > 0) {
 			// Check localStorage for a preferred profile ID
 			const savedProfileId =
 				typeof window !== "undefined"
@@ -236,12 +238,12 @@ export class WebUserState implements IUserState {
 	}
 
 	async getProfiles(): Promise<IProfile[]> {
-		const apiProfiles = await apiGet<ApiProfile[]>(
+		const allApiProfiles = await apiGet<ApiProfile[]>(
 			"profile",
 			this.backend.auth,
 		);
-		console.log("getProfiles API response:", apiProfiles);
-		if (!apiProfiles || apiProfiles.length === 0) return [];
+		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
+		if (apiProfiles.length === 0) return [];
 		return apiProfiles.map(transformApiProfile);
 	}
 
@@ -400,11 +402,13 @@ export class WebUserState implements IUserState {
 		validUntil?: Date,
 		permissions?: number,
 	): Promise<{ pat: string; permission: number }> {
-		return apiPost<{ pat: string; permission: number }>(
+		return apiPut<{ pat: string; permission: number }>(
 			"user/pat",
 			{
 				name,
-				valid_until: validUntil?.toISOString(),
+				valid_until: validUntil
+					? Math.floor(validUntil.getTime() / 1000)
+					: undefined,
 				permissions,
 			},
 			this.backend.auth,

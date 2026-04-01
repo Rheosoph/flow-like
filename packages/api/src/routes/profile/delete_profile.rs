@@ -3,9 +3,9 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 
-/// Delete a profile by ID
+/// Soft-delete a profile by ID (sets deleted_at timestamp)
 #[utoipa::path(
     delete,
     path = "/profile/{profile_id}",
@@ -36,8 +36,10 @@ pub async fn delete_profile(
         .one(&state.db)
         .await?;
 
-    if let Some(profile) = profile {
-        profile.delete(&state.db).await?;
+    if let Some(existing) = profile {
+        let mut active_model: profile::ActiveModel = existing.into();
+        active_model.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        active_model.update(&state.db).await?;
     }
 
     Ok(Json(()))

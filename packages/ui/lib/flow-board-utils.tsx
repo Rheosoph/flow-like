@@ -17,10 +17,12 @@ import {
 	type IComment,
 	ICommentType,
 	type ILayer,
+	ILayerType,
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
 import type { IFnRefs, INode } from "./schema/flow/node";
-import { type IPin, IPinType } from "./schema/flow/pin";
+import { type IPinOptions, type IPin, IPinType } from "./schema/flow/pin";
+import { parseUint8ArrayToJson } from "./uint8";
 
 export function hexToRgba(hex: string, alpha = 0.3): string {
 	let c = hex.replace("#", "");
@@ -50,6 +52,8 @@ interface ISerializedPin {
 	connected_to: string[];
 	default_value?: number[];
 	index: number;
+	schema?: string | null;
+	options?: IPinOptions | null;
 }
 interface ISerializedNode {
 	id: string;
@@ -81,6 +85,8 @@ function serializeNode(node: INode): ISerializedNode {
 			connected_to: pin.connected_to,
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
+			schema: pin.schema ?? undefined,
+			options: pin.options ?? undefined,
 		};
 	}
 
@@ -114,7 +120,8 @@ function deserializeNode(node: ISerializedNode): INode {
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
 			description: "",
-			schema: "",
+			schema: pin.schema ?? "",
+			options: pin.options ?? undefined,
 		};
 	}
 
@@ -176,6 +183,16 @@ export function isValidConnection(
 
 function invertPinType(type: IPinType): IPinType {
 	return type === IPinType.Input ? IPinType.Output : IPinType.Input;
+}
+
+function stripCallFunctionRef(node: INode): { node: INode; functionLayerId: string | undefined } {
+	const layerPin = Object.values(node.pins).find(
+		(p) => p.name === "function_layer_id",
+	);
+	const functionLayerId = layerPin?.default_value
+		? parseUint8ArrayToJson(layerPin.default_value)
+		: undefined;
+	return { node, functionLayerId };
 }
 
 /** Prefix for break struct field pins */
@@ -257,7 +274,12 @@ export function doPinsMatch(
 	}
 
 	if (sourcePin.schema && targetPin.schema) {
-		if (schemaSource !== schemaTarget) return false;
+		if (
+			schemaSource !== schemaTarget &&
+			sourcePin.options?.enforce_schema !== false &&
+			targetPin.options?.enforce_schema !== false
+		)
+			return false;
 	}
 
 	if (targetPin.value_type !== sourcePin.value_type) {
@@ -333,12 +355,14 @@ export function parseBoard(
 		isOffline: boolean;
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
 	},
+	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
 	const cache = new Map<string, [IPin, INode | ILayer, boolean]>();
 	const oldNodesMap = new Map<number, any>();
 	const oldEdgesMap = new Map<string, any>();
+	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
 
 	// Compute a hash of all fn_refs to detect changes
 	const fnRefsHash = Object.values(board.nodes)
@@ -346,14 +370,10 @@ export function parseBoard(
 		.join(";");
 
 	for (const oldNode of oldNodes ?? []) {
-		oldNode.data.boardRef = boardRef;
-		oldNode.data.fnRefsHash = fnRefsHash;
-		// Update the node reference so fn_refs changes are reflected
-		const updatedNode = board.nodes[oldNode.id];
-		if (updatedNode) {
-			oldNode.data.node = updatedNode;
+		// Only add to oldNodesMap if we haven't seen this hash before (prevents duplicate hash collisions)
+		if (oldNode.data?.hash && !oldNodesMap.has(oldNode.data.hash)) {
+			oldNodesMap.set(oldNode.data.hash, oldNode);
 		}
-		if (oldNode.data?.hash) oldNodesMap.set(oldNode.data?.hash, oldNode);
 	}
 
 	for (const edge of oldEdges ?? []) {
@@ -366,24 +386,49 @@ export function parseBoard(
 			cache.set(pin.id, [pin, node, nodeLayer === currentLayer]);
 		}
 		if (nodeLayer !== currentLayer) continue;
+
+		// Skip if this node ID has already been added (prevents duplicates)
+		if (addedNodeIds.has(node.id)) {
+			console.warn(`Duplicate node ID detected: ${node.id}, skipping...`);
+			continue;
+		}
+		addedNodeIds.add(node.id);
+
 		const hash = node.hash ?? -1;
+		const isUnavailable = catalogLookup
+			? node.wasm?.package_id
+				? !catalogLookup.wasmNodeKeys.has(`${node.wasm.package_id}:${node.name}`)
+				: !catalogLookup.nodeNames.has(node.name)
+			: false;
 		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
-		if (oldNode) {
-			// Reuse old node but create new data object to ensure React detects changes
-			// Update the hash to reflect the current node state
+		const sel = selected.has(node.id);
+		if (
+			oldNode &&
+			oldNode.selected === sel &&
+			oldNode.data?.isUnavailable === isUnavailable &&
+			oldNode.data?.fnRefsHash === fnRefsHash
+		) {
+			// Hash + selected + isUnavailable + fnRefsHash all match — reuse exact reference
+			nodes.push(oldNode);
+		} else if (oldNode) {
+			// Hash matches but some derived state changed — shallow update
+			const nodeForData = node.name === "control_call_function"
+				? stripCallFunctionRef(node).node
+				: node;
 			nodes.push({
 				...oldNode,
-				data: {
-					...oldNode.data,
-					node: node,
-					hash: hash,
-				},
-				selected: selected.has(node.id),
+				data: { ...oldNode.data, isUnavailable, fnRefsHash, node: nodeForData, boardRef },
+				selected: sel,
 			});
 		} else {
+			const isCallFunction = node.name === "control_call_function";
+			const { node: nodeForData, functionLayerId } = isCallFunction
+				? stripCallFunctionRef(node)
+				: { node, functionLayerId: undefined };
+
 			nodes.push({
 				id: node.id,
-				type: "node",
+				type: isCallFunction ? "callFunctionNode" : "node",
 				zIndex: 20,
 				position: {
 					x: node.coordinates?.[0] ?? 0,
@@ -393,11 +438,14 @@ export function parseBoard(
 					label: node.name,
 					boardRef: boardRef,
 					fnRefsHash: fnRefsHash,
-					node: node,
+					node: nodeForData,
 					hash: hash,
 					boardId: board.id,
 					appId: appId,
 					version: version,
+					isUnavailable,
+					functionLayerId,
+					currentLayerId: currentLayer,
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
 					},
@@ -422,6 +470,7 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
+			if (layer.type === ILayerType.Function && layer.id !== currentLayer) continue;
 			const parentLayer =
 				(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
 			if (parentLayer !== currentLayer) {
@@ -631,20 +680,6 @@ export function parseBoard(
 				}
 			}
 
-			const edge = oldEdgesMap.get(`${pin.id}-${connectedTo}`);
-
-			if (
-				edge &&
-				visible === connectedVisible &&
-				edge.data.fromLayer === (node as any).layer &&
-				edge.data.toLayer === (connectedNode as any).layer &&
-				currentLayer !== (connectedNode as any).layer &&
-				currentLayer !== (node as any).layer
-			) {
-				edges.push(edge);
-				continue;
-			}
-
 			// Map endpoints:
 			// - If the owner is the current layer, route to the inner nodes (-input / -return)
 			// - Else, if the owner lives in an active child layer, route to that layer node
@@ -662,6 +697,22 @@ export function parseBoard(
 					: activeLayer.has((connectedNode as any)?.layer ?? "")
 						? (connectedNode as any).layer
 						: (connectedNode as any)?.id;
+
+			const edgeId = `${pin.id}-${connectedTo}`;
+			const sel = selected.has(edgeId);
+			const oldEdge = oldEdgesMap.get(edgeId);
+
+			if (
+				oldEdge &&
+				visible === connectedVisible &&
+				oldEdge.source === sourceNodeId &&
+				oldEdge.target === targetNodeId &&
+				oldEdge.selected === sel &&
+				oldEdge.data?.pathType === connectionMode
+			) {
+				edges.push(oldEdge);
+				continue;
+			}
 
 			if (pin.id && conntectedPin.id)
 				edges.push({
@@ -682,7 +733,7 @@ export function parseBoard(
 					style: { stroke: typeToColor(pin.data_type) },
 					type: pin.data_type === "Execution" ? "execution" : "data",
 					data_type: pin.data_type,
-					selected: selected.has(`${pin.id}-${connectedTo}`),
+					selected: sel,
 				});
 			else {
 				console.log(`${pin.id}-${connectedTo} edge not created`);

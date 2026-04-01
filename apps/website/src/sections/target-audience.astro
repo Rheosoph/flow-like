@@ -1,5 +1,11 @@
 ---
-import { LuCode, LuShieldCheck, LuSettings, LuLandmark } from "react-icons/lu";
+import {
+  LuCode,
+  LuShieldCheck,
+  LuSettings,
+  LuLandmark,
+  LuArrowRight,
+} from "react-icons/lu";
 import type { Lang, TranslationKey } from "../i18n";
 import { translations, defaultLang } from "../i18n";
 
@@ -18,68 +24,150 @@ const personas = [
   {
     icon: LuCode,
     role: t("audience.cto.title"),
+    highlight: t("audience.cto.highlight"),
     description: t("audience.cto.description"),
+    accent: "bg-primary",
     color: "text-primary",
     bgColor: "bg-primary/10",
+    href: "/pitch",
   },
   {
     icon: LuShieldCheck,
     role: t("audience.ciso.title"),
+    highlight: t("audience.ciso.highlight"),
     description: t("audience.ciso.description"),
+    accent: "bg-emerald-500",
     color: "text-emerald-500",
     bgColor: "bg-emerald-500/10",
+    href: "/24-hour-solution",
   },
   {
     icon: LuSettings,
     role: t("audience.ops.title"),
+    highlight: t("audience.ops.highlight"),
     description: t("audience.ops.description"),
+    accent: "bg-amber-500",
     color: "text-amber-500",
     bgColor: "bg-amber-500/10",
+    href: "/industries/office",
   },
   {
     icon: LuLandmark,
     role: t("audience.gov.title"),
+    highlight: t("audience.gov.highlight"),
     description: t("audience.gov.description"),
+    accent: "bg-blue-500",
     color: "text-blue-500",
     bgColor: "bg-blue-500/10",
-    highlight: true,
+    href: "/industries/gov-defense",
   },
 ];
 ---
 
-<section class="relative py-20">
+<section
+  class="relative py-20"
+  data-c1="hsl(222 89% 60% / .06)"
+  data-c2="hsl(38 90% 55% / .06)"
+>
   <div class="mx-auto max-w-6xl px-6 lg:px-8">
-    <!-- Header -->
-    <div class="text-center mb-14">
-      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-4">
+    <div class="text-center mb-16 reveal">
+      <p
+        class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-4"
+      >
         {t("audience.tagline")}
       </p>
-      <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground leading-[1.15]">
+      <h2
+        class="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground leading-[1.15]"
+      >
         {t("audience.headline")}
       </h2>
     </div>
 
-    <!-- Persona Cards -->
-    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-      {personas.map((persona) => (
-        <div class={`relative text-center p-8 rounded-2xl border ${persona.highlight ? 'border-primary/30 bg-primary/5' : 'border-border/50 bg-card/30'} backdrop-blur-sm hover:border-border transition-colors`}>
-          <div class={`w-14 h-14 rounded-2xl ${persona.bgColor} flex items-center justify-center mx-auto mb-5`}>
-            <persona.icon className={`w-7 h-7 ${persona.color}`} />
-          </div>
-          <h3 class="text-lg font-semibold text-foreground mb-2">{persona.role}</h3>
-          <p class="text-sm text-muted-foreground">{persona.description}</p>
-        </div>
-      ))}
+    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-5">
+      {
+        personas.map((persona, i) => (
+          <a
+            href={persona.href}
+            class="reveal group relative flex flex-col text-left p-7 rounded-2xl border border-border/50 bg-card/30 backdrop-blur-sm hover:border-border/80 hover:bg-card/60 transition-all duration-300"
+            style={`transition-delay: ${i * 80}ms`}
+          >
+            <div
+              class={`absolute top-0 left-6 right-6 h-px ${persona.accent} opacity-40 group-hover:opacity-80 transition-opacity`}
+            />
+
+            <div
+              class={`w-11 h-11 rounded-xl ${persona.bgColor} flex items-center justify-center mb-5`}
+            >
+              <persona.icon className={`w-5 h-5 ${persona.color}`} />
+            </div>
+
+            <h3 class="text-base font-semibold text-foreground mb-1">
+              {persona.role}
+            </h3>
+            <p class={`text-sm font-semibold ${persona.color} mb-3`}>
+              {persona.highlight}
+            </p>
+            <p class="text-[13px] leading-relaxed text-muted-foreground mb-6">
+              {persona.description}
+            </p>
+
+            <span class="mt-auto inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+              {t("audience.cta")}
+              <LuArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </a>
+        ))
+      }
     </div>
 
-    <!-- Simple Rule -->
-    <div class="mt-16 text-center">
-      <div class="inline-flex flex-col items-center gap-4 px-8 py-6 rounded-2xl border border-border/50 bg-card/30 max-w-2xl">
-        <span class="text-xl">📌</span>
-        <p class="text-base font-medium text-foreground">
+    <div class="mt-16 flex justify-center reveal">
+      <div
+        class="relative px-10 py-5 rounded-full border border-border/40 bg-card/20 backdrop-blur-sm"
+      >
+        <div
+          class="absolute inset-0 rounded-full bg-[radial-gradient(50%_100%_at_50%_0%,hsl(var(--primary)/.06),transparent)]"
+        >
+        </div>
+        <p class="relative text-sm sm:text-base font-medium text-foreground">
           {t("audience.closing")}
         </p>
       </div>
     </div>
   </div>
 </section>
+
+<style>
+  .reveal {
+    opacity: 0;
+    transform: translateY(6px);
+    transition:
+      opacity 0.6s ease,
+      transform 0.6s ease;
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        }
+      }
+    },
+    { threshold: 0.15 },
+  );
+  document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+</script>

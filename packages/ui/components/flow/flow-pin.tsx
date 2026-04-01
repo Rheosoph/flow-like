@@ -86,6 +86,7 @@ function FlowPinInnerComponent({
 	skipOffset,
 	onPinRemove,
 	version,
+	currentLayerId,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -94,6 +95,7 @@ function FlowPinInnerComponent({
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
+	currentLayerId?: string;
 }>) {
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
@@ -300,6 +302,7 @@ function FlowPinInnerComponent({
 						saveDefaultValue={async (value) => {
 							await updateNode(value);
 						}}
+						currentLayerId={currentLayerId}
 					/>
 					{pin.dynamic && onPinRemove && (
 						<button
@@ -330,15 +333,38 @@ function FlowPinInnerComponent({
 }
 
 function pinPropsAreEqual(prevProps: any, nextProps: any) {
-	return (
-		prevProps.boardId === nextProps.boardId &&
-		prevProps.node?.id === nextProps.node?.id &&
-		prevProps.pin.id === nextProps.pin.id &&
-		prevProps.pin.default_value === nextProps.pin.default_value &&
-		prevProps.pin.data_type === nextProps.pin.data_type &&
-		prevProps.pin.value_type === nextProps.pin.value_type &&
-		prevProps.pin.pin_type === nextProps.pin.pin_type
-	);
+	if (
+		prevProps.boardId !== nextProps.boardId ||
+		prevProps.node?.id !== nextProps.node?.id ||
+		prevProps.pin.id !== nextProps.pin.id ||
+		prevProps.pin.index !== nextProps.pin.index ||
+		prevProps.pin.name !== nextProps.pin.name ||
+		prevProps.pin.friendly_name !== nextProps.pin.friendly_name ||
+		prevProps.pin.default_value !== nextProps.pin.default_value ||
+		prevProps.pin.data_type !== nextProps.pin.data_type ||
+		prevProps.pin.value_type !== nextProps.pin.value_type ||
+		prevProps.pin.pin_type !== nextProps.pin.pin_type ||
+		prevProps.pin.schema !== nextProps.pin.schema
+	) {
+		return false;
+	}
+
+	// Compare connection state (connected_to / depends_on) by length + contents
+	const prevConn = prevProps.pin.connected_to;
+	const nextConn = nextProps.pin.connected_to;
+	if (prevConn.length !== nextConn.length) return false;
+	for (let i = 0; i < prevConn.length; i++) {
+		if (prevConn[i] !== nextConn[i]) return false;
+	}
+
+	const prevDeps = prevProps.pin.depends_on;
+	const nextDeps = nextProps.pin.depends_on;
+	if (prevDeps.length !== nextDeps.length) return false;
+	for (let i = 0; i < prevDeps.length; i++) {
+		if (prevDeps[i] !== nextDeps[i]) return false;
+	}
+
+	return true;
 }
 
 export const FlowPinInner = memo(FlowPinInnerComponent, pinPropsAreEqual);
@@ -351,6 +377,7 @@ function FlowPin({
 	onPinRemove,
 	skipOffset,
 	version,
+	currentLayerId,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -359,6 +386,7 @@ function FlowPin({
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
+	currentLayerId?: string;
 }>) {
 	if (pin.dynamic) {
 		return (
@@ -371,6 +399,7 @@ function FlowPin({
 				skipOffset={skipOffset}
 				onPinRemove={onPinRemove}
 				version={version}
+				currentLayerId={currentLayerId}
 			/>
 		);
 	}
@@ -384,6 +413,7 @@ function FlowPin({
 			node={node}
 			skipOffset={skipOffset}
 			version={version}
+			currentLayerId={currentLayerId}
 		/>
 	);
 }

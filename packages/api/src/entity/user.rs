@@ -72,6 +72,8 @@ pub enum Relation {
     ExecutionUsageTracking,
     #[sea_orm(has_many = "super::feedback::Entity")]
     Feedback,
+    #[sea_orm(has_many = "super::interaction::Entity")]
+    Interaction,
     #[sea_orm(has_many = "super::invitation::Entity")]
     Invitation,
     #[sea_orm(has_many = "super::join_queue::Entity")]
@@ -90,12 +92,20 @@ pub enum Relation {
     PublicationLog,
     #[sea_orm(has_many = "super::publication_request::Entity")]
     PublicationRequest,
+    #[sea_orm(has_many = "super::push_notification_target::Entity")]
+    PushNotificationTarget,
     #[sea_orm(has_many = "super::transaction::Entity")]
     Transaction,
     #[sea_orm(has_many = "super::wasm_package_author::Entity")]
     WasmPackageAuthor,
+    #[sea_orm(has_many = "super::wasm_package_join_queue::Entity")]
+    WasmPackageJoinQueue,
+    #[sea_orm(has_many = "super::wasm_package_purchase::Entity")]
+    WasmPackagePurchase,
     #[sea_orm(has_many = "super::wasm_package_review::Entity")]
     WasmPackageReview,
+    #[sea_orm(has_many = "super::wasm_package_user::Entity")]
+    WasmPackageUser,
 }
 
 impl Related<super::app_purchase::Entity> for Entity {
@@ -131,6 +141,12 @@ impl Related<super::execution_usage_tracking::Entity> for Entity {
 impl Related<super::feedback::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Feedback.def()
+    }
+}
+
+impl Related<super::interaction::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Interaction.def()
     }
 }
 
@@ -188,6 +204,12 @@ impl Related<super::publication_request::Entity> for Entity {
     }
 }
 
+impl Related<super::push_notification_target::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PushNotificationTarget.def()
+    }
+}
+
 impl Related<super::transaction::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Transaction.def()
@@ -200,9 +222,27 @@ impl Related<super::wasm_package_author::Entity> for Entity {
     }
 }
 
+impl Related<super::wasm_package_join_queue::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WasmPackageJoinQueue.def()
+    }
+}
+
+impl Related<super::wasm_package_purchase::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WasmPackagePurchase.def()
+    }
+}
+
 impl Related<super::wasm_package_review::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::WasmPackageReview.def()
+    }
+}
+
+impl Related<super::wasm_package_user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WasmPackageUser.def()
     }
 }
 

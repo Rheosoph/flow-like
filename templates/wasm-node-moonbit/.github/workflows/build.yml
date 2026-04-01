@@ -1,0 +1,66 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: Setup SDK
+        run: |
+          if [ ! -d "../wasm-sdk-moonbit" ]; then
+            curl -sL https://github.com/TM9657/flow-like/archive/refs/heads/dev.tar.gz -o /tmp/flow-like.tar.gz
+            mkdir -p /tmp/flow-like-extract
+            tar xzf /tmp/flow-like.tar.gz -C /tmp/flow-like-extract --strip-components=2 "flow-like-dev/templates/wasm-sdk-moonbit"
+            mv /tmp/flow-like-extract ../wasm-sdk-moonbit
+            rm -rf /tmp/flow-like.tar.gz /tmp/flow-like-extract
+          fi
+
+      - name: Build
+        run: |
+          moon build --target wasm --release
+          mkdir -p build
+          find target -name "*.wasm" -not -path "*/deps/*" | head -1 | xargs -I{} cp {} build/node.wasm
+
+      - name: Test
+        run: moon test
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node
+          path: |
+            build/node.wasm
+            flow-like.toml
+            README.md
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-node
+          path: release-files
+
+      - name: Create tarball
+        run: tar czf flow-like-node-moonbit-${{ github.ref_name }}.tar.gz -C release-files .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flow-like-node-moonbit-${{ github.ref_name }}.tar.gz

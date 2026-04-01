@@ -7,7 +7,7 @@ use flow_like_types::{
 use schemars::JsonSchema;
 use std::{collections::HashMap, sync::Arc};
 
-use super::{DataModel, Style};
+use super::{CanvasSettings, DataModel, Style};
 
 /// A component in the A2UI surface
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -16,6 +16,9 @@ pub struct SurfaceComponent {
     pub id: String,
     pub style: Option<Style>,
     pub component: Value,
+    /// When true, this component's current value is included in widget action event payloads
+    #[serde(default)]
+    pub event_relevant: bool,
 }
 
 impl SurfaceComponent {
@@ -24,7 +27,13 @@ impl SurfaceComponent {
             id: id.into(),
             style: None,
             component,
+            event_relevant: false,
         }
+    }
+
+    pub fn with_event_relevant(mut self, event_relevant: bool) -> Self {
+        self.event_relevant = event_relevant;
+        self
     }
 
     pub fn with_style(mut self, style: Style) -> Self {
@@ -182,6 +191,10 @@ pub enum A2UIServerMessage {
         components: Vec<SurfaceComponent>,
         parent_id: Option<String>,
     },
+    SetCanvasSettings {
+        surface_id: String,
+        canvas_settings: CanvasSettings,
+    },
     DataModelUpdate {
         surface_id: String,
         path: Option<String>,
@@ -265,6 +278,16 @@ impl A2UIServerMessage {
             surface_id: surface_id.into(),
             components,
             parent_id: None,
+        }
+    }
+
+    pub fn set_canvas_settings(
+        surface_id: impl Into<String>,
+        canvas_settings: CanvasSettings,
+    ) -> Self {
+        Self::SetCanvasSettings {
+            surface_id: surface_id.into(),
+            canvas_settings,
         }
     }
 
@@ -511,6 +534,7 @@ impl From<proto::Component> for SurfaceComponent {
             id: proto.id,
             style: proto.style.map(Into::into),
             component,
+            event_relevant: false,
         }
     }
 }

@@ -57,6 +57,23 @@ export function WebhookConfig({
 				</p>
 			</div>
 
+			<div className="space-y-4">
+				<div className="flex items-center space-x-2">
+					<Switch
+						disabled={!isEditing}
+						id="allow_voice_mode"
+						checked={config?.allow_voice_mode ?? false}
+						onCheckedChange={(checked) => {
+							setValue("allow_voice_mode", checked);
+						}}
+					/>
+					<Label htmlFor="allow_voice_mode">Allow Voice Mode</Label>
+				</div>
+				<p className="text-sm text-muted-foreground">
+					Enable voice mode with auto silence detection
+				</p>
+			</div>
+
 			<div className="space-y-3">
 				<Label htmlFor="history_elements">History Elements</Label>
 				{isEditing ? (

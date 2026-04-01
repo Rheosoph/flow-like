@@ -1,0 +1,5 @@
+build/
+gen/
+node.wasm
+cmake-build-*/
+.DS_Store

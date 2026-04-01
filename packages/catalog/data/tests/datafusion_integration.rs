@@ -23,7 +23,7 @@ use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetForm
 use flow_like_storage::datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
+use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext, col, lit};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::files::store::local_store::LocalObjectStore;
 use flow_like_storage::object_store::ObjectStore;
@@ -712,8 +712,12 @@ mod session_persistence_tests {
         register_parquet_from_store(&ctx, &store, &store_url, &users_path, "users").await;
 
         for dept in ["Engineering", "Sales", "HR"] {
-            let query = format!("SELECT name FROM users WHERE department = '{}'", dept);
-            let df = ctx.sql(&query).await.unwrap();
+            let df = ctx
+                .sql("SELECT name, department FROM users")
+                .await
+                .unwrap()
+                .filter(col("department").eq(lit(dept.to_string())))
+                .unwrap();
             let _ = df.collect().await.unwrap();
         }
 

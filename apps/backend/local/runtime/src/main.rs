@@ -3,7 +3,6 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use dotenv::dotenv;
-use flow_like::credentials::SharedCredentials;
 use flow_like_api::execution::{QueueConfig, QueueWorker, QueuedJob};
 use flow_like_catalog::initialize as initialize_catalog;
 use flow_like_executor::{
@@ -84,42 +83,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Process a job from the Redis queue
 async fn process_queued_job(job: QueuedJob, executor_config: ExecutorConfig) -> Result<(), String> {
-    tracing::info!(job_id = %job.job_id, run_id = %job.run_id, "Processing queued job");
+    let job_id = job.job_id.clone();
+    tracing::info!(job_id = %job_id, run_id = %job.run_id, "Processing queued job");
 
-    // Parse credentials
-    let credentials: SharedCredentials = serde_json::from_str(&job.credentials)
-        .map_err(|e| format!("Failed to parse credentials: {}", e))?;
-
-    let exec_request = ExecutionRequest {
-        credentials,
-        app_id: job.app_id,
-        board_id: job.board_id,
-        board_version: job.board_version,
-        node_id: job.node_id,
-        event_json: job.event_json,
-        payload: job.payload,
-        executor_jwt: job.executor_jwt,
-        token: job.token,
-        oauth_tokens: job.oauth_tokens,
-        stream_state: job.stream_state,
-        runtime_variables: job.runtime_variables,
-        user_context: job.user_context,
-        profile: job.profile,
-    };
+    let exec_request = ExecutionRequest::try_from(job)
+        .map_err(|e| format!("Failed to convert dispatch payload: {}", e))?;
 
     let result = execute(exec_request, executor_config).await;
 
     match &result {
         Ok(exec_result) => {
             tracing::info!(
-                job_id = %job.job_id,
+                job_id = %job_id,
                 run_id = %exec_result.run_id,
                 status = ?exec_result.status,
                 "Job completed"
             );
         }
         Err(e) => {
-            tracing::error!(job_id = %job.job_id, error = %e, "Job failed");
+            tracing::error!(job_id = %job_id, error = %e, "Job failed");
         }
     }
 

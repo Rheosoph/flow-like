@@ -61,8 +61,9 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let database = database.read().await;
+        let cached_db = database.load(context).await?;
+        cached_db.ensure_flushed().await?;
+        let database = cached_db.db.read().await;
         let keep_versions: bool = context.evaluate_pin("keep_versions").await?;
         database.optimize(keep_versions).await?;
 

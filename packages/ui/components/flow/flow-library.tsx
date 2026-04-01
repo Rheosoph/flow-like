@@ -75,6 +75,7 @@ interface FlowLibraryBoardsSectionProps {
 	>;
 	onOpenBoard: (boardId: string) => Promise<void>;
 	onDeleteBoard: (boardId: string) => Promise<void>;
+	boardHref?: (boardId: string) => string;
 }
 
 interface FlowLibraryBoardCardProps {
@@ -82,6 +83,7 @@ interface FlowLibraryBoardCardProps {
 	app: IApp;
 	onOpenBoard: (boardId: string) => Promise<void>;
 	onDeleteBoard: (boardId: string) => Promise<void>;
+	href?: string;
 }
 
 interface AggregatedScores {
@@ -325,6 +327,7 @@ export function FlowLibraryBoardsSection({
 	setBoardCreation,
 	onOpenBoard,
 	onDeleteBoard,
+	boardHref,
 }: Readonly<FlowLibraryBoardsSectionProps>) {
 	if (boards.isLoading) {
 		return (
@@ -360,6 +363,7 @@ export function FlowLibraryBoardsSection({
 							app={app}
 							onOpenBoard={onOpenBoard}
 							onDeleteBoard={onDeleteBoard}
+							href={boardHref?.(board.id)}
 						/>
 					))}
 			</div>
@@ -419,6 +423,7 @@ export function FlowLibraryBoardCard({
 	app,
 	onOpenBoard,
 	onDeleteBoard,
+	href,
 }: Readonly<FlowLibraryBoardCardProps>) {
 	const backend = useBackend();
 	const pages = useInvoke(backend.pageState.getPages, backend.pageState, [
@@ -602,6 +607,8 @@ export function FlowLibraryBoardCard({
 					type="button"
 					className="absolute inset-0 rounded-lg"
 					onClick={() => onOpenBoard(board.id)}
+					data-href={href}
+					data-title={board.name}
 				/>
 			</Card>
 		</BubbleActions>

@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{app, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -74,8 +74,8 @@ pub async fn delete_role(
     }
 
     membership::Entity::update_many()
-        .filter(membership::Column::AppId.eq(app_id))
-        .filter(membership::Column::RoleId.eq(role_id))
+        .filter(membership::Column::AppId.eq(app_id.clone()))
+        .filter(membership::Column::RoleId.eq(role_id.clone()))
         .col_expr(membership::Column::RoleId, Expr::value(default_role_id))
         .exec(&txn)
         .await?;
@@ -85,5 +85,18 @@ pub async fn delete_role(
 
     txn.commit().await?;
 
+    if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
+        tracing::warn!(error = %e, "Failed to invalidate permission cache after role deletion");
+    }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "role.delete",
+        "Role",
+        role_id,
+        "Role deleted"
+    );
     Ok(Json(()))
 }

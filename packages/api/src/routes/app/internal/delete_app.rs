@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::app, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::app, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -31,6 +31,7 @@ pub async fn delete_app(
     Path(app_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     let sub = ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
+    let sub_id = sub.sub()?;
 
     let txn = state.db.begin().await?;
 
@@ -45,12 +46,12 @@ pub async fn delete_app(
 
     let scoped_permissions = state
         .scoped_credentials(
-            &sub.sub()?,
+            &sub_id,
             &app_id,
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
-    let path = flow_like_storage::Path::from("apps").child(app_id);
+    let path = flow_like_storage::Path::from("apps").child(app_id.as_str());
 
     let meta_bucket = scoped_permissions.to_store(true).await?.as_generic();
     let project_bucket = scoped_permissions.to_store(false).await?.as_generic();
@@ -73,5 +74,14 @@ pub async fn delete_app(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to delete metadata: {}", e)))?;
 
     txn.commit().await?;
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "app.delete",
+        "App",
+        app_id,
+        "Application deleted"
+    );
     Ok(Json(()))
 }

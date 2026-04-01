@@ -63,13 +63,6 @@ pub fn register_node(attr: TokenStream, item: TokenStream) -> TokenStream {
         #struct_item
 
         #name_impl
-
-        ::inventory::submit! {
-            #[allow(clippy::redundant_closure)]
-            crate::NodeConstructor::new(|| {
-                ::std::sync::Arc::new(#struct_name::default()) as ::std::sync::Arc<dyn ::flow_like::flow::node::NodeLogic>
-            })
-        }
     };
 
     TokenStream::from(expanded)

@@ -1,6 +1,7 @@
 "use client";
 
-import { DndProvider } from "react-dnd";
+import { useContext } from "react";
+import { DndContext as ReactDndContext, DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { TouchBackend } from "react-dnd-touch-backend";
 
@@ -9,6 +10,31 @@ import { PlaceholderPlugin } from "@platejs/media/react";
 
 import { isTauri } from "../../../lib/platform";
 import { BlockDraggable } from "../ui/block-draggable";
+
+function DndProviderGuard({ children }: { children: React.ReactNode }) {
+	const existing = useContext(ReactDndContext);
+
+	if (existing?.dragDropManager) {
+		return <>{children}</>;
+	}
+
+	const backend = isTauri() ? TouchBackend : HTML5Backend;
+	const options = isTauri()
+		? {
+				enableMouseEvents: true,
+				delayTouchStart: 0,
+				delayMouseStart: 0,
+				ignoreContextMenu: true,
+				touchSlop: 5,
+			}
+		: undefined;
+
+	return (
+		<DndProvider backend={backend as any} options={options as any} context={window}>
+			{children}
+		</DndProvider>
+	);
+}
 
 export const DndKit = [
 	DndPlugin.configure({
@@ -22,24 +48,9 @@ export const DndKit = [
 		},
 		render: {
 			aboveNodes: BlockDraggable,
-			aboveSlate: (props) => {
-				const backend = isTauri() ? TouchBackend : HTML5Backend;
-				const options = isTauri()
-					? {
-							enableMouseEvents: true,
-							delayTouchStart: 0,
-							delayMouseStart: 0,
-							ignoreContextMenu: true,
-							touchSlop: 5,
-						}
-					: undefined;
-				return (
-					// react-dnd types allow options; cast if needed to satisfy TS in this environment
-					<DndProvider backend={backend as any} options={options as any}>
-						{props.children}
-					</DndProvider>
-				);
-			},
+			aboveSlate: (props) => (
+				<DndProviderGuard>{props.children}</DndProviderGuard>
+			),
 		},
 	}),
 ];

@@ -46,7 +46,7 @@ export const deCompare = {
 	"compare.cap.data_science": "Data-Science-Workflows",
 	"compare.cap.governance": "Governance & RBAC",
 	"compare.cap.self_hosted": "Self-Hosted-Option",
-	"compare.cap.lock_in": "Vendor-Lock-in-Risiko",
+	"compare.cap.lock_in": "Kein Vendor-Lock-in",
 
 	// Flow-Like Values
 	"compare.fl.visual_workflow": "Typisiertes IR",
@@ -153,7 +153,7 @@ export const deCompare = {
 	"compare.explain.self_hosted.flow":
 		"Deployen Sie Flow-Like on-prem, in Ihrer Private Cloud oder vollständig air-gapped. Ihre Daten müssen Ihre Infrastruktur nie verlassen. Null externe Abhängigkeiten.",
 
-	"compare.explain.lock_in.title": "Vendor-Lock-in-Risiko",
+	"compare.explain.lock_in.title": "Kein Vendor-Lock-in",
 	"compare.explain.lock_in.what":
 		"Wie schwierig ist es zu wechseln, wenn nötig?",
 	"compare.explain.lock_in.flow":
@@ -193,4 +193,7 @@ export const deCompare = {
 		"Industriestandard für Workflow-Orchestrierung. Leistungsstark für Datenpipelines, erfordert aber Python-Expertise und keine UI-Entwicklung.",
 	"compare.competitor.temporal":
 		"Durable-Execution-Plattform. Exzellent für komplexe Workflows, aber entwicklerorientiert mit steiler Lernkurve.",
+
+	// Capability Deep Dive
+	"compare.explain.how_does_it": "So macht es Flow-Like",
 };

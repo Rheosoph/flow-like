@@ -123,8 +123,9 @@ impl NodeLogic for FitSVMMultiClassNode {
 
                 // fetch records
                 let records = {
-                    let database = database.load(context).await?.db.clone();
-                    let database = database.read().await;
+                    let cached_db = database.load(context).await?;
+                    cached_db.ensure_flushed().await?;
+                    let database = cached_db.db.read().await;
                     let schema = database.schema().await?;
                     let existing_cols: HashSet<String> =
                         schema.fields.iter().map(|f| f.name().clone()).collect();

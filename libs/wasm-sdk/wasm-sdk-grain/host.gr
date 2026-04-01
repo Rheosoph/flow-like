@@ -1,0 +1,431 @@
+// Flow-Like WASM SDK — Host function imports (Grain)
+//
+// Declares all `foreign wasm` imports from the flowlike_* host modules
+// and provides safe Grain wrapper functions.
+//
+// Grain version: 0.6+
+
+module Host
+
+from "memory" include Memory
+from "runtime/unsafe/wasmi32" include WasmI32
+from "runtime/unsafe/wasmi64" include WasmI64
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_log
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("trace")
+foreign wasm hostTrace: (WasmI32, WasmI32) => Void from "flowlike_log"
+@unsafe
+@externalName("debug")
+foreign wasm hostDebug: (WasmI32, WasmI32) => Void from "flowlike_log"
+@unsafe
+@externalName("info")
+foreign wasm hostInfo: (WasmI32, WasmI32) => Void from "flowlike_log"
+@unsafe
+@externalName("warn")
+foreign wasm hostWarn: (WasmI32, WasmI32) => Void from "flowlike_log"
+@unsafe
+@externalName("error")
+foreign wasm hostError: (WasmI32, WasmI32) => Void from "flowlike_log"
+@unsafe
+@externalName("log_json")
+foreign wasm hostLogJson: (WasmI32, WasmI32, WasmI32, WasmI32, WasmI32) => Void from "flowlike_log"
+
+@unsafe
+provide let logTrace = (msg: String) => {
+  hostTrace(Memory.stringDataPtr(msg), Memory.stringByteLen(msg))
+}
+
+@unsafe
+provide let logDebug = (msg: String) => {
+  hostDebug(Memory.stringDataPtr(msg), Memory.stringByteLen(msg))
+}
+
+@unsafe
+provide let logInfo = (msg: String) => {
+  hostInfo(Memory.stringDataPtr(msg), Memory.stringByteLen(msg))
+}
+
+@unsafe
+provide let logWarn = (msg: String) => {
+  hostWarn(Memory.stringDataPtr(msg), Memory.stringByteLen(msg))
+}
+
+@unsafe
+provide let logError = (msg: String) => {
+  hostError(Memory.stringDataPtr(msg), Memory.stringByteLen(msg))
+}
+
+@unsafe
+provide let logJson = (level: WasmI32, msg: String, data: String) => {
+  hostLogJson(
+    level,
+    Memory.stringDataPtr(msg),
+    Memory.stringByteLen(msg),
+    Memory.stringDataPtr(data),
+    Memory.stringByteLen(data),
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_pins
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("get_input")
+foreign wasm hostGetInput: (WasmI32, WasmI32) => WasmI64 from "flowlike_pins"
+@unsafe
+@externalName("set_output")
+foreign wasm hostSetOutput: (WasmI32, WasmI32, WasmI32, WasmI32) => Void from "flowlike_pins"
+@unsafe
+@externalName("activate_exec")
+foreign wasm hostActivateExec: (WasmI32, WasmI32) => Void from "flowlike_pins"
+
+@unsafe
+provide let getInput = (name: String) => {
+  Memory.unpackString(
+    hostGetInput(Memory.stringDataPtr(name), Memory.stringByteLen(name)),
+  )
+}
+
+@unsafe
+provide let setOutput = (name: String, value: String) => {
+  hostSetOutput(
+    Memory.stringDataPtr(name),
+    Memory.stringByteLen(name),
+    Memory.stringDataPtr(value),
+    Memory.stringByteLen(value),
+  )
+}
+
+@unsafe
+provide let activateExec = (name: String) => {
+  hostActivateExec(Memory.stringDataPtr(name), Memory.stringByteLen(name))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_vars
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("get")
+foreign wasm hostVarGet: (WasmI32, WasmI32) => WasmI64 from "flowlike_vars"
+@unsafe
+@externalName("set")
+foreign wasm hostVarSet: (WasmI32, WasmI32, WasmI32, WasmI32) => Void from "flowlike_vars"
+@unsafe
+@externalName("delete")
+foreign wasm hostVarDelete: (WasmI32, WasmI32) => Void from "flowlike_vars"
+@unsafe
+@externalName("has")
+foreign wasm hostVarHas: (WasmI32, WasmI32) => WasmI32 from "flowlike_vars"
+
+@unsafe
+provide let getVariable = (name: String) => {
+  Memory.unpackString(
+    hostVarGet(Memory.stringDataPtr(name), Memory.stringByteLen(name)),
+  )
+}
+
+@unsafe
+provide let setVariable = (name: String, value: String) => {
+  hostVarSet(
+    Memory.stringDataPtr(name),
+    Memory.stringByteLen(name),
+    Memory.stringDataPtr(value),
+    Memory.stringByteLen(value),
+  )
+}
+
+@unsafe
+provide let deleteVariable = (name: String) => {
+  hostVarDelete(Memory.stringDataPtr(name), Memory.stringByteLen(name))
+}
+
+@unsafe
+provide let hasVariable = (name: String) => {
+  use WasmI32.{ (!=) }
+  hostVarHas(Memory.stringDataPtr(name), Memory.stringByteLen(name)) != 0n
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_cache
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("get")
+foreign wasm hostCacheGet: (WasmI32, WasmI32) => WasmI64 from "flowlike_cache"
+@unsafe
+@externalName("set")
+foreign wasm hostCacheSet: (WasmI32, WasmI32, WasmI32, WasmI32) => Void from "flowlike_cache"
+@unsafe
+@externalName("delete")
+foreign wasm hostCacheDelete: (WasmI32, WasmI32) => Void from "flowlike_cache"
+@unsafe
+@externalName("has")
+foreign wasm hostCacheHas: (WasmI32, WasmI32) => WasmI32 from "flowlike_cache"
+
+@unsafe
+provide let cacheGet = (key: String) => {
+  Memory.unpackString(
+    hostCacheGet(Memory.stringDataPtr(key), Memory.stringByteLen(key)),
+  )
+}
+
+@unsafe
+provide let cacheSet = (key: String, value: String) => {
+  hostCacheSet(
+    Memory.stringDataPtr(key),
+    Memory.stringByteLen(key),
+    Memory.stringDataPtr(value),
+    Memory.stringByteLen(value),
+  )
+}
+
+@unsafe
+provide let cacheDelete = (key: String) => {
+  hostCacheDelete(Memory.stringDataPtr(key), Memory.stringByteLen(key))
+}
+
+@unsafe
+provide let cacheHas = (key: String) => {
+  use WasmI32.{ (!=) }
+  hostCacheHas(Memory.stringDataPtr(key), Memory.stringByteLen(key)) != 0n
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_meta
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("get_node_id")
+foreign wasm hostGetNodeId: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("get_run_id")
+foreign wasm hostGetRunId: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("get_app_id")
+foreign wasm hostGetAppId: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("get_board_id")
+foreign wasm hostGetBoardId: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("get_user_id")
+foreign wasm hostGetUserId: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("is_streaming")
+foreign wasm hostIsStreaming: () => WasmI32 from "flowlike_meta"
+@unsafe
+@externalName("get_log_level")
+foreign wasm hostGetLogLevel: () => WasmI32 from "flowlike_meta"
+@unsafe
+@externalName("time_now")
+foreign wasm hostTimeNow: () => WasmI64 from "flowlike_meta"
+@unsafe
+@externalName("random")
+foreign wasm hostRandom: () => WasmI64 from "flowlike_meta"
+
+@unsafe
+provide let getNodeId = () => Memory.unpackString(hostGetNodeId())
+@unsafe
+provide let getRunId = () => Memory.unpackString(hostGetRunId())
+@unsafe
+provide let getAppId = () => Memory.unpackString(hostGetAppId())
+@unsafe
+provide let getBoardId = () => Memory.unpackString(hostGetBoardId())
+@unsafe
+provide let getUserId = () => Memory.unpackString(hostGetUserId())
+@unsafe
+provide let isStreaming = () => {
+  use WasmI32.{ (!=) }
+  hostIsStreaming() != 0n
+}
+@unsafe
+provide let getLogLevel = () => Memory.toNumber(hostGetLogLevel())
+@unsafe
+provide let timeNow = () => hostTimeNow()
+@unsafe
+provide let random = () => hostRandom()
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_storage
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("read_request")
+foreign wasm hostStorageRead: (WasmI32, WasmI32) => WasmI64 from "flowlike_storage"
+@unsafe
+@externalName("write_request")
+foreign wasm hostStorageWrite: (WasmI32, WasmI32, WasmI32, WasmI32) => WasmI32 from "flowlike_storage"
+@unsafe
+@externalName("storage_dir")
+foreign wasm hostStorageDir: (WasmI32) => WasmI64 from "flowlike_storage"
+@unsafe
+@externalName("upload_dir")
+foreign wasm hostUploadDir: () => WasmI64 from "flowlike_storage"
+@unsafe
+@externalName("cache_dir")
+foreign wasm hostCacheDir: (WasmI32, WasmI32) => WasmI64 from "flowlike_storage"
+@unsafe
+@externalName("user_dir")
+foreign wasm hostUserDir: (WasmI32) => WasmI64 from "flowlike_storage"
+@unsafe
+@externalName("list_request")
+foreign wasm hostStorageList: (WasmI32, WasmI32) => WasmI64 from "flowlike_storage"
+
+@unsafe
+provide let storageRead = (path: String) => {
+  Memory.unpackString(
+    hostStorageRead(Memory.stringDataPtr(path), Memory.stringByteLen(path)),
+  )
+}
+
+@unsafe
+provide let storageWrite = (path: String, data: String) => {
+  use WasmI32.{ (!=) }
+  hostStorageWrite(
+    Memory.stringDataPtr(path),
+    Memory.stringByteLen(path),
+    Memory.stringDataPtr(data),
+    Memory.stringByteLen(data),
+  ) != 0n
+}
+
+@unsafe
+provide let storageDir = (nodeScoped: Bool) => {
+  Memory.unpackString(hostStorageDir(if (nodeScoped) 1n else 0n))
+}
+
+@unsafe
+provide let uploadDir = () => Memory.unpackString(hostUploadDir())
+
+@unsafe
+provide let cacheDirPath = (nodeScoped: Bool, userScoped: Bool) => {
+  Memory.unpackString(
+    hostCacheDir(
+      if (nodeScoped) 1n else 0n,
+      if (userScoped) 1n else 0n,
+    ),
+  )
+}
+
+@unsafe
+provide let userDir = (nodeScoped: Bool) => {
+  Memory.unpackString(hostUserDir(if (nodeScoped) 1n else 0n))
+}
+
+@unsafe
+provide let storageList = (flowPathJson: String) => {
+  Memory.unpackString(
+    hostStorageList(
+      Memory.stringDataPtr(flowPathJson),
+      Memory.stringByteLen(flowPathJson),
+    ),
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_models
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("embed_text")
+foreign wasm hostEmbedText: (WasmI32, WasmI32, WasmI32, WasmI32) => WasmI64 from "flowlike_models"
+
+@unsafe
+provide let embedText = (bitJson: String, textsJson: String) => {
+  Memory.unpackString(
+    hostEmbedText(
+      Memory.stringDataPtr(bitJson),
+      Memory.stringByteLen(bitJson),
+      Memory.stringDataPtr(textsJson),
+      Memory.stringByteLen(textsJson),
+    ),
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_http
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("request")
+foreign wasm hostHttpRequest: (WasmI32, WasmI32, WasmI32, WasmI32, WasmI32, WasmI32, WasmI32) => WasmI32 from "flowlike_http"
+
+@unsafe
+provide let httpRequest = (
+  method: Number,
+  url: String,
+  headers: String,
+  body: String,
+) => {
+  use WasmI32.{ (!=) }
+  hostHttpRequest(
+    Memory.fromNumber(method),
+    Memory.stringDataPtr(url),
+    Memory.stringByteLen(url),
+    Memory.stringDataPtr(headers),
+    Memory.stringByteLen(headers),
+    Memory.stringDataPtr(body),
+    Memory.stringByteLen(body),
+  ) != 0n
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_stream
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("emit")
+foreign wasm hostStreamEmit: (WasmI32, WasmI32, WasmI32, WasmI32) => Void from "flowlike_stream"
+@unsafe
+@externalName("text")
+foreign wasm hostStreamText: (WasmI32, WasmI32) => Void from "flowlike_stream"
+
+@unsafe
+provide let streamEmit = (eventType: String, data: String) => {
+  hostStreamEmit(
+    Memory.stringDataPtr(eventType),
+    Memory.stringByteLen(eventType),
+    Memory.stringDataPtr(data),
+    Memory.stringByteLen(data),
+  )
+}
+
+@unsafe
+provide let streamText = (text: String) => {
+  hostStreamText(Memory.stringDataPtr(text), Memory.stringByteLen(text))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// flowlike_auth
+// ═══════════════════════════════════════════════════════════════════════
+
+@unsafe
+@externalName("get_oauth_token")
+foreign wasm hostGetOauthToken: (WasmI32, WasmI32) => WasmI64 from "flowlike_auth"
+@unsafe
+@externalName("has_oauth_token")
+foreign wasm hostHasOauthToken: (WasmI32, WasmI32) => WasmI32 from "flowlike_auth"
+
+@unsafe
+provide let getOauthToken = (provider: String) => {
+  Memory.unpackString(
+    hostGetOauthToken(
+      Memory.stringDataPtr(provider),
+      Memory.stringByteLen(provider),
+    ),
+  )
+}
+
+@unsafe
+provide let hasOauthToken = (provider: String) => {
+  use WasmI32.{ (!=) }
+  hostHasOauthToken(
+    Memory.stringDataPtr(provider),
+    Memory.stringByteLen(provider),
+  ) != 0n
+}

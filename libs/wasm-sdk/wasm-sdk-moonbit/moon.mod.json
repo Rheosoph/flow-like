@@ -1,0 +1,8 @@
+{
+	"name": "felix-schultz/flow-like-wasm-sdk",
+	"version": "0.1.0",
+	"readme": "README.md",
+	"license": "MIT",
+	"keywords": ["flow-like", "wasm", "sdk"],
+	"description": "SDK for building Flow-Like WASM nodes in MoonBit"
+}

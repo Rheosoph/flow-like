@@ -1,0 +1,27 @@
+[tools]
+dotnet = "10.0"
+
+[tasks.wit-copy]
+description = "Copy canonical WIT from packages/wasm/wit/"
+run = "mkdir -p wit && cp ../../packages/wasm/wit/flow-like-node.wit wit/flow-like-node.wit"
+
+[tasks.wit-clean]
+description = "Remove local WIT copy"
+run = "rm -rf wit"
+
+[tasks.setup]
+description = "Install WASI workload and restore"
+run = ["dotnet workload install wasi-experimental", "dotnet restore"]
+
+[tasks.build]
+description = "Build the WASM node"
+depends = ["wit-copy"]
+run = "WASI_SDK_PATH=${WASI_SDK_PATH:-$PWD/../../.tools/wasi-sdk-25.0-arm64-macos/} dotnet publish -c Release /p:WasmSingleFileBundle=true /p:WasiClangLinkOptimizationFlag=-O0 /p:WasiClangCompileOptimizationFlag=-O0 /p:WasiBitcodeCompileOptimizationFlag=-O0"
+
+[tasks.test]
+description = "Run tests"
+run = "dotnet test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = ["dotnet clean && rm -rf bin/ obj/", "rm -rf wit"]

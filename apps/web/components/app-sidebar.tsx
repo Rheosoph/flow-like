@@ -2,6 +2,20 @@
 import { createId } from "@paralleldrive/cuid2";
 import * as Sentry from "@sentry/nextjs";
 import {
+	AnimatedBrainIcon,
+	AnimatedBugIcon,
+	AnimatedDashboardIcon,
+	AnimatedDocsIcon,
+	AnimatedFlowsIcon,
+	AnimatedHomeIcon,
+	AnimatedKeyIcon,
+	AnimatedLibraryIcon,
+	AnimatedPackageIcon,
+	AnimatedSettingsIcon,
+	AnimatedSparklesIcon,
+	AnimatedExploreAppsIcon,
+	AnimatedThemeIcon,
+	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -53,6 +67,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
+	AnimatedSidebarIcon,
 } from "@tm9657/flow-like-ui";
 import {
 	BadgeCheck,
@@ -64,182 +79,80 @@ import {
 	ChevronsUpDown,
 	CreditCard,
 	Edit3Icon,
-	ExternalLinkIcon,
-	HeartIcon,
+	HomeIcon,
 	KeyIcon,
-	KeyRoundIcon,
-	LayoutDashboardIcon,
-	LibraryIcon,
+
 	LogInIcon,
 	LogOut,
 	type LucideIcon,
 	Moon,
-	Package2Icon,
 	Plus,
+	SettingsIcon,
 	SidebarCloseIcon,
 	SidebarOpenIcon,
-	Sparkles,
 	Sun,
-	UsersRoundIcon,
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ComponentType } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 import { fetcher } from "../lib/api";
 import { Shortcuts } from "./shortcuts";
 
 const data = {
 	navMain: [
 		{
-			title: "Hub",
+			title: "Home",
 			url: "/",
-			icon: HeartIcon,
+			icon: AnimatedHomeIcon,
 			isActive: true,
 			permission: false,
-			items: [
-				{
-					title: "Home",
-					url: "/",
-				},
-				{
-					title: "Explore Apps",
-					url: "/store/explore/apps",
-				},
-				{
-					title: "Explore Models",
-					url: "/settings/ai",
-				},
-			],
+			items: [],
+		},
+		{
+			title: "Explore Apps",
+			url: "/store/explore/apps",
+			icon: AnimatedExploreAppsIcon,
+			isActive: false,
+			permission: false,
+			items: [],
+		},
+		{
+			title: "Explore Models",
+			url: "/settings/ai",
+			icon: AnimatedBrainIcon,
+			isActive: false,
+			permission: false,
+			items: [],
 		},
 		{
 			title: "Library",
 			url: "/library",
-			icon: LibraryIcon,
+			icon: AnimatedLibraryIcon,
 			isActive: false,
 			permission: false,
-			items: [
-				{
-					title: "Overview",
-					url: "/library",
-				},
-				// {
-				// 	title: "Favorites",
-				// 	url: "/library/favorites",
-				// },
-			],
-		},
-		// {
-		// 	title: "Developer",
-		// 	url: "/settings/registry",
-		// 	icon: Code2Icon,
-		// 	isActive: false,
-		// 	permission: false,
-		// 	items: [
-		// 		{
-		// 			title: "Installed",
-		// 			url: "/settings/registry/installed",
-		// 		},
-		// 		{
-		// 			title: "Explore",
-		// 			url: "/settings/registry/explore",
-		// 		},
-		// 	],
-		// },
-		// {
-		// 	title: "Documentation",
-		// 	url: "https://docs.flow-like.com/",
-		// 	permission: false,
-		// 	icon: BookOpenIcon,
-		// },
-		{
-			title: "User Actions",
-			url: "/admin/user",
-			icon: UsersRoundIcon,
-			permission: true,
-			items: [
-				{
-					title: "Find",
-					url: "/admin/user",
-					permission: GlobalPermission.ReadProfile,
-				},
-				{
-					title: "Manage",
-					url: "/admin/user/edit",
-					permission: GlobalPermission.WriteProfile,
-				},
-			],
+			items: [],
 		},
 		{
-			title: "Governance",
-			url: "/admin/governance",
-			icon: LayoutDashboardIcon,
+			title: "Admin",
+			url: "/admin",
+			icon: AnimatedDashboardIcon,
 			permission: true,
-			items: [
-				{
-					title: "Dashboard",
-					url: "/admin/governance",
-					permission: GlobalPermission.ReadPublishing,
-				},
-				{
-					title: "Your Requests",
-					url: "/admin/governance/requests",
-					permission: GlobalPermission.WritePublishing,
-				},
-			],
+			items: [],
 		},
+	],
+	navDev: [
 		{
-			title: "Bits",
-			url: "/admin/bits",
-			icon: Package2Icon,
-			permission: true,
-			items: [
-				{
-					title: "Add Bits",
-					url: "/admin/bits/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Add Profile",
-					url: "/admin/profiles/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Edit Bits",
-					url: "/admin/bits/edit",
-					permission: GlobalPermission.WriteBits,
-				},
-			],
-		},
-		{
-			title: "Solutions",
-			url: "/admin/solutions",
-			icon: Sparkles,
-			permission: true,
-			items: [
-				{
-					title: "Manage Requests",
-					url: "/admin/solutions",
-					permission: GlobalPermission.WriteSolutions,
-				},
-			],
-		},
-		{
-			title: "Sinks",
-			url: "/admin/sinks",
-			icon: KeyRoundIcon,
-			permission: true,
-			items: [
-				{
-					title: "Service Tokens",
-					url: "/admin/sinks",
-					permission: GlobalPermission.Admin,
-				},
-			],
+			title: "Packages",
+			url: "/store/packages",
+			icon: AnimatedPackageIcon,
+			isActive: false,
+			items: [],
 		},
 	],
 };
@@ -317,15 +230,17 @@ function InnerSidebar() {
 				<div className="flex flex-col gap-1">
 					<Dialog>
 						<DialogTrigger asChild>
-							<SidebarMenuButton>
-								<BugIcon />
+							<MotionSidebarMenuButton initial="initial" whileHover="hover">
+								<motion.div variants={iconVariants}>
+									<AnimatedBugIcon />
+								</motion.div>
 								<span>Report Bug</span>
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</DialogTrigger>
 						<DialogContent>
 							<DialogHeader>
 								<DialogTitle className="flex flex-row items-center gap-2">
-									<BugIcon />
+									<AnimatedBugIcon />
 									{"Bug Report"}
 								</DialogTitle>
 								<DialogDescription>
@@ -405,11 +320,12 @@ function InnerSidebar() {
 					</Dialog>
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<SidebarMenuButton>
-								<Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-								<Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+							<MotionSidebarMenuButton initial="initial" whileHover="hover">
+								<motion.div variants={iconVariants}>
+									<AnimatedThemeIcon />
+								</motion.div>
 								<span>{"Toggle Theme"}</span>
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="center" side="right">
 							<DropdownMenuItem onClick={() => setTheme("light")}>
@@ -424,27 +340,41 @@ function InnerSidebar() {
 						</DropdownMenuContent>
 					</DropdownMenu>
 
+					<a href="/settings">
+						<MotionSidebarMenuButton tooltip="Settings" initial="initial" whileHover="hover">
+							<motion.div variants={iconVariants}>
+								<AnimatedSettingsIcon className="size-4" />
+							</motion.div>
+							<span className="w-full flex flex-row items-center justify-between">
+								Settings
+							</span>
+						</MotionSidebarMenuButton>
+					</a>
 					<a
 						href="https://docs.flow-like.com"
 						target="_blank"
 						rel="noopener noreferrer"
 					>
-						<SidebarMenuButton>
-							<BookOpenIcon className="size-4" />
+						<MotionSidebarMenuButton tooltip="Documentation" initial="initial" whileHover="hover">
+							<motion.div variants={iconVariants}>
+								<AnimatedDocsIcon className="size-4" />
+							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
 								Documentation{" "}
 							</span>
-						</SidebarMenuButton>
+						</MotionSidebarMenuButton>
 					</a>
-					<SidebarMenuButton onClick={toggleSidebar}>
-						{open ? <SidebarCloseIcon /> : <SidebarOpenIcon />}
+					<MotionSidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar} initial="initial" whileHover="hover">
+						<div>
+							<AnimatedSidebarIcon className="size-4" isOpen={open} />
+						</div>
 						<span className="w-full flex flex-row items-center justify-between">
 							Toggle Sidebar{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
 								⌘B
 							</span>
 						</span>
-					</SidebarMenuButton>
+					</MotionSidebarMenuButton>
 				</div>
 				<NavUser user={user} />
 			</SidebarFooter>
@@ -571,9 +501,11 @@ function Profiles() {
 			<SidebarMenuItem>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<SidebarMenuButton
+						<MotionSidebarMenuButton
 							size="lg"
 							className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground relative"
+							initial="initial"
+							whileHover="hover"
 						>
 							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
 								<Avatar className="h-8 w-8 rounded-lg">
@@ -602,8 +534,10 @@ function Profiles() {
 									)}
 								</span>
 							</div>
-							<ChevronsUpDown className="ml-auto" />
-						</SidebarMenuButton>
+							<motion.div variants={iconVariants}>
+								<ChevronsUpDown className="ml-auto" />
+							</motion.div>
+						</MotionSidebarMenuButton>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent
 						className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
@@ -729,21 +663,153 @@ function Profiles() {
 	);
 }
 
+type NavIcon = LucideIcon | ComponentType<{ className?: string }>;
+
+interface INavItem {
+	title: string;
+	url: string;
+	icon?: NavIcon;
+	isActive?: boolean;
+	permission?: boolean;
+	items?: {
+		title: string;
+		url: string;
+		permission?: GlobalPermission;
+	}[];
+}
+
+const MotionLink = motion.create(Link);
+const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
+
+const iconVariants = {
+	initial: { scale: 1, rotate: 0 },
+	hover: {
+		scale: 1.1,
+		rotate: 5,
+		transition: { type: "spring", stiffness: 400, damping: 10 },
+	},
+};
+
+function isItemActive(item: INavItem, pathname: string): boolean {
+	if (pathname === item.url) return true;
+	if (
+		item.items?.some(
+			(sub) => pathname === sub.url || pathname.startsWith(`${sub.url}/`),
+		)
+	)
+		return true;
+	return item.url !== "/" && pathname.startsWith(`${item.url}/`);
+}
+
+function NavFlatItem({
+	item,
+	pathname,
+}: Readonly<{ item: INavItem; pathname: string }>) {
+	const active = isItemActive(item, pathname);
+	return (
+		<SidebarMenuItem>
+			<SidebarMenuButton
+				asChild
+				variant={active ? "outline" : "default"}
+				tooltip={item.title}
+			>
+				<MotionLink href={item.url} initial="initial" whileHover="hover">
+					{item.icon && (
+						<motion.div variants={iconVariants}>
+							<item.icon className="size-4" />
+						</motion.div>
+					)}
+					<span>{item.title}</span>
+				</MotionLink>
+			</SidebarMenuButton>
+		</SidebarMenuItem>
+	);
+}
+
+function NavCollapsible({
+	item,
+	pathname,
+	sidebarOpen,
+	onNavigate,
+}: Readonly<{
+	item: INavItem;
+	pathname: string;
+	sidebarOpen: boolean;
+	onNavigate: (url: string) => void;
+}>) {
+	const active = isItemActive(item, pathname);
+	return (
+		<Collapsible
+			asChild
+			defaultOpen={
+				(localStorage.getItem(`sidebar:${item.title}`) ??
+					(item.isActive ? "open" : "closed")) === "open"
+			}
+			onOpenChange={(isOpen) => {
+				localStorage.setItem(
+					`sidebar:${item.title}`,
+					isOpen ? "open" : "closed",
+				);
+			}}
+			className="group/collapsible"
+		>
+			<SidebarMenuItem>
+				<CollapsibleTrigger asChild>
+					<MotionSidebarMenuButton
+						variant={active ? "outline" : "default"}
+						tooltip={item.title}
+						initial="initial"
+						whileHover="hover"
+						onClick={() => {
+							if (!sidebarOpen) onNavigate(item.url);
+						}}
+						onMouseDown={(e) => {
+							if (e.button === 1) {
+								e.preventDefault();
+								window.open(item.url, "_blank", "noopener,noreferrer");
+							}
+						}}
+					>
+						{item.icon && (
+							<motion.div variants={iconVariants}>
+								<item.icon className="size-4" />
+							</motion.div>
+						)}
+						<span>{item.title}</span>
+						<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+					</MotionSidebarMenuButton>
+				</CollapsibleTrigger>
+				<CollapsibleContent>
+					<SidebarMenuSub>
+						{item.items?.map((subItem) => (
+							<SidebarMenuSubItem key={subItem.title}>
+								<SidebarMenuSubButton asChild>
+									<Link href={subItem.url}>
+										<span
+											className={
+												pathname === subItem.url ||
+												pathname.startsWith(`${subItem.url}/`)
+													? "font-bold text-primary"
+													: ""
+											}
+										>
+											{subItem.title}
+										</span>
+									</Link>
+								</SidebarMenuSubButton>
+							</SidebarMenuSubItem>
+						))}
+					</SidebarMenuSub>
+				</CollapsibleContent>
+			</SidebarMenuItem>
+		</Collapsible>
+	);
+}
+
 function NavMain({
 	items,
 }: Readonly<{
-	items: {
-		title: string;
-		url: string;
-		icon?: LucideIcon;
-		isActive?: boolean;
-		permission?: boolean;
-		items?: {
-			title: string;
-			url: string;
-			permission?: GlobalPermission;
-		}[];
-	}[];
+	items: INavItem[];
 }>) {
 	const backend = useBackend();
 	const router = useRouter();
@@ -760,97 +826,15 @@ function NavMain({
 						.filter((item) => !item.permission)
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
-								<Collapsible
+								<NavCollapsible
 									key={item.title}
-									asChild
-									defaultOpen={
-										(localStorage.getItem(`sidebar:${item.title}`) ??
-											(item.isActive ? "open" : "closed")) === "open"
-									}
-									onOpenChange={(open) => {
-										localStorage.setItem(
-											`sidebar:${item.title}`,
-											open ? "open" : "closed",
-										);
-									}}
-									className="group/collapsible"
-								>
-									<SidebarMenuItem>
-										<CollapsibleTrigger asChild>
-											<SidebarMenuButton
-												variant={
-													pathname === item.url ||
-													typeof item.items?.find(
-														(item) => item.url === pathname,
-													) !== "undefined"
-														? "outline"
-														: "default"
-												}
-												tooltip={item.title}
-												onClick={() => {
-													if (!open) router.push(item.url);
-												}}
-												onMouseDown={async (e) => {
-													// Middle mouse button (button 1)
-													if (e.button === 1) {
-														e.preventDefault();
-														try {
-															// Web: open in new browser tab
-															window.open(
-																item.url,
-																"_blank",
-																"noopener,noreferrer",
-															);
-														} catch (error) {
-															console.error(
-																"Failed to open new window:",
-																error,
-															);
-														}
-													}
-												}}
-											>
-												{item.icon && <item.icon />}
-												<span>{item.title}</span>
-												<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-											</SidebarMenuButton>
-										</CollapsibleTrigger>
-										<CollapsibleContent>
-											<SidebarMenuSub>
-												{item.items?.map((subItem) => (
-													<SidebarMenuSubItem key={subItem.title}>
-														<SidebarMenuSubButton asChild>
-															<Link href={subItem.url}>
-																<span
-																	className={
-																		pathname === subItem.url
-																			? "font-bold text-primary"
-																			: ""
-																	}
-																>
-																	{subItem.title}
-																</span>
-															</Link>
-														</SidebarMenuSubButton>
-													</SidebarMenuSubItem>
-												))}
-											</SidebarMenuSub>
-										</CollapsibleContent>
-									</SidebarMenuItem>
-								</Collapsible>
+									item={item}
+									pathname={pathname}
+									sidebarOpen={open}
+									onNavigate={router.push}
+								/>
 							) : (
-								<SidebarMenuItem key={item.title}>
-									<a href={item.url} target="_blank" rel="noreferrer">
-										<SidebarMenuButton
-											variant={pathname === item.url ? "outline" : "default"}
-											tooltip={item.title}
-										>
-											{item.icon && <item.icon />}
-											<span>{item.title}</span>
-											<ExternalLinkIcon className="ml-auto" />
-										</SidebarMenuButton>
-									</a>
-								</SidebarMenuItem>
+								<NavFlatItem key={item.title} item={item} pathname={pathname} />
 							),
 						)}
 				</SidebarMenu>
@@ -863,95 +847,49 @@ function NavMain({
 							.filter(
 								(item) =>
 									item.permission &&
-									typeof item.items?.find((subitem) =>
-										new GlobalPermission(
-											info.data?.permission ?? 0,
-										).hasPermission(
-											subitem.permission ?? GlobalPermission.Admin,
-										),
-									) !== "undefined",
+									(!item.items?.length ||
+										typeof item.items.find((subitem) =>
+											new GlobalPermission(
+												info.data?.permission ?? 0,
+											).hasPermission(
+												subitem.permission ?? GlobalPermission.Admin,
+											),
+										) !== "undefined"),
 							)
 							.map((item) =>
 								item.items && item.items.length > 0 ? (
-									<Collapsible
+									<NavCollapsible
 										key={item.title}
-										asChild
-										defaultOpen={
-											(localStorage.getItem(`sidebar:${item.title}`) ??
-												(item.isActive ? "open" : "closed")) === "open"
-										}
-										onOpenChange={(open) => {
-											localStorage.setItem(
-												`sidebar:${item.title}`,
-												open ? "open" : "closed",
-											);
+										item={{
+											...item,
+											items: item.items?.filter((sub) =>
+												new GlobalPermission(
+													info.data?.permission ?? 0,
+												).hasPermission(
+													sub.permission ?? GlobalPermission.Admin,
+												),
+											),
 										}}
-										className="group/collapsible"
-									>
-										<SidebarMenuItem>
-											<CollapsibleTrigger asChild>
-												<SidebarMenuButton
-													variant={
-														pathname === item.url ||
-														typeof item.items?.find(
-															(item) => item.url === pathname,
-														) !== "undefined"
-															? "outline"
-															: "default"
-													}
-													tooltip={item.title}
-													onClick={() => {
-														if (!open) router.push(item.url);
-													}}
-												>
-													{item.icon && <item.icon />}
-													<span>{item.title}</span>
-													<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-												</SidebarMenuButton>
-											</CollapsibleTrigger>
-											<CollapsibleContent>
-												<SidebarMenuSub>
-													{item.items
-														?.filter((item) =>
-															new GlobalPermission(
-																info.data?.permission ?? 0,
-															).hasPermission(
-																item.permission ?? GlobalPermission.Admin,
-															),
-														)
-														.map((subItem) => (
-															<SidebarMenuSubItem key={subItem.title}>
-																<SidebarMenuSubButton asChild>
-																	<Link href={subItem.url}>
-																		<span
-																			className={
-																				pathname === subItem.url
-																					? "font-bold text-primary"
-																					: ""
-																			}
-																		>
-																			{subItem.title}
-																		</span>
-																	</Link>
-																</SidebarMenuSubButton>
-															</SidebarMenuSubItem>
-														))}
-												</SidebarMenuSub>
-											</CollapsibleContent>
-										</SidebarMenuItem>
-									</Collapsible>
+										pathname={pathname}
+										sidebarOpen={open}
+										onNavigate={router.push}
+									/>
 								) : (
 									<SidebarMenuItem key={item.title}>
-										<a href={item.url} target="_blank" rel="noreferrer">
-											<SidebarMenuButton
-												variant={pathname === item.url ? "outline" : "default"}
-												tooltip={item.title}
-											>
-												{item.icon && <item.icon />}
+										<SidebarMenuButton
+											asChild
+											variant={pathname === item.url ? "outline" : "default"}
+											tooltip={item.title}
+										>
+											<MotionLink href={item.url} initial="initial" whileHover="hover">
+												{item.icon && (
+													<motion.div variants={iconVariants}>
+														<item.icon className="size-4" />
+													</motion.div>
+												)}
 												<span>{item.title}</span>
-												<ExternalLinkIcon className="ml-auto" />
-											</SidebarMenuButton>
-										</a>
+											</MotionLink>
+										</SidebarMenuButton>
 									</SidebarMenuItem>
 								),
 							)}
@@ -1005,9 +943,11 @@ export function NavUser({
 			<SidebarMenuItem>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<SidebarMenuButton
+						<MotionSidebarMenuButton
 							size="lg"
 							className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+							initial="initial"
+							whileHover="hover"
 						>
 							<Avatar className="h-8 w-8 rounded-lg">
 								<AvatarImage
@@ -1027,8 +967,10 @@ export function NavUser({
 								<span className="truncate font-semibold">{displayName}</span>
 								<span className="truncate text-xs">{email}</span>
 							</div>
-							<ChevronsUpDown className="ml-auto size-4" />
-						</SidebarMenuButton>
+							<motion.div variants={iconVariants}>
+								<ChevronsUpDown className="ml-auto size-4" />
+							</motion.div>
+						</MotionSidebarMenuButton>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent
 						className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
@@ -1059,7 +1001,7 @@ export function NavUser({
 										<DropdownMenuGroup>
 											<a href="/subscription">
 												<DropdownMenuItem className="gap-2">
-													<Sparkles className="size-4" />
+													<AnimatedSparklesIcon />
 													Upgrade to Pro
 												</DropdownMenuItem>
 											</a>
@@ -1191,9 +1133,11 @@ function Flows() {
 				>
 					<SidebarMenuItem>
 						<CollapsibleTrigger asChild>
-							<SidebarMenuButton
+							<MotionSidebarMenuButton
 								variant={pathname.startsWith("/flow") ? "outline" : "default"}
 								tooltip={"Flows"}
+								initial="initial"
+								whileHover="hover"
 								onClick={() => {
 									const firstBoard = openBoards.data?.[0];
 									if (firstBoard)
@@ -1202,10 +1146,12 @@ function Flows() {
 										);
 								}}
 							>
-								<WorkflowIcon />
+								<motion.div variants={iconVariants}>
+									<AnimatedFlowsIcon />
+								</motion.div>
 								<span>Open Flows</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-							</SidebarMenuButton>
+							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>
 						<CollapsibleContent>
 							<SidebarMenuSub>

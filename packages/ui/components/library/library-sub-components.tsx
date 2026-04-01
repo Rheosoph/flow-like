@@ -1,21 +1,16 @@
 "use client";
 
-import { AppCard } from "../ui/app-card";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Skeleton } from "../ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import {
-	closestCenter,
 	DndContext,
 	type DragEndEvent,
 	PointerSensor,
+	closestCenter,
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
 import {
-	rectSortingStrategy,
 	SortableContext,
+	rectSortingStrategy,
 	useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -32,6 +27,11 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AppCard } from "../ui/app-card";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Skeleton } from "../ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import type { LibraryItem } from "./library-types";
 import {
 	CARD_MIN_W_DESKTOP,
@@ -44,10 +44,12 @@ export function SortableFavoriteCard({
 	item,
 	onAppClick,
 	onSettingsClick,
+	appHref,
 }: Readonly<{
 	item: LibraryItem;
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
+	appHref?: (id: string) => string;
 }>) {
 	const {
 		attributes,
@@ -74,6 +76,7 @@ export function SortableFavoriteCard({
 				variant="extended"
 				onClick={() => onAppClick(item.id)}
 				onSettingsClick={() => onSettingsClick(item.id)}
+				href={appHref?.(item.id)}
 				className="w-full"
 			/>
 		</div>
@@ -93,6 +96,7 @@ export function Section({
 	categoryColor,
 	isMobile = false,
 	showSeeAll = false,
+	appHref,
 }: Readonly<{
 	title: string;
 	icon?: React.ReactNode;
@@ -106,6 +110,7 @@ export function Section({
 	categoryColor?: string;
 	isMobile?: boolean;
 	showSeeAll?: boolean;
+	appHref?: (id: string) => string;
 }>) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const cardMin = isMobile ? CARD_MIN_W_MOBILE : CARD_MIN_W_DESKTOP;
@@ -162,9 +167,7 @@ export function Section({
 							<div
 								key={`${title}-${meta.id}`}
 								className={`transition-opacity duration-200 ${
-									visibilityMode && !isActive
-										? "opacity-35"
-										: ""
+									visibilityMode && !isActive ? "opacity-35" : ""
 								}`}
 							>
 								<AppCard
@@ -174,10 +177,9 @@ export function Section({
 									variant="small"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode
-											? undefined
-											: () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : () => onSettingsClick(meta.id)
 									}
+									href={!visibilityMode ? appHref?.(meta.id) : undefined}
 									className="w-full rounded-none border-0 shadow-none bg-transparent"
 								/>
 							</div>
@@ -198,8 +200,7 @@ export function Section({
 								</>
 							) : (
 								<>
-									{hiddenCount} more{" "}
-									<ChevronDown className="h-3 w-3" />
+									{hiddenCount} more <ChevronDown className="h-3 w-3" />
 								</>
 							)}
 						</button>
@@ -222,9 +223,7 @@ export function Section({
 				<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
 					{title}
 				</h2>
-				<span className="text-xs text-muted-foreground/30">
-					{items.length}
-				</span>
+				<span className="text-xs text-muted-foreground/30">{items.length}</span>
 			</div>
 
 			<div
@@ -240,9 +239,7 @@ export function Section({
 						<div
 							key={`${title}-${meta.id}`}
 							className={`transition-all duration-300 ${
-								visibilityMode && !isActive
-									? "opacity-35 hover:opacity-70"
-									: ""
+								visibilityMode && !isActive ? "opacity-35 hover:opacity-70" : ""
 							}`}
 						>
 							<AppCard
@@ -252,10 +249,9 @@ export function Section({
 								variant={variant}
 								onClick={() => handleClick(meta.id)}
 								onSettingsClick={
-									visibilityMode
-										? undefined
-										: () => onSettingsClick(meta.id)
+									visibilityMode ? undefined : () => onSettingsClick(meta.id)
 								}
+								href={!visibilityMode ? appHref?.(meta.id) : undefined}
 								className="w-full"
 							/>
 						</div>
@@ -276,8 +272,7 @@ export function Section({
 							</>
 						) : (
 							<>
-								{hiddenCount} more{" "}
-								<ChevronDown className="h-3 w-3" />
+								{hiddenCount} more <ChevronDown className="h-3 w-3" />
 							</>
 						)}
 					</button>
@@ -292,12 +287,14 @@ export function FavoritesSection({
 	onAppClick,
 	onSettingsClick,
 	onReorder,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
 	onReorder: (orderedIds: string[]) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	const sensors = useSensors(
@@ -330,7 +327,13 @@ export function FavoritesSection({
 		<section>
 			<div className="flex items-center gap-2.5 mb-2 md:mb-4">
 				<Heart className="h-3.5 w-3.5 text-primary/70 fill-primary/70" />
-				<h2 className={isMobile ? "text-base font-bold tracking-tight text-foreground" : "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"}>
+				<h2
+					className={
+						isMobile
+							? "text-base font-bold tracking-tight text-foreground"
+							: "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"
+					}
+				>
 					Favorites
 				</h2>
 				{!isMobile && (
@@ -346,6 +349,7 @@ export function FavoritesSection({
 						<AppCard
 							key={item.id}
 							isOwned
+							href={appHref?.(item.id)}
 							app={item.app}
 							metadata={item}
 							variant="small"
@@ -376,8 +380,7 @@ export function FavoritesSection({
 									key={item.id}
 									item={item}
 									onAppClick={onAppClick}
-									onSettingsClick={onSettingsClick}
-								/>
+									onSettingsClick={onSettingsClick}								appHref={appHref}								/>
 							))}
 						</div>
 					</SortableContext>
@@ -391,11 +394,13 @@ export function PinnedHero({
 	items,
 	onAppClick,
 	onSettingsClick,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
 	onSettingsClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	if (items.length === 0) return null;
@@ -404,7 +409,13 @@ export function PinnedHero({
 		<section>
 			<div className="flex items-center gap-2 mb-2 md:mb-3">
 				<Pin className="h-3.5 w-3.5 text-primary/60 fill-primary/60" />
-				<h2 className={isMobile ? "text-base font-bold tracking-tight text-foreground" : "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"}>
+				<h2
+					className={
+						isMobile
+							? "text-base font-bold tracking-tight text-foreground"
+							: "text-xs font-medium uppercase tracking-widest text-muted-foreground/60"
+					}
+				>
 					Pinned
 				</h2>
 			</div>
@@ -414,6 +425,7 @@ export function PinnedHero({
 						<div key={`pinned-${meta.id}`}>
 							<AppCard
 								isOwned
+								href={appHref?.(meta.id)}
 								app={meta.app}
 								metadata={meta}
 								variant="small"
@@ -438,6 +450,7 @@ export function PinnedHero({
 						>
 							<AppCard
 								isOwned
+								href={appHref?.(meta.id)}
 								app={meta.app}
 								metadata={meta}
 								variant="extended"
@@ -461,6 +474,7 @@ export function SearchResults({
 	visibilityMode,
 	activeAppIds,
 	onToggleVisibility,
+	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
@@ -470,6 +484,7 @@ export function SearchResults({
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
 	onToggleVisibility?: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
 	const handleClick = (id: string) => {
@@ -509,21 +524,16 @@ export function SearchResults({
 							<div
 								key={`search-${meta.id}`}
 								className={`transition-opacity duration-200 ${
-									visibilityMode && !isActive
-										? "opacity-35"
-										: ""
+									visibilityMode && !isActive ? "opacity-35" : ""
 								}`}
 							>
 								<AppCard
-									isOwned
-									app={meta.app}
+									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
 									metadata={meta}
 									variant="small"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode
-											? undefined
-											: () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : () => onSettingsClick(meta.id)
 									}
 									className="w-full rounded-none border-0 shadow-none bg-transparent"
 								/>
@@ -550,15 +560,12 @@ export function SearchResults({
 								}`}
 							>
 								<AppCard
-									isOwned
-									app={meta.app}
+									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
 									metadata={meta}
 									variant="extended"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode
-											? undefined
-											: () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : () => onSettingsClick(meta.id)
 									}
 									className="w-full"
 								/>

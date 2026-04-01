@@ -1,0 +1,46 @@
+name: Build Grain WASM Node
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Grain
+        run: |
+          npm install -g @grain-lang/cli
+          grain --version
+
+      - name: Build WASM node
+        run: |
+          mkdir -p build
+          grain compile --release --no-gc --elide-type-info \
+            -I ../wasm-sdk-grain -o build/node.wasm src/main.gr
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grain-wasm-node
+          path: |
+            build/node.wasm
+            flow-like.toml
+            README.md
+
+      - name: Create release tarball
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tar czf grain-wasm-node.tar.gz \
+            build/node.wasm flow-like.toml README.md
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: grain-wasm-node.tar.gz

@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useMemo, useState } from "react";
 import {
 	Alert,
@@ -22,10 +23,13 @@ import {
 } from "../../ui";
 import type { IConfigInterfaceProps } from "../interfaces";
 
+export type SinkExecutionTarget = "REMOTE" | "LOCAL" | "HYBRID";
+
 export type HttpSink = {
 	path: string;
 	method: string;
 	auth_token?: string | null;
+	sink_execution?: SinkExecutionTarget;
 };
 
 const HTTP_METHODS = [
@@ -44,12 +48,14 @@ export function HttpConfig({
 	config,
 	onConfigUpdate,
 	hub,
+	canExecuteLocally,
 }: IConfigInterfaceProps) {
 	const [showToken, setShowToken] = useState(false);
 
 	const path = (config?.path as string) || "/webhook";
 	const method = (config?.method as string) || "POST";
 	const authToken = (config?.auth_token as string | null) || null;
+	const sinkExecution = (config?.sink_execution as SinkExecutionTarget) || undefined;
 
 	const setValue = (key: string, value: any) => {
 		onConfigUpdate?.({
@@ -63,12 +69,24 @@ export function HttpConfig({
 
 	const remoteUrl = useMemo(() => {
 		if (!hub?.domain) return null;
-		// Use HTTPS for production/staging, HTTP for development
 		const protocol = hub.environment === "Development" ? "http" : "https";
 		return `${protocol}://${hub.domain}/sink/trigger/http/${appId}${path}`;
 	}, [hub?.domain, hub?.environment, appId, path]);
 
 	const supportsRemote = hub?.supported_sinks?.http === true;
+	const supportsLocal = canExecuteLocally ?? false;
+	const supportsBoth = supportsRemote && supportsLocal;
+
+	// Determine effective execution target
+	const effectiveExecution: SinkExecutionTarget = useMemo(() => {
+		if (sinkExecution) return sinkExecution;
+		if (supportsBoth) return "HYBRID";
+		if (supportsRemote) return "REMOTE";
+		return "LOCAL";
+	}, [sinkExecution, supportsBoth, supportsRemote]);
+
+	const showRemoteUrl = effectiveExecution === "REMOTE" || effectiveExecution === "HYBRID";
+	const showLocalUrl = effectiveExecution === "LOCAL" || effectiveExecution === "HYBRID";
 
 	const pathError =
 		path && !path.startsWith("/") ? "Path must start with '/'" : null;
@@ -146,105 +164,88 @@ export function HttpConfig({
 				</p>
 			</div>
 
-			{/* URL Preview - Tabs for local/remote */}
+			{/* Execution Target */}
+			{supportsBoth && (
+				<div className="space-y-2">
+					<Label htmlFor="sink_execution">Execution Target</Label>
+					<Select
+						value={effectiveExecution}
+						onValueChange={(value) => setValue("sink_execution", value)}
+						disabled={!isEditing}
+					>
+						<SelectTrigger id="sink_execution" className="w-full">
+							<SelectValue placeholder="Select execution target" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="REMOTE">
+								<div className="flex items-center gap-2">
+									<Badge variant="default">Remote</Badge>
+									<span className="text-muted-foreground text-xs">
+										Server only — available 24/7
+									</span>
+								</div>
+							</SelectItem>
+							<SelectItem value="LOCAL">
+								<div className="flex items-center gap-2">
+									<Badge variant="secondary">Local</Badge>
+									<span className="text-muted-foreground text-xs">
+										Desktop app only
+									</span>
+								</div>
+							</SelectItem>
+							<SelectItem value="HYBRID">
+								<div className="flex items-center gap-2">
+									<Badge variant="outline">Both</Badge>
+									<span className="text-muted-foreground text-xs">
+										Server + desktop app
+									</span>
+								</div>
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p className="text-sm text-muted-foreground">
+						Where this HTTP endpoint should be registered and executed.
+					</p>
+				</div>
+			)}
+
+			{/* URL Preview */}
 			<div className="space-y-2">
 				<Label>Endpoint URLs</Label>
-				{supportsRemote && remoteUrl ? (
+				{showRemoteUrl && showLocalUrl && remoteUrl ? (
 					<Tabs defaultValue="remote" className="w-full">
 						<TabsList className="grid w-full grid-cols-2">
 							<TabsTrigger value="remote">Remote (Server)</TabsTrigger>
 							<TabsTrigger value="local">Local (Desktop)</TabsTrigger>
 						</TabsList>
 						<TabsContent value="remote" className="space-y-3">
-							<div className="relative">
-								<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm items-center font-mono break-all">
-									<Badge variant="default" className="mr-2 font-mono shrink-0">
-										{method}
-									</Badge>
-									{remoteUrl}
-								</div>
-								<Button
-									type="button"
-									variant="ghost"
-									size="sm"
-									className="absolute right-1 top-1 h-8"
-									onClick={() => navigator.clipboard.writeText(remoteUrl)}
-								>
-									Copy
-								</Button>
-							</div>
+							<UrlPreview url={remoteUrl} method={method} variant="default" authToken={authToken} CurlExample={CurlExample} />
 							<p className="text-xs text-muted-foreground">
 								Public endpoint for remote/cloud execution. Available 24/7.
 							</p>
-							<Alert>
-								<AlertTitle>Example Request</AlertTitle>
-								<AlertDescription>
-									<CurlExample url={remoteUrl} withAuth={!!authToken} />
-								</AlertDescription>
-							</Alert>
 						</TabsContent>
 						<TabsContent value="local" className="space-y-3">
-							<div className="relative">
-								<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm items-center font-mono break-all">
-									<Badge
-										variant="secondary"
-										className="mr-2 font-mono shrink-0"
-									>
-										{method}
-									</Badge>
-									{localUrl}
-								</div>
-								<Button
-									type="button"
-									variant="ghost"
-									size="sm"
-									className="absolute right-1 top-1 h-8"
-									onClick={() => navigator.clipboard.writeText(localUrl)}
-								>
-									Copy
-								</Button>
-							</div>
+							<UrlPreview url={localUrl} method={method} variant="secondary" authToken={authToken} CurlExample={CurlExample} />
 							<p className="text-xs text-muted-foreground">
 								Local endpoint for desktop app execution. Only available when
 								the app is running.
 							</p>
-							<Alert>
-								<AlertTitle>Example Request</AlertTitle>
-								<AlertDescription>
-									<CurlExample url={localUrl} withAuth={!!authToken} />
-								</AlertDescription>
-							</Alert>
 						</TabsContent>
 					</Tabs>
+				) : showRemoteUrl && remoteUrl ? (
+					<div className="space-y-3">
+						<UrlPreview url={remoteUrl} method={method} variant="default" authToken={authToken} CurlExample={CurlExample} />
+						<p className="text-xs text-muted-foreground">
+							Public endpoint for remote/cloud execution. Available 24/7.
+						</p>
+					</div>
 				) : (
 					<div className="space-y-3">
-						<div className="relative">
-							<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm items-center font-mono break-all">
-								<Badge variant="secondary" className="mr-2 font-mono shrink-0">
-									{method}
-								</Badge>
-								{localUrl}
-							</div>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="absolute right-1 top-1 h-8"
-								onClick={() => navigator.clipboard.writeText(localUrl)}
-							>
-								Copy
-							</Button>
-						</div>
+						<UrlPreview url={localUrl} method={method} variant="secondary" authToken={authToken} CurlExample={CurlExample} />
 						<p className="text-xs text-muted-foreground">
 							Local endpoint for desktop app execution. Only available when the
 							app is running.
 						</p>
-						<Alert>
-							<AlertTitle>Example Request</AlertTitle>
-							<AlertDescription>
-								<CurlExample url={localUrl} withAuth={!!authToken} />
-							</AlertDescription>
-						</Alert>
 					</div>
 				)}
 			</div>
@@ -323,6 +324,48 @@ export function HttpConfig({
 				</Alert>
 			)}
 		</div>
+	);
+}
+
+function UrlPreview({
+	url,
+	method,
+	variant,
+	authToken,
+	CurlExample,
+}: {
+	url: string;
+	method: string;
+	variant: "default" | "secondary";
+	authToken: string | null;
+	CurlExample: (props: { url: string; withAuth: boolean }) => React.ReactNode;
+}) {
+	return (
+		<>
+			<div className="relative">
+				<div className="flex h-auto min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm items-center font-mono break-all">
+					<Badge variant={variant} className="mr-2 font-mono shrink-0">
+						{method}
+					</Badge>
+					{url}
+				</div>
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					className="absolute right-1 top-1 h-8"
+					onClick={() => navigator.clipboard.writeText(url)}
+				>
+					Copy
+				</Button>
+			</div>
+			<Alert>
+				<AlertTitle>Example Request</AlertTitle>
+				<AlertDescription>
+					<CurlExample url={url} withAuth={!!authToken} />
+				</AlertDescription>
+			</Alert>
+		</>
 	);
 }
 

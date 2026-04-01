@@ -11,7 +11,7 @@ const posts = (await getCollection('blog', ({ data }) => import.meta.env.PROD ? 
     <summary>Latest</summary>
     <ul>
       {posts.map(p =>
-        <li><a href={`/${p.slug.split('-').slice(3).join('-')}/`}>{p.data.title}</a></li>
+        <li><a href={`/${p.id.split('-').slice(3).join('-')}/`}>{p.data.title}</a></li>
       )}
     </ul>
   </details>

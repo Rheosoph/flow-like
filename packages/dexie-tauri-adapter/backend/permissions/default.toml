@@ -1,0 +1,12 @@
+[default]
+description = "Default permissions for the blob offload plugin – allows all commands."
+permissions = [
+    "allow-blob-store",
+    "allow-blob-get",
+    "allow-blob-store-batch",
+    "allow-blob-get-batch",
+    "allow-blob-delete",
+    "allow-blob-configure",
+    "allow-blob-inc-refs",
+    "allow-blob-dec-refs",
+]

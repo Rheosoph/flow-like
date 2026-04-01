@@ -677,14 +677,13 @@ pub async fn get_or_open_workbook(
     use calamine::Reader;
 
     let key = excel_cache_key(file);
-    if let Some(cached) = ctx.get_cache(&key).await {
-        if cached
+    if let Some(cached) = ctx.get_cache(&key).await
+        && cached
             .as_any()
             .downcast_ref::<CachedExcelWorkbook>()
             .is_some()
-        {
-            return Ok(cached);
-        }
+    {
+        return Ok(cached);
     }
 
     let bytes_result = file.get(ctx, false).await;

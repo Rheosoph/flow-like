@@ -37,7 +37,11 @@ const dateFor = (p: any) =>
     : "";
 ---
 
-<section class="relative py-24 bg-zinc-950">
+<section
+  class="relative py-24 bg-zinc-950"
+  data-c1="hsl(220 30% 40% / .04)"
+  data-c2="hsl(260 30% 40% / .04)"
+>
   <!-- Subtle grid overlay -->
   <div
     aria-hidden="true"
@@ -68,7 +72,7 @@ const dateFor = (p: any) =>
     <div class="grid gap-6 md:grid-cols-3">
       {posts.map((post) => (
         <a
-          href={`/blog/${post.slug.split("-").slice(3).join("-")}/`}
+          href={`/blog/${post.id.split("-").slice(3).join("-")}/`}
           class="group block"
         >
           <!-- Thumbnail -->

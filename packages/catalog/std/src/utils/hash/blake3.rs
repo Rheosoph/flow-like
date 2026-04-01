@@ -59,7 +59,6 @@ impl NodeLogic for Blake3Node {
         context.deactivate_exec_pin("exec_out").await?;
 
         let value = context.evaluate_pin_to_ref("input").await?;
-        let value = value.lock().await.clone();
         let reference_value = to_vec(&value)?;
         let mut hasher = blake3::Hasher::new();
         let hash = hasher.update(&reference_value).finalize();

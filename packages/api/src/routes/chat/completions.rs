@@ -226,17 +226,31 @@ fn prepare_upstream_body(
     (body, stream)
 }
 
-fn build_provider_url(hosted_provider: &HostedProvider) -> Result<(String, String), ApiError> {
+async fn build_provider_url(
+    state: &AppState,
+    hosted_provider: &HostedProvider,
+) -> Result<(String, String), ApiError> {
+    use flow_like_secrets::{ExposeSecret, SecretRef};
+
     let endpoint_key = hosted_provider.env_endpoint_key();
     let api_key_key = hosted_provider.env_api_key();
 
-    let endpoint = std::env::var(endpoint_key)
+    let endpoint = state
+        .secrets
+        .get_secret_string(&SecretRef::new(endpoint_key))
+        .await
         .ok()
+        .map(|s| s.expose_secret().to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| hosted_provider.default_endpoint().map(String::from))
         .ok_or_else(|| ApiError::internal(format!("{} not configured", endpoint_key)))?;
 
-    let api_key = std::env::var(api_key_key).unwrap_or_default();
+    let api_key = state
+        .secrets
+        .get_secret_string(&SecretRef::new(api_key_key))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .unwrap_or_default();
     if api_key.is_empty() {
         return Err(ApiError::internal(format!(
             "{} not configured",
@@ -482,7 +496,7 @@ pub async fn invoke_llm(
     Extension(user): Extension<AppUser>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<AxumResponse, ApiError> {
-    user.sub()?;
+    user.executor_scoped_sub()?;
     let model_field = payload
         .get("model")
         .and_then(|v| v.as_str())
@@ -500,7 +514,7 @@ pub async fn invoke_llm(
         tracking_id_opt.as_deref(),
         &hosted_provider,
     );
-    let (url, api_key) = build_provider_url(&hosted_provider)?;
+    let (url, api_key) = build_provider_url(&state, &hosted_provider).await?;
     let client = flow_like_types::reqwest::Client::new();
 
     let mut request_builder = if hosted_provider.uses_bearer_auth() {
@@ -528,7 +542,7 @@ pub async fn invoke_llm(
         request_builder = request_builder.header("X-User-Id", tracking_id);
     }
 
-    let user_sub = user.sub()?;
+    let user_sub = user.executor_scoped_sub()?;
     if stream {
         handle_streaming(request_builder, state, user_sub, upstream_model_id).await
     } else {

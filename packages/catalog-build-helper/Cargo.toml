@@ -1,0 +1,4 @@
+[package]
+name = "flow-like-catalog-build-helper"
+version = "0.1.0"
+edition = "2024"

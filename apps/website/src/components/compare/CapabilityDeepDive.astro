@@ -9,7 +9,7 @@ const { t } = Astro.props;
 
 const capabilities = [
   { id: "visual_workflow", icon: LuWorkflow, color: "primary" },
-  { id: "deterministic", icon: LuShield, color: "emerald" },
+  { id: "replayable", icon: LuShield, color: "emerald" },
   { id: "high_volume", icon: LuZap, color: "amber" },
   { id: "compiled", icon: LuCpu, color: "orange" },
   { id: "ai_agents", icon: LuBrain, color: "purple" },
@@ -84,7 +84,7 @@ const capabilities = [
 
             <!-- How Flow-Like does it -->
             <div class="pt-4 border-t border-border/30">
-              <p class="text-xs font-medium text-primary mb-1.5">How Flow-Like does it</p>
+              <p class="text-xs font-medium text-primary mb-1.5">{t("compare.explain.how_does_it")}</p>
               <p class="text-sm text-muted-foreground/90 leading-relaxed">
                 {t(`compare.explain.${cap.id}.flow`)}
               </p>

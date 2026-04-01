@@ -2,6 +2,7 @@
 
 import {
 	AboutSection,
+	AppReviewsSection,
 	HeroSkeleton,
 	StoreEmptyState,
 	StoreHero,
@@ -21,10 +22,13 @@ export default function Page() {
 	const purchaseStatus = searchParams.get("purchase");
 	const {
 		apps,
-		app,
-		meta,
+		appData,
+		metaData,
 		isMember,
 		isPurchasing,
+		isLoading,
+		isError,
+		notFound,
 		hasThumbnail,
 		coverUrl,
 		iconUrl,
@@ -35,6 +39,7 @@ export default function Page() {
 		onSettings,
 		onBuy,
 		onJoinOrRequest,
+		refetchAppData,
 	} = useStoreData(id, router, EVENT_CONFIG);
 
 	useEffect(() => {
@@ -65,7 +70,7 @@ export default function Page() {
 		);
 	}
 
-	if (!app.data || !meta.data) {
+	if (isLoading) {
 		return (
 			<main className="flex-col flex grow max-h-full overflow-auto min-h-0 w-full">
 				<HeroSkeleton />
@@ -74,6 +79,21 @@ export default function Page() {
 					<div className="h-4 w-1/2 rounded-full bg-muted/20" />
 				</div>
 			</main>
+		);
+	}
+
+	if (isError || notFound || !appData || !metaData) {
+		return (
+			<div className="flex-1 flex items-center justify-center p-6">
+				<StoreEmptyState
+					title={isError ? "Failed to load app" : "App not found"}
+					description={
+						isError
+							? "Something went wrong. Please try again later."
+							: "This app may be private or no longer available."
+					}
+				/>
+			</div>
 		);
 	}
 
@@ -86,14 +106,14 @@ export default function Page() {
 				iconUrl={iconUrl}
 				appName={appName}
 				priceLabel={priceLabel}
-				category={app.data.primary_category ?? "Other"}
+				category={appData.primary_category ?? "Other"}
 				isMember={isMember}
-				ratingCount={app.data.rating_count}
-				avgRating={app.data.avg_rating ?? 0}
-				visibility={app.data.visibility}
-				authors={app.data.authors}
+				ratingCount={appData.rating_count}
+				avgRating={appData.avg_rating ?? 0}
+				visibility={appData.visibility}
+				authors={appData.authors}
 				canUseApp={canUseApp}
-				price={app.data.price ?? 0}
+				price={appData.price ?? 0}
 				isPurchasing={isPurchasing}
 				onUse={onUse}
 				onSettings={onSettings}
@@ -102,16 +122,18 @@ export default function Page() {
 			/>
 
 			<div className="max-w-5xl mx-auto w-full px-6 md:px-10 pt-8 pb-12 space-y-10">
-				<AboutSection app={app.data} meta={meta.data} />
+				<AboutSection app={appData} meta={metaData} />
 
-				{meta.data.long_description && (
+				{metaData?.long_description && (
 					<div className="leading-relaxed">
 						<TextEditor
-							initialContent={meta.data.long_description}
+							initialContent={metaData.long_description}
 							isMarkdown
 						/>
 					</div>
 				)}
+
+				<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
 
 				<StoreRecommendations />
 			</div>

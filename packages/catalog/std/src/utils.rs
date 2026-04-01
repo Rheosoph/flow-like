@@ -3,7 +3,6 @@ pub mod bool;
 pub mod csv;
 pub mod cuid;
 pub mod datetime;
-pub mod env;
 pub mod float;
 pub mod hash;
 pub mod int;

@@ -56,6 +56,28 @@ export function useSurfaceManager() {
 					break;
 				}
 
+				case "setCanvasSettings": {
+					const existing = next.get(message.surfaceId);
+					if (!existing) break;
+
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+
+					next.set(message.surfaceId, {
+						...existing,
+						canvasSettings: {
+							...existing.canvasSettings,
+							...filtered,
+						},
+					});
+					break;
+				}
+
 				case "surfaceUpdate": {
 					const existing = next.get(message.surfaceId);
 					if (existing) {
@@ -112,7 +134,26 @@ export function useSurfaceManager() {
 					if (!surface) break;
 
 					const component = surface.components[componentId];
-					if (!component) break;
+
+					// Create new component if it doesn't exist and value has createComponent type
+					if (!component) {
+						const updateValue = value as Record<string, unknown>;
+						if (updateValue?.type === "createComponent") {
+							const newComponent: SurfaceComponent = {
+								id: componentId,
+								component: updateValue.component as SurfaceComponent["component"],
+								style: updateValue.style as SurfaceComponent["style"],
+							};
+							next.set(surfaceId, {
+								...surface,
+								components: {
+									...surface.components,
+									[componentId]: newComponent,
+								},
+							});
+						}
+						break;
+					}
 
 					const updateValue = value as Record<string, unknown>;
 					const updateType = updateValue?.type as string;
@@ -281,7 +322,8 @@ export function useSurfaceManager() {
 							};
 							break;
 						}
-						case "setChartData": {
+						case "setChartData":
+						case "setNivoData": {
 							const data = updateValue.data;
 							const componentData = component.component as unknown as Record<
 								string,
@@ -291,13 +333,14 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									data,
+									data: { literalJson: JSON.stringify(data) },
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;
 						}
-						case "setChartLayout": {
-							const layout = updateValue.layout;
+						case "setChartLayout":
+						case "setNivoConfig": {
+							const configOrLayout = updateValue.layout ?? updateValue.config;
 							const componentData = component.component as unknown as Record<
 								string,
 								unknown
@@ -306,7 +349,8 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									layout,
+									...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+									...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;
@@ -566,6 +610,37 @@ export function useSurfaceManager() {
 								component: {
 									...componentData,
 									children: { explicitList: [] },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "setIframeSrc": {
+							const src = updateValue.src as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									src: { literalString: src },
+									srcdoc: undefined,
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "setIframeSrcdoc": {
+							const srcdoc = updateValue.srcdoc as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									srcdoc: { literalString: srcdoc },
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;

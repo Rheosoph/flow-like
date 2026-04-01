@@ -1,0 +1,1213 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const panels = [
+  { id: "it",     hue: "222 89% 60%",  accent: "blue"   },
+  { id: "data",   hue: "45 80% 50%",   accent: "amber"  },
+  { id: "ai",     hue: "280 60% 55%",  accent: "purple" },
+  { id: "nocode", hue: "161 50% 45%",  accent: "green"  },
+  { id: "maker",  hue: "25 80% 52%",   accent: "orange" },
+  { id: "tools",  hue: "340 65% 50%",  accent: "rose"   },
+] as const;
+---
+
+<section class="sc-section relative isolate overflow-hidden py-20 md:py-28">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="sc-orb sc-orb--1"></div>
+    <div class="sc-orb sc-orb--2"></div>
+  </div>
+
+  <!-- Header -->
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 mb-12 md:mb-16">
+    <div class="sc-reveal mx-auto max-w-3xl text-center">
+      <span class="inline-block rounded-full border border-border/50 bg-muted/40 px-4 py-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase mb-6">
+        {t("v3.showcase.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-foreground">
+        {t("v3.showcase.headline")}
+      </h2>
+      <p class="mt-4 text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+        {t("v3.showcase.description")}
+      </p>
+    </div>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 mb-6">
+    <div class="sc-tabs flex items-center gap-1.5 sm:gap-2 mx-auto w-fit max-w-full overflow-x-auto px-2 py-1.5 rounded-xl border border-border/40 bg-background/70 backdrop-blur-sm" id="sc-tabs" role="tablist" aria-label="Use case navigation">
+      {panels.map((p, i) => (
+        <button
+          class:list={[
+            "sc-tab-btn relative whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300 ease-out hover:scale-[1.02] active:scale-95",
+            i === 0
+              ? "text-foreground bg-muted/50 shadow-sm"
+              : "text-muted-foreground hover:text-foreground hover:bg-muted/30",
+          ]}
+          data-index={i}
+          role="tab"
+          aria-selected={i === 0 ? "true" : "false"}
+          type="button"
+        >
+          {t(`v3.showcase.${p.id}.title` as TranslationKey)}
+        </button>
+      ))}
+    </div>
+  </div>
+
+  <!-- Scroll Theater -->
+  <div class="sc-theater relative" id="sc-theater">
+    <!-- Arrow Left -->
+    <button
+      class="sc-arrow sc-arrow--left hidden md:flex"
+      id="sc-arrow-left"
+      aria-label="Previous panel"
+      type="button"
+    >
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4L6 10L12 16"/>
+      </svg>
+    </button>
+
+    <!-- Arrow Right -->
+    <button
+      class="sc-arrow sc-arrow--right hidden md:flex"
+      id="sc-arrow-right"
+      aria-label="Next panel"
+      type="button"
+    >
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4L14 10L8 16"/>
+      </svg>
+    </button>
+
+    <!-- Scroll Container -->
+    <div class="sc-track" id="sc-track" role="region" aria-label="Use case showcase" tabindex="0">
+
+      <!-- Panel: IT -->
+      <div class="sc-panel" data-panel="it">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-it-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(222 89% 60% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(222 89% 60% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-it-bg)"/>
+
+            <!-- Pulse rings from center -->
+            <circle cx="450" cy="145" r="80" stroke="hsl(222 89% 60% / 0.08)" stroke-width="1" fill="none">
+              <animate attributeName="r" values="80;140" dur="3s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+              <animate attributeName="opacity" values="0.3;0" dur="3s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </circle>
+            <circle cx="450" cy="145" r="80" stroke="hsl(222 89% 60% / 0.06)" stroke-width="1" fill="none">
+              <animate attributeName="r" values="80;140" dur="3s" begin="1s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+              <animate attributeName="opacity" values="0.2;0" dur="3s" begin="1s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </circle>
+
+            <!-- Connection lines from hub to spoke nodes -->
+            <line x1="402" y1="131" x2="250" y2="87" stroke="hsl(222 89% 60% / 0.15)" stroke-width="1.5" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-8" dur="1s" repeatCount="indefinite"/>
+            </line>
+            <line x1="498" y1="131" x2="650" y2="87" stroke="hsl(200 70% 50% / 0.15)" stroke-width="1.5" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-8" dur="1.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="402" y1="158" x2="220" y2="205" stroke="hsl(210 70% 50% / 0.15)" stroke-width="1.5" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-8" dur="1.4s" repeatCount="indefinite"/>
+            </line>
+            <line x1="498" y1="158" x2="680" y2="205" stroke="hsl(280 60% 55% / 0.15)" stroke-width="1.5" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-8" dur="1.1s" repeatCount="indefinite"/>
+            </line>
+            <line x1="450" y1="195" x2="450" y2="260" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1.5" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-8" dur="1.3s" repeatCount="indefinite"/>
+            </line>
+
+            <!-- Data packets traveling on lines -->
+            <circle r="4" fill="hsl(222 89% 60% / 0.6)">
+              <animateMotion dur="2s" repeatCount="indefinite" path="M402,131 L250,87"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="4" fill="hsl(200 70% 50% / 0.6)">
+              <animateMotion dur="2.4s" repeatCount="indefinite" path="M498,131 L650,87"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.4s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="4" fill="hsl(210 70% 50% / 0.6)">
+              <animateMotion dur="2.8s" repeatCount="indefinite" path="M402,158 L220,205"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.8s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="4" fill="hsl(280 60% 55% / 0.6)">
+              <animateMotion dur="2.2s" repeatCount="indefinite" path="M498,158 L680,205"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="4" fill="hsl(161 50% 45% / 0.6)">
+              <animateMotion dur="2.6s" repeatCount="indefinite" path="M450,195 L450,260"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.6s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Central Hub -->
+            <circle cx="450" cy="145" r="50" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="2"/>
+            <text x="450" y="138" text-anchor="middle" fill="hsl(222 89% 60% / 0.8)" font-size="13" font-family="system-ui" font-weight="700">Flow-Like</text>
+            <text x="450" y="157" text-anchor="middle" fill="hsl(222 89% 60% / 0.4)" font-size="9" font-family="system-ui">orchestrator</text>
+
+            <!-- Spoke: Azure AD -->
+            <rect x="130" y="44" width="120" height="52" rx="12" fill="hsl(222 89% 60% / 0.07)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <circle cx="155" cy="70" r="10" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1"/>
+            <path d="M151 73 L155 67 L159 73" stroke="hsl(222 89% 60% / 0.6)" stroke-width="1.2" fill="none"/>
+            <text x="175" y="74" fill="hsl(222 89% 60% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Azure AD</text>
+
+            <!-- Spoke: Jira -->
+            <rect x="650" y="44" width="120" height="52" rx="12" fill="hsl(200 70% 50% / 0.07)" stroke="hsl(200 70% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="675" cy="70" r="10" fill="hsl(200 70% 50% / 0.12)" stroke="hsl(200 70% 50% / 0.3)" stroke-width="1"/>
+            <rect x="670" y="65" width="10" height="10" rx="2" stroke="hsl(200 70% 50% / 0.6)" stroke-width="1" fill="none"/>
+            <text x="695" y="74" fill="hsl(200 70% 50% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Jira Board</text>
+
+            <!-- Spoke: LDAP -->
+            <rect x="100" y="194" width="120" height="52" rx="12" fill="hsl(210 70% 50% / 0.07)" stroke="hsl(210 70% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="125" cy="220" r="10" fill="hsl(210 70% 50% / 0.12)" stroke="hsl(210 70% 50% / 0.3)" stroke-width="1"/>
+            <path d="M121 217 L125 213 L129 217 M121 223 L125 227 L129 223" stroke="hsl(210 70% 50% / 0.6)" stroke-width="1" fill="none"/>
+            <text x="145" y="224" fill="hsl(210 70% 50% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">LDAP Sync</text>
+
+            <!-- Spoke: Slack -->
+            <rect x="680" y="194" width="120" height="52" rx="12" fill="hsl(280 60% 55% / 0.07)" stroke="hsl(280 60% 55% / 0.3)" stroke-width="1.5"/>
+            <circle cx="705" cy="220" r="10" fill="hsl(280 60% 55% / 0.12)" stroke="hsl(280 60% 55% / 0.3)" stroke-width="1"/>
+            <path d="M701 216 L705 220 L709 216 M701 224 L705 220 L709 224" stroke="hsl(280 60% 55% / 0.6)" stroke-width="1.2" fill="none"/>
+            <text x="725" y="224" fill="hsl(280 60% 55% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Slack</text>
+
+            <!-- Spoke: Email -->
+            <rect x="390" y="260" width="120" height="52" rx="12" fill="hsl(161 50% 45% / 0.07)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <circle cx="415" cy="286" r="10" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1"/>
+            <rect x="409" y="281" width="12" height="9" rx="2" stroke="hsl(161 50% 45% / 0.6)" stroke-width="1" fill="none"/>
+            <path d="M409 282 L415 287 L421 282" stroke="hsl(161 50% 45% / 0.5)" stroke-width="0.8" fill="none"/>
+            <text x="435" y="290" fill="hsl(161 50% 45% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Notify Mgr</text>
+
+            <!-- Pipeline label -->
+            <rect x="40" y="295" width="200" height="28" rx="14" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.15)" stroke-width="1"/>
+            <text x="140" y="314" text-anchor="middle" fill="hsl(222 89% 60% / 0.5)" font-size="10" font-family="system-ui" font-weight="500">Employee Onboarding Hub</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.it.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.it.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.it.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.it.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.it.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.it.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.it.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Data -->
+      <div class="sc-panel" data-panel="data">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-data-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(45 80% 50% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(45 80% 50% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-data-bg)"/>
+
+            <!-- Source layer: 3 database icons at top -->
+            <rect x="80" y="40" width="130" height="55" rx="10" fill="hsl(210 60% 50% / 0.07)" stroke="hsl(210 60% 50% / 0.3)" stroke-width="1.5"/>
+            <ellipse cx="110" cy="58" rx="10" ry="5" fill="hsl(210 60% 50% / 0.15)" stroke="hsl(210 60% 50% / 0.4)" stroke-width="1"/>
+            <line x1="100" y1="58" x2="100" y2="72" stroke="hsl(210 60% 50% / 0.4)" stroke-width="1"/>
+            <line x1="120" y1="58" x2="120" y2="72" stroke="hsl(210 60% 50% / 0.4)" stroke-width="1"/>
+            <ellipse cx="110" cy="72" rx="10" ry="5" stroke="hsl(210 60% 50% / 0.4)" stroke-width="1" fill="none"/>
+            <text x="140" y="72" fill="hsl(210 60% 50% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Postgres</text>
+
+            <rect x="385" y="40" width="130" height="55" rx="10" fill="hsl(161 50% 45% / 0.07)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <path d="M410 55 L425 55 L420 75 L410 75 Z" stroke="hsl(161 50% 45% / 0.4)" stroke-width="1" fill="hsl(161 50% 45% / 0.1)"/>
+            <text x="440" y="72" fill="hsl(161 50% 45% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">Kafka</text>
+
+            <rect x="690" y="40" width="130" height="55" rx="10" fill="hsl(250 60% 55% / 0.07)" stroke="hsl(250 60% 55% / 0.3)" stroke-width="1.5"/>
+            <text x="715" y="62" fill="hsl(250 60% 55% / 0.5)" font-size="9" font-family="monospace">{`{}`}</text>
+            <text x="740" y="72" fill="hsl(250 60% 55% / 0.8)" font-size="11" font-family="system-ui" font-weight="500">REST API</text>
+
+            <!-- Converging streams (animated dashed lines going down) -->
+            <path d="M145 95 C145 130, 350 130, 400 155" stroke="hsl(210 60% 50% / 0.2)" stroke-width="1.5" stroke-dasharray="5 4">
+              <animate attributeName="stroke-dashoffset" values="0;-18" dur="2s" repeatCount="indefinite"/>
+            </path>
+            <path d="M450 95 L450 155" stroke="hsl(161 50% 45% / 0.2)" stroke-width="1.5" stroke-dasharray="5 4">
+              <animate attributeName="stroke-dashoffset" values="0;-18" dur="1.8s" repeatCount="indefinite"/>
+            </path>
+            <path d="M755 95 C755 130, 550 130, 500 155" stroke="hsl(250 60% 55% / 0.2)" stroke-width="1.5" stroke-dasharray="5 4">
+              <animate attributeName="stroke-dashoffset" values="0;-18" dur="2.2s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Animated data particles on streams -->
+            <circle r="3" fill="hsl(210 60% 50% / 0.6)">
+              <animateMotion dur="2.5s" repeatCount="indefinite" path="M145,95 C145,130 350,130 400,155"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.5s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="3" fill="hsl(161 50% 45% / 0.6)">
+              <animateMotion dur="2s" repeatCount="indefinite" path="M450,95 L450,155"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="3" fill="hsl(250 60% 55% / 0.6)">
+              <animateMotion dur="2.8s" repeatCount="indefinite" path="M755,95 C755,130 550,130 500,155"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.8s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Transform funnel -->
+            <path d="M320 155 L580 155 L540 205 L360 205 Z" fill="hsl(45 80% 50% / 0.06)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.5" stroke-linejoin="round"/>
+            <text x="450" y="175" text-anchor="middle" fill="hsl(45 80% 50% / 0.7)" font-size="11" font-family="system-ui" font-weight="600">Clean + Validate + Deduplicate</text>
+            <text x="450" y="195" text-anchor="middle" fill="hsl(45 80% 50% / 0.4)" font-size="9" font-family="system-ui">schema enforcement</text>
+
+            <!-- Row count badges on funnel -->
+            <rect x="590" y="148" width="60" height="20" rx="10" fill="hsl(0 60% 50% / 0.08)" stroke="hsl(0 60% 50% / 0.2)" stroke-width="0.5"/>
+            <text x="620" y="162" text-anchor="middle" fill="hsl(0 60% 50% / 0.6)" font-size="8" font-family="monospace">1.2M rows</text>
+            <rect x="550" y="198" width="55" height="20" rx="10" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.5"/>
+            <text x="577" y="212" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="8" font-family="monospace">980K rows</text>
+
+            <!-- Output stream -->
+            <path d="M450 205 L450 245" stroke="hsl(45 80% 50% / 0.2)" stroke-width="2" stroke-dasharray="5 4">
+              <animate attributeName="stroke-dashoffset" values="0;-18" dur="1.5s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Output: Data warehouse -->
+            <rect x="370" y="245" width="160" height="60" rx="12" fill="hsl(45 80% 50% / 0.08)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="2"/>
+            <text x="450" y="272" text-anchor="middle" fill="hsl(45 80% 50% / 0.8)" font-size="13" font-family="system-ui" font-weight="700">Data Lake</text>
+            <text x="450" y="292" text-anchor="middle" fill="hsl(45 80% 50% / 0.4)" font-size="9" font-family="system-ui">parquet / iceberg</text>
+
+            <!-- Mini chart in corner -->
+            <rect x="710" y="225" width="150" height="85" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <text x="725" y="245" fill="hsl(0 0% 60% / 0.5)" font-size="8" font-family="system-ui" font-weight="600">Throughput</text>
+            <rect x="725" y="275" width="12" height="25" rx="2" fill="hsl(45 80% 50% / 0.2)"/>
+            <rect x="745" y="260" width="12" height="40" rx="2" fill="hsl(45 80% 50% / 0.3)"/>
+            <rect x="765" y="268" width="12" height="32" rx="2" fill="hsl(45 80% 50% / 0.25)"/>
+            <rect x="785" y="252" width="12" height="48" rx="2" fill="hsl(45 80% 50% / 0.35)"/>
+            <rect x="805" y="255" width="12" height="45" rx="2" fill="hsl(45 80% 50% / 0.4)"/>
+            <rect x="825" y="248" width="12" height="52" rx="2" fill="hsl(161 50% 45% / 0.4)"/>
+
+            <rect x="40" y="285" width="170" height="28" rx="14" fill="hsl(45 80% 50% / 0.06)" stroke="hsl(45 80% 50% / 0.15)" stroke-width="1"/>
+            <text x="125" y="304" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="10" font-family="system-ui" font-weight="500">Sales ETL Pipeline</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.data.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.data.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.data.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.data.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.data.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.data.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.data.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: AI -->
+      <div class="sc-panel" data-panel="ai">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-ai-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(280 60% 55% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(280 60% 55% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-ai-bg)"/>
+
+            <!-- Orbit rings -->
+            <ellipse cx="380" cy="155" rx="150" ry="100" stroke="hsl(280 60% 55% / 0.08)" stroke-width="1" fill="none" stroke-dasharray="4 6"/>
+            <ellipse cx="380" cy="155" rx="220" ry="140" stroke="hsl(280 60% 55% / 0.05)" stroke-width="1" fill="none" stroke-dasharray="3 8"/>
+
+            <!-- Thinking pulse from center -->
+            <circle cx="380" cy="155" r="50" stroke="hsl(280 60% 55% / 0.1)" stroke-width="1" fill="none">
+              <animate attributeName="r" values="50;100" dur="2.5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+              <animate attributeName="opacity" values="0.4;0" dur="2.5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </circle>
+            <circle cx="380" cy="155" r="50" stroke="hsl(280 60% 55% / 0.08)" stroke-width="1" fill="none">
+              <animate attributeName="r" values="50;100" dur="2.5s" begin="0.8s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+              <animate attributeName="opacity" values="0.3;0" dur="2.5s" begin="0.8s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </circle>
+
+            <!-- Neural connection lines -->
+            <line x1="336" y1="132" x2="247" y2="85" stroke="hsl(222 89% 60% / 0.12)" stroke-width="1" stroke-dasharray="3 3">
+              <animate attributeName="stroke-dashoffset" values="0;-12" dur="2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="424" y1="131" x2="515" y2="80" stroke="hsl(161 50% 45% / 0.12)" stroke-width="1" stroke-dasharray="3 3">
+              <animate attributeName="stroke-dashoffset" values="0;-12" dur="2.3s" repeatCount="indefinite"/>
+            </line>
+            <line x1="335" y1="177" x2="233" y2="225" stroke="hsl(0 60% 50% / 0.12)" stroke-width="1" stroke-dasharray="3 3">
+              <animate attributeName="stroke-dashoffset" values="0;-12" dur="1.8s" repeatCount="indefinite"/>
+            </line>
+            <line x1="424" y1="178" x2="532" y2="235" stroke="hsl(45 80% 50% / 0.12)" stroke-width="1" stroke-dasharray="3 3">
+              <animate attributeName="stroke-dashoffset" values="0;-12" dur="2.1s" repeatCount="indefinite"/>
+            </line>
+
+            <!-- Central Brain / LLM node -->
+            <circle cx="380" cy="155" r="50" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.3)" stroke-width="2"/>
+            <!-- Brain icon -->
+            <path d="M365 145 C365 135, 375 130, 380 130 C385 130, 395 135, 395 145 C400 145, 405 150, 405 155 C405 162, 400 167, 395 167 C393 172, 387 175, 380 175 C373 175, 367 172, 365 167 C360 167, 355 162, 355 155 C355 150, 360 145, 365 145" stroke="hsl(280 60% 55% / 0.5)" stroke-width="1.5" fill="hsl(280 60% 55% / 0.08)"/>
+            <path d="M380 130 L380 175 M365 155 L395 155" stroke="hsl(280 60% 55% / 0.2)" stroke-width="0.8"/>
+            <text x="380" y="195" text-anchor="middle" fill="hsl(280 60% 55% / 0.6)" font-size="10" font-family="system-ui" font-weight="600">LLM Core</text>
+
+            <!-- Satellite: RAG / Memory -->
+            <rect x="144" y="35" width="110" height="50" rx="10" fill="hsl(222 89% 60% / 0.07)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <circle cx="168" cy="60" r="10" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1"/>
+            <path d="M164 57 L172 57 M164 60 L172 60 M164 63 L169 63" stroke="hsl(222 89% 60% / 0.5)" stroke-width="0.8" stroke-linecap="round"/>
+            <text x="188" y="64" fill="hsl(222 89% 60% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">RAG Memory</text>
+
+            <!-- Satellite: Tools -->
+            <rect x="505" y="30" width="110" height="50" rx="10" fill="hsl(161 50% 45% / 0.07)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <circle cx="529" cy="55" r="10" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1"/>
+            <path d="M525 51 L533 51 L533 59 L525 59 Z" stroke="hsl(161 50% 45% / 0.5)" stroke-width="0.8" fill="none"/>
+            <text x="549" y="59" fill="hsl(161 50% 45% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Tool Calls</text>
+
+            <!-- Satellite: PII Guard -->
+            <rect x="124" y="225" width="110" height="50" rx="10" fill="hsl(0 60% 50% / 0.07)" stroke="hsl(0 60% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="148" cy="250" r="10" fill="hsl(0 60% 50% / 0.12)" stroke="hsl(0 60% 50% / 0.25)" stroke-width="1"/>
+            <circle cx="148" cy="247" r="3" stroke="hsl(0 60% 50% / 0.5)" stroke-width="0.8" fill="none"/>
+            <line x1="148" y1="250" x2="148" y2="256" stroke="hsl(0 60% 50% / 0.5)" stroke-width="0.8"/>
+            <text x="168" y="254" fill="hsl(0 60% 50% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">PII Guard</text>
+
+            <!-- Satellite: Quality Gate -->
+            <rect x="525" y="235" width="110" height="50" rx="10" fill="hsl(45 80% 50% / 0.07)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="549" cy="260" r="10" fill="hsl(45 80% 50% / 0.12)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1"/>
+            <path d="M545 260 L548 263 L553 255" stroke="hsl(45 80% 50% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <text x="569" y="264" fill="hsl(45 80% 50% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Quality Gate</text>
+
+            <!-- Right side: Execution trace -->
+            <rect x="690" y="40" width="180" height="260" rx="12" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <text x="710" y="65" fill="hsl(0 0% 60% / 0.6)" font-size="10" font-family="system-ui" font-weight="600">Execution Trace</text>
+            <line x1="690" y1="76" x2="870" y2="76" stroke="hsl(0 0% 50% / 0.06)" stroke-width="1"/>
+            <text x="710" y="98" fill="hsl(161 50% 45% / 0.6)" font-size="9" font-family="monospace">&#x2713; input_received    8ms</text>
+            <text x="710" y="118" fill="hsl(161 50% 45% / 0.6)" font-size="9" font-family="monospace">&#x2713; pii_redacted     42ms</text>
+            <text x="710" y="138" fill="hsl(161 50% 45% / 0.6)" font-size="9" font-family="monospace">&#x2713; rag_retrieved   180ms</text>
+            <text x="710" y="158" fill="hsl(222 89% 60% / 0.6)" font-size="9" font-family="monospace">&#x21BB; llm_inference   847ms</text>
+            <text x="710" y="178" fill="hsl(161 50% 45% / 0.6)" font-size="9" font-family="monospace">&#x2713; tool_executed   203ms</text>
+            <text x="710" y="198" fill="hsl(161 50% 45% / 0.6)" font-size="9" font-family="monospace">&#x2713; quality_check    12ms</text>
+            <text x="710" y="218" fill="hsl(0 0% 50% / 0.4)" font-size="9" font-family="monospace">&#x25E6; response_built  pending</text>
+            <!-- latency bar -->
+            <rect x="710" y="240" width="150" height="6" rx="3" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="710" y="240" width="120" height="6" rx="3" fill="hsl(280 60% 55% / 0.3)">
+              <animate attributeName="width" values="0;120" dur="2s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </rect>
+            <text x="710" y="262" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Total: 1.29s</text>
+            <!-- confidence score -->
+            <rect x="710" y="275" width="150" height="6" rx="3" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="710" y="275" width="135" height="6" rx="3" fill="hsl(161 50% 45% / 0.3)">
+              <animate attributeName="width" values="0;135" dur="2.5s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </rect>
+            <text x="710" y="297" fill="hsl(0 0% 60% / 0.4)" font-size="8" font-family="system-ui">Confidence: 0.94</text>
+
+            <rect x="40" y="300" width="200" height="28" rx="14" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.15)" stroke-width="1"/>
+            <text x="140" y="319" text-anchor="middle" fill="hsl(280 60% 55% / 0.5)" font-size="10" font-family="system-ui" font-weight="500">AI Support Agent Pipeline</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.ai.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.ai.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.ai.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.ai.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.ai.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.ai.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.ai.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: NoCode -->
+      <div class="sc-panel" data-panel="nocode">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-nocode-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(161 50% 45% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(161 50% 45% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-nocode-bg)"/>
+
+            <!-- Left Sidebar: Component Palette -->
+            <rect x="30" y="25" width="150" height="290" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+            <text x="50" y="48" fill="hsl(0 0% 60% / 0.6)" font-size="9" font-family="system-ui" font-weight="600" text-transform="uppercase">Components</text>
+            <line x1="30" y1="58" x2="180" y2="58" stroke="hsl(0 0% 50% / 0.08)" stroke-width="1"/>
+
+            <!-- Palette items -->
+            <rect x="42" y="68" width="126" height="28" rx="6" fill="hsl(222 89% 60% / 0.05)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="76" width="10" height="10" rx="2" fill="hsl(222 89% 60% / 0.2)"/>
+            <text x="66" y="86" fill="hsl(222 89% 60% / 0.6)" font-size="8" font-family="system-ui">Text Field</text>
+
+            <rect x="42" y="104" width="126" height="28" rx="6" fill="hsl(161 50% 45% / 0.05)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="112" width="10" height="10" rx="2" fill="hsl(161 50% 45% / 0.2)"/>
+            <text x="66" y="122" fill="hsl(161 50% 45% / 0.6)" font-size="8" font-family="system-ui">Dropdown</text>
+
+            <rect x="42" y="140" width="126" height="28" rx="6" fill="hsl(280 60% 55% / 0.05)" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="148" width="10" height="10" rx="2" fill="hsl(280 60% 55% / 0.2)"/>
+            <text x="66" y="158" fill="hsl(280 60% 55% / 0.6)" font-size="8" font-family="system-ui">Data Table</text>
+
+            <rect x="42" y="176" width="126" height="28" rx="6" fill="hsl(45 80% 50% / 0.05)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="184" width="10" height="10" rx="2" fill="hsl(45 80% 50% / 0.2)"/>
+            <text x="66" y="194" fill="hsl(45 80% 50% / 0.6)" font-size="8" font-family="system-ui">Chart Widget</text>
+
+            <rect x="42" y="212" width="126" height="28" rx="6" fill="hsl(0 60% 50% / 0.05)" stroke="hsl(0 60% 50% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="220" width="10" height="10" rx="2" fill="hsl(0 60% 50% / 0.2)"/>
+            <text x="66" y="230" fill="hsl(0 60% 50% / 0.6)" font-size="8" font-family="system-ui">Button</text>
+
+            <rect x="42" y="248" width="126" height="28" rx="6" fill="hsl(210 70% 50% / 0.05)" stroke="hsl(210 70% 50% / 0.2)" stroke-width="1"/>
+            <rect x="50" y="256" width="10" height="10" rx="2" fill="hsl(210 70% 50% / 0.2)"/>
+            <text x="66" y="266" fill="hsl(210 70% 50% / 0.6)" font-size="8" font-family="system-ui">Card Layout</text>
+
+            <!-- Center Canvas -->
+            <rect x="200" y="25" width="480" height="290" rx="10" fill="hsl(0 0% 50% / 0.02)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <!-- Grid dots -->
+            <pattern id="sc-nc-grid" width="20" height="20" patternUnits="userSpaceOnUse" x="200" y="25">
+              <circle cx="10" cy="10" r="0.5" fill="hsl(0 0% 50% / 0.12)"/>
+            </pattern>
+            <rect x="200" y="25" width="480" height="290" rx="10" fill="url(#sc-nc-grid)"/>
+
+            <!-- Snap alignment line (drawn behind widgets) -->
+            <line x1="375" y1="40" x2="375" y2="310" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1" stroke-dasharray="2 3">
+              <animate attributeName="opacity" values="0;0.5;0" dur="3s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1"/>
+            </line>
+
+            <!-- Placed widget: CRM Data Table -->
+            <rect x="220" y="40" width="260" height="130" rx="8" fill="var(--card)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <!-- Selection handles -->
+            <rect x="216" y="36" width="8" height="8" rx="2" fill="hsl(161 50% 45% / 0.5)" stroke="hsl(161 50% 45% / 0.8)" stroke-width="1"/>
+            <rect x="480" y="36" width="8" height="8" rx="2" fill="hsl(161 50% 45% / 0.5)" stroke="hsl(161 50% 45% / 0.8)" stroke-width="1"/>
+            <rect x="216" y="166" width="8" height="8" rx="2" fill="hsl(161 50% 45% / 0.5)" stroke="hsl(161 50% 45% / 0.8)" stroke-width="1"/>
+            <rect x="480" y="166" width="8" height="8" rx="2" fill="hsl(161 50% 45% / 0.5)" stroke="hsl(161 50% 45% / 0.8)" stroke-width="1"/>
+            <text x="235" y="60" fill="hsl(0 0% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="600">Open Deals</text>
+            <line x1="220" y1="72" x2="480" y2="72" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <text x="235" y="88" fill="hsl(0 0% 50% / 0.4)" font-size="8" font-family="monospace">Acme Corp       $42,000   High </text>
+            <text x="235" y="104" fill="hsl(0 0% 50% / 0.4)" font-size="8" font-family="monospace">Global Inc      $28,500   Med  </text>
+            <text x="235" y="120" fill="hsl(0 0% 50% / 0.4)" font-size="8" font-family="monospace">StartupXYZ      $15,200   Low  </text>
+            <text x="235" y="136" fill="hsl(0 0% 50% / 0.4)" font-size="8" font-family="monospace">Enterprise Co   $95,000   High </text>
+            <text x="235" y="152" fill="hsl(0 0% 50% / 0.4)" font-size="8" font-family="monospace">DataFlow Ltd    $61,800   Med  </text>
+
+            <!-- Placed widget: Chart -->
+            <rect x="220" y="185" width="140" height="115" rx="8" fill="var(--card)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="1.5"/>
+            <text x="235" y="205" fill="hsl(0 0% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="600">Revenue</text>
+            <rect x="235" y="265" width="12" height="25" rx="2" fill="hsl(222 89% 60% / 0.25)"/>
+            <rect x="255" y="250" width="12" height="40" rx="2" fill="hsl(222 89% 60% / 0.3)"/>
+            <rect x="275" y="240" width="12" height="50" rx="2" fill="hsl(161 50% 45% / 0.35)"/>
+            <rect x="295" y="230" width="12" height="60" rx="2" fill="hsl(161 50% 45% / 0.4)"/>
+            <rect x="315" y="220" width="12" height="70" rx="2" fill="hsl(161 50% 45% / 0.5)"/>
+
+            <!-- Placed widget: Action Button -->
+            <rect x="375" y="185" width="105" height="40" rx="8" fill="var(--card)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <rect x="390" y="194" width="75" height="22" rx="6" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1"/>
+            <text x="427" y="210" text-anchor="middle" fill="hsl(222 89% 60% / 0.7)" font-size="9" font-family="system-ui" font-weight="600">Send Report</text>
+
+            <!-- Widget being dragged (with cursor + dashed outline) -->
+            <g>
+              <animateMotion dur="3s" repeatCount="indefinite" path="M0,0 L-5,10 L0,0" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1"/>
+              <rect x="395" y="245" width="95" height="55" rx="8" fill="none" stroke="hsl(280 60% 55% / 0.4)" stroke-width="1.5" stroke-dasharray="4 3">
+                <animate attributeName="opacity" values="0.4;0.8;0.4" dur="2s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1"/>
+              </rect>
+              <text x="443" y="278" text-anchor="middle" fill="hsl(280 60% 55% / 0.5)" font-size="8" font-family="system-ui">AI Summary</text>
+              <!-- Cursor icon -->
+              <path d="M497 246 L497 262 L503 257 L509 268 L513 266 L507 255 L514 255 Z" fill="hsl(280 60% 55% / 0.6)"/>
+            </g>
+
+            <!-- Right Sidebar: Properties -->
+            <rect x="700" y="25" width="170" height="290" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.12)" stroke-width="1"/>
+            <text x="720" y="48" fill="hsl(0 0% 60% / 0.6)" font-size="9" font-family="system-ui" font-weight="600">Properties</text>
+            <line x1="700" y1="58" x2="870" y2="58" stroke="hsl(0 0% 50% / 0.08)" stroke-width="1"/>
+            <text x="715" y="78" fill="hsl(0 0% 50% / 0.5)" font-size="8" font-family="system-ui">Data Source</text>
+            <rect x="715" y="84" width="140" height="22" rx="4" fill="var(--card)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1"/>
+            <text x="725" y="99" fill="hsl(0 0% 60% / 0.6)" font-size="8" font-family="system-ui">CRM &gt; Open Deals</text>
+            <text x="715" y="124" fill="hsl(0 0% 50% / 0.5)" font-size="8" font-family="system-ui">Columns</text>
+            <rect x="715" y="130" width="60" height="18" rx="9" fill="hsl(222 89% 60% / 0.1)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="0.5"/>
+            <text x="745" y="143" text-anchor="middle" fill="hsl(222 89% 60% / 0.6)" font-size="7" font-family="system-ui">Company</text>
+            <rect x="780" y="130" width="50" height="18" rx="9" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.5"/>
+            <text x="805" y="143" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="7" font-family="system-ui">Value</text>
+            <rect x="715" y="152" width="45" height="18" rx="9" fill="hsl(45 80% 50% / 0.1)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.5"/>
+            <text x="737" y="165" text-anchor="middle" fill="hsl(45 80% 50% / 0.6)" font-size="7" font-family="system-ui">Risk</text>
+            <text x="715" y="190" fill="hsl(0 0% 50% / 0.5)" font-size="8" font-family="system-ui">Sort By</text>
+            <rect x="715" y="196" width="140" height="22" rx="4" fill="var(--card)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1"/>
+            <text x="725" y="211" fill="hsl(0 0% 60% / 0.6)" font-size="8" font-family="system-ui">Value (desc)</text>
+            <text x="715" y="240" fill="hsl(0 0% 50% / 0.5)" font-size="8" font-family="system-ui">Refresh</text>
+            <rect x="715" y="246" width="140" height="22" rx="4" fill="var(--card)" stroke="hsl(0 0% 50% / 0.15)" stroke-width="1"/>
+            <text x="725" y="261" fill="hsl(0 0% 60% / 0.6)" font-size="8" font-family="system-ui">Every 5 minutes</text>
+            <!-- Published badge -->
+            <rect x="715" y="280" width="80" height="22" rx="11" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1"/>
+            <text x="755" y="295" text-anchor="middle" fill="hsl(161 50% 45% / 0.7)" font-size="8" font-family="system-ui" font-weight="600">&#x2713; Published</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.nocode.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.nocode.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.nocode.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.nocode.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.nocode.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.nocode.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.nocode.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Maker -->
+      <div class="sc-panel" data-panel="maker">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-maker-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(25 80% 52% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(25 80% 52% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-maker-bg)"/>
+
+            <!-- Mesh connection lines between devices -->
+            <line x1="411" y1="132" x2="210" y2="94" stroke="hsl(25 80% 52% / 0.12)" stroke-width="1" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-16" dur="3s" repeatCount="indefinite"/>
+            </line>
+            <line x1="412" y1="153" x2="240" y2="215" stroke="hsl(25 80% 52% / 0.12)" stroke-width="1" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-16" dur="3.5s" repeatCount="indefinite"/>
+            </line>
+            <line x1="489" y1="132" x2="680" y2="94" stroke="hsl(25 80% 52% / 0.12)" stroke-width="1" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-16" dur="2.8s" repeatCount="indefinite"/>
+            </line>
+            <line x1="488" y1="153" x2="660" y2="215" stroke="hsl(25 80% 52% / 0.12)" stroke-width="1" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-16" dur="3.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="450" y1="180" x2="450" y2="260" stroke="hsl(25 80% 52% / 0.12)" stroke-width="1" stroke-dasharray="4 4">
+              <animate attributeName="stroke-dashoffset" values="0;-16" dur="2.5s" repeatCount="indefinite"/>
+            </line>
+            <!-- Secondary mesh lines between devices -->
+            <line x1="145" y1="108" x2="165" y2="212" stroke="hsl(25 80% 52% / 0.06)" stroke-width="0.5" stroke-dasharray="3 5"/>
+            <line x1="746" y1="108" x2="734" y2="212" stroke="hsl(25 80% 52% / 0.06)" stroke-width="0.5" stroke-dasharray="3 5"/>
+
+            <!-- Signal pulses traveling to hub -->
+            <circle r="3" fill="hsl(25 80% 52% / 0.5)">
+              <animateMotion dur="3s" repeatCount="indefinite" path="M210,94 L411,132"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="3s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="3" fill="hsl(45 80% 50% / 0.5)">
+              <animateMotion dur="3.5s" repeatCount="indefinite" path="M240,215 L412,153"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="3.5s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="3" fill="hsl(0 60% 50% / 0.5)">
+              <animateMotion dur="2.8s" repeatCount="indefinite" path="M680,94 L489,132"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.8s" repeatCount="indefinite"/>
+            </circle>
+            <circle r="3" fill="hsl(161 50% 45% / 0.5)">
+              <animateMotion dur="3.2s" repeatCount="indefinite" path="M660,215 L488,153"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="3.2s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Central Gateway Hub -->
+            <circle cx="450" cy="140" r="40" fill="hsl(25 80% 52% / 0.06)" stroke="hsl(25 80% 52% / 0.3)" stroke-width="2"/>
+            <!-- Antenna icon -->
+            <line x1="450" y1="125" x2="450" y2="145" stroke="hsl(25 80% 52% / 0.6)" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M440 128 C440 120, 450 115, 450 115 C450 115, 460 120, 460 128" stroke="hsl(25 80% 52% / 0.4)" stroke-width="1" fill="none"/>
+            <path d="M435 132 C435 118, 450 110, 450 110 C450 110, 465 118, 465 132" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1" fill="none"/>
+            <text x="450" y="160" text-anchor="middle" fill="hsl(25 80% 52% / 0.7)" font-size="9" font-family="system-ui" font-weight="600">Gateway</text>
+            <!-- Signal rings from hub -->
+            <circle cx="450" cy="140" r="40" stroke="hsl(25 80% 52% / 0.1)" stroke-width="1" fill="none">
+              <animate attributeName="r" values="40;80" dur="2s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+              <animate attributeName="opacity" values="0.3;0" dur="2s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.16 1 0.3 1"/>
+            </circle>
+
+            <!-- Device: Temperature Sensor -->
+            <rect x="70" y="52" width="140" height="56" rx="10" fill="hsl(25 80% 52% / 0.07)" stroke="hsl(25 80% 52% / 0.3)" stroke-width="1.5"/>
+            <circle cx="95" cy="80" r="12" fill="hsl(25 80% 52% / 0.12)" stroke="hsl(25 80% 52% / 0.3)" stroke-width="1"/>
+            <!-- Thermometer -->
+            <rect x="92" y="71" width="6" height="14" rx="3" stroke="hsl(25 80% 52% / 0.6)" stroke-width="1" fill="none"/>
+            <circle cx="95" cy="82" r="2" fill="hsl(25 80% 52% / 0.5)"/>
+            <text x="115" y="76" fill="hsl(25 80% 52% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Temp Sensor</text>
+            <text x="115" y="92" fill="hsl(25 80% 52% / 0.5)" font-size="10" font-family="monospace" font-weight="600">22.4°C</text>
+
+            <!-- Device: Humidity Sensor -->
+            <rect x="100" y="212" width="140" height="56" rx="10" fill="hsl(45 80% 50% / 0.07)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="125" cy="240" r="12" fill="hsl(45 80% 50% / 0.12)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="1"/>
+            <path d="M125 232 C121 238, 121 242, 125 246 C129 242, 129 238, 125 232 Z" fill="hsl(45 80% 50% / 0.3)" stroke="hsl(45 80% 50% / 0.5)" stroke-width="1"/>
+            <text x="145" y="236" fill="hsl(45 80% 50% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Humidity</text>
+            <text x="145" y="252" fill="hsl(45 80% 50% / 0.5)" font-size="10" font-family="monospace" font-weight="600">67.2%</text>
+
+            <!-- Device: Power Meter -->
+            <rect x="680" y="52" width="140" height="56" rx="10" fill="hsl(0 60% 50% / 0.07)" stroke="hsl(0 60% 50% / 0.3)" stroke-width="1.5"/>
+            <circle cx="705" cy="80" r="12" fill="hsl(0 60% 50% / 0.12)" stroke="hsl(0 60% 50% / 0.3)" stroke-width="1"/>
+            <!-- Lightning bolt -->
+            <path d="M703 74 L707 79 L703 79 L707 86" stroke="hsl(0 60% 50% / 0.6)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <text x="725" y="76" fill="hsl(0 60% 50% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Power Meter</text>
+            <text x="725" y="92" fill="hsl(0 60% 50% / 0.5)" font-size="10" font-family="monospace" font-weight="600">3.2 kWh</text>
+
+            <!-- Device: Motor/Actuator -->
+            <rect x="660" y="212" width="140" height="56" rx="10" fill="hsl(161 50% 45% / 0.07)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <circle cx="685" cy="240" r="12" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1"/>
+            <!-- Gear icon -->
+            <circle cx="685" cy="240" r="5" stroke="hsl(161 50% 45% / 0.5)" stroke-width="1" fill="none"/>
+            <circle cx="685" cy="240" r="2" fill="hsl(161 50% 45% / 0.4)"/>
+            <text x="705" y="236" fill="hsl(161 50% 45% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">AC Motor</text>
+            <text x="705" y="252" fill="hsl(161 50% 45% / 0.5)" font-size="10" font-family="monospace" font-weight="600">ON 1200rpm</text>
+
+            <!-- Device: Display -->
+            <rect x="380" y="260" width="140" height="56" rx="10" fill="hsl(222 89% 60% / 0.07)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <circle cx="405" cy="288" r="12" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1"/>
+            <rect x="398" y="282" width="14" height="10" rx="2" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1" fill="none"/>
+            <line x1="403" y1="292" x2="407" y2="292" stroke="hsl(222 89% 60% / 0.4)" stroke-width="0.8"/>
+            <text x="425" y="284" fill="hsl(222 89% 60% / 0.8)" font-size="10" font-family="system-ui" font-weight="500">Dashboard</text>
+            <text x="425" y="300" fill="hsl(222 89% 60% / 0.5)" font-size="9" font-family="system-ui">live display</text>
+
+            <rect x="40" y="300" width="220" height="28" rx="14" fill="hsl(25 80% 52% / 0.06)" stroke="hsl(25 80% 52% / 0.15)" stroke-width="1"/>
+            <text x="150" y="319" text-anchor="middle" fill="hsl(25 80% 52% / 0.5)" font-size="10" font-family="system-ui" font-weight="500">Smart Home Energy Monitor</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.maker.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.maker.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.maker.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.maker.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.maker.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.maker.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.maker.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Tools -->
+      <div class="sc-panel" data-panel="tools">
+        <div class="sc-panel__canvas">
+          <svg class="sc-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="sc-tools-bg" x1="0" y1="0" x2="900" y2="340" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(340 65% 50% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(340 65% 50% / 0.01)"/>
+              </linearGradient>
+            </defs>
+            <rect width="900" height="340" rx="16" fill="url(#sc-tools-bg)"/>
+
+            <!-- Column: Backlog -->
+            <rect x="50" y="30" width="250" height="280" rx="12" fill="hsl(340 65% 50% / 0.03)" stroke="hsl(340 65% 50% / 0.12)" stroke-width="1"/>
+            <text x="80" y="56" fill="hsl(340 65% 50% / 0.5)" font-size="11" font-family="system-ui" font-weight="600">Backlog</text>
+            <rect x="200" y="42" width="24" height="18" rx="9" fill="hsl(340 65% 50% / 0.08)"/>
+            <text x="212" y="55" text-anchor="middle" fill="hsl(340 65% 50% / 0.4)" font-size="9" font-family="system-ui" font-weight="600">3</text>
+            <!-- Card 1 -->
+            <rect x="66" y="72" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(340 65% 50% / 0.15)" stroke-width="1"/>
+            <rect x="66" y="72" width="4" height="58" rx="2" fill="hsl(340 65% 50% / 0.5)"/>
+            <text x="82" y="92" fill="var(--foreground)" font-size="10" font-family="system-ui" font-weight="500">Dark mode for dashboard</text>
+            <rect x="82" y="100" width="40" height="16" rx="8" fill="hsl(280 60% 55% / 0.1)"/>
+            <text x="102" y="112" text-anchor="middle" fill="hsl(280 60% 55% / 0.6)" font-size="8" font-family="system-ui">UI/UX</text>
+            <circle cx="264" cy="103" r="9" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="0.8"/>
+            <text x="264" y="107" text-anchor="middle" fill="hsl(222 89% 60% / 0.6)" font-size="7" font-family="system-ui" font-weight="600">TM</text>
+            <!-- Card 2 -->
+            <rect x="66" y="140" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(340 65% 50% / 0.15)" stroke-width="1"/>
+            <rect x="66" y="140" width="4" height="58" rx="2" fill="hsl(45 80% 50% / 0.5)"/>
+            <text x="82" y="160" fill="var(--foreground)" font-size="10" font-family="system-ui" font-weight="500">API rate limit alerts</text>
+            <rect x="82" y="168" width="55" height="16" rx="8" fill="hsl(25 80% 52% / 0.1)"/>
+            <text x="109" y="180" text-anchor="middle" fill="hsl(25 80% 52% / 0.6)" font-size="8" font-family="system-ui">Backend</text>
+            <circle cx="264" cy="171" r="9" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="0.8"/>
+            <text x="264" y="175" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="7" font-family="system-ui" font-weight="600">SJ</text>
+            <!-- Card 3 -->
+            <rect x="66" y="208" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(340 65% 50% / 0.15)" stroke-width="1"/>
+            <rect x="66" y="208" width="4" height="58" rx="2" fill="hsl(0 60% 50% / 0.5)"/>
+            <text x="82" y="228" fill="var(--foreground)" font-size="10" font-family="system-ui" font-weight="500">CSV export broken</text>
+            <rect x="82" y="236" width="30" height="16" rx="8" fill="hsl(0 60% 50% / 0.1)"/>
+            <text x="97" y="248" text-anchor="middle" fill="hsl(0 60% 50% / 0.6)" font-size="8" font-family="system-ui">Bug</text>
+            <circle cx="264" cy="239" r="9" fill="hsl(340 65% 50% / 0.12)" stroke="hsl(340 65% 50% / 0.25)" stroke-width="0.8"/>
+            <text x="264" y="243" text-anchor="middle" fill="hsl(340 65% 50% / 0.6)" font-size="7" font-family="system-ui" font-weight="600">AL</text>
+
+            <!-- Column: In Progress -->
+            <rect x="325" y="30" width="250" height="280" rx="12" fill="hsl(222 89% 60% / 0.03)" stroke="hsl(222 89% 60% / 0.12)" stroke-width="1"/>
+            <text x="355" y="56" fill="hsl(222 89% 60% / 0.5)" font-size="11" font-family="system-ui" font-weight="600">In Progress</text>
+            <rect x="475" y="42" width="24" height="18" rx="9" fill="hsl(222 89% 60% / 0.08)"/>
+            <text x="487" y="55" text-anchor="middle" fill="hsl(222 89% 60% / 0.4)" font-size="9" font-family="system-ui" font-weight="600">2</text>
+            <!-- Card 4 -->
+            <rect x="341" y="72" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(222 89% 60% / 0.15)" stroke-width="1"/>
+            <rect x="341" y="72" width="4" height="58" rx="2" fill="hsl(222 89% 60% / 0.5)"/>
+            <text x="357" y="92" fill="var(--foreground)" font-size="10" font-family="system-ui" font-weight="500">Webhook retry logic</text>
+            <rect x="357" y="100" width="55" height="16" rx="8" fill="hsl(25 80% 52% / 0.1)"/>
+            <text x="384" y="112" text-anchor="middle" fill="hsl(25 80% 52% / 0.6)" font-size="8" font-family="system-ui">Backend</text>
+            <circle cx="539" cy="103" r="9" fill="hsl(45 80% 50% / 0.12)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="0.8"/>
+            <text x="539" y="107" text-anchor="middle" fill="hsl(45 80% 50% / 0.6)" font-size="7" font-family="system-ui" font-weight="600">KR</text>
+            <!-- Animated card sliding out toward Done column -->
+            <g opacity="0">
+              <animateTransform attributeName="transform" type="translate" values="0 0; 275 0; 275 0" keyTimes="0; 0.6; 1" dur="4s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.2 1; 1 1 1 1"/>
+              <animate attributeName="opacity" values="0; 0.8; 0.8; 0" keyTimes="0; 0.1; 0.6; 0.7" dur="4s" repeatCount="indefinite"/>
+
+              <rect x="341" y="140" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5" stroke-dasharray="4 3">
+                <animate attributeName="stroke-dashoffset" values="0;-28" dur="4s" repeatCount="indefinite"/>
+              </rect>
+              <rect x="341" y="140" width="4" height="58" rx="2" fill="hsl(161 50% 45% / 0.5)"/>
+              <text x="357" y="160" fill="var(--foreground)" font-size="10" font-family="system-ui" font-weight="500">
+                Add SSO support
+              </text>
+              <rect x="357" y="168" width="52" height="16" rx="8" fill="hsl(161 50% 45% / 0.1)"/>
+              <text x="383" y="180" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="8" font-family="system-ui">
+                Security
+              </text>
+            </g>
+
+            <!-- Column: Done -->
+            <rect x="600" y="30" width="250" height="280" rx="12" fill="hsl(161 50% 45% / 0.03)" stroke="hsl(161 50% 45% / 0.12)" stroke-width="1"/>
+            <text x="630" y="56" fill="hsl(161 50% 45% / 0.5)" font-size="11" font-family="system-ui" font-weight="600">Done</text>
+            <rect x="750" y="42" width="24" height="18" rx="9" fill="hsl(161 50% 45% / 0.08)"/>
+            <text x="762" y="55" text-anchor="middle" fill="hsl(161 50% 45% / 0.4)" font-size="9" font-family="system-ui" font-weight="600">4</text>
+            <!-- Card 5 (completed, with checkmark) -->
+            <rect x="616" y="72" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1"/>
+            <rect x="616" y="72" width="4" height="58" rx="2" fill="hsl(161 50% 45% / 0.5)"/>
+            <text x="632" y="92" fill="color-mix(in oklch, var(--foreground) 50%, transparent)" font-size="10" font-family="system-ui" font-weight="500" text-decoration="line-through">Email notifications</text>
+            <circle cx="818" cy="88" r="10" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1"/>
+            <path d="M812 88 L816 92 L824 84" stroke="hsl(161 50% 45% / 0.6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <circle cx="818" cy="118" r="9" fill="hsl(280 60% 55% / 0.12)" stroke="hsl(280 60% 55% / 0.25)" stroke-width="0.8"/>
+            <text x="818" y="122" text-anchor="middle" fill="hsl(280 60% 55% / 0.6)" font-size="7" font-family="system-ui" font-weight="600">PB</text>
+            <!-- Card 6 -->
+            <rect x="616" y="140" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1"/>
+            <rect x="616" y="140" width="4" height="58" rx="2" fill="hsl(161 50% 45% / 0.5)"/>
+            <text x="632" y="160" fill="color-mix(in oklch, var(--foreground) 50%, transparent)" font-size="10" font-family="system-ui" font-weight="500" text-decoration="line-through">Role-based access</text>
+            <circle cx="818" cy="156" r="10" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1"/>
+            <path d="M812 156 L816 160 L824 152" stroke="hsl(161 50% 45% / 0.6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <!-- Card 7 -->
+            <rect x="616" y="208" width="218" height="58" rx="8" fill="var(--card)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1"/>
+            <rect x="616" y="208" width="4" height="58" rx="2" fill="hsl(161 50% 45% / 0.5)"/>
+            <text x="632" y="228" fill="color-mix(in oklch, var(--foreground) 50%, transparent)" font-size="10" font-family="system-ui" font-weight="500" text-decoration="line-through">Bulk import tool</text>
+            <circle cx="818" cy="224" r="10" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1"/>
+            <path d="M812 224 L816 228 L824 220" stroke="hsl(161 50% 45% / 0.6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+            <rect x="40" y="300" width="220" height="28" rx="14" fill="hsl(340 65% 50% / 0.06)" stroke="hsl(340 65% 50% / 0.15)" stroke-width="1"/>
+            <text x="150" y="319" text-anchor="middle" fill="hsl(340 65% 50% / 0.5)" font-size="10" font-family="system-ui" font-weight="500">Feature Request Tracker</text>
+          </svg>
+        </div>
+        <div class="sc-panel__info">
+          <div class="sc-panel__col sc-panel__col--left">
+            <h3 class="text-lg sm:text-xl font-bold text-foreground">{t("v3.showcase.tools.title")}</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">{t("v3.showcase.tools.subtitle")}</p>
+            <p class="mt-3 text-sm text-muted-foreground leading-relaxed">{t("v3.showcase.tools.scenario")}</p>
+          </div>
+          <div class="sc-panel__col sc-panel__col--center">
+            <ul class="sc-pros">
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.tools.pro1")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.tools.pro2")}</li>
+              <li><span class="sc-pro-mark">+</span>{t("v3.showcase.tools.pro3")}</li>
+            </ul>
+          </div>
+          <div class="sc-panel__col sc-panel__col--right">
+            <div class="sc-note">
+              <span class="sc-note__label">Good to know</span>
+              <p>{t("v3.showcase.tools.note")}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Dot Indicator -->
+    <div class="sc-dots" id="sc-dots" role="tablist" aria-label="Panel navigation">
+      {panels.map((p, i) => (
+        <button
+          class:list={["sc-dot-btn", { "is-active": i === 0 }]}
+          data-index={i}
+          role="tab"
+          aria-selected={i === 0 ? "true" : "false"}
+          aria-label={t(`v3.showcase.${p.id}.title` as TranslationKey)}
+          type="button"
+        />
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .sc-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.3;
+    pointer-events: none;
+    animation: drift 20s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+  }
+  @keyframes drift {
+    0% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(2%, 4%) scale(1.05); }
+    100% { transform: translate(-2%, -2%) scale(0.95); }
+  }
+  .sc-orb--1 {
+    width: 600px;
+    height: 600px;
+    top: -200px;
+    left: -150px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.08), transparent 70%);
+  }
+  .sc-orb--2 {
+    width: 500px;
+    height: 500px;
+    bottom: -150px;
+    right: -100px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.06), transparent 70%);
+  }
+
+  .sc-reveal {
+    opacity: 0;
+    transform: translateY(32px) scale(0.98);
+    transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .sc-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  /* Theater */
+  .sc-theater {
+    position: relative;
+    width: 100%;
+  }
+
+  .sc-track {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    outline: none;
+  }
+  .sc-track::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Panels */
+  .sc-panel {
+    flex: 0 0 100%;
+    width: 100%;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    padding: 0 1rem;
+    box-sizing: border-box;
+  }
+
+  @media (min-width: 640px) {
+    .sc-panel {
+      padding: 0 2rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .sc-panel {
+      padding: 0 4rem;
+    }
+  }
+
+  .sc-panel__canvas {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .sc-svg {
+    width: 100%;
+    height: auto;
+    border-radius: 16px;
+    border: 1px solid hsl(0 0% 50% / 0.1);
+  }
+
+  .sc-panel__info {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+    max-width: 900px;
+    width: 100%;
+    margin: 2rem auto 0;
+    padding: 1.25rem;
+    padding-bottom: 1.25rem;
+    border-radius: 12px;
+    border: 1px solid hsl(0 0% 50% / 0.1);
+    background: hsl(0 0% 50% / 0.02);
+  }
+
+  @media (min-width: 768px) {
+    .sc-panel__info {
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 2rem;
+      padding: 1.5rem 2rem;
+    }
+  }
+
+  .sc-panel__col--left h3 {
+    line-height: 1.3;
+  }
+
+  .sc-pros {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .sc-pros li {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--muted-foreground);
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+  .sc-pro-mark {
+    flex-shrink: 0;
+    font-weight: 700;
+    color: hsl(161 50% 45%);
+    font-size: 0.9rem;
+    line-height: 1.6;
+  }
+
+  .sc-note {
+    border-radius: 10px;
+    border: 1px solid hsl(0 0% 50% / 0.12);
+    background: hsl(0 0% 50% / 0.04);
+    padding: 0.875rem 1rem;
+  }
+  .sc-note__label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(0 0% 55% / 0.7);
+    margin-bottom: 0.5rem;
+  }
+  .sc-note p {
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: hsl(0 0% 60% / 0.8);
+    margin: 0;
+  }
+
+  /* Arrows */
+  .sc-arrow {
+    position: absolute;
+    top: 140px;
+    z-index: 30;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid hsl(0 0% 50% / 0.15);
+    background: hsl(0 0% 50% / 0.05);
+    backdrop-filter: blur(8px);
+    color: hsl(0 0% 50% / 0.6);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .sc-arrow:hover {
+    border-color: hsl(222 89% 60% / 0.3);
+    color: hsl(222 89% 60% / 0.8);
+    background: hsl(222 89% 60% / 0.1);
+    transform: scale(1.05);
+  }
+  .sc-arrow:active {
+    transform: scale(0.95);
+  }
+  .sc-arrow--left {
+    left: 8px;
+  }
+  .sc-arrow--right {
+    right: 8px;
+  }
+
+  /* Tabs */
+  .sc-tabs {
+    scrollbar-width: none;
+  }
+  .sc-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Dots */
+  .sc-dots {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding: 1.25rem 0 0.5rem;
+  }
+
+  .sc-dot-btn {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid hsl(0 0% 50% / 0.25);
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .sc-dot-btn:hover {
+    border-color: hsl(222 89% 60% / 0.5);
+    transform: scale(1.1);
+  }
+  .sc-dot-btn.is-active {
+    background: hsl(222 89% 60% / 0.7);
+    border-color: hsl(222 89% 60% / 0.7);
+    transform: scale(1.25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sc-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+  }
+</style>
+
+<script>
+  function initShowcase() {
+    const track = document.getElementById("sc-track");
+    const dots = document.querySelectorAll<HTMLButtonElement>("#sc-dots .sc-dot-btn");
+    const tabs = document.querySelectorAll<HTMLButtonElement>("#sc-tabs .sc-tab-btn");
+    const arrowL = document.getElementById("sc-arrow-left");
+    const arrowR = document.getElementById("sc-arrow-right");
+    if (!track || dots.length === 0) return;
+
+    const panels = track.querySelectorAll<HTMLDivElement>(".sc-panel");
+    const total = panels.length;
+    let current = 0;
+
+    function scrollToPanel(idx: number) {
+      if (idx < 0 || idx >= total) return;
+      const panelWidth = track!.clientWidth;
+      track!.scrollTo({ left: idx * panelWidth, behavior: "smooth" });
+    }
+
+    function setActive(idx: number) {
+      current = idx;
+      dots.forEach((d, i) => {
+        const active = i === idx;
+        d.classList.toggle("is-active", active);
+        d.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      tabs.forEach((t, i) => {
+        const active = i === idx;
+        t.classList.toggle("text-foreground", active);
+        t.classList.toggle("bg-muted/50", active);
+        t.classList.toggle("text-muted-foreground", !active);
+        t.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    }
+
+    // Scroll observer
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+            const idx = Array.from(panels).indexOf(entry.target as HTMLDivElement);
+            if (idx >= 0) setActive(idx);
+          }
+        }
+      },
+      { root: track, threshold: 0.5 },
+    );
+    panels.forEach((p) => io.observe(p));
+
+    // Dot clicks
+    dots.forEach((dot) => {
+      dot.addEventListener("click", () => {
+        const idx = parseInt(dot.dataset.index ?? "0", 10);
+        scrollToPanel(idx);
+      });
+    });
+
+    // Tab clicks
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const idx = parseInt(tab.dataset.index ?? "0", 10);
+        scrollToPanel(idx);
+      });
+    });
+
+    // Arrow clicks
+    arrowL?.addEventListener("click", () => scrollToPanel(current - 1));
+    arrowR?.addEventListener("click", () => scrollToPanel(current + 1));
+
+    // Keyboard
+    track.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        scrollToPanel(current - 1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        scrollToPanel(current + 1);
+      }
+    });
+  }
+
+  function initShowcaseReveal() {
+    const els = document.querySelectorAll(".sc-section .sc-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initShowcaseReveal();
+  initShowcase();
+</script>

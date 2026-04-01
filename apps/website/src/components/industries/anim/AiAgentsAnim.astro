@@ -1,0 +1,154 @@
+---
+/**
+ * AI Agents: Advanced Neural Network with Organic Synapses & Agent Nodes
+ */
+interface Props { ring: string; dot: string; node: string; line: string; }
+const { ring, dot, node, line } = Astro.props;
+---
+
+<svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full max-w-md">
+  <defs>
+    <radialGradient id="ai-brain" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color={dot} stop-opacity="0.2">
+        <animate attributeName="stop-opacity" values="0.1;0.35;0.1" dur="4s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="100%" stop-color={dot} stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="ai-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComponentTransfer in="blur" result="glow">
+        <feFuncA type="linear" slope="1.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <path id="path-i1-h1" d="M 70 100 C 108 100, 108 120, 146 120" />
+    <path id="path-i1-h2" d="M 70 100 C 108 100, 108 200, 146 200" />
+    <path id="path-i2-h1" d="M 70 180 C 108 180, 108 120, 146 120" />
+    <path id="path-i2-h2" d="M 70 180 C 108 180, 108 200, 146 200" />
+    <path id="path-i2-h3" d="M 70 180 C 108 180, 108 280, 146 280" />
+    <path id="path-i3-h2" d="M 70 260 C 108 260, 108 200, 146 200" />
+    <path id="path-i3-h3" d="M 70 260 C 108 260, 108 280, 146 280" />
+
+    <path id="path-h1-l1" d="M 174 120 C 210 120, 210 140, 246 140" />
+    <path id="path-h1-l2" d="M 174 120 C 210 120, 210 220, 246 220" />
+    <path id="path-h2-l1" d="M 174 200 C 210 200, 210 140, 246 140" />
+    <path id="path-h2-l2" d="M 174 200 C 210 200, 210 220, 246 220" />
+    <path id="path-h3-l1" d="M 174 280 C 210 280, 210 140, 246 140" />
+    <path id="path-h3-l2" d="M 174 280 C 210 280, 210 220, 246 220" />
+
+    <path id="path-l1-out" d="M 274 140 C 304 140, 304 180, 334 180" />
+    <path id="path-l2-out" d="M 274 220 C 304 220, 304 180, 334 180" />
+  </defs>
+
+  <circle cx="200" cy="180" r="100" fill="url(#ai-brain)">
+    <animate attributeName="r" values="80;110;80" dur="6s" repeatCount="indefinite" />
+  </circle>
+
+  <g stroke={line} fill="none">
+    <use href="#path-i1-h1" stroke-width="0.8" opacity="0.15"/>
+    <use href="#path-i1-h2" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-i2-h1" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-i2-h2" stroke-width="0.8" opacity="0.15"/>
+    <use href="#path-i2-h3" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-i3-h2" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-i3-h3" stroke-width="0.8" opacity="0.15"/>
+
+    <use href="#path-h1-l1" stroke-width="0.8" opacity="0.15"/>
+    <use href="#path-h1-l2" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-h2-l1" stroke-width="0.4" opacity="0.08"/>
+    <use href="#path-h2-l2" stroke-width="0.8" opacity="0.15"/>
+    <use href="#path-h3-l1" stroke-width="0.3" opacity="0.05"/>
+    <use href="#path-h3-l2" stroke-width="0.5" opacity="0.10"/>
+
+    <use href="#path-l1-out" stroke-width="1.2" opacity="0.2"/>
+    <use href="#path-l2-out" stroke-width="1.2" opacity="0.2"/>
+  </g>
+
+  <g fill={node} stroke={ring}>
+    <circle cx="60" cy="100" r="12" opacity="0.06" stroke-width="0.8" />
+    <circle cx="60" cy="180" r="12" opacity="0.06" stroke-width="0.8" />
+    <circle cx="60" cy="260" r="12" opacity="0.06" stroke-width="0.8" />
+  </g>
+  <g fill={dot}>
+    <circle cx="60" cy="100" r="3"><animate attributeName="opacity" values="0.2;1;0.2" dur="1.5s" repeatCount="indefinite"/></circle>
+    <circle cx="60" cy="180" r="3"><animate attributeName="opacity" values="0.2;1;0.2" dur="2s" repeatCount="indefinite" begin="0.5s"/></circle>
+    <circle cx="60" cy="260" r="3"><animate attributeName="opacity" values="0.2;1;0.2" dur="2.5s" repeatCount="indefinite" begin="1s"/></circle>
+  </g>
+
+  <g fill={node} stroke={ring} stroke-width="1">
+    <circle cx="160" cy="120" r="14" opacity="0.1"/>
+    <circle cx="160" cy="200" r="14" opacity="0.1"/>
+    <circle cx="160" cy="280" r="14" opacity="0.1"/>
+  </g>
+  <g fill={dot}>
+    <circle cx="160" cy="120" r="4" filter="url(#ai-glow)"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="1.5s" repeatCount="indefinite" begin="0.8s"/></circle>
+    <circle cx="160" cy="200" r="4" filter="url(#ai-glow)"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2s" repeatCount="indefinite" begin="1.3s"/></circle>
+    <circle cx="160" cy="280" r="4" filter="url(#ai-glow)"><animate attributeName="opacity" values="0.2;0.8;0.2" dur="2.5s" repeatCount="indefinite" begin="1.8s"/></circle>
+  </g>
+
+  <g fill={node} stroke={ring} stroke-width="1.2">
+    <circle cx="260" cy="140" r="18" opacity="0.1" />
+    <circle cx="260" cy="140" r="22" fill="none" stroke-dasharray="4 6" opacity="0.4">
+      <animateTransform attributeName="transform" type="rotate" from="0 260 140" to="360 260 140" dur="8s" repeatCount="indefinite"/>
+    </circle>
+
+    <circle cx="260" cy="220" r="18" opacity="0.1" />
+    <circle cx="260" cy="220" r="22" fill="none" stroke-dasharray="8 4" opacity="0.4">
+      <animateTransform attributeName="transform" type="rotate" from="360 260 220" to="0 260 220" dur="10s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <text x="260" y="142" text-anchor="middle" fill={dot} font-size="7" font-weight="bold" opacity="0.8">LLM</text>
+  <text x="260" y="222" text-anchor="middle" fill={dot} font-size="7" font-weight="bold" opacity="0.8">RAG</text>
+
+  <circle cx="350" cy="180" r="24" fill={node} opacity="0.1" stroke={ring} stroke-width="1"/>
+  <circle cx="350" cy="180" r="30" fill="none" stroke={ring} stroke-dasharray="2 8" stroke-width="2" opacity="0.5">
+    <animateTransform attributeName="transform" type="rotate" from="0 350 180" to="360 350 180" dur="15s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="350" cy="180" r="8" fill={dot} filter="url(#ai-glow)" opacity="0.8">
+    <animate attributeName="r" values="6;10;6" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.6;1;0.6" dur="2s" repeatCount="indefinite"/>
+  </circle>
+
+  <g fill={dot} filter="url(#ai-glow)">
+    <circle r="2.5"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#path-i1-h1"/></animateMotion></circle>
+    <circle r="1.5" opacity="0.5"><animateMotion dur="1.2s" repeatCount="indefinite" begin="0.1s"><mpath href="#path-i1-h1"/></animateMotion></circle>
+
+    <circle r="2.5"><animateMotion dur="1.5s" repeatCount="indefinite" begin="0.4s"><mpath href="#path-i2-h2"/></animateMotion></circle>
+    <circle r="2.5"><animateMotion dur="1.8s" repeatCount="indefinite" begin="0.2s"><mpath href="#path-i3-h3"/></animateMotion></circle>
+
+    <circle r="3"><animateMotion dur="1.1s" repeatCount="indefinite" begin="0.8s"><mpath href="#path-h1-l1"/></animateMotion></circle>
+    <circle r="3"><animateMotion dur="1.3s" repeatCount="indefinite" begin="1.2s"><mpath href="#path-h2-l2"/></animateMotion></circle>
+
+    <rect width="6" height="2" rx="1"><animateMotion dur="0.8s" repeatCount="indefinite" begin="1.5s" rotate="auto"><mpath href="#path-l1-out"/></animateMotion></rect>
+    <rect width="6" height="2" rx="1"><animateMotion dur="0.9s" repeatCount="indefinite" begin="1.7s" rotate="auto"><mpath href="#path-l2-out"/></animateMotion></rect>
+  </g>
+
+  <path d="M 260 120 L 260 90 L 295 90" stroke={line} stroke-width="1" opacity="0.3" fill="none" stroke-dasharray="2 2">
+    <animate attributeName="stroke-dashoffset" values="8;0" dur="1s" repeatCount="indefinite" />
+  </path>
+  <rect x="295" y="78" width="55" height="24" rx="4" fill={node} opacity="0.1" stroke={ring} stroke-width="1" />
+  <rect x="295" y="78" width="4" height="24" rx="1" fill={dot} opacity="0.6" />
+  <text x="325" y="93" text-anchor="middle" fill={dot} font-size="7" opacity="0.8" font-family="monospace">Tool API</text>
+
+  <path d="M 260 240 L 260 270 L 295 270" stroke={line} stroke-width="1" opacity="0.3" fill="none" stroke-dasharray="2 2">
+    <animate attributeName="stroke-dashoffset" values="0;8" dur="1s" repeatCount="indefinite" />
+  </path>
+  <rect x="295" y="258" width="60" height="24" rx="4" fill={node} opacity="0.1" stroke={ring} stroke-width="1" />
+  <rect x="295" y="258" width="4" height="24" rx="1" fill={dot} opacity="0.6" />
+  <text x="328" y="273" text-anchor="middle" fill={dot} font-size="7" opacity="0.8" font-family="monospace">Vector DB</text>
+
+  <text x="60" y="55" text-anchor="middle" fill={dot} font-size="8" font-weight="bold" opacity="0.4" font-family="monospace">INPUT</text>
+  <text x="350" y="130" text-anchor="middle" fill={dot} font-size="8" font-weight="bold" opacity="0.4" font-family="monospace">OUTPUT</text>
+
+  <g fill={dot} opacity="0.5">
+    <circle cx="30" cy="40" r="1"><animate attributeName="opacity" values="0;1;0" dur="3s" repeatCount="indefinite"/></circle>
+    <circle cx="380" cy="340" r="1.5"><animate attributeName="opacity" values="0;0.8;0" dur="4s" repeatCount="indefinite" begin="1s"/></circle>
+    <circle cx="200" cy="365" r="1"><animate attributeName="opacity" values="0;1;0" dur="2.5s" repeatCount="indefinite" begin="0.5s"/></circle>
+    <circle cx="130" cy="50" r="2"><animate attributeName="opacity" values="0;0.6;0" dur="5s" repeatCount="indefinite"/></circle>
+  </g>
+</svg>

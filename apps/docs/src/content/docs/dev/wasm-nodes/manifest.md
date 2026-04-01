@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-Every WASM package requires a `manifest.toml` file that declares its metadata, permissions, and nodes. This document provides a complete reference.
+Every WASM package requires a `manifest.toml` file that declares its metadata and permissions. Nodes are automatically extracted from the WASM binary during compilation — they do not need to be declared in the manifest.
 
 ## Minimal Example
 
@@ -15,12 +15,6 @@ id = "com.example.hello"
 name = "Hello World"
 version = "1.0.0"
 description = "A simple hello world node"
-
-[[nodes]]
-id = "hello"
-name = "Say Hello"
-description = "Outputs a greeting"
-category = "Custom/Examples"
 ```
 
 ## Full Example
@@ -70,31 +64,6 @@ scopes = [
 ]
 reason = "Read and write files to Google Drive"
 required = true
-
-[[nodes]]
-id = "list_files"
-name = "List Drive Files"
-description = "List files in a Google Drive folder"
-category = "Cloud/Google Drive"
-icon = "data:image/svg+xml;base64,..."
-oauth_providers = ["google"]
-
-[nodes.metadata]
-docs_url = "https://example.com/docs/list-files"
-
-[[nodes]]
-id = "download_file"
-name = "Download File"
-description = "Download a file from Google Drive"
-category = "Cloud/Google Drive"
-oauth_providers = ["google"]
-
-[[nodes]]
-id = "upload_file"
-name = "Upload File"
-description = "Upload a file to Google Drive"
-category = "Cloud/Google Drive"
-oauth_providers = ["google"]
 ```
 
 ## Root Fields
@@ -129,8 +98,8 @@ url = "https://your.site"   # optional
 
 ```toml
 [permissions]
-memory = "standard"   # minimal, light, standard, heavy, intensive
-timeout = "standard"  # quick, standard, extended, long_running
+memory = "standard"   # minimal, light, standard, heavy, intensive, large, huge, extreme, maximum
+timeout = "standard"  # quick, standard, extended, long_running, very_long, maximum
 ```
 
 **Memory Tiers:**
@@ -142,6 +111,10 @@ timeout = "standard"  # quick, standard, extended, long_running
 | `standard` | 64 MB | Most nodes (default) |
 | `heavy` | 128 MB | Data processing |
 | `intensive` | 256 MB | ML, large datasets |
+| `large` | 512 MB | Large model inference |
+| `huge` | 1 GB | Very large datasets |
+| `extreme` | 2 GB | Heavy computation |
+| `maximum` | 4 GB | Maximum allocation |
 
 **Timeout Tiers:**
 
@@ -151,6 +124,8 @@ timeout = "standard"  # quick, standard, extended, long_running
 | `standard` | 30s | Most nodes (default) |
 | `extended` | 60s | API calls |
 | `long_running` | 5min | ML inference |
+| `very_long` | 10min | Heavy processing |
+| `maximum` | 30min | Maximum duration |
 
 ### Capability Flags
 
@@ -211,63 +186,14 @@ required = true
 - `discord` - Discord OAuth
 - Custom providers via Flow-Like configuration
 
-## Nodes
+## Node Discovery
 
-Each node in the package is declared with a `[[nodes]]` section:
+Nodes are **not** declared in the manifest. Instead, they are automatically extracted from the WASM binary:
 
-```toml
-[[nodes]]
-id = "my_node"
-name = "My Node"
-description = "Does something useful"
-category = "Custom/MyCategory"
-icon = "data:image/svg+xml;base64,..."  # optional
-oauth_providers = ["google"]             # optional
+- **Remote (registry):** The backend compiles the WASM and calls `get_nodes()` to discover all nodes.
+- **Local (desktop):** The runtime calls `get_nodes()` on the loaded WASM module.
 
-[nodes.metadata]
-docs_url = "https://example.com/docs"
-custom_key = "custom_value"
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Unique identifier within package |
-| `name` | string | ✅ | Display name |
-| `description` | string | ✅ | Brief description |
-| `category` | string | ✅ | Category path (e.g., "Cloud/Storage") |
-| `icon` | string | | Base64 data URI or URL |
-| `oauth_providers` | string[] | | Which OAuth providers this node uses |
-| `metadata` | table | | Additional key-value metadata |
-
-### OAuth Provider References
-
-Nodes can only reference OAuth providers declared at the package level:
-
-```toml
-# Package-level declaration
-[[permissions.oauth_scopes]]
-provider = "google"
-scopes = ["..."]
-reason = "..."
-
-[[permissions.oauth_scopes]]
-provider = "github"
-scopes = ["..."]
-reason = "..."
-
-# Node references
-[[nodes]]
-id = "google_only"
-oauth_providers = ["google"]  # ✅ Valid
-
-[[nodes]]
-id = "both"
-oauth_providers = ["google", "github"]  # ✅ Valid
-
-[[nodes]]
-id = "invalid"
-oauth_providers = ["slack"]  # ❌ Error: not declared at package level
-```
+This ensures the node catalog always matches the actual WASM code and prevents manifests from misrepresenting capabilities.
 
 ## Validation
 
@@ -281,8 +207,6 @@ Common validation errors:
 | Error | Cause |
 |-------|-------|
 | `Package ID is required` | Missing `id` field |
-| `Package must contain at least one node` | Empty `nodes` array |
-| `Node references unknown OAuth provider` | `oauth_providers` not in package `oauth_scopes` |
 | `Invalid memory tier` | Unknown value for `memory` |
 
 ## Best Practices

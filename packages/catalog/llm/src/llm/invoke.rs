@@ -14,7 +14,10 @@ use flow_like::{
     },
 };
 use flow_like_model_provider::{
-    history::History, llm::LLMCallback, response::Response, response_chunk::ResponseChunk,
+    history::History,
+    llm::LLMCallback,
+    response::{LLMUsageStats, Response},
+    response_chunk::ResponseChunk,
 };
 use flow_like_types::{
     async_trait,
@@ -25,6 +28,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Instant;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -46,6 +50,7 @@ impl NodeLogic for InvokeLLM {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(1);
 
         // Generic model invocation node. The actual provider can be local or cloud,
         // so we assign balanced default scores.
@@ -90,6 +95,15 @@ impl NodeLogic for InvokeLLM {
             VariableType::Struct,
         )
         .set_schema::<Response>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.set_long_running(true);
@@ -180,7 +194,9 @@ impl NodeLogic for InvokeLLM {
             None,
         );
 
+        let start = Instant::now();
         let res = model.invoke(&history, Some(callback)).await?;
+        let duration_ms = start.elapsed().as_millis() as u64;
 
         message.end();
         message.put_stats(LogStat::new(
@@ -196,7 +212,10 @@ impl NodeLogic for InvokeLLM {
             context.push_sub_context(&mut sub_context);
         }
 
+        let mut stats = LLMUsageStats::from_response(&res);
+        stats.set_duration_ms(duration_ms);
         context.set_pin_value("result", json!(res)).await?;
+        context.set_pin_value("stats", json!(stats)).await?;
         context.deactivate_exec_pin("on_stream").await?;
         context.activate_exec_pin("done").await?;
 

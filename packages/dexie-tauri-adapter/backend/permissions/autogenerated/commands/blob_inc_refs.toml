@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-blob-inc-refs"
+description = "Enables the blob_inc_refs command without any pre-configured scope."
+commands.allow = ["blob_inc_refs"]
+
+[[permission]]
+identifier = "deny-blob-inc-refs"
+description = "Denies the blob_inc_refs command without any pre-configured scope."
+commands.deny = ["blob_inc_refs"]

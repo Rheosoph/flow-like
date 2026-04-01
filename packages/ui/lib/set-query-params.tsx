@@ -1,11 +1,10 @@
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export function useSetQueryParams() {
 	const router = useRouter();
-	const searchParams = useSearchParams();
 
 	return (key: string, value: string | undefined) => {
-		const params = new URLSearchParams(searchParams.toString());
+		const params = new URLSearchParams(window.location.search);
 		if (value === undefined || value === null) {
 			params.delete(key);
 		} else {

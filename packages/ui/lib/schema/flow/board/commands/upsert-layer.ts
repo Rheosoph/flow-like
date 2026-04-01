@@ -1,3 +1,5 @@
+import type { INodePermission } from "../../board";
+
 export interface IUpsertLayer {
 	current_layer?: null | string;
 	layer: ILayer;
@@ -74,7 +76,14 @@ export interface INode {
 	start?: boolean | null;
 	/** Schema version for node migration. When catalog version > placed version, pins are synced. */
 	version?: number | null;
+	/** WASM metadata for external nodes. Undefined for built-in catalog nodes. */
+	wasm?: INodeWasm | null;
 	[property: string]: any;
+}
+
+export interface INodeWasm {
+	package_id: string;
+	permissions: INodePermission[];
 }
 
 export interface IPin {

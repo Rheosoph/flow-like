@@ -1,0 +1,35 @@
+---
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section class="relative py-28">
+  <div class="absolute top-0 left-0 right-0 h-px bg-border" />
+
+  <div class="mx-auto max-w-3xl px-6 lg:px-8 text-center">
+    <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight mb-6">
+      {t("pitch.cta.headline")}
+    </h2>
+    <p class="text-lg text-muted-foreground leading-relaxed mb-10 max-w-xl mx-auto">
+      {t("pitch.cta.description")}
+    </p>
+
+    <div class="flex flex-col sm:flex-row items-center justify-center gap-6">
+      <a
+        href="mailto:enterprise@flow-like.com?subject=Demo%20Request"
+        class="inline-flex items-center gap-3 bg-primary text-primary-foreground px-8 py-4 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+      >
+        {t("pitch.cta.button")}
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+        </svg>
+      </a>
+    </div>
+    <p class="text-sm text-muted-foreground mt-6">
+      {t("pitch.cta.email")}
+    </p>
+  </div>
+</section>

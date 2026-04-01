@@ -1,7 +1,9 @@
 //! Telegram user interaction - wait for replies, callbacks, and reactions
 
 use super::message::SentMessage;
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -12,7 +14,9 @@ use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
+#[cfg(feature = "execute")]
 use teloxide::types::{Message as TgMessage, ParseMode};
 
 /// Represents a user's reply message
@@ -40,6 +44,7 @@ pub struct UserReply {
     pub has_audio: bool,
 }
 
+#[cfg(feature = "execute")]
 impl From<&TgMessage> for UserReply {
     fn from(msg: &TgMessage) -> Self {
         Self {
@@ -174,6 +179,7 @@ impl NodeLogic for WaitForReplyNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let timeout_secs: i64 = context
@@ -282,6 +288,13 @@ impl NodeLogic for WaitForReplyNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -381,6 +394,7 @@ impl NodeLogic for SendAndWaitNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let prompt: String = context.evaluate_pin("prompt").await?;
@@ -488,6 +502,13 @@ impl NodeLogic for SendAndWaitNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -591,6 +612,7 @@ impl NodeLogic for WaitForCallbackNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let timeout_secs: i64 = context
@@ -712,6 +734,13 @@ impl NodeLogic for WaitForCallbackNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -785,6 +814,7 @@ impl NodeLogic for AnswerCallbackQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let callback: CallbackResponse = context.evaluate_pin("callback").await?;
@@ -815,6 +845,13 @@ impl NodeLogic for AnswerCallbackQueryNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -917,6 +954,7 @@ impl NodeLogic for ConfirmationDialogNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
@@ -1034,5 +1072,12 @@ impl NodeLogic for ConfirmationDialogNode {
         }
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }

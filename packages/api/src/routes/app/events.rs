@@ -38,7 +38,7 @@ pub fn routes() -> Router<AppState> {
             post(invoke_event_async::invoke_event_async),
         )
         .route(
-            "/{board_id}/feedback",
+            "/{event_id}/feedback",
             put(upsert_event_feedback::upsert_event_feedback),
         )
 }

@@ -1,0 +1,437 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const tags = t("v3.bento.unified.tags").split("|").map((s) => s.trim());
+---
+
+<section class="bento-section relative isolate overflow-hidden py-24 md:py-32">
+  <!-- Background orbs -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="bento-orb bento-orb--blue"></div>
+    <div class="bento-orb bento-orb--green"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="bento-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-block rounded-full border border-border/50 bg-muted/40 px-4 py-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase mb-6">
+        {t("v3.bento.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-foreground">
+        {t("v3.bento.headline")}
+      </h2>
+      <p class="mt-4 text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+        {t("v3.bento.description")}
+      </p>
+    </div>
+
+    <!-- Bento Grid -->
+    <div class="bento-grid grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
+
+      <!-- BI Dashboards — spans 2 columns -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden md:col-span-2">
+        <div class="bento-tile__svg p-5 pb-0">
+          <svg class="w-full rounded-lg" viewBox="0 0 520 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="520" height="200" rx="8" fill="hsl(45 80% 50% / 0.03)"/>
+            <!-- Chart area -->
+            <rect x="20" y="20" width="240" height="120" rx="6" fill="hsl(45 80% 50% / 0.04)" stroke="hsl(45 80% 50% / 0.15)" stroke-width="1"/>
+            <!-- Bar chart -->
+            <rect x="40" y="100" width="20" height="30" rx="3" fill="hsl(45 80% 50% / 0.25)"/>
+            <rect x="70" y="80" width="20" height="50" rx="3" fill="hsl(45 80% 50% / 0.35)"/>
+            <rect x="100" y="60" width="20" height="70" rx="3" fill="hsl(45 80% 50% / 0.45)"/>
+            <rect x="130" y="45" width="20" height="85" rx="3" fill="hsl(45 80% 50% / 0.55)"/>
+            <rect x="160" y="70" width="20" height="60" rx="3" fill="hsl(45 80% 50% / 0.4)"/>
+            <rect x="190" y="55" width="20" height="75" rx="3" fill="hsl(45 80% 50% / 0.5)"/>
+            <rect x="220" y="40" width="20" height="90" rx="3" fill="hsl(45 80% 50% / 0.6)"/>
+            <!-- Line chart label -->
+            <text x="30" y="35" fill="hsl(45 80% 50% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">Revenue Trend</text>
+            <!-- KPI cards -->
+            <rect x="280" y="20" width="110" height="55" rx="6" fill="hsl(222 89% 60% / 0.04)" stroke="hsl(222 89% 60% / 0.15)" stroke-width="1"/>
+            <text x="295" y="42" fill="hsl(222 89% 60% / 0.5)" font-size="8" font-family="system-ui">Active Users</text>
+            <text x="295" y="62" fill="hsl(222 89% 60% / 0.8)" font-size="16" font-family="system-ui" font-weight="700">12,847</text>
+            <rect x="400" y="20" width="100" height="55" rx="6" fill="hsl(161 50% 45% / 0.04)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1"/>
+            <text x="415" y="42" fill="hsl(161 50% 45% / 0.5)" font-size="8" font-family="system-ui">Conversion</text>
+            <text x="415" y="62" fill="hsl(161 50% 45% / 0.8)" font-size="16" font-family="system-ui" font-weight="700">4.2%</text>
+            <!-- Donut chart -->
+            <circle cx="335" cy="130" r="30" stroke="hsl(45 80% 50% / 0.15)" stroke-width="8" fill="none"/>
+            <circle cx="335" cy="130" r="30" stroke="hsl(45 80% 50% / 0.5)" stroke-width="8" fill="none" stroke-dasharray="120 69" stroke-dashoffset="0" stroke-linecap="round"/>
+            <circle cx="335" cy="130" r="30" stroke="hsl(222 89% 60% / 0.4)" stroke-width="8" fill="none" stroke-dasharray="50 139" stroke-dashoffset="-120" stroke-linecap="round"/>
+            <!-- Table snippet -->
+            <rect x="390" y="90" width="110" height="70" rx="6" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <line x1="390" y1="108" x2="500" y2="108" stroke="hsl(0 0% 50% / 0.1)"/>
+            <text x="400" y="103" fill="hsl(0 0% 50% / 0.4)" font-size="7" font-family="system-ui">Region</text>
+            <text x="460" y="103" fill="hsl(0 0% 50% / 0.4)" font-size="7" font-family="system-ui">MRR</text>
+            <text x="400" y="122" fill="hsl(0 0% 60% / 0.5)" font-size="7" font-family="monospace">EMEA</text>
+            <text x="460" y="122" fill="hsl(161 50% 45% / 0.6)" font-size="7" font-family="monospace">$240k</text>
+            <text x="400" y="136" fill="hsl(0 0% 60% / 0.5)" font-size="7" font-family="monospace">APAC</text>
+            <text x="460" y="136" fill="hsl(161 50% 45% / 0.6)" font-size="7" font-family="monospace">$180k</text>
+            <text x="400" y="150" fill="hsl(0 0% 60% / 0.5)" font-size="7" font-family="monospace">AMER</text>
+            <text x="460" y="150" fill="hsl(161 50% 45% / 0.6)" font-size="7" font-family="monospace">$310k</text>
+            <!-- Embedded badge -->
+            <rect x="20" y="160" width="80" height="22" rx="11" fill="hsl(45 80% 50% / 0.08)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.8"/>
+            <text x="60" y="175" text-anchor="middle" fill="hsl(45 80% 50% / 0.6)" font-size="8" font-family="system-ui">&#x2713; Embeddable</text>
+          </svg>
+        </div>
+        <div class="p-5 pt-4">
+          <h3 class="text-lg font-bold text-foreground">{t("v3.bento.bi.title")}</h3>
+          <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.bi.desc")}</p>
+          <p class="mt-3 text-xs italic text-muted-foreground/70">"{t("v3.bento.bi.quote")}"</p>
+          <a href="#" class="inline-block mt-3 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+
+      <!-- Workflow Automation -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden">
+        <div class="bento-tile__svg p-5 pb-0">
+          <svg class="w-full rounded-lg" viewBox="0 0 240 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="240" height="200" rx="8" fill="hsl(222 89% 60% / 0.03)"/>
+            <!-- Trigger node -->
+            <rect x="80" y="15" width="80" height="36" rx="8" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <circle cx="104" cy="33" r="6" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1.2" fill="none"/>
+            <path d="M104 29 L104 33 L107 35" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1" stroke-linecap="round" fill="none"/>
+            <text x="118" y="37" fill="hsl(222 89% 60% / 0.6)" font-size="9" font-family="system-ui">Trigger</text>
+            <!-- Arrow down -->
+            <line x1="120" y1="51" x2="120" y2="68" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5"/>
+            <path d="M116 64 L120 70 L124 64" fill="hsl(222 89% 60% / 0.3)"/>
+            <!-- Condition diamond -->
+            <polygon points="120,72 150,92 120,112 90,92" fill="hsl(25 80% 52% / 0.06)" stroke="hsl(25 80% 52% / 0.3)" stroke-width="1.5"/>
+            <text x="120" y="96" text-anchor="middle" fill="hsl(25 80% 52% / 0.5)" font-size="8" font-family="system-ui">If/Else</text>
+            <!-- Left branch -->
+            <line x1="90" y1="92" x2="50" y2="92" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <line x1="50" y1="92" x2="50" y2="130" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <rect x="20" y="130" width="60" height="32" rx="6" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.2"/>
+            <text x="50" y="150" text-anchor="middle" fill="hsl(161 50% 45% / 0.5)" font-size="8" font-family="system-ui">Approve</text>
+            <!-- Right branch -->
+            <line x1="150" y1="92" x2="190" y2="92" stroke="hsl(0 50% 50% / 0.3)" stroke-width="1.5"/>
+            <line x1="190" y1="92" x2="190" y2="130" stroke="hsl(0 50% 50% / 0.3)" stroke-width="1.5"/>
+            <rect x="160" y="130" width="60" height="32" rx="6" fill="hsl(0 50% 50% / 0.06)" stroke="hsl(0 50% 50% / 0.25)" stroke-width="1.2"/>
+            <text x="190" y="150" text-anchor="middle" fill="hsl(0 50% 50% / 0.5)" font-size="8" font-family="system-ui">Escalate</text>
+            <!-- Merge -->
+            <line x1="50" y1="162" x2="50" y2="175" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1"/>
+            <line x1="190" y1="162" x2="190" y2="175" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1"/>
+            <line x1="50" y1="175" x2="190" y2="175" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1"/>
+            <line x1="120" y1="175" x2="120" y2="190" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1"/>
+            <circle cx="120" cy="192" r="4" fill="hsl(222 89% 60% / 0.15)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="p-5 pt-4">
+          <h3 class="text-lg font-bold text-foreground">{t("v3.bento.auto.title")}</h3>
+          <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.auto.desc")}</p>
+          <p class="mt-3 text-xs italic text-muted-foreground/70">"{t("v3.bento.auto.quote")}"</p>
+          <a href="#" class="inline-block mt-3 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+
+      <!-- AI Agents -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden">
+        <div class="bento-tile__svg p-5 pb-0">
+          <svg class="w-full rounded-lg" viewBox="0 0 240 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="240" height="200" rx="8" fill="hsl(280 60% 55% / 0.03)"/>
+            <!-- Radiating tool connections (drawn first, behind boxes) -->
+            <line x1="96" y1="55" x2="55" y2="35" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1.2"/>
+            <line x1="144" y1="55" x2="185" y2="35" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1.2"/>
+            <line x1="96" y1="85" x2="55" y2="110" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1.2"/>
+            <line x1="144" y1="85" x2="185" y2="110" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1.2"/>
+
+            <!-- Tool boxes (on top of lines, opaque background to cover lines) -->
+            <rect x="30" y="22" width="50" height="26" rx="6" fill="white" stroke="none"/>
+            <rect x="30" y="22" width="50" height="26" rx="6" fill="hsl(222 89% 60% / 0.08)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1"/>
+            <text x="55" y="39" text-anchor="middle" fill="hsl(222 89% 60% / 0.5)" font-size="7" font-family="system-ui">Search</text>
+
+            <rect x="160" y="22" width="50" height="26" rx="6" fill="white" stroke="none"/>
+            <rect x="160" y="22" width="50" height="26" rx="6" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1"/>
+            <text x="185" y="39" text-anchor="middle" fill="hsl(161 50% 45% / 0.5)" font-size="7" font-family="system-ui">Code</text>
+
+            <rect x="25" y="100" width="60" height="26" rx="6" fill="white" stroke="none"/>
+            <rect x="25" y="100" width="60" height="26" rx="6" fill="hsl(45 80% 50% / 0.08)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1"/>
+            <text x="55" y="117" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="7" font-family="system-ui">Database</text>
+
+            <rect x="155" y="100" width="60" height="26" rx="6" fill="white" stroke="none"/>
+            <rect x="155" y="100" width="60" height="26" rx="6" fill="hsl(25 80% 52% / 0.08)" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1"/>
+            <text x="185" y="117" text-anchor="middle" fill="hsl(25 80% 52% / 0.5)" font-size="7" font-family="system-ui">API Call</text>
+
+            <!-- Brain/agent hub (on top of everything) -->
+            <circle cx="120" cy="70" r="28" fill="white" stroke="none"/>
+            <circle cx="120" cy="70" r="28" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.25)" stroke-width="1.5"/>
+            <circle cx="120" cy="70" r="14" fill="hsl(280 60% 55% / 0.1)" stroke="hsl(280 60% 55% / 0.3)" stroke-width="1"/>
+            <!-- Brain pattern -->
+            <path d="M113 65 C113 60, 120 58, 120 63 C120 58, 127 60, 127 65" stroke="hsl(280 60% 55% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <path d="M113 72 C113 77, 120 79, 120 74 C120 79, 127 77, 127 72" stroke="hsl(280 60% 55% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <!-- Observability log lines -->
+            <rect x="30" y="145" width="180" height="44" rx="6" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="1"/>
+            <text x="40" y="160" fill="hsl(161 50% 45% / 0.5)" font-size="7" font-family="monospace">&#x2713; tool:search 120ms $0.002</text>
+            <text x="40" y="173" fill="hsl(280 60% 55% / 0.5)" font-size="7" font-family="monospace">&#x2713; reasoning  340ms $0.008</text>
+            <text x="40" y="186" fill="hsl(222 89% 60% / 0.5)" font-size="7" font-family="monospace">&#x2713; response   80ms  $0.001</text>
+          </svg>
+        </div>
+        <div class="p-5 pt-4">
+          <h3 class="text-lg font-bold text-foreground">{t("v3.bento.ai.title")}</h3>
+          <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.ai.desc")}</p>
+          <p class="mt-3 text-xs italic text-muted-foreground/70">"{t("v3.bento.ai.quote")}"</p>
+          <a href="#" class="inline-block mt-3 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+
+      <!-- Data Pipelines / ETL -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden">
+        <div class="bento-tile__svg p-5 pb-0">
+          <svg class="w-full rounded-lg" viewBox="0 0 240 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="240" height="200" rx="8" fill="hsl(161 50% 45% / 0.03)"/>
+            <!-- Source cylinders (stroke-only, no body fill) -->
+            <ellipse cx="40" cy="35" rx="22" ry="10" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.2"/>
+            <line x1="18" y1="35" x2="18" y2="55" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.2"/>
+            <line x1="62" y1="35" x2="62" y2="55" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.2"/>
+            <ellipse cx="40" cy="55" rx="22" ry="10" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.2"/>
+            <text x="40" y="49" text-anchor="middle" fill="hsl(222 89% 60% / 0.5)" font-size="7" font-family="system-ui">SQL</text>
+
+            <ellipse cx="40" cy="100" rx="22" ry="10" fill="hsl(25 80% 52% / 0.06)" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1.2"/>
+            <line x1="18" y1="100" x2="18" y2="120" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1.2"/>
+            <line x1="62" y1="100" x2="62" y2="120" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1.2"/>
+            <ellipse cx="40" cy="120" rx="22" ry="10" fill="hsl(25 80% 52% / 0.06)" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1.2"/>
+            <text x="40" y="114" text-anchor="middle" fill="hsl(25 80% 52% / 0.5)" font-size="7" font-family="system-ui">CSV</text>
+
+            <ellipse cx="40" cy="160" rx="22" ry="10" fill="hsl(45 80% 50% / 0.06)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.2"/>
+            <line x1="18" y1="160" x2="18" y2="180" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.2"/>
+            <line x1="62" y1="160" x2="62" y2="180" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.2"/>
+            <ellipse cx="40" cy="180" rx="22" ry="10" fill="hsl(45 80% 50% / 0.06)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.2"/>
+            <text x="40" y="174" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="7" font-family="system-ui">API</text>
+
+            <!-- Arrows to transform -->
+            <path d="M62 45 C90 45, 90 100, 100 100" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.2" fill="none"/>
+            <path d="M62 110 L100 110" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.2" fill="none"/>
+            <path d="M62 170 C90 170, 90 120, 100 120" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.2" fill="none"/>
+
+            <!-- Transform box -->
+            <rect x="100" y="80" width="60" height="60" rx="8" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <text x="130" y="105" text-anchor="middle" fill="hsl(161 50% 45% / 0.5)" font-size="8" font-family="system-ui" font-weight="500">Transform</text>
+            <text x="130" y="118" text-anchor="middle" fill="hsl(161 50% 45% / 0.35)" font-size="7" font-family="system-ui">join &#x2022; filter</text>
+            <text x="130" y="130" text-anchor="middle" fill="hsl(161 50% 45% / 0.35)" font-size="7" font-family="system-ui">aggregate</text>
+
+            <!-- Arrow to destination -->
+            <line x1="160" y1="110" x2="180" y2="110" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.2"/>
+            <path d="M176 106 L182 110 L176 114" fill="hsl(161 50% 45% / 0.3)"/>
+
+            <!-- Destination -->
+            <rect x="182" y="85" width="48" height="50" rx="8" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.25)" stroke-width="1.5"/>
+            <rect x="192" y="95" width="28" height="4" rx="2" fill="hsl(280 60% 55% / 0.2)"/>
+            <rect x="192" y="103" width="22" height="4" rx="2" fill="hsl(280 60% 55% / 0.15)"/>
+            <rect x="192" y="111" width="26" height="4" rx="2" fill="hsl(280 60% 55% / 0.2)"/>
+            <rect x="192" y="119" width="18" height="4" rx="2" fill="hsl(280 60% 55% / 0.15)"/>
+            <text x="206" y="135" text-anchor="middle" fill="hsl(280 60% 55% / 0.4)" font-size="6" font-family="system-ui">Warehouse</text>
+
+            <!-- Type-safe badge -->
+            <rect x="90" y="155" width="80" height="22" rx="11" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.8"/>
+            <text x="130" y="170" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="8" font-family="system-ui">&#x2713; Type-safe</text>
+          </svg>
+        </div>
+        <div class="p-5 pt-4">
+          <h3 class="text-lg font-bold text-foreground">{t("v3.bento.etl.title")}</h3>
+          <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.etl.desc")}</p>
+          <p class="mt-3 text-xs italic text-muted-foreground/70">"{t("v3.bento.etl.quote")}"</p>
+          <a href="#" class="inline-block mt-3 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+
+      <!-- Internal Tools & Apps -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden">
+        <div class="bento-tile__svg p-5 pb-0">
+          <svg class="w-full rounded-lg" viewBox="0 0 240 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="240" height="200" rx="8" fill="hsl(222 89% 60% / 0.03)"/>
+            <!-- App frame -->
+            <rect x="25" y="15" width="190" height="140" rx="8" fill="hsl(222 89% 60% / 0.04)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="1.5"/>
+            <!-- Title bar -->
+            <rect x="25" y="15" width="190" height="24" rx="8" fill="hsl(0 0% 50% / 0.04)"/>
+            <rect x="25" y="31" width="190" height="8" fill="hsl(0 0% 50% / 0.04)"/>
+            <circle cx="40" cy="27" r="3" fill="hsl(0 60% 55% / 0.35)"/>
+            <circle cx="50" cy="27" r="3" fill="hsl(45 80% 55% / 0.35)"/>
+            <circle cx="60" cy="27" r="3" fill="hsl(161 50% 45% / 0.35)"/>
+            <text x="80" y="30" fill="hsl(0 0% 50% / 0.4)" font-size="7" font-family="monospace">Internal Tool</text>
+            <!-- Sidebar -->
+            <rect x="25" y="39" width="40" height="116" fill="hsl(222 89% 60% / 0.03)"/>
+            <line x1="65" y1="39" x2="65" y2="155" stroke="hsl(222 89% 60% / 0.1)" stroke-width="1"/>
+            <rect x="31" y="48" width="28" height="6" rx="3" fill="hsl(222 89% 60% / 0.15)"/>
+            <rect x="31" y="60" width="28" height="6" rx="3" fill="hsl(222 89% 60% / 0.08)"/>
+            <rect x="31" y="72" width="28" height="6" rx="3" fill="hsl(222 89% 60% / 0.08)"/>
+            <rect x="31" y="84" width="28" height="6" rx="3" fill="hsl(222 89% 60% / 0.08)"/>
+            <!-- Content area: form -->
+            <rect x="75" y="48" width="60" height="8" rx="3" fill="hsl(0 0% 50% / 0.06)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="0.8"/>
+            <rect x="75" y="62" width="60" height="8" rx="3" fill="hsl(0 0% 50% / 0.06)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="0.8"/>
+            <rect x="75" y="76" width="60" height="8" rx="3" fill="hsl(0 0% 50% / 0.06)" stroke="hsl(0 0% 50% / 0.1)" stroke-width="0.8"/>
+            <rect x="75" y="92" width="40" height="14" rx="5" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1"/>
+            <text x="95" y="102" text-anchor="middle" fill="hsl(222 89% 60% / 0.6)" font-size="7" font-family="system-ui">Submit</text>
+            <!-- Content area: mini table -->
+            <rect x="145" y="48" width="60" height="58" rx="4" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 0% 50% / 0.08)" stroke-width="0.8"/>
+            <line x1="145" y1="60" x2="205" y2="60" stroke="hsl(0 0% 50% / 0.08)"/>
+            <rect x="150" y="52" width="20" height="4" rx="2" fill="hsl(0 0% 50% / 0.1)"/>
+            <rect x="175" y="52" width="15" height="4" rx="2" fill="hsl(0 0% 50% / 0.1)"/>
+            <rect x="150" y="65" width="24" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="175" y="65" width="18" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="150" y="73" width="20" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="175" y="73" width="22" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="150" y="81" width="26" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <rect x="175" y="81" width="16" height="3" rx="1.5" fill="hsl(0 0% 50% / 0.06)"/>
+            <!-- Status bar -->
+            <rect x="75" y="120" width="130" height="22" rx="6" fill="hsl(161 50% 45% / 0.04)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="0.8"/>
+            <circle cx="88" cy="131" r="4" fill="hsl(161 50% 45% / 0.3)"/>
+            <text x="98" y="134" fill="hsl(161 50% 45% / 0.5)" font-size="7" font-family="system-ui">Live &#x2022; Connected to workflow</text>
+            <!-- Platform badges -->
+            <rect x="30" y="168" width="50" height="18" rx="9" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.15)" stroke-width="0.8"/>
+            <text x="55" y="180" text-anchor="middle" fill="hsl(222 89% 60% / 0.5)" font-size="7" font-family="system-ui">Web</text>
+            <rect x="88" y="168" width="55" height="18" rx="9" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.15)" stroke-width="0.8"/>
+            <text x="115" y="180" text-anchor="middle" fill="hsl(280 60% 55% / 0.5)" font-size="7" font-family="system-ui">Desktop</text>
+            <rect x="150" y="168" width="55" height="18" rx="9" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="0.8"/>
+            <text x="177" y="180" text-anchor="middle" fill="hsl(161 50% 45% / 0.5)" font-size="7" font-family="system-ui">Mobile</text>
+          </svg>
+        </div>
+        <div class="p-5 pt-4">
+          <h3 class="text-lg font-bold text-foreground">{t("v3.bento.apps.title")}</h3>
+          <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.apps.desc")}</p>
+          <p class="mt-3 text-xs italic text-muted-foreground/70">"{t("v3.bento.apps.quote")}"</p>
+          <a href="#" class="inline-block mt-3 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+
+      <!-- API Integrations — full width thin bar -->
+      <div class="bento-reveal bento-tile group relative rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm overflow-hidden md:col-span-3">
+        <div class="flex flex-col md:flex-row items-center gap-5 p-5">
+          <svg class="shrink-0 w-full md:w-64 h-16" viewBox="0 0 280 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Connector icons strip -->
+            <rect x="0" y="5" width="50" height="50" rx="10" fill="hsl(222 89% 60% / 0.05)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="1"/>
+            <text x="25" y="35" text-anchor="middle" fill="hsl(222 89% 60% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">REST</text>
+            <line x1="50" y1="30" x2="58" y2="30" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1.5"/>
+
+            <rect x="58" y="5" width="50" height="50" rx="10" fill="hsl(161 50% 45% / 0.05)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="1"/>
+            <text x="83" y="35" text-anchor="middle" fill="hsl(161 50% 45% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">Kafka</text>
+            <line x1="108" y1="30" x2="116" y2="30" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1.5"/>
+
+            <rect x="116" y="5" width="50" height="50" rx="10" fill="hsl(280 60% 55% / 0.05)" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1"/>
+            <text x="141" y="35" text-anchor="middle" fill="hsl(280 60% 55% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">MQTT</text>
+            <line x1="166" y1="30" x2="174" y2="30" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1.5"/>
+
+            <rect x="174" y="5" width="50" height="50" rx="10" fill="hsl(25 80% 52% / 0.05)" stroke="hsl(25 80% 52% / 0.2)" stroke-width="1"/>
+            <text x="199" y="35" text-anchor="middle" fill="hsl(25 80% 52% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">gRPC</text>
+            <line x1="224" y1="30" x2="232" y2="30" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1.5"/>
+
+            <rect x="232" y="5" width="46" height="50" rx="10" fill="hsl(45 80% 50% / 0.05)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="1"/>
+            <text x="255" y="35" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="9" font-family="system-ui" font-weight="500">+100s</text>
+          </svg>
+          <div class="flex-1 min-w-0">
+            <h3 class="text-lg font-bold text-foreground">{t("v3.bento.api.title")}</h3>
+            <p class="mt-1 text-sm text-muted-foreground leading-relaxed">{t("v3.bento.api.desc")}</p>
+            <p class="mt-2 text-xs italic text-muted-foreground/70">"{t("v3.bento.api.quote")}"</p>
+          </div>
+          <a href="#" class="shrink-0 text-sm font-medium text-primary hover:underline">{t("v3.bento.explore")}</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Unified Statement -->
+    <div class="bento-reveal mt-14 md:mt-20 mx-auto max-w-3xl text-center">
+      <h3 class="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+        {t("v3.bento.unified.headline")}
+      </h3>
+      <p class="mt-4 text-base text-muted-foreground leading-relaxed">
+        {t("v3.bento.unified.desc")}
+      </p>
+      <div class="mt-6 flex flex-wrap justify-center gap-2">
+        {tags.map((tag) => (
+          <span class="rounded-full border border-border/50 bg-muted/40 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+            {tag}
+          </span>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .bento-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.4;
+  }
+  .bento-orb--blue {
+    width: 500px;
+    height: 500px;
+    top: -80px;
+    left: -100px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.1), transparent 70%);
+  }
+  .bento-orb--green {
+    width: 400px;
+    height: 400px;
+    bottom: -60px;
+    right: -80px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.08), transparent 70%);
+  }
+
+  .bento-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .bento-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .bento-tile {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .bento-tile:hover {
+    transform: translateY(-4px) scale(1.01);
+    box-shadow: 0 12px 32px -8px hsl(0 0% 0% / 0.12);
+  }
+
+  .bento-tile__svg {
+    border-bottom: 1px solid hsl(0 0% 50% / 0.06);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bento-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .bento-tile {
+      transition: none !important;
+    }
+    .bento-tile:hover {
+      transform: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initBentoReveal() {
+    const els = document.querySelectorAll(".bento-section .bento-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initBentoReveal();
+</script>

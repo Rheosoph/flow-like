@@ -20,7 +20,11 @@ import { get } from "../lib/api";
 import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
-const PUBLIC_PATHS = ["/thirdparty/callback"];
+const PUBLIC_PATHS = [
+	"/thirdparty/callback",
+	"/store",
+	"/store/explore",
+];
 
 const DEFAULT_PROFILE: IProfile = {
 	name: "default",
@@ -174,9 +178,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		};
 	}, [auth]);
 
-	// Push auth context to backend when authenticated
+	// Push auth context to backend (always, so unsigned users can trigger signinRedirect)
 	useEffect(() => {
 		if (!auth) return;
+
+		if (backend instanceof WebBackend) {
+			backend.pushAuthContext(auth);
+		}
 
 		if (!auth.isAuthenticated) {
 			setAuthPushed(false);
@@ -188,11 +196,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			return;
 		}
 
-		if (backend instanceof WebBackend) {
-			console.log("Pushing auth context to backend:", auth);
-			backend.pushAuthContext(auth);
-			setAuthPushed(true);
-		}
+		setAuthPushed(true);
 	}, [
 		auth?.isAuthenticated,
 		auth?.isLoading,
@@ -201,7 +205,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		backend,
 	]);
 
-	// Fetch and push profile after authentication and auth push
+	// Ensure user exists in DB, then fetch and push profile
 	useEffect(() => {
 		if (
 			!authPushed ||
@@ -212,24 +216,51 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			return;
 		}
 
+		let cancelled = false;
+
 		(async () => {
+			const MAX_RETRIES = 5;
+			const BASE_DELAY = 500;
+
+			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+				if (cancelled) return;
+
+				try {
+					await backend.userState.getInfo();
+					break;
+				} catch (error) {
+					if (attempt === MAX_RETRIES) {
+						console.error(
+							"Failed to ensure user exists after retries:",
+							error,
+						);
+					} else {
+						const delay = BASE_DELAY * 2 ** attempt;
+						await new Promise((r) => setTimeout(r, delay));
+					}
+				}
+			}
+
+			if (cancelled) return;
+
 			try {
-				console.log("Fetching profile...");
 				const profile = await backend.userState.getProfile();
-				console.log("Profile fetched:", profile);
 				if (profile && backend instanceof WebBackend) {
 					backend.pushProfile(profile);
 					setProfileLoaded(true);
 				}
 			} catch (error) {
 				console.error("Failed to fetch profile:", error);
-				// Use default profile as fallback
 				if (backend instanceof WebBackend) {
 					backend.pushProfile(DEFAULT_PROFILE);
 					setProfileLoaded(true);
 				}
 			}
 		})();
+
+		return () => {
+			cancelled = true;
+		};
 	}, [authPushed, auth?.isAuthenticated, auth?.user?.access_token, backend]);
 
 	useEffect(() => {
@@ -289,6 +320,11 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		if (typeof window !== "undefined" && pathname) {
 			const returnUrl = window.location.pathname + window.location.search;
 			if (returnUrl && returnUrl !== "/") {
+				// Use both storages: localStorage survives cross-context mobile
+				// redirects, sessionStorage is the fallback
+				try {
+					localStorage.setItem("flow-like-return-url", returnUrl);
+				} catch {}
 				sessionStorage.setItem("flow-like-return-url", returnUrl);
 			}
 		}

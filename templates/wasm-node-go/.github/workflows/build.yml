@@ -1,0 +1,64 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install TinyGo
+        run: |
+          wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.40.0/tinygo_0.40.0_amd64.deb
+          sudo dpkg -i tinygo_0.40.0_amd64.deb
+
+      - name: Install wit-bindgen-go
+        run: go install go.bytecodealliance.org/cmd/wit-bindgen-go@latest
+
+      - name: Generate WIT bindings
+        run: wit-bindgen-go generate --world flow-like-node --out gen ./wit
+
+      - name: Build
+        run: |
+          go mod tidy
+          tinygo build -o node.wasm -target wasip2 -no-debug ./
+
+      - name: Test
+        run: go test ./...
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node
+          path: |
+            node.wasm
+            flow-like.toml
+            README.md
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-node
+          path: release-files
+
+      - name: Create tarball
+        run: tar czf flow-like-node-go-${{ github.ref_name }}.tar.gz -C release-files .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flow-like-node-go-${{ github.ref_name }}.tar.gz

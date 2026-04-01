@@ -136,7 +136,7 @@ fn resolve_default_hub() -> String {
         return format!("{}://{}", protocol, domain);
     }
 
-    String::from("https://api.alpha.flow-like.com")
+    String::from("https://api.flow-like.com")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -198,15 +198,15 @@ impl Settings {
 
         ensure_app_dirs().ok();
 
-        let mut bit_dir = dirs_next::data_dir()
+        let bit_dir = dirs_next::data_dir()
             .unwrap_or_default()
             .join("flow-like")
             .join("bits");
-        let mut project_dir = dirs_next::data_dir()
+        let project_dir = dirs_next::data_dir()
             .unwrap_or_default()
             .join("flow-like")
             .join("projects");
-        let mut user_dir = dirs_next::cache_dir().unwrap_or_default().join("flow-like");
+        let user_dir = dirs_next::cache_dir().unwrap_or_default().join("flow-like");
 
         if cfg!(any(target_os = "ios", target_os = "android")) {
             #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -218,7 +218,10 @@ impl Settings {
             }
         }
 
-        println!("Settings::new() bit_dir={:?} project_dir={:?} user_dir={:?}", bit_dir, project_dir, user_dir);
+        println!(
+            "Settings::new() bit_dir={:?} project_dir={:?} user_dir={:?}",
+            bit_dir, project_dir, user_dir
+        );
 
         Self {
             loaded: false,

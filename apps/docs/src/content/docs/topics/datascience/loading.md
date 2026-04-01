@@ -223,6 +223,90 @@ Batch Insert CSV
     └── End
 ```
 
+### Write Batching
+
+Database connections use **automatic micro-batching** to reduce the number of
+storage operations. Instead of writing every record to disk immediately, writes
+are buffered and flushed in configurable batches.
+
+**How it works:**
+
+1. Every insert or upsert is buffered in memory.
+2. When the buffer reaches the configured **batch size** (default: 1 000), it is
+   flushed to storage as a single operation.
+3. Before any **read** (filter, search, count, …), remaining buffered writes are
+   flushed automatically to guarantee consistency.
+4. At the **end of the workflow**, a completion hook flushes whatever is left.
+
+You can configure the batch size on the **Open Database** node:
+
+```
+Open Database
+    │
+    ├── Name: "my_dataset"
+    ├── Batch Size: 1000        ← records buffered before flush
+    │
+    └── Database ──▶ (connection)
+```
+
+:::tip[Choosing a batch size]
+Larger batches reduce the number of write operations (better for cloud storage
+like S3/R2) but use more memory. A batch size of **500–2 000** works well for
+most workloads.
+:::
+
+**Schema-mismatch handling:**
+
+When records in a batch have different schemas (different JSON keys), the batch
+insert would normally fail. The batching layer handles this transparently with a
+three-tier fallback:
+
+1. **Schema pre-filter** — Records are compared against the table's Arrow schema.
+   Those with matching field names are grouped into one batch; outliers are
+   separated.
+2. **Divide & conquer** — If a batch still fails (e.g. type mismatches), it is
+   split in half and each half is retried recursively.
+3. **Single-record ingest** — At the leaf of the recursion, individual records
+   that still fail are logged and skipped.
+
+This means that a handful of malformed records will never take down the entire
+batch — the valid majority is always written efficiently.
+
+**Operation coalescing:**
+
+The buffer preserves the order of operations but coalesces consecutive runs of
+the same type. For example, a sequence of:
+
+```
+insert → insert → insert → upsert → upsert → insert → insert
+```
+
+is flushed as three batches:
+
+1. **Batch insert** (first 3 records)
+2. **Batch upsert / merge-insert** (2 records)
+3. **Batch insert** (last 2 records)
+
+Only **insert** and **upsert** (merge-insert) are buffered. Mutating operations
+like **delete**, **index**, and **optimize** always flush first and then execute
+immediately.
+
+**Manual flush:**
+
+You can force a flush at any point with the **Flush Database** node:
+
+```
+Flush Database
+    │
+    ├── Database: (connection)
+    │
+    └── End
+```
+
+This is useful when you need to guarantee writes are persisted before continuing
+with logic that does not go through the database nodes (e.g. external API calls
+that read from the same storage).
+
 ### Querying Data
 
 | Node | Purpose | Use Case |
@@ -247,6 +331,7 @@ Filter Database
 
 | Node | Purpose |
 |------|---------|
+| **Flush** | Force buffered writes to storage |
 | **Index** | Create indexes for faster queries |
 | **Optimize** | Compact and optimize storage |
 | **Purge** | Remove deleted records permanently |

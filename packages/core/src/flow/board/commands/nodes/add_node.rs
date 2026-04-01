@@ -45,11 +45,19 @@ impl Command for AddNodeCommand {
     async fn execute(
         &mut self,
         board: &mut Board,
-        _state: Arc<FlowLikeState>,
+        state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
         // Validate and deduplicate fn_refs - never trust the frontend!
         if let Some(fn_refs) = &mut self.node.fn_refs {
             super::validate_and_deduplicate_fn_refs(fn_refs, board);
+        }
+
+        // Populate wasm metadata from the registry - never trust frontend-supplied values
+        let node_registry = state.node_registry.read().await.node_registry.clone();
+        if let Ok(blueprint) = node_registry.get_node(&self.node.name) {
+            self.node.wasm = blueprint.wasm.clone();
+        } else {
+            self.node.wasm = None;
         }
 
         self.node.layer = self.current_layer.clone();

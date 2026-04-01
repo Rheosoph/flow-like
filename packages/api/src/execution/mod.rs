@@ -4,16 +4,23 @@
 //! (Kubernetes, Docker Compose, Lambda, etc.) to securely communicate with the API.
 
 mod dispatch;
+mod interaction_jwt;
 mod jwt;
 pub mod payload_storage;
 pub mod queue;
 mod sse_proxy;
 pub mod state;
+pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
     ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse, Dispatcher,
     ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
+};
+pub use interaction_jwt::{
+    InteractionClaims, InteractionJwtError, InteractionJwtParams,
+    sign_responder as sign_interaction_responder_jwt,
+    verify_responder as verify_interaction_responder_jwt,
 };
 pub use jwt::{
     ExecutionClaims, ExecutionJwk, ExecutionJwks, ExecutionJwtError, ExecutionJwtParams,
@@ -29,3 +36,4 @@ pub use state::{
     ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,
     UpdateRunInput, create_state_store,
 };
+pub use wasm_resolve::resolve_wasm_packages;

@@ -9,7 +9,7 @@ export interface IRouteMapping {
 
 export interface IAppRouteState {
 	/** Get all route mappings for an app */
-	getRoutes(appId: string): Promise<IRouteMapping[]>;
+	getRoutes(appId: string, force?: boolean): Promise<IRouteMapping[]>;
 	/** Get the route mapping for a specific path */
 	getRouteByPath(appId: string, path: string): Promise<IRouteMapping | null>;
 	/** Get the default route (path = "/") */

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+build/
+vendor/
+!vendor/.gitkeep
+wit/
+.venv/
+*.egg-info/
+dist/
+uv.lock
+componentize_py_async_support/
+componentize_py_runtime.pyi
+componentize_py_types.py
+poll_loop.py
+wit_world/

@@ -10,15 +10,19 @@ git clone https://github.com/your-username/flow-like.git
 cd flow-like
 
 # 2. Install prerequisites
-# - Rust (stable): https://www.rust-lang.org/tools/install
-# - Bun: https://bun.sh
+# - mise: https://mise.jdx.dev/getting-started.html
 # - Tauri prerequisites: https://tauri.app/start/prerequisites/
 # - Protobuf compiler: https://protobuf.dev/installation/
 
-# 3. Install dependencies & run
+# 3. Install toolchains & dependencies
+mise trust && mise install   # installs Rust, Bun, Node, Python, uv
 bun install
-bun run dev:desktop          # macOS / Linux
-bun run dev:desktop:win      # Windows
+
+# 4. Run in dev mode
+mise run dev:desktop:mac:arm     # macOS Apple Silicon
+mise run dev:desktop:mac:intel   # macOS Intel
+mise run dev:desktop:win:x64     # Windows x64
+mise run dev:desktop:linux:x64   # Linux x64
 ```
 
 > **Full setup guide →** [docs.flow-like.com/contributing/getting-started](https://docs.flow-like.com/contributing/getting-started/)
@@ -75,6 +79,11 @@ git checkout -b fix/issue-description        # bug fixes
 ```
 
 ### 2. Make your changes
+
+**Auto-fix everything:**
+```bash
+mise run fix    # runs cargo clippy --fix, cargo fmt, and bunx biome check --write
+```
 
 **Rust code:**
 - Run `cargo clippy` before committing — warnings should be resolved
@@ -155,7 +164,7 @@ We love feature ideas! Before opening an issue:
 
 ## 🔐 Security Issues
 
-For security vulnerabilities, please **do not open a public issue**. Report privately to [security@good-co.de](mailto:security@good-co.de). See [SECURITY.md](./SECURITY.md) for details.
+For security vulnerabilities, please **do not open a public issue**. Report privately to [security@great-co.de](mailto:security@great-co.de). See [SECURITY.md](./SECURITY.md) for details.
 
 ---
 

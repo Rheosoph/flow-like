@@ -1,5 +1,5 @@
 ---
-import { getCollection } from "astro:content";
+import { getCollection, render } from "astro:content";
 import "@tm9657/flow-like-ui/global.css";
 import "../../styles/blog.css";
 import BlogLayout from "../../layouts/Blog-Layout.astro";
@@ -11,13 +11,13 @@ export async function getStaticPaths() {
     import.meta.env.PROD ? !data.draft : true,
   );
   return all.map((entry) => ({
-    params: { slug: entry.slug.split("-").slice(3).join("-") },
+    params: { slug: entry.id.split("-").slice(3).join("-") },
     props: { entry },
   }));
 }
 
 const { entry } = Astro.props;
-const { Content, headings } = await entry.render();
+const { Content, headings } = await render(entry);
 const { title, description, date, tags = [], cover } = entry.data;
 const postCover = cover;
 

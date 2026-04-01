@@ -72,7 +72,6 @@ impl NodeLogic for AHashNode {
         let value = context.evaluate_pin_to_ref("input").await?;
         let consistent = context.evaluate_pin::<bool>("consistent").await?;
         let seed = context.evaluate_pin::<i64>("seed").await?;
-        let value = value.lock().await.clone();
         let reference_value = to_vec(&value)?;
         let hasher = if consistent {
             ahash::RandomState::with_seed(seed as usize)

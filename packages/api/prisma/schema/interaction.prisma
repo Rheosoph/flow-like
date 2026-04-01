@@ -1,0 +1,29 @@
+/// Status of an interaction request
+enum InteractionStatus {
+  PENDING
+  RESPONDED
+}
+
+/// Lean human-in-the-loop interaction record.
+/// Details (name, description, form config) are streamed via SSE and never persisted.
+/// Rows are deleted once the SSE creator stream ends (responded or expired).
+/// Only abandoned interactions (creator disconnected before response) need periodic cleanup.
+model Interaction {
+  id            String            @id
+
+  sub           String
+  user          User             @relation(fields: [sub], references: [id], onDelete: Cascade)
+
+  appId         String
+  app           App               @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  status        InteractionStatus @default(PENDING)
+  expiresAt     BigInt
+  responseValue String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([sub, expiresAt])
+}

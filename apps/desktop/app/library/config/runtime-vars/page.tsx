@@ -95,7 +95,7 @@ export default function RuntimeVariablesPage() {
 		return (
 			<main className="flex flex-col items-center justify-center w-full flex-1 p-8">
 				<div className="flex flex-col items-center gap-6 max-w-md text-center">
-					<div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-green-500/20 flex items-center justify-center">
+					<div className="w-20 h-20 rounded-2xl bg-linear-to-br from-emerald-500/20 to-green-500/20 flex items-center justify-center">
 						<ShieldCheckIcon className="w-10 h-10 text-emerald-500" />
 					</div>
 					<div className="space-y-2">
@@ -115,9 +115,9 @@ export default function RuntimeVariablesPage() {
 	}
 
 	return (
-		<main className="flex flex-col w-full flex-1 max-h-full overflow-y-auto gap-8 pb-8">
+		<main className="flex flex-col w-full flex-1 max-h-full overflow-y-auto md:overflow-visible gap-8 pb-8">
 			{/* Header */}
-			<header className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
+			<header className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 border-b">
 				<div className="py-6 space-y-4">
 					<div className="flex items-start justify-between gap-4">
 						<div className="space-y-1">
@@ -125,9 +125,7 @@ export default function RuntimeVariablesPage() {
 								Runtime Variables
 							</h1>
 							<p className="text-sm text-muted-foreground">
-								{totalVariables} variable{totalVariables !== 1 ? "s" : ""}{" "}
-								across {runtimeConfiguredBoards.length} board
-								{runtimeConfiguredBoards.length !== 1 ? "s" : ""}
+								Set secrets and user-specific values that your flows need at runtime
 							</p>
 						</div>
 						<StatusBadge

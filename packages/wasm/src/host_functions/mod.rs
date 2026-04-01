@@ -9,16 +9,147 @@ pub mod linker;
 pub mod logging;
 pub mod metadata;
 pub mod pins;
+pub mod schema;
 pub mod storage;
 pub mod streaming;
 pub mod variables;
+pub mod websocket;
 
 use crate::limits::WasmCapabilities;
+use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::object_store::path::Path;
 use parking_lot::RwLock;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub use linker::register_host_functions;
+pub use websocket::WsConnection;
+
+/// Storage context for WASM modules — resolves stores server-side without exposing credentials.
+pub struct StorageContext {
+    pub stores: flow_like::state::FlowLikeStores,
+    pub store_cache: RwLock<HashMap<String, FlowLikeStore>>,
+    pub app_id: String,
+    pub board_dir: Path,
+    pub board_id: String,
+    pub node_id: String,
+    pub sub: String,
+}
+
+impl std::fmt::Debug for StorageContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageContext")
+            .field("app_id", &self.app_id)
+            .field("board_id", &self.board_id)
+            .field("node_id", &self.node_id)
+            .finish()
+    }
+}
+
+impl StorageContext {
+    pub fn resolve_store(&self, store_ref: &str) -> Option<FlowLikeStore> {
+        if let Some(store) = self.store_cache.read().get(store_ref).cloned() {
+            return Some(store);
+        }
+
+        // Foreign store_ref from native catalog nodes (e.g. "dirs__upload_..." without
+        // "wasm_" prefix). Try to match the pattern and auto-register the backing store.
+        let store = self.resolve_foreign_store(store_ref)?;
+        self.register_store(store_ref, store.clone());
+        Some(store)
+    }
+
+    fn resolve_foreign_store(&self, store_ref: &str) -> Option<FlowLikeStore> {
+        let key = store_ref.strip_prefix("wasm_").unwrap_or(store_ref);
+
+        if key.starts_with("dirs__upload_") || key.starts_with("dirs__storage_") {
+            let store = self.stores.app_storage_store.clone();
+            if store.is_none() {
+                tracing::warn!(
+                    "[wasm] resolve_foreign_store: app_storage_store is None for {store_ref}"
+                );
+            }
+            return store;
+        }
+        if key.starts_with("dirs__cache_") {
+            let store = self.stores.temporary_store.clone();
+            if store.is_none() {
+                tracing::warn!(
+                    "[wasm] resolve_foreign_store: temporary_store is None for {store_ref}"
+                );
+            }
+            return store;
+        }
+        if key.starts_with("dirs__user_") {
+            let store = self.stores.user_store.clone();
+            if store.is_none() {
+                tracing::warn!("[wasm] resolve_foreign_store: user_store is None for {store_ref}");
+            }
+            return store;
+        }
+        tracing::warn!("[wasm] resolve_foreign_store: no pattern matched for {store_ref}");
+        None
+    }
+
+    pub fn register_store(&self, store_ref: &str, store: FlowLikeStore) {
+        self.store_cache
+            .write()
+            .insert(store_ref.to_string(), store);
+    }
+
+    pub fn get_storage_dir(&self, node: bool) -> Path {
+        let base = self.board_dir.child("storage");
+        if node {
+            base.child(self.node_id.clone())
+        } else {
+            base
+        }
+    }
+
+    pub fn get_upload_dir(&self) -> Path {
+        self.board_dir.child("upload")
+    }
+
+    pub fn get_cache_dir(&self, node: bool, user: bool) -> Path {
+        let mut base = Path::from("tmp");
+        if user {
+            base = base.child("user").child(self.sub.clone());
+        } else {
+            base = base.child("global");
+        }
+        base = base.child("apps").child(self.app_id.clone());
+        if node {
+            base.child(self.node_id.clone())
+        } else {
+            base
+        }
+    }
+
+    pub fn get_user_dir(&self, node: bool) -> Path {
+        let base = Path::from("users")
+            .child(self.sub.clone())
+            .child("apps")
+            .child(self.app_id.clone());
+        if node {
+            base.child(self.node_id.clone())
+        } else {
+            base
+        }
+    }
+}
+
+/// Model context for WASM modules — provides model access including auth tokens.
+pub struct ModelContext {
+    pub app_state: Arc<flow_like::state::FlowLikeState>,
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for ModelContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelContext").finish()
+    }
+}
 
 /// Host state accessible from host functions
 #[derive(Debug)]
@@ -47,6 +178,12 @@ pub struct HostState {
     pub metadata: ExecutionMetadata,
     /// Stream events to send
     pub stream_events: RwLock<Vec<StreamEvent>>,
+    /// Storage context for server-side store resolution
+    pub storage_context: Option<StorageContext>,
+    /// Model context for server-side model access
+    pub model_context: Option<ModelContext>,
+    /// Active WebSocket connections (session_id -> connection)
+    pub ws_connections: Arc<tokio::sync::Mutex<HashMap<String, WsConnection>>>,
 }
 
 /// Log entry from WASM
@@ -101,6 +238,9 @@ impl HostState {
             oauth_tokens: RwLock::new(HashMap::new()),
             metadata: ExecutionMetadata::default(),
             stream_events: RwLock::new(Vec::new()),
+            storage_context: None,
+            model_context: None,
+            ws_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 

@@ -133,6 +133,12 @@ export interface IPrerunBoardResponse {
 	execution_mode: IExecutionMode;
 	/** Whether user can execute locally (has ReadBoards permission). If false, must execute on server */
 	can_execute_locally: boolean;
+	/** Whether the board contains any WASM (external) nodes */
+	has_wasm_nodes?: boolean;
+	/** package_id values of all WASM nodes present in the board */
+	wasm_package_ids?: string[];
+	/** Per-package deduplicated permissions declared by WASM nodes */
+	wasm_package_permissions?: Record<string, string[]>;
 }
 
 /** Response from pre-run analysis for events */
@@ -144,4 +150,10 @@ export interface IPrerunEventResponse {
 	execution_mode: IExecutionMode;
 	/** Whether user can execute locally (has ReadBoards permission). If false, must execute on server */
 	can_execute_locally: boolean;
+	/** Whether the board contains any WASM (external) nodes */
+	has_wasm_nodes?: boolean;
+	/** package_id values of all WASM nodes present in the board */
+	wasm_package_ids?: string[];
+	/** Per-package deduplicated permissions declared by WASM nodes */
+	wasm_package_permissions?: Record<string, string[]>;
 }

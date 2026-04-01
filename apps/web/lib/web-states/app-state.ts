@@ -1,5 +1,6 @@
 import { createId } from "@paralleldrive/cuid2";
 import type {
+	AppCommentsResponse,
 	IApp,
 	IAppCategory,
 	IAppState,
@@ -7,6 +8,8 @@ import type {
 	IBoard,
 	IMetadata,
 	IPurchaseResponse,
+	UpsertAppCommentRequest,
+	UpsertAppCommentResponse,
 } from "@tm9657/flow-like-ui";
 import { IExecutionStage, ILogLevel } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
@@ -22,6 +25,44 @@ import {
 
 export class WebAppState implements IAppState {
 	constructor(private readonly backend: WebBackendRef) {}
+
+	private normalizeAppCommentsResponse(response: {
+		comments: Array<{
+			id: string;
+			text: string;
+			rating: number;
+			userId?: string;
+			user_id?: string;
+			userName?: string | null;
+			user_name?: string | null;
+			userAvatar?: string | null;
+			user_avatar?: string | null;
+			createdAt?: string;
+			created_at?: string;
+			updatedAt?: string;
+			updated_at?: string;
+		}>;
+		total: number;
+		offset: number;
+		limit: number;
+	}): AppCommentsResponse {
+		return {
+			comments: response.comments.map((comment) => ({
+				id: comment.id,
+				text: comment.text,
+				rating: comment.rating,
+				userId: comment.userId ?? comment.user_id ?? "",
+				userName: comment.userName ?? comment.user_name ?? undefined,
+				userAvatar:
+					comment.userAvatar ?? comment.user_avatar ?? undefined,
+				createdAt: comment.createdAt ?? comment.created_at ?? "",
+				updatedAt: comment.updatedAt ?? comment.updated_at ?? "",
+			})),
+			total: response.total,
+			offset: response.offset,
+			limit: response.limit,
+		};
+	}
 
 	async createApp(
 		metadata: IMetadata,
@@ -179,14 +220,79 @@ export class WebAppState implements IAppState {
 	}
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {
+		if (!this.backend.auth?.isAuthenticated) {
+			await this.backend.auth?.signinRedirect();
+			return;
+		}
 		await apiPut(`apps/${appId}/team/queue`, { comment }, this.backend.auth);
 	}
 
 	async purchaseApp(appId: string): Promise<IPurchaseResponse> {
+		if (!this.backend.auth?.isAuthenticated) {
+			await this.backend.auth?.signinRedirect();
+			throw new Error("Sign in required to purchase an app.");
+		}
 		return apiPost<IPurchaseResponse>(
 			`apps/${appId}/team/purchase`,
 			{},
 			this.backend.auth,
 		);
+	}
+
+	async getAppComments(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<AppCommentsResponse> {
+		const params = new URLSearchParams();
+		if (offset != null) params.set("offset", String(offset));
+		if (limit != null) params.set("limit", String(limit));
+		const qs = params.toString();
+
+		try {
+			const response = await apiGet<{
+				comments: Array<{
+					id: string;
+					text: string;
+					rating: number;
+					userId?: string;
+					user_id?: string;
+					userName?: string | null;
+					user_name?: string | null;
+					userAvatar?: string | null;
+					user_avatar?: string | null;
+					createdAt?: string;
+					created_at?: string;
+					updatedAt?: string;
+					updated_at?: string;
+				}>;
+				total: number;
+				offset: number;
+				limit: number;
+			}>(`apps/${appId}/comments${qs ? `?${qs}` : ""}`, this.backend.auth);
+
+			return this.normalizeAppCommentsResponse(response);
+		} catch {
+			return { comments: [], total: 0, offset: 0, limit: 20 };
+		}
+	}
+
+	async upsertAppComment(
+		appId: string,
+		body: UpsertAppCommentRequest,
+	): Promise<UpsertAppCommentResponse> {
+		const response = await apiPut<{ commentId?: string; comment_id?: string }>(
+			`apps/${appId}/comments`,
+			body,
+			this.backend.auth,
+		);
+
+		return {
+			commentId: response.commentId ?? response.comment_id ?? "",
+		};
+	}
+
+	async deleteAppComment(appId: string, commentId: string): Promise<void> {
+		await apiDelete(`apps/${appId}/comments/${commentId}`, this.backend.auth);
 	}
 }

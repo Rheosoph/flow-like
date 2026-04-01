@@ -357,6 +357,23 @@ pub struct Bit {
     pub dependency_tree_hash: String,
     pub created: String,
     pub updated: String,
+    pub model_slug: Option<String>,
+    pub model_evaluation: Option<LlmModelEvaluation>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct LlmModelEvaluation {
+    pub slug: String,
+    pub name: String,
+    pub release_date: Option<String>,
+    pub creator_name: String,
+    pub creator_slug: String,
+    pub evaluations: Option<Value>,
+    pub pricing: Option<Value>,
+    pub median_output_tokens_per_second: Option<f64>,
+    pub median_time_to_first_token_seconds: Option<f64>,
+    pub median_time_to_first_answer_token: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -787,6 +804,7 @@ mod tests {
             dependency_tree_hash: "hash_proxied".into(),
             created: chrono::Utc::now().to_rfc3339(),
             updated: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
         };
 
         let zero_size_bit = Bit {
@@ -807,6 +825,7 @@ mod tests {
             dependency_tree_hash: "hash_zero".into(),
             created: chrono::Utc::now().to_rfc3339(),
             updated: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
         };
 
         let pack = BitPack {

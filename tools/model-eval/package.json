@@ -1,0 +1,21 @@
+{
+	"name": "model-eval",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"start": "bun run index.ts"
+	},
+	"dependencies": {
+		"@prisma/adapter-pg": "^7.4.2",
+		"@prisma/client": "^7.2.0",
+		"@types/pg": "^8.18.0",
+		"dotenv": "^17.2.2",
+		"pg": "^8.20.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"prisma": "^7.2.0",
+		"typescript": "^5.7.3"
+	}
+}

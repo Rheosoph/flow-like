@@ -1,23 +1,34 @@
+use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::{entity::app, state::AppState};
+use crate::{
+    entity::{app, sea_orm_active_enums::Visibility},
+    error::ApiError,
+    state::AppState,
+};
 use axum::{
     Router,
     routing::{get, patch, post},
 };
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub mod internal;
 
+pub mod analytics;
 pub mod api;
 pub mod board;
+pub mod comments;
 pub mod data;
 pub mod db;
 pub mod events;
 pub mod invoke;
 pub mod meta;
 pub mod notifications;
+pub mod packages;
 pub mod page;
+pub mod publication;
 pub mod roles;
+pub mod route;
 pub mod sales;
 pub mod team;
 pub mod template;
@@ -27,6 +38,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(internal::get_apps::get_apps))
         .route("/nodes", get(internal::get_nodes::get_nodes))
+        .route("/{app_id}/nodes", get(internal::get_nodes::get_app_nodes))
         .route("/search", get(internal::search_apps::search_apps))
         .route(
             "/{app_id}",
@@ -34,6 +46,7 @@ pub fn routes() -> Router<AppState> {
                 .put(internal::upsert_app::upsert_app)
                 .delete(internal::delete_app::delete_app),
         )
+        .route("/{app_id}/detail", get(internal::get_detail::get_detail))
         .route(
             "/{app_id}/visibility",
             patch(internal::change_visibility::change_visibility),
@@ -49,12 +62,17 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/meta", meta::routes())
         .nest("/{app_id}/roles", roles::routes())
         .nest("/{app_id}/team", team::routes())
+        .nest("/{app_id}/analytics", analytics::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())
+        .nest("/{app_id}/comments", comments::routes())
+        .nest("/{app_id}/publication", publication::routes())
+        .nest("/{app_id}/packages", packages::routes())
         .nest("/{app_id}/data", data::routes())
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())
         .nest("/{app_id}/api", api::routes())
+        .nest("/{app_id}/routes", route::routes())
 }
 
 #[macro_export]
@@ -89,6 +107,21 @@ macro_rules! ensure_permissions {
         }
         sub
     }};
+}
+
+pub async fn ensure_app_publicly_visible(
+    app_id: &str,
+    state: &AppState,
+) -> Result<app::Model, ApiError> {
+    app::Entity::find_by_id(app_id)
+        .filter(
+            app::Column::Visibility
+                .eq(Visibility::Public)
+                .or(app::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+        )
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::FORBIDDEN)
 }
 
 impl From<crate::entity::sea_orm_active_enums::Category> for flow_like::app::AppCategory {
@@ -236,6 +269,7 @@ impl From<app::Model> for flow_like::app::App {
         Self {
             id: model.id,
             price: Some(model.price as u32),
+            packages: HashMap::new(),
             execution_mode: match model.execution_mode {
                 crate::entity::sea_orm_active_enums::ExecutionMode::Any => {
                     flow_like::app::AppExecutionMode::Any

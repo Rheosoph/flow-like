@@ -59,6 +59,9 @@ import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
+import { initBlobOffload } from "../lib/init-blob-offload";
+
+initBlobOffload();
 
 const persister = createIDBPersister();
 const queryClient = new QueryClient({
@@ -66,12 +69,12 @@ const queryClient = new QueryClient({
 		queries: {
 			networkMode: "always",
 			staleTime: 30 * 1000,
-			gcTime: 7 * 24 * 60 * 60 * 1000,
+			gcTime: 24 * 60 * 60 * 1000,
 			refetchOnWindowFocus: false,
 			refetchOnReconnect: false,
 			refetchOnMount: true,
 			retry: 1,
-			retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
+			retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
 		},
 	},
 });
@@ -170,6 +173,7 @@ export default function RootLayout({
 						client={queryClient}
 						persistOptions={{
 							persister,
+							maxAge: 24 * 60 * 60 * 1000,
 						}}
 					>
 						<NetworkAwareProvider>

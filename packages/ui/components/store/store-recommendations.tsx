@@ -1,14 +1,14 @@
 "use client";
 
-import { Alert, AlertDescription } from "../ui/alert";
-import { AppCard } from "../ui/app-card";
-import { Skeleton } from "../ui/skeleton";
-import { useBackend } from "../../state/backend-state";
-import { useInfiniteInvoke } from "../../hooks/use-invoke";
-import { IAppSearchSort } from "../../lib/schema/app/app-search-query";
 import { AlertCircle, Package, SparklesIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useMemo } from "react";
+import { useInfiniteInvoke } from "../../hooks/use-invoke";
+import { IAppSearchSort } from "../../lib/schema/app/app-search-query";
+import { useBackend } from "../../state/backend-state";
+import { Alert, AlertDescription } from "../ui/alert";
+import { AppCard } from "../ui/app-card";
+import { Skeleton } from "../ui/skeleton";
 
 export const StoreRecommendations = memo(function StoreRecommendations() {
 	const backend = useBackend();
@@ -45,19 +45,14 @@ export const StoreRecommendations = memo(function StoreRecommendations() {
 			{error && (
 				<Alert className="border-destructive/20 bg-destructive/5">
 					<AlertCircle className="h-4 w-4" />
-					<AlertDescription>
-						Failed to load: {error.message}
-					</AlertDescription>
+					<AlertDescription>Failed to load: {error.message}</AlertDescription>
 				</Alert>
 			)}
 
 			{isLoading ? (
 				<div className="flex gap-4 overflow-hidden">
 					{[...Array(4)].map((_, i) => (
-						<div
-							key={i}
-							className="shrink-0 w-65 md:w-75 space-y-3"
-						>
+						<div key={i} className="shrink-0 w-65 md:w-75 space-y-3">
 							<Skeleton className="h-40 w-full rounded-xl" />
 							<Skeleton className="h-4 w-3/4 rounded-full" />
 							<Skeleton className="h-3 w-1/2 rounded-full" />
@@ -78,18 +73,14 @@ export const StoreRecommendations = memo(function StoreRecommendations() {
 						style={{ scrollbarWidth: "none" }}
 					>
 						{combinedApps.map(([app, metadata]) => (
-							<div
-								key={app.id}
-								className="snap-start shrink-0 w-65 md:w-75"
-							>
+							<div key={app.id} className="snap-start shrink-0 w-65 md:w-75">
 								<AppCard
 									app={app}
 									variant="extended"
 									metadata={metadata}
 									className="w-full h-full"
-									onClick={() =>
-										router.push(`/store?id=${app.id}`)
-									}
+									onClick={() => router.push(`/store?id=${app.id}`)}
+									href={`/store?id=${app.id}`}
 								/>
 							</div>
 						))}

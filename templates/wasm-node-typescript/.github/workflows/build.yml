@@ -1,0 +1,58 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fetch WIT definition
+        run: |
+          mkdir -p wit
+          curl -fsSL https://raw.githubusercontent.com/TM9657/flow-like/dev/packages/wasm/wit/flow-like-node.wit -o wit/flow-like-node.wit
+
+      - run: npm run build
+
+      - name: Test
+        run: npm test --if-present
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node
+          path: |
+            build/node.wasm
+            flow-like.toml
+            README.md
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-node
+          path: release-files
+
+      - name: Create tarball
+        run: tar czf flow-like-node-typescript-${{ github.ref_name }}.tar.gz -C release-files .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flow-like-node-typescript-${{ github.ref_name }}.tar.gz

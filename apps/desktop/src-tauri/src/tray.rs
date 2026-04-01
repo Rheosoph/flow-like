@@ -160,6 +160,7 @@ pub struct TrayUpdate {
 pub struct TrayRuntimeState {
     pub tray: Option<tauri::tray::TrayIcon>,
     pub data: TrayData,
+    pub recording: bool,
 }
 
 pub fn init_tray(app_handle: &AppHandle) -> tauri::Result<()> {
@@ -176,10 +177,37 @@ pub fn init_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                 button_state: MouseButtonState::Down,
                 ..
             } = event
-                && let Some(main) = tray.app_handle().get_webview_window("main")
             {
-                let _ = main.show();
-                let _ = main.set_focus();
+                let app = tray.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let is_recording = if let Some(state) = app.try_state::<TauriTrayState>() {
+                        state.0.lock().await.recording
+                    } else {
+                        false
+                    };
+
+                    if is_recording {
+                        // Deactivate capture immediately so the tray click isn't recorded
+                        if let Some(rec_state) =
+                            app.try_state::<crate::state::TauriRecordingState>()
+                        {
+                            let capture = rec_state.capture.read().await;
+                            if let Some(c) = capture.as_ref() {
+                                c.set_active(false);
+                            }
+                        }
+                        let _ = app.emit("recording:stop-from-tray", ());
+                        restore_tray_icon(&app).await;
+                        if let Some(main) = app.get_webview_window("main") {
+                            let _ = main.show();
+                            let _ = main.unminimize();
+                            let _ = main.set_focus();
+                        }
+                    } else if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                });
             }
         });
 
@@ -198,6 +226,76 @@ pub fn init_tray(app_handle: &AppHandle) -> tauri::Result<()> {
     }
 
     Ok(())
+}
+
+fn generate_stop_icon() -> Vec<u8> {
+    const SIZE: usize = 32;
+    let mut rgba = vec![0u8; SIZE * SIZE * 4];
+    let center = SIZE / 2;
+    let radius = (SIZE / 2 - 1) as f64;
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f64 - center as f64;
+            let dy = y as f64 - center as f64;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = (y * SIZE + x) * 4;
+
+            if dist <= radius {
+                // Red circle
+                rgba[idx] = 220; // R
+                rgba[idx + 1] = 50; // G
+                rgba[idx + 2] = 50; // B
+                // Anti-alias the edge
+                let alpha = if dist > radius - 1.0 {
+                    ((radius - dist).max(0.0) * 255.0) as u8
+                } else {
+                    255
+                };
+                rgba[idx + 3] = alpha;
+
+                // White square in center (stop icon)
+                let sq = (SIZE as f64 * 0.22) as usize;
+                if x >= center - sq && x <= center + sq && y >= center - sq && y <= center + sq {
+                    rgba[idx] = 255;
+                    rgba[idx + 1] = 255;
+                    rgba[idx + 2] = 255;
+                    rgba[idx + 3] = alpha;
+                }
+            }
+        }
+    }
+    rgba
+}
+
+pub async fn set_recording_tray_icon(app_handle: &AppHandle) {
+    let Some(state) = app_handle.try_state::<TauriTrayState>() else {
+        return;
+    };
+    let mut guard = state.0.lock().await;
+    guard.recording = true;
+
+    if let Some(ref tray) = guard.tray {
+        let rgba = generate_stop_icon();
+        let icon = tauri::image::Image::new_owned(rgba, 32, 32);
+        let _ = tray.set_icon(Some(icon));
+        let _ = tray.set_tooltip(Some("Flow-Like — Recording (click to stop)"));
+    }
+}
+
+pub async fn restore_tray_icon(app_handle: &AppHandle) {
+    let Some(state) = app_handle.try_state::<TauriTrayState>() else {
+        return;
+    };
+    let mut guard = state.0.lock().await;
+    guard.recording = false;
+
+    if let Some(ref tray) = guard.tray {
+        if let Some(icon) = app_handle.default_window_icon() {
+            let _ = tray.set_icon(Some(icon.clone()));
+        }
+        let _ = tray.set_tooltip(Some("Flow-Like"));
+    }
 }
 
 pub fn spawn_tray_refresh(app_handle: AppHandle) {

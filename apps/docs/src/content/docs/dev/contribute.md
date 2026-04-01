@@ -40,14 +40,13 @@ Before contributing, set up your development environment:
 
    ```bash
    bun install
-   bun run dev:desktop:mac:arm   # or your platform variant
+   mise run dev:desktop:mac:arm   # or your platform variant
    ```
 
 3. Format and lint before committing:
 
    ```bash
-   cargo fmt && cargo clippy
-   bunx biome check --write
+   mise run fix    # runs cargo clippy --fix, cargo fmt, and bunx biome check --write
    ```
 
 ## Contribution Areas

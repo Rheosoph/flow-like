@@ -3,12 +3,33 @@ use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{Value as JsonValue, async_trait, json::json, reqwest::Url};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeltaSchemaField {
+    pub name: String,
+    pub field_type: String,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeltaSchemaInfo {
+    pub fields: Vec<DeltaSchemaField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeltaHistoryEntry {
+    pub timestamp: Option<String>,
+    pub operation: Option<String>,
 }
 
 // ============================================================================
@@ -361,6 +382,7 @@ impl NodeLogic for DeltaTableInfoNode {
             "Data/DataFusion/Lakes",
         );
         node.add_icon("/flow/icons/info.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -402,23 +424,27 @@ impl NodeLogic for DeltaTableInfoNode {
         node.add_output_pin(
             "schema",
             "Schema",
-            "Table schema as JSON",
-            VariableType::Generic,
-        );
+            "Table schema as typed field metadata",
+            VariableType::Struct,
+        )
+        .set_schema::<DeltaSchemaInfo>();
 
         node.add_output_pin(
             "history",
             "History",
-            "Version history as JSON array",
-            VariableType::Generic,
-        );
+            "Version history as array of typed entries",
+            VariableType::Struct,
+        )
+        .set_schema::<DeltaHistoryEntry>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "partitions",
             "Partitions",
             "Partition columns",
-            VariableType::Generic,
-        );
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array);
 
         node.scores = Some(NodeScores {
             privacy: 10,
@@ -460,32 +486,28 @@ impl NodeLogic for DeltaTableInfoNode {
                 .snapshot()
                 .map_err(|e| flow_like_types::anyhow!("Failed to get snapshot: {}", e))?;
 
-            let schema_json = {
+            let schema_info = {
                 let schema = snapshot.schema();
-                let fields: Vec<_> = schema
+                let fields: Vec<DeltaSchemaField> = schema
                     .fields()
-                    .map(|f| {
-                        json!({
-                            "name": f.name(),
-                            "type": format!("{:?}", f.data_type()),
-                            "nullable": f.is_nullable(),
-                        })
+                    .map(|f| DeltaSchemaField {
+                        name: f.name().to_string(),
+                        field_type: format!("{:?}", f.data_type()),
+                        nullable: f.is_nullable(),
                     })
                     .collect();
-                json!({ "fields": fields })
+                DeltaSchemaInfo { fields }
             };
 
             let partitions: Vec<String> = snapshot.metadata().partition_columns().to_vec();
 
-            let history: Vec<_> = delta_table
+            let history: Vec<DeltaHistoryEntry> = delta_table
                 .history(Some(history_limit as usize))
                 .await
                 .map(|h| {
-                    h.map(|entry| {
-                        json!({
-                            "timestamp": entry.timestamp,
-                            "operation": entry.operation,
-                        })
+                    h.map(|entry| DeltaHistoryEntry {
+                        timestamp: entry.timestamp.map(|ts| ts.to_string()),
+                        operation: entry.operation,
                     })
                     .collect()
                 })
@@ -494,7 +516,7 @@ impl NodeLogic for DeltaTableInfoNode {
             context
                 .set_pin_value("current_version", json!(current_version))
                 .await?;
-            context.set_pin_value("schema", schema_json).await?;
+            context.set_pin_value("schema", json!(schema_info)).await?;
             context.set_pin_value("history", json!(history)).await?;
             context
                 .set_pin_value("partitions", json!(partitions))
@@ -799,7 +821,7 @@ impl NodeLogic for WriteDeltaTableNode {
             "Write query results to a new or existing Delta Lake table using FlowPath. Supports append, overwrite modes.",
             "Data/DataFusion/Lakes",
         );
-        node.add_icon("/flow/icons/save.svg");
+        node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
             "exec_in",

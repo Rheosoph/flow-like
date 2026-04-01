@@ -44,6 +44,8 @@ interface FilePreviewProps {
 	showFullscreenButton?: boolean;
 	onFullscreen?: (file: ProcessedAttachment) => void;
 	onClick?: (file: ProcessedAttachment) => void;
+	/** When true, images use a fixed aspect ratio for uniform grid layout */
+	inGrid?: boolean;
 }
 
 export function FilePreview({
@@ -51,6 +53,7 @@ export function FilePreview({
 	showFullscreenButton = false,
 	onFullscreen,
 	onClick,
+	inGrid = false,
 }: FilePreviewProps) {
 	const handleClick = () => {
 		if (showFullscreenButton && onFullscreen) {
@@ -106,12 +109,12 @@ export function FilePreview({
 			return (
 				<div
 					key={file.url}
-					className="relative group rounded-md overflow-hidden border bg-muted/50 max-w-screen-sm"
+					className={`relative group rounded-md overflow-hidden border bg-muted/50 ${inGrid ? "aspect-4/3" : "max-w-screen-sm"}`}
 				>
 					<img
 						src={file.thumbnailUrl || file.url}
 						alt={file.name}
-						className="w-full h-auto object-cover cursor-pointer hover:opacity-90 transition-opacity"
+						className={`cursor-pointer hover:opacity-90 transition-opacity ${inGrid ? "w-full h-full object-cover" : "w-full h-auto object-cover"}`}
 						onClick={handleClick}
 						onError={(e) => {
 							const target = e.target as HTMLImageElement;

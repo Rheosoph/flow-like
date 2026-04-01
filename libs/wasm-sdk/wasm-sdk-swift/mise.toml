@@ -1,0 +1,31 @@
+[tasks.setup]
+description = "Resolve Swift package dependencies"
+run = "swift package resolve"
+
+[tasks.build]
+description = "Build the SDK"
+run = "swift build"
+
+[tasks.test]
+description = "Run tests"
+run = "swift test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "swift package clean"
+
+[tasks.publish]
+description = "Tag and publish a release (Swift packages are distributed via Git)"
+run = """
+VERSION=$(grep -oP '(?<=version: ")[^"]+' Package.swift 2>/dev/null || echo "0.1.0")
+echo "Swift packages are distributed via Git tags + Swift Package Manager."
+echo "Users add this SDK with: .package(url: \"https://github.com/TM9657/flow-like\", from: \"$VERSION\")"
+echo ""
+echo "To publish a new version:"
+echo "  1. Update version references"
+echo "  2. git tag wasm-sdk-swift/v$VERSION"
+echo "  3. git push origin wasm-sdk-swift/v$VERSION"
+echo ""
+echo "For Swift Package Registry (experimental):"
+echo "  swift package-registry publish https://github.com/TM9657/flow-like $VERSION"
+"""

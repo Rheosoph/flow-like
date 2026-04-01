@@ -1,18 +1,21 @@
 "use client";
 
 import {
+	AlertTriangle,
 	Calendar,
 	Camera,
 	Cpu,
 	GitBranch,
+	Loader2,
 	Save,
 	Settings,
+	Trash2,
 	Upload,
 	User,
 	X,
 	Zap,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { ISettingsProfile } from "../../../types";
 import { IConnectionMode, IThemes } from "../../../types";
 import { Badge } from "../../ui/badge";
@@ -43,6 +46,8 @@ export interface ProfileSettingsPageProps {
 	themeTranslation: Record<IThemes, unknown>;
 	onProfileUpdate: (updates: Partial<ISettingsProfile>) => void;
 	onProfileImageChange?: () => Promise<void>;
+	onProfileDelete?: () => Promise<void>;
+	canDeleteProfile?: boolean;
 }
 
 export function ProfileSettingsPage({
@@ -52,6 +57,8 @@ export function ProfileSettingsPage({
 	themeTranslation,
 	onProfileUpdate,
 	onProfileImageChange,
+	onProfileDelete,
+	canDeleteProfile = false,
 }: ProfileSettingsPageProps) {
 	const [themeSelectValue, setThemeSelectValue] = useState<string>(
 		profile.hub_profile.theme?.id ?? IThemes.FLOW_LIKE,
@@ -522,8 +529,168 @@ export function ProfileSettingsPage({
 						</CardContent>
 					</Card>
 				</div>
+
+				{onProfileDelete && (
+					<DeleteProfileCard
+						profileName={profile.hub_profile.name}
+						onDelete={onProfileDelete}
+						canDelete={canDeleteProfile}
+					/>
+				)}
 			</div>
 		</main>
+	);
+}
+
+function DeleteProfileCard({
+	profileName,
+	onDelete,
+	canDelete,
+}: {
+	profileName: string;
+	onDelete: () => Promise<void>;
+	canDelete: boolean;
+}) {
+	const [confirmName, setConfirmName] = useState("");
+	const [isDeleting, setIsDeleting] = useState(false);
+	const [isOpen, setIsOpen] = useState(false);
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	const isConfirmed = confirmName === profileName;
+
+	const handleDelete = useCallback(async () => {
+		if (!isConfirmed || isDeleting) return;
+		setIsDeleting(true);
+		try {
+			await onDelete();
+		} finally {
+			setIsDeleting(false);
+			setIsOpen(false);
+			setConfirmName("");
+		}
+	}, [isConfirmed, isDeleting, onDelete]);
+
+	return (
+		<Card className="border-destructive/30">
+			<CardHeader>
+				<CardTitle className="flex items-center gap-2 text-destructive">
+					<AlertTriangle className="h-5 w-5" />
+					Danger Zone
+				</CardTitle>
+				<CardDescription>
+					Irreversible actions that affect your profile
+				</CardDescription>
+			</CardHeader>
+			<CardContent>
+				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+					<div className="space-y-1 min-w-0">
+						<p className="text-sm font-medium">Delete this profile</p>
+						<p className="text-sm text-muted-foreground">
+							{canDelete
+								? "Permanently delete this profile and all its data. If synced online, it will be removed from all devices."
+								: "You cannot delete your only profile. Create another profile first."}
+						</p>
+					</div>
+					{canDelete ? (
+						<>
+							<Button
+								variant="destructive"
+								className="shrink-0"
+								onClick={() => {
+									setIsOpen(true);
+									setConfirmName("");
+									setTimeout(() => inputRef.current?.focus(), 100);
+								}}
+							>
+								<Trash2 className="h-4 w-4 mr-2" />
+								Delete Profile
+							</Button>
+							{isOpen && (
+								<div className="fixed inset-0 z-50 flex items-center justify-center">
+									<div
+										className="fixed inset-0 bg-black/50"
+										onClick={() => {
+											setIsOpen(false);
+											setConfirmName("");
+										}}
+										onKeyDown={() => {}}
+									/>
+									<div className="relative z-50 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
+										<div className="space-y-4">
+											<div className="space-y-2">
+												<h3 className="text-lg font-semibold">
+													Delete profile
+												</h3>
+												<p className="text-sm text-muted-foreground">
+													This will permanently delete{" "}
+													<span className="font-semibold text-foreground">
+														{profileName}
+													</span>{" "}
+													and remove it from all synced devices. This action
+													cannot be undone.
+												</p>
+											</div>
+											<div className="space-y-2">
+												<Label htmlFor="confirm-delete">
+													Type{" "}
+													<span className="font-mono font-semibold text-destructive">
+														{profileName}
+													</span>{" "}
+													to confirm
+												</Label>
+												<Input
+													ref={inputRef}
+													id="confirm-delete"
+													placeholder={profileName}
+													value={confirmName}
+													onChange={(e) => setConfirmName(e.target.value)}
+													onKeyDown={(e) => {
+														if (e.key === "Enter" && isConfirmed)
+															handleDelete();
+														if (e.key === "Escape") {
+															setIsOpen(false);
+															setConfirmName("");
+														}
+													}}
+												/>
+											</div>
+											<div className="flex justify-end gap-2">
+												<Button
+													variant="outline"
+													onClick={() => {
+														setIsOpen(false);
+														setConfirmName("");
+													}}
+												>
+													Cancel
+												</Button>
+												<Button
+													variant="destructive"
+													disabled={!isConfirmed || isDeleting}
+													onClick={handleDelete}
+												>
+													{isDeleting ? (
+														<Loader2 className="h-4 w-4 animate-spin mr-2" />
+													) : (
+														<Trash2 className="h-4 w-4 mr-2" />
+													)}
+													Delete permanently
+												</Button>
+											</div>
+										</div>
+									</div>
+								</div>
+							)}
+						</>
+					) : (
+						<Button variant="destructive" className="shrink-0" disabled>
+							<Trash2 className="h-4 w-4 mr-2" />
+							Delete Profile
+						</Button>
+					)}
+				</div>
+			</CardContent>
+		</Card>
 	);
 }
 

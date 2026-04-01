@@ -1,4 +1,8 @@
+#[cfg(feature = "execute")]
+use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
 use crate::generative::agent::{Agent, ContextManagementMode};
+#[cfg(feature = "execute")]
+use crate::generative::embedding::CachedEmbeddingModelObject;
 /// # Agent Execution Helpers
 /// This module contains reusable logic for executing agents with tools and streaming.
 /// Extracted from simple.rs to be shared across multiple agent nodes.
@@ -8,12 +12,15 @@ use ahash::AHashSet;
 use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     execution::{context::ExecutionContext, internal_node::InternalNode},
-    pin::PinType,
+    pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
 use flow_like_model_provider::{
-    history::{Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool},
-    response::{Response, Usage as ResponseUsage},
+    history::{
+        Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool,
+        normalize_json_schema_strings,
+    },
+    response::{LLMUsageStats, Response, Usage as ResponseUsage},
     response_chunk::ResponseChunk,
 };
 use flow_like_types::{
@@ -39,7 +46,7 @@ use rmcp::{
         CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParam,
     },
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
@@ -80,20 +87,20 @@ fn estimate_message_tokens(msg: &rig::message::Message) -> usize {
 
 /// Truncate message history using sliding window to fit within token budget.
 /// Preserves most recent messages while keeping tool call/result pairs intact.
-/// Returns (truncated_history, truncated_count) where truncated_count is the number of removed messages.
+/// Returns (truncated_history, evicted_messages) where evicted_messages are the removed messages.
 #[cfg(feature = "execute")]
 fn truncate_history_to_budget(
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> (Vec<rig::message::Message>, usize) {
+) -> (Vec<rig::message::Message>, Vec<rig::message::Message>) {
     if history.is_empty() {
-        return (history, 0);
+        return (history, vec![]);
     }
 
     let total_tokens: usize = history.iter().map(estimate_message_tokens).sum();
 
     if total_tokens <= max_tokens as usize {
-        return (history, 0);
+        return (history, vec![]);
     }
 
     let mut result = Vec::new();
@@ -102,9 +109,10 @@ fn truncate_history_to_budget(
 
     // Track tool call IDs to keep pairs together
     let mut required_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut kept_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     // First pass: from end, collect messages until budget
-    for msg in history.iter().rev() {
+    for (idx, msg) in history.iter().enumerate().rev() {
         let msg_tokens = estimate_message_tokens(msg);
 
         // Check for tool results - we need the corresponding tool call
@@ -118,6 +126,7 @@ fn truncate_history_to_budget(
 
         if current_tokens + msg_tokens <= target_tokens {
             result.push(msg.clone());
+            kept_indices.insert(idx);
             current_tokens += msg_tokens;
 
             // Track tool calls so we don't orphan results
@@ -140,6 +149,7 @@ fn truncate_history_to_budget(
                 });
                 if has_required {
                     result.push(msg.clone());
+                    kept_indices.insert(idx);
                     current_tokens += msg_tokens;
                     for c in content.iter() {
                         if let AssistantContent::ToolCall(tc) = c {
@@ -157,27 +167,36 @@ fn truncate_history_to_budget(
 
     result.reverse();
 
-    let truncated_count = history.len() - result.len();
-    (result, truncated_count)
+    let evicted: Vec<rig::message::Message> = history
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !kept_indices.contains(idx))
+        .map(|(_, msg)| msg.clone())
+        .collect();
+    (result, evicted)
 }
 
 /// Summarize old messages using LLM to compress context while preserving key information.
-/// Returns (updated_history, summarized_count) where summarized_count is messages compressed.
+/// Returns (updated_history, evicted_messages, optional_usage).
 #[cfg(feature = "execute")]
 async fn summarize_history_to_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize)> {
+) -> flow_like_types::Result<(
+    Vec<rig::message::Message>,
+    Vec<rig::message::Message>,
+    Option<ResponseUsage>,
+)> {
     if history.is_empty() {
-        return Ok((history, 0));
+        return Ok((history, vec![], None));
     }
 
     let total_tokens: usize = history.iter().map(estimate_message_tokens).sum();
 
     if total_tokens <= max_tokens as usize {
-        return Ok((history, 0));
+        return Ok((history, vec![], None));
     }
 
     // Find the split point: keep recent messages, summarize older ones
@@ -197,13 +216,14 @@ async fn summarize_history_to_budget(
 
     // If split would leave nothing to summarize, fall back to truncation
     if split_idx <= 1 {
-        return Ok(truncate_history_to_budget(history, max_tokens));
+        let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+        return Ok((h, evicted, None));
     }
 
     let (old_messages, recent_messages) = history.split_at(split_idx);
 
     if old_messages.is_empty() {
-        return Ok((recent_messages.to_vec(), 0));
+        return Ok((recent_messages.to_vec(), vec![], None));
     }
 
     // Convert old messages to text for summarization
@@ -244,6 +264,8 @@ async fn summarize_history_to_budget(
         }
     }
 
+    let evicted_messages = old_messages.to_vec();
+
     // Use the agent's model to generate a summary
     let summary_prompt = format!(
         "Summarize the following conversation history concisely, preserving key facts, decisions, and context that would be important for continuing the conversation. Focus on: user goals, important information shared, actions taken, and outcomes.\n\n---\n{}\n---\n\nProvide a concise summary:",
@@ -261,7 +283,7 @@ async fn summarize_history_to_budget(
             match summary_agent.completion(summary_prompt, vec![]).await {
                 Ok(request) => match request.send().await {
                     Ok(response) => {
-                        // Extract text from response.choice
+                        let usage = ResponseUsage::from_rig(response.usage);
                         let mut text = String::new();
                         for content in response.choice {
                             if let AssistantContent::Text(t) = content {
@@ -273,17 +295,18 @@ async fn summarize_history_to_budget(
                                 "Summary response was empty, falling back to truncation",
                                 LogLevel::Warn,
                             );
-                            return Ok(truncate_history_to_budget(history, max_tokens));
+                            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                            return Ok((h, evicted, Some(usage)));
                         }
-                        text
+                        (text, Some(usage))
                     }
                     Err(e) => {
                         context.log_message(
                             &format!("Failed to get summary response: {}", e),
                             LogLevel::Warn,
                         );
-                        // Fall back to truncation
-                        return Ok(truncate_history_to_budget(history, max_tokens));
+                        let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                        return Ok((h, evicted, None));
                     }
                 },
                 Err(e) => {
@@ -291,7 +314,8 @@ async fn summarize_history_to_budget(
                         &format!("Failed to create summary completion: {}", e),
                         LogLevel::Warn,
                     );
-                    return Ok(truncate_history_to_budget(history, max_tokens));
+                    let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+                    return Ok((h, evicted, None));
                 }
             }
         }
@@ -300,14 +324,17 @@ async fn summarize_history_to_budget(
                 &format!("Failed to create summary agent: {}", e),
                 LogLevel::Warn,
             );
-            return Ok(truncate_history_to_budget(history, max_tokens));
+            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+            return Ok((h, evicted, None));
         }
     };
+
+    let (summary_text, summary_usage) = summary;
 
     // Create a summary message to prepend
     let summary_msg = rig::message::Message::User {
         content: OneOrMany::one(rig::message::UserContent::Text(rig::message::Text {
-            text: format!("[Previous conversation summary: {}]", summary),
+            text: format!("[Previous conversation summary: {}]", summary_text),
         })),
     };
 
@@ -315,25 +342,123 @@ async fn summarize_history_to_budget(
     let mut result = vec![summary_msg];
     result.extend(recent_messages.iter().cloned());
 
-    let summarized_count = old_messages.len();
-    Ok((result, summarized_count))
+    Ok((result, evicted_messages, summary_usage))
 }
 
 /// Manage context budget using the appropriate strategy (truncate or summarize).
-/// Returns (managed_history, affected_count).
+/// Returns (managed_history, evicted_messages, optional_usage).
 #[cfg(feature = "execute")]
 async fn manage_context_budget(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: Vec<rig::message::Message>,
     max_tokens: u32,
-) -> flow_like_types::Result<(Vec<rig::message::Message>, usize)> {
+) -> flow_like_types::Result<(
+    Vec<rig::message::Message>,
+    Vec<rig::message::Message>,
+    Option<ResponseUsage>,
+)> {
     match agent.context_management_mode {
         ContextManagementMode::Summarize => {
             summarize_history_to_budget(context, agent, history, max_tokens).await
         }
-        ContextManagementMode::Truncate => Ok(truncate_history_to_budget(history, max_tokens)),
+        ContextManagementMode::Truncate => {
+            let (h, evicted) = truncate_history_to_budget(history, max_tokens);
+            Ok((h, evicted, None))
+        }
     }
+}
+
+#[cfg(feature = "execute")]
+fn sanitize_tool_description(value: &str) -> String {
+    value
+        .replace(['"', '`'], "'")
+        .chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+#[cfg(feature = "execute")]
+fn sanitize_tool_identifier(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+
+    for ch in value.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if matches!(ch, ' ' | '-' | '_' | '.' | '/' | ':' | '\\') {
+            Some('_')
+        } else {
+            None
+        };
+
+        match normalized {
+            Some('_') => {
+                if !previous_was_separator && !sanitized.is_empty() {
+                    sanitized.push('_');
+                }
+                previous_was_separator = true;
+            }
+            Some(letter) => {
+                sanitized.push(letter);
+                previous_was_separator = false;
+            }
+            None => {
+                previous_was_separator = true;
+            }
+        }
+    }
+
+    let sanitized = sanitized.trim_matches('_').to_string();
+    if sanitized.is_empty() {
+        "value".to_string()
+    } else if sanitized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+    {
+        format!("arg_{}", sanitized)
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(feature = "execute")]
+fn assign_sanitized_argument_names(names: Vec<(u16, String)>) -> HashMap<String, String> {
+    let mut sorted_names = names;
+    sorted_names.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+
+    let mut counters: HashMap<String, usize> = HashMap::new();
+    let mut sanitized_names = HashMap::new();
+
+    for (_index, original_name) in sorted_names {
+        let base_name = sanitize_tool_identifier(&original_name);
+        let entry = counters.entry(base_name.clone()).or_insert(0);
+        *entry += 1;
+
+        let sanitized_name = if *entry == 1 {
+            base_name
+        } else {
+            format!("{}_{}", base_name, entry)
+        };
+
+        sanitized_names
+            .entry(original_name)
+            .or_insert(sanitized_name);
+    }
+
+    sanitized_names
 }
 
 /// Generate OpenAI function call schema from a referenced function node.
@@ -341,6 +466,7 @@ async fn manage_context_budget(
 #[cfg(feature = "execute")]
 pub async fn generate_tool_from_function(
     referenced_node: &Arc<InternalNode>,
+    refs: &HashMap<String, String>,
 ) -> flow_like_types::Result<Tool> {
     use flow_like_model_provider::history::{
         HistoryFunction, HistoryFunctionParameters, HistoryJSONSchemaDefine, HistoryJSONSchemaType,
@@ -348,15 +474,258 @@ pub async fn generate_tool_from_function(
     };
     use std::collections::HashMap;
 
+    fn resolve_ref(value: &str, refs: &HashMap<String, String>) -> String {
+        refs.get(value)
+            .cloned()
+            .unwrap_or_else(|| value.to_string())
+    }
+
+    fn nested_schema_from_string(
+        schema_str: &str,
+        refs: &HashMap<String, String>,
+        description: &str,
+    ) -> Option<HistoryJSONSchemaDefine> {
+        let resolved_schema = resolve_ref(schema_str, refs);
+
+        let Ok(mut schema_value) = flow_like_types::json::from_str::<Value>(&resolved_schema)
+        else {
+            return None;
+        };
+
+        normalize_json_schema_strings(&mut schema_value);
+
+        // Collect $defs for resolving $ref pointers (Pydantic pattern)
+        let defs = schema_value
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        fn resolve_schema_value<'a>(
+            schema: &'a Value,
+            defs: &'a flow_like_types::json::Map<String, Value>,
+        ) -> Option<&'a Value> {
+            if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
+                let def_name = ref_path.strip_prefix("#/$defs/")?;
+                defs.get(def_name)
+            } else {
+                Some(schema)
+            }
+        }
+
+        fn parse_property(
+            prop_schema: &Value,
+            defs: &flow_like_types::json::Map<String, Value>,
+        ) -> HistoryJSONSchemaDefine {
+            let resolved = resolve_schema_value(prop_schema, defs).unwrap_or(prop_schema);
+
+            let prop_type = match resolved.get("type").and_then(|t| t.as_str()) {
+                Some("string") => HistoryJSONSchemaType::String,
+                Some("number") | Some("integer") => HistoryJSONSchemaType::Number,
+                Some("boolean") => HistoryJSONSchemaType::Boolean,
+                Some("array") => HistoryJSONSchemaType::Array,
+                _ => HistoryJSONSchemaType::Object,
+            };
+
+            let prop_desc = resolved
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(sanitize_tool_description);
+
+            let prop_enum = resolved.get("enum").and_then(|e| {
+                e.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(sanitize_tool_description))
+                        .collect()
+                })
+            });
+
+            // Parse items for array types
+            let items = if matches!(prop_type, HistoryJSONSchemaType::Array) {
+                resolved
+                    .get("items")
+                    .map(|items_schema| Box::new(parse_property(items_schema, defs)))
+            } else {
+                None
+            };
+
+            // Recurse into nested object properties
+            let (nested_props, nested_required) =
+                if matches!(prop_type, HistoryJSONSchemaType::Object) {
+                    let props = resolved
+                        .get("properties")
+                        .and_then(|p| p.as_object())
+                        .map(|obj| {
+                            obj.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        sanitize_tool_identifier(k),
+                                        Box::new(parse_property(v, defs)),
+                                    )
+                                })
+                                .collect::<HashMap<String, Box<HistoryJSONSchemaDefine>>>()
+                        });
+                    let req = resolved
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(sanitize_tool_identifier))
+                                .collect()
+                        });
+                    (props, req)
+                } else {
+                    (None, None)
+                };
+
+            HistoryJSONSchemaDefine {
+                schema_type: Some(prop_type),
+                description: prop_desc,
+                enum_values: prop_enum,
+                properties: nested_props,
+                required: nested_required,
+                items,
+            }
+        }
+
+        let props = schema_value.get("properties").and_then(|p| p.as_object())?;
+
+        let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
+        for (prop_name, prop_schema) in props {
+            let sanitized_prop_name = sanitize_tool_identifier(prop_name);
+            nested_props.insert(
+                sanitized_prop_name,
+                Box::new(parse_property(prop_schema, &defs)),
+            );
+        }
+
+        Some(HistoryJSONSchemaDefine {
+            schema_type: Some(HistoryJSONSchemaType::Object),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(sanitize_tool_description(description))
+            },
+            enum_values: None,
+            properties: Some(nested_props),
+            required: schema_value
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(sanitize_tool_identifier))
+                        .collect()
+                }),
+            items: None,
+        })
+    }
+
+    fn wrap_value_type(
+        base_def: HistoryJSONSchemaDefine,
+        value_type: &ValueType,
+        description: &str,
+    ) -> HistoryJSONSchemaDefine {
+        match value_type {
+            ValueType::Array | ValueType::HashSet => HistoryJSONSchemaDefine {
+                schema_type: Some(HistoryJSONSchemaType::Array),
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description.to_string())
+                },
+                enum_values: None,
+                properties: None,
+                required: None,
+                items: Some(Box::new(base_def)),
+            },
+            ValueType::HashMap => HistoryJSONSchemaDefine {
+                schema_type: Some(HistoryJSONSchemaType::Object),
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description.to_string())
+                },
+                enum_values: None,
+                properties: None,
+                required: None,
+                items: None,
+            },
+            ValueType::Normal => base_def,
+        }
+    }
+
+    /// Convert a Pin to HistoryJSONSchemaDefine, handling ValueType (Array/HashSet/HashMap),
+    /// pin schemas for Struct/Generic, and enum values from pin options.
+    fn pin_to_schema_define(pin: &Pin, refs: &HashMap<String, String>) -> HistoryJSONSchemaDefine {
+        let pin_description = sanitize_tool_description(&resolve_ref(&pin.description, refs));
+
+        // Map base VariableType to schema type
+        let (base_type, base_properties) = match pin.data_type {
+            VariableType::String | VariableType::PathBuf | VariableType::Date => {
+                (HistoryJSONSchemaType::String, None)
+            }
+            VariableType::Integer | VariableType::Float | VariableType::Byte => {
+                (HistoryJSONSchemaType::Number, None)
+            }
+            VariableType::Boolean => (HistoryJSONSchemaType::Boolean, None),
+            VariableType::Struct | VariableType::Generic => {
+                if let Some(schema_str) = &pin.schema
+                    && let Some(schema_define) =
+                        nested_schema_from_string(schema_str, refs, &pin_description)
+                {
+                    return wrap_value_type(schema_define, &pin.value_type, &pin_description);
+                }
+                (HistoryJSONSchemaType::Object, None)
+            }
+            VariableType::Execution => (HistoryJSONSchemaType::Null, None),
+        };
+
+        // Get enum values from pin options
+        let enum_values = pin
+            .options
+            .as_ref()
+            .and_then(|opts| opts.valid_values.as_ref())
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| sanitize_tool_description(value))
+                    .collect()
+            });
+
+        // Build base definition
+        let base_def = HistoryJSONSchemaDefine {
+            schema_type: Some(base_type.clone()),
+            description: if pin_description.is_empty() {
+                None
+            } else {
+                Some(pin_description.clone())
+            },
+            enum_values,
+            properties: base_properties,
+            required: None,
+            items: None,
+        };
+
+        wrap_value_type(base_def, &pin.value_type, &pin_description)
+    }
+
     let node = referenced_node.node.lock().await;
-    // Use friendly_name (user-customizable) and convert to snake_case for LLM
-    let function_name = node.friendly_name.to_lowercase().replace([' ', '-'], "_");
-    let description = node.description.clone();
+    let function_name = sanitize_tool_identifier(&node.friendly_name);
+    let description = sanitize_tool_description(&resolve_ref(&node.description, refs));
+    let argument_names = assign_sanitized_argument_names(
+        node.pins
+            .values()
+            .filter(|pin| {
+                pin.data_type != VariableType::Execution && pin.pin_type == PinType::Output
+            })
+            .map(|pin| (pin.index, pin.name.clone()))
+            .collect(),
+    );
 
     // Collect all non-execution output pins to build parameter schema
     let mut properties: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
     let mut has_data_pins = false;
-    let mut payload_pin = None;
+    let mut payload_pin: Option<&Pin> = None;
 
     for (_pin_id, pin) in node.pins.iter() {
         // Skip execution pins and input pins
@@ -371,63 +740,20 @@ pub async fn generate_tool_from_function(
         }
 
         has_data_pins = true;
-
-        // Map VariableType to JSONSchemaType
-        let schema_type = match pin.data_type {
-            VariableType::String => HistoryJSONSchemaType::String,
-            VariableType::Integer => HistoryJSONSchemaType::Number,
-            VariableType::Float => HistoryJSONSchemaType::Number,
-            VariableType::Boolean => HistoryJSONSchemaType::Boolean,
-            VariableType::Struct | VariableType::Generic => HistoryJSONSchemaType::Object,
-            VariableType::Date | VariableType::PathBuf | VariableType::Byte => {
-                HistoryJSONSchemaType::String
-            }
-            VariableType::Execution => continue, // Already filtered above
-        };
-
-        let property_def = HistoryJSONSchemaDefine {
-            schema_type: Some(schema_type),
-            description: if pin.description.is_empty() {
-                None
-            } else {
-                Some(pin.description.clone())
-            },
-            enum_values: None,
-            properties: None,
-            required: None,
-            items: None,
-        };
-
-        properties.insert(pin.name.clone(), Box::new(property_def));
+        let argument_name = argument_names
+            .get(&pin.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
+        properties.insert(argument_name, Box::new(pin_to_schema_define(pin, refs)));
     }
 
     // If no data pins exist AND the event has a payload pin defined, add it to the schema
     if !has_data_pins && let Some(payload) = payload_pin {
-        let schema_type = match payload.data_type {
-            VariableType::String => HistoryJSONSchemaType::String,
-            VariableType::Integer => HistoryJSONSchemaType::Number,
-            VariableType::Float => HistoryJSONSchemaType::Number,
-            VariableType::Boolean => HistoryJSONSchemaType::Boolean,
-            VariableType::Struct | VariableType::Generic => HistoryJSONSchemaType::Object,
-            VariableType::Date | VariableType::PathBuf | VariableType::Byte => {
-                HistoryJSONSchemaType::String
-            }
-            VariableType::Execution => HistoryJSONSchemaType::Object, // Fallback
-        };
-
-        let payload_def = HistoryJSONSchemaDefine {
-            schema_type: Some(schema_type),
-            description: if payload.description.is_empty() {
-                None
-            } else {
-                Some(payload.description.clone())
-            },
-            enum_values: None,
-            properties: None,
-            required: None,
-            items: None,
-        };
-        properties.insert("payload".to_string(), Box::new(payload_def));
+        let payload_name = argument_names
+            .get(&payload.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&payload.name));
+        properties.insert(payload_name, Box::new(pin_to_schema_define(payload, refs)));
     }
 
     let parameters = HistoryFunctionParameters {
@@ -475,15 +801,33 @@ pub async fn execute_tool_call(
         .as_object()
         .ok_or_else(|| anyhow!("Tool call arguments for '{}' are not an object", tool_name))?;
 
-    // Set values on the referenced function's OUTPUT pins (matching call_ref.rs logic)
+    let argument_names = assign_sanitized_argument_names(
+        referenced_node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .map(|pin| (pin.index, pin.name.clone()))
+            .collect(),
+    );
+
+    // Set values on the referenced function's OUTPUT pins using sanitized tool names,
+    // while still accepting the original pin names for backward compatibility.
     for (_id, pin) in referenced_node.pins.iter() {
-        // Skip input pins and execution pins
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
 
-        // Set value if we have an argument for this pin
-        if let Some(value) = args_obj.get(&pin.name) {
+        let sanitized_name = argument_names
+            .get(&pin.name)
+            .cloned()
+            .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
+
+        if let Some(value) = args_obj
+            .get(&sanitized_name)
+            .or_else(|| args_obj.get(&pin.name))
+        {
             pin.set_value(value.clone()).await;
         }
     }
@@ -523,6 +867,7 @@ pub async fn execute_tool_call(
 pub struct AgentExecutionResult {
     pub response: Response,
     pub history: History,
+    pub stats: LLMUsageStats,
 }
 
 /// Trait for handling stream emissions during agent execution
@@ -685,14 +1030,13 @@ pub async fn execute_agent_streaming(
     context: &mut ExecutionContext,
     agent: &Agent,
     history: History,
-    tool_name_to_node: HashMap<String, Arc<InternalNode>>,
+    mut tool_name_to_node: HashMap<String, Arc<InternalNode>>,
     stream_state: &dyn StreamHandler,
 ) -> flow_like_types::Result<AgentExecutionResult> {
     let model_display_name = agent
-        .model
-        .meta
-        .get("name")
-        .map(|meta| meta.name.clone())
+        .model_display_name
+        .clone()
+        .or_else(|| agent.model.meta.get("en").map(|meta| meta.name.clone()))
         .unwrap_or_else(|| agent.model.id.clone());
 
     let system_prompt = agent
@@ -851,8 +1195,10 @@ pub async fn execute_agent_streaming(
         .collect();
 
     // Generate tool definitions from function references
+    let board_refs = context.get_board().await?.refs.clone();
+
     for internal_node in tool_name_to_node.values() {
-        let tool = generate_tool_from_function(internal_node).await?;
+        let tool = generate_tool_from_function(internal_node, &board_refs).await?;
         let parameters =
             json::to_value(&tool.function.parameters).unwrap_or_else(|_| json::json!({}));
         tool_definitions.push(ToolDefinition {
@@ -865,6 +1211,86 @@ pub async fn execute_agent_streaming(
     // Deduplicate tools by name, keeping the first occurrence
     let mut seen_tool_names = std::collections::HashSet::new();
     tool_definitions.retain(|tool| seen_tool_names.insert(tool.name.clone()));
+
+    // Expose the lazy-search meta-tool when the agent has indexed tool pools
+    if !agent.lazy_function_refs.is_empty() {
+        tool_definitions.push(ToolDefinition {
+            name: "_lazy_search_tools".to_string(),
+            description:
+                "Search for available tools by describing what you need to do. \
+                 Call this whenever you need a capability that you don't see in your current tool list. \
+                 The matching tools will be added to your available tools for subsequent calls."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Description of what you need to do or what kind of tool you are looking for"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of tools to return (default: 5)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        });
+    }
+
+    // Expose built-in memory tools when the agent has a memory config
+    if agent.memory.is_some() {
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_search".to_string(),
+            description:
+                "Search persistent memory for relevant context. Call this at the start of conversations \
+                 and whenever you need to recall previously stored information."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query text for vector similarity and/or full-text search"
+                    },
+                    "role_filter": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "observation", "summary", "context"],
+                        "description": "Optional: only return memories with this role"
+                    }
+                },
+                "required": ["query"]
+            }),
+        });
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_store".to_string(),
+            description:
+                "Store an observation in persistent memory. Use this to remember important facts, \
+                 user preferences, decisions, and context worth preserving across conversations."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Text content to store as a memory observation"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "observation"],
+                        "description": "Role label for the memory entry (default: observation)"
+                    }
+                },
+                "required": ["content"]
+            }),
+        });
+    }
+
+    // Normalize tool schema strings to remove escaped quotes that cause
+    // OpenAI strict mode validation failures (e.g. \" in descriptions/enum values)
+    for tool_def in &mut tool_definitions {
+        normalize_json_schema_strings(&mut tool_def.parameters);
+    }
 
     let (prompt, history_msgs) = history
         .extract_prompt_and_history()
@@ -1017,11 +1443,27 @@ pub async fn execute_agent_streaming(
     let max_context_tokens = agent
         .max_context_tokens
         .unwrap_or(DEFAULT_MAX_CONTEXT_TOKENS);
+
+    let mut full_history = history.clone();
+    let mut iteration = 0;
+    let agent_start = Instant::now();
+    let mut accumulated_stats = LLMUsageStats {
+        usage: ResponseUsage::default(),
+        model: Some(model_display_name.clone()),
+        duration_ms: None,
+        iterations: None,
+        calls: vec![],
+    };
+
     if agent.infinite_context {
-        let (managed, count) =
+        let (managed, evicted, summarize_usage) =
             manage_context_budget(context, agent, current_history, max_context_tokens).await?;
         current_history = managed;
-        if count > 0 {
+        if let Some(usage) = summarize_usage {
+            accumulated_stats.accumulate(&usage, Some(&model_display_name));
+        }
+        if !evicted.is_empty() {
+            let count = evicted.len();
             let mode_name = match agent.context_management_mode {
                 ContextManagementMode::Summarize => "summarized",
                 ContextManagementMode::Truncate => "truncated",
@@ -1033,15 +1475,19 @@ pub async fn execute_agent_streaming(
                 ),
                 LogLevel::Debug,
             );
+            if agent.memory.is_some()
+                && let Err(e) = store_evicted_to_memory(context, agent, &evicted).await
+            {
+                context.log_message(
+                    &format!(
+                        "Failed to store evicted messages to memory (non-fatal): {}",
+                        e
+                    ),
+                    LogLevel::Warn,
+                );
+            }
         }
     }
-
-    let mut full_history = history.clone();
-    let mut iteration = 0;
-
-    // Track repeated identical tool calls: (name::result) → invocation count
-    let mut repeated_call_tracker: HashMap<String, usize> = HashMap::new();
-    const MAX_IDENTICAL_CALLS: usize = 1;
 
     // Proven-deterministic cache:
     // - call_prior_result: last result seen for (name::args) — used to detect consistency
@@ -1052,6 +1498,12 @@ pub async fn execute_agent_streaming(
     let mut call_cache_blacklist: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
+    // Follow rig's pattern: prompt is always the last message in current_history,
+    // and everything before it is the chat history. This ensures that after tool
+    // results are appended, the tool result becomes the new "prompt" and the
+    // original user message stays in history rather than being re-appended at the end.
+    current_history.push(prompt);
+
     loop {
         if iteration >= agent.max_iterations {
             return Err(anyhow!(
@@ -1060,11 +1512,19 @@ pub async fn execute_agent_streaming(
             ));
         }
 
+        // Split: last message = prompt, everything before = history
+        let current_prompt = current_history
+            .last()
+            .cloned()
+            .expect("current_history should always have at least one message");
+        let history_slice = current_history[..current_history.len() - 1].to_vec();
+
         {
             let mut iter_summary = format!(
-                "=== Iteration {} === current_history: {} messages",
+                "=== Iteration {} === current_history: {} messages (history: {}, prompt: 1)",
                 iteration,
-                current_history.len()
+                current_history.len(),
+                history_slice.len()
             );
             for (i, msg) in current_history.iter().enumerate() {
                 match msg {
@@ -1114,7 +1574,7 @@ pub async fn execute_agent_streaming(
         }
 
         let mut request = rig_agent
-            .completion(prompt.clone(), current_history.clone())
+            .completion(current_prompt, history_slice)
             .await
             .map_err(|e| anyhow!("Agent completion failed: {}", e))?;
 
@@ -1198,7 +1658,9 @@ pub async fn execute_agent_streaming(
         stream_state.emit_chunk(context, &finish_chunk).await?;
 
         if let Some(usage) = final_usage {
-            response_obj.usage = ResponseUsage::from_rig(usage);
+            let response_usage = ResponseUsage::from_rig(usage);
+            accumulated_stats.accumulate(&response_usage, Some(&model_display_name));
+            response_obj.usage = response_usage;
         }
 
         // Convert accumulated tool call deltas into complete ToolCall entries
@@ -1207,7 +1669,7 @@ pub async fn execute_agent_streaming(
             if !name.is_empty() && !complete_tool_call_ids.contains(&id) {
                 let tool_call = RigToolCall {
                     id: id.clone(),
-                    call_id: None,
+                    call_id: Some(id.clone()),
                     function: rig::message::ToolFunction {
                         name,
                         arguments: json::from_str(&arguments).unwrap_or(json::json!({})),
@@ -1236,6 +1698,7 @@ pub async fn execute_agent_streaming(
                         LogLevel::Warn,
                     );
                     tc.id = new_id.clone();
+                    tc.call_id = Some(new_id.clone());
                     used_ids.insert(new_id);
                 }
                 id_counter += 1;
@@ -1252,12 +1715,12 @@ pub async fn execute_agent_streaming(
         };
 
         let mut tool_calls_found = false;
-        let mut tool_results: Vec<(String, String, Value, Value)> = Vec::new();
+        let mut tool_results: Vec<(String, Option<String>, String, Value, Value)> = Vec::new();
 
         for content in response_contents.iter() {
             if let AssistantContent::ToolCall(RigToolCall {
                 id,
-                call_id: _,
+                call_id,
                 function:
                     rig::message::ToolFunction {
                         name, arguments, ..
@@ -1331,6 +1794,33 @@ pub async fn execute_agent_streaming(
                         LogLevel::Debug,
                     );
                     json::json!(format!("<think>{}</think>", thought))
+                } else if name == "_lazy_search_tools" && !agent.lazy_function_refs.is_empty() {
+                    let query = arguments
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let limit = arguments
+                        .get("limit")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5)
+                        .min(20) as usize;
+                    handle_lazy_tool_search(
+                        context,
+                        agent,
+                        &query,
+                        limit,
+                        &mut tool_definitions,
+                        &mut tool_name_to_node,
+                    )
+                    .await
+                    .unwrap_or_else(
+                        |e| json::json!({ "error": format!("Lazy tool search failed: {}", e) }),
+                    )
+                } else if name.starts_with("_memory_") && agent.memory.is_some() {
+                    handle_memory_tool_call(context, agent, name, arguments)
+                        .await
+                        .unwrap_or_else(|e| json::json!({ "error": format!("{}", e) }))
                 } else {
                     return Err(anyhow!(
                         "Tool '{}' not found in referenced functions or MCP servers",
@@ -1362,7 +1852,13 @@ pub async fn execute_agent_streaming(
                     }
                 }
 
-                tool_results.push((id.clone(), name.clone(), arguments.clone(), tool_output));
+                tool_results.push((
+                    id.clone(),
+                    call_id.clone(),
+                    name.clone(),
+                    arguments.clone(),
+                    tool_output,
+                ));
             }
         }
 
@@ -1372,7 +1868,7 @@ pub async fn execute_agent_streaming(
                 iteration,
                 tool_results.len()
             );
-            for (id, name, args, output) in &tool_results {
+            for (id, _call_id, name, args, output) in &tool_results {
                 let args_preview = {
                     let s = json::to_string(args).unwrap_or_default();
                     s.chars().take(300).collect::<String>()
@@ -1408,9 +1904,13 @@ pub async fn execute_agent_streaming(
             };
             full_history.push_message(final_assistant_msg);
 
+            accumulated_stats.set_duration_ms(agent_start.elapsed().as_millis() as u64);
+            accumulated_stats.set_iterations(iteration as u32 + 1);
+
             return Ok(AgentExecutionResult {
                 response: response_obj,
                 history: full_history,
+                stats: accumulated_stats,
             });
         }
 
@@ -1427,41 +1927,15 @@ pub async fn execute_agent_streaming(
         // the assistant's tool call message in a single message
         let mut tool_result_contents: Vec<UserContent> = Vec::new();
 
-        for (tool_id, tool_name, _tool_args, tool_output) in &tool_results {
+        for (tool_id, tool_call_id, tool_name, _tool_args, tool_output) in &tool_results {
             let tool_result_str = match tool_output.as_str() {
                 Some(s) => s.to_string(),
                 None => json::to_string(tool_output).unwrap_or_default(),
             };
 
-            // Detect repeated identical calls: same tool name + same result
-            let repeat_key = format!("{}::{}", tool_name, tool_result_str);
-            let call_count = repeated_call_tracker
-                .entry(repeat_key)
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
-
-            let tool_result_str = if *call_count > MAX_IDENTICAL_CALLS {
-                context.log_message(
-                    &format!(
-                        "Repeated call detected: '{}' returned identical result {} times",
-                        tool_name, call_count
-                    ),
-                    LogLevel::Warn,
-                );
-                format!(
-                    "{}\n\n[SYSTEM NOTE: You have called '{}' {} times and received the same result. \
-                     Do NOT call this tool again with the same or similar parameters. \
-                     Use the result you already have, try a completely different approach, \
-                     or respond to the user with what you know.]",
-                    tool_result_str, tool_name, call_count
-                )
-            } else {
-                tool_result_str
-            };
-
             tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                 id: tool_id.clone(),
-                call_id: None,
+                call_id: tool_call_id.clone().or_else(|| Some(tool_id.clone())),
                 content: OneOrMany::one(ToolResultContent::text(tool_result_str.clone())),
             }));
 
@@ -1496,97 +1970,16 @@ pub async fn execute_agent_streaming(
             current_history.push(tool_result_msg);
         }
 
-        // Hard stop: if any tool has been called too many times with identical results, bail out
-        const HARD_STOP_THRESHOLD: usize = MAX_IDENTICAL_CALLS + 2;
-        let worst_repeat = repeated_call_tracker.values().max().copied().unwrap_or(0);
-        if worst_repeat >= HARD_STOP_THRESHOLD {
-            context.log_message(
-                &format!(
-                    "Hard stop at iteration {}: a tool was called {} times with identical results (threshold {})",
-                    iteration, worst_repeat, HARD_STOP_THRESHOLD
-                ),
-                LogLevel::Warn,
-            );
-            context.log_message(
-                &format!(
-                    "Agent loop stopped: a tool was called {} times with identical results",
-                    worst_repeat
-                ),
-                LogLevel::Warn,
-            );
-
-            // Build a meaningful response from the tool results gathered in this session.
-            // response_obj.content() is often empty here because the model's last output
-            // was a tool call, not text. Falling back to empty would cause parent agents
-            // to retry this tool endlessly.
-            let mut final_response = response_obj.content().unwrap_or_default();
-            if final_response.trim().is_empty() {
-                let mut gathered: Vec<String> = Vec::new();
-                for msg in full_history.messages.iter().rev() {
-                    if msg.role == Role::Tool {
-                        let text = match &msg.content {
-                            MessageContent::String(s) => s.clone(),
-                            MessageContent::Contents(cs) => cs
-                                .iter()
-                                .filter_map(|c| match c {
-                                    Content::Text { text, .. } => Some(text.as_str()),
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                        };
-                        // Skip system notes we injected
-                        let clean = text
-                            .split("\n\n[SYSTEM NOTE:")
-                            .next()
-                            .unwrap_or(&text)
-                            .trim();
-                        if !clean.is_empty() && clean != "[]" && clean != "\"\"" {
-                            gathered.push(clean.to_string());
-                        }
-                        if gathered.len() >= 3 {
-                            break;
-                        }
-                    }
-                }
-                gathered.reverse();
-                final_response = if gathered.is_empty() {
-                    "I was unable to find the requested information after multiple search attempts."
-                        .to_string()
-                } else {
-                    format!(
-                        "After multiple search attempts, here is what I found:\n\n{}",
-                        gathered.join("\n\n")
-                    )
-                };
-                // Also set this on the response object so the caller gets it
-                response_obj.push_chunk(ResponseChunk::from_text(
-                    &final_response,
-                    &model_display_name,
-                ));
-            }
-
-            let stop_msg = HistoryMessage {
-                role: Role::Assistant,
-                content: MessageContent::String(final_response),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                annotations: None,
-            };
-            full_history.push_message(stop_msg);
-            return Ok(AgentExecutionResult {
-                response: response_obj,
-                history: full_history,
-            });
-        }
-
         // Apply context management after adding tool results if infinite context is enabled
         if agent.infinite_context {
-            let (managed, count) =
+            let (managed, evicted, summarize_usage) =
                 manage_context_budget(context, agent, current_history, max_context_tokens).await?;
             current_history = managed;
-            if count > 0 {
+            if let Some(usage) = summarize_usage {
+                accumulated_stats.accumulate(&usage, Some(&model_display_name));
+            }
+            if !evicted.is_empty() {
+                let count = evicted.len();
                 let mode_name = match agent.context_management_mode {
                     ContextManagementMode::Summarize => "summarized",
                     ContextManagementMode::Truncate => "truncated",
@@ -1598,9 +1991,757 @@ pub async fn execute_agent_streaming(
                     ),
                     LogLevel::Debug,
                 );
+                if agent.memory.is_some()
+                    && let Err(e) = store_evicted_to_memory(context, agent, &evicted).await
+                {
+                    context.log_message(
+                        &format!(
+                            "Failed to store evicted messages to memory (non-fatal): {}",
+                            e
+                        ),
+                        LogLevel::Warn,
+                    );
+                }
             }
         }
 
         iteration += 1;
     }
+}
+
+/// Perform a hybrid (FTS + vector) search over all lazy tool indexes registered on the
+/// agent and inject the matching nodes into `tool_definitions` / `tool_name_to_node` so
+/// that the LLM can call them in the next iteration.
+///
+/// Returns a human-readable JSON summary of the tools that were found and added.
+#[cfg(feature = "execute")]
+async fn handle_lazy_tool_search(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    query: &str,
+    limit: usize,
+    tool_definitions: &mut Vec<ToolDefinition>,
+    tool_name_to_node: &mut HashMap<String, Arc<InternalNode>>,
+) -> flow_like_types::Result<Value> {
+    use flow_like_storage::databases::vector::VectorStore;
+
+    if query.is_empty() {
+        return Ok(
+            json::json!({ "added_tools": [], "message": "Empty query – no tools searched." }),
+        );
+    }
+
+    let mut added_tool_names: Vec<String> = Vec::new();
+    let mut already_loaded_count: usize = 0;
+
+    let lazy_model_key = match &agent.lazy_embedding_model {
+        Some(m) => m.cache_key.clone(),
+        None => {
+            context.log_message(
+                "Lazy search: no embedding model set on agent",
+                LogLevel::Warn,
+            );
+            return Ok(
+                json::json!({ "added_tools": [], "message": "No embedding model configured for lazy tool search." }),
+            );
+        }
+    };
+
+    let text_model_opt: Option<_> = {
+        let cache = context.cache.read().await;
+        cache.get(&lazy_model_key).and_then(|entry| {
+            entry
+                .as_any()
+                .downcast_ref::<CachedEmbeddingModelObject>()
+                .and_then(|obj| obj.text_model.clone())
+        })
+    };
+    let text_model = match text_model_opt {
+        Some(m) => m,
+        None => {
+            context.log_message(
+                &format!(
+                    "Lazy search: embedding model '{}' not in cache or has no text model",
+                    lazy_model_key
+                ),
+                LogLevel::Warn,
+            );
+            return Ok(
+                json::json!({ "added_tools": [], "message": "Embedding model not available." }),
+            );
+        }
+    };
+
+    let embeddings = match text_model.text_embed_query(&vec![query.to_string()]).await {
+        Ok(e) => e,
+        Err(err) => {
+            context.log_message(
+                &format!("Lazy search: embedding failed: {}", err),
+                LogLevel::Warn,
+            );
+            return Ok(
+                json::json!({ "added_tools": [], "message": format!("Embedding failed: {}", err) }),
+            );
+        }
+    };
+    if embeddings.is_empty() {
+        return Ok(
+            json::json!({ "added_tools": [], "message": "Embedding returned empty result." }),
+        );
+    }
+    let vector: Vec<f64> = embeddings[0].iter().map(|&v| v as f64).collect();
+
+    for lazy_ref in &agent.lazy_function_refs {
+        let db_arc_opt: Option<_> = {
+            let cache = context.cache.read().await;
+            cache.get(&lazy_ref.db_cache_key).and_then(|entry| {
+                entry
+                    .as_any()
+                    .downcast_ref::<CachedLazyToolDB>()
+                    .map(|db| db.db.clone())
+            })
+        };
+        let db_arc = match db_arc_opt {
+            Some(db) => db,
+            None => {
+                context.log_message(
+                    &format!(
+                        "Lazy search: tool DB '{}' not in cache, skipping",
+                        lazy_ref.db_cache_key
+                    ),
+                    LogLevel::Warn,
+                );
+                continue;
+            }
+        };
+
+        let results = {
+            let db = db_arc.read().await;
+            db.hybrid_search(
+                vector.clone(),
+                query,
+                None,
+                Some(vec!["node_id".to_string()]),
+                Some(vec!["content".to_string()]),
+                limit,
+                0,
+                true,
+            )
+            .await
+            .unwrap_or_default()
+        };
+
+        for result in results {
+            let node_id = match result.get("node_id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            if let Some(internal_node) = context.nodes.get(&node_id) {
+                let node = internal_node.clone();
+                let node_guard = node.node.lock().await;
+                let tool_name = node_guard.name.clone();
+                let friendly_name = node_guard
+                    .friendly_name
+                    .to_lowercase()
+                    .replace([' ', '-'], "_");
+                drop(node_guard);
+
+                if tool_name_to_node.contains_key(&tool_name)
+                    || tool_name_to_node.contains_key(&friendly_name)
+                {
+                    already_loaded_count += 1;
+                } else {
+                    tool_name_to_node.insert(tool_name.clone(), node.clone());
+                    tool_name_to_node.insert(friendly_name.clone(), node.clone());
+
+                    let board_refs = context.get_board().await?.refs.clone();
+
+                    if let Ok(tool) = generate_tool_from_function(&node, &board_refs).await {
+                        let parameters = json::to_value(&tool.function.parameters)
+                            .unwrap_or_else(|_| json::json!({}));
+                        tool_definitions.push(ToolDefinition {
+                            name: tool.function.name.clone(),
+                            description: tool.function.description.clone().unwrap_or_default(),
+                            parameters,
+                        });
+                        added_tool_names.push(tool.function.name);
+                    }
+                }
+            }
+        }
+    }
+
+    let message = if added_tool_names.is_empty() && already_loaded_count > 0 {
+        format!(
+            "All {} matching tool(s) for '{}' are already available in your current tool list. Check your existing tools and use them directly.",
+            already_loaded_count, query
+        )
+    } else if added_tool_names.is_empty() {
+        format!(
+            "No tools found matching '{}'. Try a different query.",
+            query
+        )
+    } else {
+        format!(
+            "Found {} tool(s) matching '{}'. They are now available: {}. You can call them directly.",
+            added_tool_names.len(),
+            query,
+            added_tool_names.join(", ")
+        )
+    };
+
+    context.log_message(
+        &format!("Lazy tool search '{}': {}", query, message),
+        LogLevel::Debug,
+    );
+
+    Ok(json::json!({
+        "added_tools": added_tool_names,
+        "message": message,
+    }))
+}
+
+#[cfg(feature = "execute")]
+async fn handle_memory_tool_call(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    tool_name: &str,
+    arguments: &Value,
+) -> flow_like_types::Result<Value> {
+    use flow_like_catalog_core::CachedDB;
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    let memory = agent
+        .memory
+        .as_ref()
+        .ok_or_else(|| anyhow!("Memory not configured on agent"))?;
+
+    let cached_db: CachedDB = {
+        let cache = context.cache.read().await;
+        let entry = cache
+            .get(&memory.database.cache_key)
+            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
+        entry
+            .as_any()
+            .downcast_ref::<CachedDB>()
+            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
+            .clone()
+    };
+
+    match tool_name {
+        "_memory_search" => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let role_filter = arguments
+                .get("role_filter")
+                .and_then(|v| v.as_str())
+                .filter(|r| {
+                    matches!(
+                        *r,
+                        "user" | "assistant" | "observation" | "summary" | "context"
+                    )
+                });
+            let filter_expr: Option<String> = role_filter.map(|r| format!("role = '{}'", r));
+            let filter_opt: Option<&str> = filter_expr.as_deref();
+            let top_k = memory.recall_top_k as usize;
+
+            cached_db.ensure_flushed().await?;
+
+            let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+
+            let mut results: Vec<Value> = match memory.recall_strategy {
+                crate::generative::agent::memory::config::RecallStrategy::RecentFirst => {
+                    db.filter(
+                        filter_opt.unwrap_or("1=1"),
+                        Some(vec![
+                            "id".to_string(),
+                            "content".to_string(),
+                            "role".to_string(),
+                            "timestamp".to_string(),
+                        ]),
+                        top_k,
+                        0,
+                    )
+                    .await?
+                }
+                crate::generative::agent::memory::config::RecallStrategy::Relevance => {
+                    let vector = embed_memory_query(context, memory, &query).await?;
+                    db.vector_search(vector, filter_opt, None, top_k, 0).await?
+                }
+                crate::generative::agent::memory::config::RecallStrategy::Hybrid => {
+                    let vector = embed_memory_query(context, memory, &query).await?;
+                    db.hybrid_search(
+                        vector,
+                        &query,
+                        filter_opt,
+                        None,
+                        Some(vec!["content".to_string()]),
+                        top_k,
+                        0,
+                        true,
+                    )
+                    .await?
+                }
+            };
+
+            // Client-side sort by timestamp descending for RecentFirst strategy
+            if matches!(
+                memory.recall_strategy,
+                crate::generative::agent::memory::config::RecallStrategy::RecentFirst
+            ) {
+                results.sort_by(|a, b| {
+                    let ts_a = a.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let ts_b = b.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    ts_b.cmp(&ts_a)
+                });
+            }
+
+            context.log_message(
+                &format!("_memory_search '{}': {} results", query, results.len()),
+                LogLevel::Debug,
+            );
+
+            Ok(json::json!({
+                "results": results,
+                "count": results.len(),
+            }))
+        }
+        "_memory_store" => {
+            let content = arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let role = arguments
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("observation")
+                .to_string();
+
+            if content.trim().is_empty() {
+                return Ok(json::json!({ "stored": false, "reason": "Empty content" }));
+            }
+
+            // Dedup: hash lowercase content and check for existing entry
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            content.to_lowercase().hash(&mut hasher);
+            let content_hash = format!("{:x}", hasher.finish());
+
+            {
+                cached_db.ensure_flushed().await?;
+                let db = cached_db.db.read().await;
+                let existing = db
+                    .filter(
+                        &format!("content_hash = '{}'", content_hash),
+                        Some(vec!["id".to_string()]),
+                        1,
+                        0,
+                    )
+                    .await
+                    .unwrap_or_default();
+                if !existing.is_empty() {
+                    return Ok(json::json!({ "stored": false, "reason": "Duplicate content" }));
+                }
+            }
+
+            let embeddings = embed_memory_document(context, memory, &content).await?;
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let record = json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "content": content,
+                "content_hash": content_hash,
+                "role": role,
+                "vector": embeddings,
+                "timestamp": now,
+            });
+
+            let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+            db.insert(vec![record]).await?;
+            let count = db
+                .count(Some("role != 'summary'".to_string()))
+                .await
+                .unwrap_or(0);
+            drop(db);
+
+            context.log_message(
+                &format!(
+                    "_memory_store: stored '{}' (role={}, total={})",
+                    content.chars().take(80).collect::<String>(),
+                    role,
+                    count
+                ),
+                LogLevel::Debug,
+            );
+
+            let threshold = memory.compress_threshold as usize;
+            if memory.auto_compress && count >= threshold {
+                context.log_message(
+                    &format!(
+                        "_memory_store: auto-compress triggered ({} >= {})",
+                        count, threshold
+                    ),
+                    LogLevel::Debug,
+                );
+                match run_memory_compress(context, agent, memory, &cached_db).await {
+                    Ok(result) => {
+                        return Ok(json::json!({
+                            "stored": true,
+                            "observation_count": count,
+                            "auto_compressed": result,
+                        }));
+                    }
+                    Err(e) => {
+                        context.log_message(
+                            &format!("Auto-compress failed (non-fatal): {}", e),
+                            LogLevel::Warn,
+                        );
+                    }
+                }
+            }
+
+            Ok(json::json!({
+                "stored": true,
+                "observation_count": count,
+            }))
+        }
+        _ => Err(anyhow!("Unknown memory tool: {}", tool_name)),
+    }
+}
+
+/// Store evicted conversation messages into persistent memory so they remain
+/// discoverable via `_memory_search` even after being dropped from the context window.
+#[cfg(feature = "execute")]
+async fn store_evicted_to_memory(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    evicted: &[rig::message::Message],
+) -> flow_like_types::Result<()> {
+    use flow_like_catalog_core::CachedDB;
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::RwLockWriteGuard;
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    let memory = agent
+        .memory
+        .as_ref()
+        .ok_or_else(|| anyhow!("Memory not configured"))?;
+
+    // Extract text content from evicted messages, grouped into a single document
+    let mut text_parts: Vec<String> = Vec::new();
+    for msg in evicted {
+        match msg {
+            rig::message::Message::User { content } => {
+                for c in content.iter() {
+                    if let rig::message::UserContent::Text(t) = c
+                        && !t.text.is_empty()
+                    {
+                        text_parts.push(format!("[user] {}", t.text));
+                    }
+                }
+            }
+            rig::message::Message::Assistant { content, .. } => {
+                for c in content.iter() {
+                    if let AssistantContent::Text(t) = c
+                        && !t.text.is_empty()
+                    {
+                        text_parts.push(format!("[assistant] {}", t.text));
+                    }
+                }
+            }
+        }
+    }
+
+    if text_parts.is_empty() {
+        return Ok(());
+    }
+
+    // Combine into a single document, truncating to avoid excessively large embeddings
+    let combined = text_parts.join("\n");
+    let content = if combined.chars().count() > 8000 {
+        format!("{}...", combined.chars().take(8000).collect::<String>())
+    } else {
+        combined
+    };
+
+    let embeddings = embed_memory_document(context, memory, &content).await?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let record = json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "content": content,
+        "role": "context",
+        "vector": embeddings,
+        "timestamp": now,
+    });
+
+    let cached_db: CachedDB = {
+        let cache = context.cache.read().await;
+        let entry = cache
+            .get(&memory.database.cache_key)
+            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
+        entry
+            .as_any()
+            .downcast_ref::<CachedDB>()
+            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
+            .clone()
+    };
+
+    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+    db.insert(vec![record]).await?;
+    drop(db);
+
+    context.log_message(
+        &format!(
+            "Stored {} evicted messages ({} chars) to memory",
+            evicted.len(),
+            content.len()
+        ),
+        LogLevel::Debug,
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "execute")]
+async fn run_memory_compress(
+    context: &mut ExecutionContext,
+    agent: &Agent,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    cached_db: &flow_like_catalog_core::CachedDB,
+) -> flow_like_types::Result<Value> {
+    use flow_like_storage::databases::vector::{
+        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
+
+    cached_db.ensure_flushed().await?;
+
+    let count = {
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.count(Some("role != 'summary'".to_string()))
+            .await
+            .unwrap_or(0)
+    };
+
+    let threshold = memory.compress_threshold as usize;
+    if count < threshold {
+        return Ok(json::json!({
+            "compressed": false,
+            "reason": format!("Only {} observations (threshold: {})", count, threshold),
+            "observation_count": count,
+        }));
+    }
+
+    let observations: Vec<Value> = {
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.filter(
+            "role != 'summary'",
+            Some(vec![
+                "id".to_string(),
+                "content".to_string(),
+                "role".to_string(),
+                "timestamp".to_string(),
+            ]),
+            threshold,
+            0,
+        )
+        .await
+        .unwrap_or_default()
+    };
+
+    if observations.is_empty() {
+        return Ok(json::json!({
+            "compressed": false,
+            "reason": "No non-summary observations to compress",
+        }));
+    }
+
+    let mut obs_text = String::new();
+    let mut obs_ids: Vec<String> = Vec::new();
+    for obs in &observations {
+        if let Some(content) = obs.get("content").and_then(|c| c.as_str()) {
+            let role = obs
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("observation");
+            obs_text.push_str(&format!("[{}] {}\n", role, content));
+        }
+        if let Some(id) = obs.get("id").and_then(|i| i.as_str()) {
+            obs_ids.push(id.to_string());
+        }
+    }
+
+    let prompt = format!(
+        "Compress the following conversation/observation history into a concise summary. \
+         Preserve key facts, decisions, user preferences, and context. \
+         Drop redundant details. Output only the summary text, nothing else.\n\n{}",
+        obs_text
+    );
+
+    let history: Option<History> = None;
+    let agent_builder = agent.model.agent(context, &history).await?;
+    let summary_agent = agent_builder
+        .preamble("You are a memory compressor. Be concise but preserve key facts, decisions, user preferences, and context.")
+        .build();
+
+    let response = summary_agent
+        .completion(prompt, vec![])
+        .await
+        .map_err(|e| anyhow!("Failed to create compression request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| anyhow!("Compression LLM call failed: {}", e))?;
+
+    let mut summary = String::new();
+    for content in response.choice {
+        if let AssistantContent::Text(t) = content {
+            summary.push_str(&t.text);
+        }
+    }
+    let summary = summary.trim().to_string();
+
+    if summary.is_empty() {
+        return Err(anyhow!("LLM returned empty summary"));
+    }
+
+    let summary_embedding = embed_memory_document(context, memory, &summary).await?;
+
+    // Compute content hash for dedup
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    summary.to_lowercase().hash(&mut hasher);
+    let summary_hash = format!("{:x}", hasher.finish());
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let summary_record = json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "content": summary,
+        "content_hash": summary_hash,
+        "role": "summary",
+        "vector": summary_embedding,
+        "timestamp": now,
+    });
+
+    // Insert summary first, then delete old observations (safer ordering)
+    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+    db.insert(vec![summary_record]).await?;
+    drop(db);
+
+    cached_db.ensure_flushed().await?;
+
+    if !obs_ids.is_empty() {
+        let ids_filter = obs_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("id IN ({})", ids_filter);
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        db.delete(&filter).await?;
+        drop(db);
+    }
+
+    let compressed_count = observations.len();
+    context.log_message(
+        &format!(
+            "memory_compress: compressed {} observations into summary",
+            compressed_count
+        ),
+        LogLevel::Debug,
+    );
+
+    Ok(json::json!({
+        "compressed": true,
+        "compressed_count": compressed_count,
+        "summary": summary,
+    }))
+}
+
+#[cfg(feature = "execute")]
+async fn embed_memory_query(
+    context: &mut ExecutionContext,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    query: &str,
+) -> flow_like_types::Result<Vec<f64>> {
+    let cached_model = context
+        .get_cache(&memory.embedding_model.cache_key)
+        .await
+        .ok_or_else(|| anyhow!("Embedding model not found in cache"))?;
+    let embedding_obj = cached_model
+        .as_any()
+        .downcast_ref::<CachedEmbeddingModelObject>()
+        .ok_or_else(|| anyhow!("Failed to downcast embedding model"))?;
+
+    let embeddings = if let Some(model) = &embedding_obj.text_model {
+        model.text_embed_query(&vec![query.to_string()]).await?
+    } else {
+        return Err(anyhow!("No text embedding model available"));
+    };
+
+    if embeddings.is_empty() {
+        return Err(anyhow!("Embedding returned empty vector"));
+    }
+
+    Ok(embeddings[0].iter().map(|x| *x as f64).collect())
+}
+
+#[cfg(feature = "execute")]
+async fn embed_memory_document(
+    context: &mut ExecutionContext,
+    memory: &crate::generative::agent::memory::MemoryConfig,
+    content: &str,
+) -> flow_like_types::Result<Vec<f32>> {
+    let cached_model = context
+        .get_cache(&memory.embedding_model.cache_key)
+        .await
+        .ok_or_else(|| anyhow!("Embedding model not found in cache"))?;
+    let embedding_obj = cached_model
+        .as_any()
+        .downcast_ref::<CachedEmbeddingModelObject>()
+        .ok_or_else(|| anyhow!("Failed to downcast embedding model"))?;
+
+    let embeddings = if let Some(model) = &embedding_obj.text_model {
+        model
+            .text_embed_document(&vec![content.to_string()])
+            .await?
+    } else {
+        return Err(anyhow!("No text embedding model available"));
+    };
+
+    if embeddings.is_empty() {
+        return Err(anyhow!("Embedding returned empty vector"));
+    }
+
+    Ok(embeddings[0].clone())
 }

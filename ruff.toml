@@ -1,0 +1,5 @@
+exclude = [
+    "templates/wasm-node-python/wit_world",
+    "templates/wasm-node-python/componentize_py_async_support",
+    "templates/wasm-node-python/poll_loop.py",
+]

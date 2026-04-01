@@ -1,14 +1,19 @@
-import { ChevronDown, Layers } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CheckIcon, ChevronDown, Layers } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../../..";
 import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectLabel,
-	SelectTrigger,
-} from "../../../../components/ui/select";
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "../../../../components/ui/command";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "../../../../components/ui/popover";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -145,46 +150,70 @@ export function ElementSelect({
 		loadElements();
 	}, [backend, appId]);
 
-	const currentValue = parseUint8ArrayToJson(value);
+	const [open, setOpen] = useState(false);
+	const currentValue = parseUint8ArrayToJson(value) as string | undefined;
 	const selectedElement = elements.find(
 		(el) => el.id === currentValue || el.rawId === currentValue,
 	);
 
+	const triggerLabel = useMemo(() => {
+		if (loading) return "Loading...";
+		return selectedElement?.rawId ?? "Select element";
+	}, [loading, selectedElement?.rawId]);
+
 	return (
 		<div className="flex flex-row items-center justify-start w-fit max-w-full ml-1 overflow-hidden">
-			<Select
-				defaultValue={currentValue}
-				value={currentValue}
-				onValueChange={(val) => setValue(convertJsonToUint8Array(val))}
-			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<Layers className="size-2 min-w-2 min-h-2 text-muted-foreground mr-0.5 shrink-0" />
-					<small className="text-start text-[10px] m-0! truncate">
-						{loading && "Loading..."}
-						{!loading && (selectedElement?.label ?? "No Element Selected")}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
-				<SelectContent className="bg-background max-h-60 overflow-y-auto">
-					<SelectGroup>
-						<SelectLabel>{pin.friendly_name}</SelectLabel>
-						{elements.map((element) => (
-							<SelectItem key={element.id} value={element.id}>
-								<div className="flex items-center gap-2">
-									<span>{element.label}</span>
-									<span className="text-xs text-muted-foreground">
-										{element.type}
-									</span>
-								</div>
-							</SelectItem>
-						))}
-					</SelectGroup>
-				</SelectContent>
-			</Select>
+			<Popover open={open} onOpenChange={setOpen}>
+				<PopoverTrigger asChild>
+					<button
+						type="button"
+						className="flex flex-row items-center gap-0.5 w-fit max-w-full p-0 border-0 text-xs bg-card text-start h-4 overflow-hidden cursor-pointer"
+					>
+						<Layers className="size-2 min-w-2 min-h-2 text-muted-foreground mr-0.5 shrink-0" />
+						<small className="text-start text-[10px] m-0! truncate">
+							{triggerLabel}
+						</small>
+						<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
+					</button>
+				</PopoverTrigger>
+				<PopoverContent className="w-60 p-0" align="start">
+					<Command>
+						<CommandInput placeholder="Search elements..." />
+						<CommandList>
+							<CommandEmpty>No elements found.</CommandEmpty>
+							<CommandGroup heading={pin.friendly_name}>
+								{elements.map((element) => (
+									<CommandItem
+										key={element.id}
+										value={`${element.pageName ?? ""} ${element.rawId} ${element.type}`}
+										onSelect={() => {
+											setValue(convertJsonToUint8Array(element.id));
+											setOpen(false);
+										}}
+									>
+										<div className="flex flex-col gap-0.5 min-w-0">
+											<div className="flex items-center gap-1">
+												<span className="truncate text-xs">{element.rawId}</span>
+												<span className="text-[10px] text-muted-foreground shrink-0">
+													{element.type}
+												</span>
+											</div>
+											{element.pageName && (
+												<span className="text-[10px] text-muted-foreground truncate">
+													{element.pageName}
+												</span>
+											)}
+										</div>
+										{currentValue === element.id && (
+											<CheckIcon className="ml-auto size-3 shrink-0" />
+										)}
+									</CommandItem>
+								))}
+							</CommandGroup>
+						</CommandList>
+					</Command>
+				</PopoverContent>
+			</Popover>
 		</div>
 	);
 }

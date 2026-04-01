@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-blob-configure"
+description = "Enables the blob_configure command without any pre-configured scope."
+commands.allow = ["blob_configure"]
+
+[[permission]]
+identifier = "deny-blob-configure"
+description = "Denies the blob_configure command without any pre-configured scope."
+commands.deny = ["blob_configure"]

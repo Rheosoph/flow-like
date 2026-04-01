@@ -183,7 +183,7 @@ export const koCommon = {
 		"네! Flow-Like는 완전히 자체 호스팅 가능합니다. 자체 인프라, 온프레미스, 에어갭 환경에서 실행할 수 있습니다. 데스크톱 앱은 완전히 오프라인으로 작동합니다.",
 	"pricing.faq.q3": "사용자별 요금이 있나요?",
 	"pricing.faq.a3":
-		"아니요. 자동화는 전체 조직이 접근할 수 있어야 한다고 생각합니다. 모든 플랜은 무제한 사용자를 지원합니다. 사용량(클라우드 기능)에 따라만 지불하고, 직원 수로는 지불하지 않습니다.",
+		"대부분의 플랜은 시트별 요금제를 사용합니다. Enterprise 플랜은 무제한 사용자와 실행을 포함하며, 사용량(클라우드 기능)에 따라서만 지불합니다.",
 	"pricing.faq.q4": "AI 모델 접근에는 무엇이 포함되나요?",
 	"pricing.faq.a4":
 		"AI 모델 접근에는 FlowPilot(AI 어시스턴트), 지능형 워크플로우 제안, 호스팅된 모델을 통한 자연어 자동화 등의 기능이 포함됩니다.",
@@ -208,4 +208,15 @@ export const koCommon = {
 	"pricing.ctaSection.enterprise": "엔터프라이즈 영업팀 문의",
 	"pricing.ctaSection.startingAt":
 		"€1,999부터 · 전체 소스코드 소유권 · 어디서나 배포",
+
+	// Navigation – page links
+	"header.integrations": "통합",
+	"header.security": "보안",
+	"footer.link.integrations": "통합",
+	"footer.link.whitelabel": "화이트 라벨",
+	"footer.link.security": "보안",
+
+	"pricing.faq.moreQuestions": "아직 궁금한 점이 있으신가요?",
+	"pricing.faq.contactUs": "도움을 드리겠습니다",
+	"pricing.faq.contactButton": "문의하기",
 };

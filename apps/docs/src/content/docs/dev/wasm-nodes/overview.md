@@ -57,7 +57,8 @@ Every package requires a `manifest.toml` that declares:
 - Package metadata (name, version, author)
 - Permission requirements
 - OAuth scope requirements
-- Node definitions
+
+Nodes are automatically extracted from the WASM binary — they are not declared in the manifest.
 
 ```toml title="manifest.toml"
 manifest_version = 1
@@ -71,16 +72,9 @@ memory = "standard"     # 64 MB
 timeout = "standard"    # 30 seconds
 variables = true
 cache = true
-
-[[nodes]]
-id = "add"
-name = "Add Numbers"
-description = "Adds two numbers"
-category = "Math/Arithmetic"
 ```
 
 See [Package Manifest](/dev/wasm-nodes/manifest/) for full documentation.
-```
 
 ## Permission System
 
@@ -95,6 +89,10 @@ Packages must declare their required permissions upfront. Users can review these
 | `standard` | 64 MB | Most nodes (default) |
 | `heavy` | 128 MB | Data processing |
 | `intensive` | 256 MB | ML inference, large datasets |
+| `large` | 512 MB | Large model inference |
+| `huge` | 1 GB | Very large datasets |
+| `extreme` | 2 GB | Heavy computation |
+| `maximum` | 4 GB | Maximum allocation |
 
 ### Timeout Tiers
 
@@ -104,10 +102,12 @@ Packages must declare their required permissions upfront. Users can review these
 | `standard` | 30 seconds | Most nodes (default) |
 | `extended` | 60 seconds | API calls |
 | `long_running` | 5 minutes | ML inference |
+| `very_long` | 10 minutes | Heavy processing |
+| `maximum` | 30 minutes | Maximum duration |
 
 ### OAuth Scopes
 
-Packages can request OAuth access per-provider. Each node declares which providers it needs:
+Packages can request OAuth access per-provider:
 
 ```toml
 [[permissions.oauth_scopes]]
@@ -115,11 +115,6 @@ provider = "google"
 scopes = ["https://www.googleapis.com/auth/drive.readonly"]
 reason = "Read files from Google Drive"
 required = true
-
-[[nodes]]
-id = "list_drive_files"
-name = "List Drive Files"
-oauth_providers = ["google"]  # Only this node gets Google access
 ```
 
 ## Data Types
@@ -165,15 +160,36 @@ Set quality metrics (0-10 scale) to help users understand node trade-offs:
 
 ## Language Templates
 
-Choose your preferred language to get started:
+Choose your preferred language to get started. See [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/) for a detailed comparison of what each runtime model supports.
 
-| Language | Status | Template |
-|----------|--------|----------|
-| [Rust](/dev/wasm-nodes/rust/) | ✅ Recommended | Full support, smallest binaries |
-| [Go](/dev/wasm-nodes/go/) | ✅ Supported | TinyGo for smaller binaries |
-| [TypeScript](/dev/wasm-nodes/typescript/) | ✅ Supported | AssemblyScript or Javy |
-| [Python](/dev/wasm-nodes/python/) | 🔜 Planned | Via Pyodide or similar |
-| [C/C++](/dev/wasm-nodes/cpp/) | ✅ Supported | Emscripten or wasi-sdk |
+### Component Model (Recommended)
+
+These languages produce WASM Component Model binaries with typed WIT bindings, WASI Preview 2 support, and optional TCP/UDP/DNS networking:
+
+| Language | Template | Notes |
+|----------|----------|-------|
+| [Rust](/dev/wasm-nodes/rust/) | `wasm-node-rust` | Recommended — smallest binaries, best tooling |
+| [Go](/dev/wasm-nodes/go/) | `wasm-node-go` | TinyGo with `wasip2` target |
+| [C++](/dev/wasm-nodes/cpp/) | `wasm-node-cpp` | wasi-sdk + wit-bindgen |
+| [Zig](/dev/wasm-nodes/zig/) | `wasm-node-zig` | wit-bindgen via `@cImport` |
+| [Swift](/dev/wasm-nodes/swift/) | `wasm-node-swift` | SwiftWasm + wit-bindgen |
+| [C#](/dev/wasm-nodes/csharp/) | `wasm-node-csharp` | .NET `wasi-experimental` workload |
+| [Python](/dev/wasm-nodes/python/) | `wasm-node-python` | componentize-py |
+| [TypeScript](/dev/wasm-nodes/typescript/) | `wasm-node-typescript` | componentize-js |
+
+### Core Modules
+
+These languages produce traditional WASM core modules. They have access to all host APIs via the HTTP bridge, but cannot use TCP/UDP/DNS sockets:
+
+| Language | Template | Notes |
+|----------|----------|-------|
+| AssemblyScript | `wasm-node-assemblyscript` | TypeScript-like syntax, small binaries |
+| Kotlin | `wasm-node-kotlin` | Requires engine GC + exception handling support |
+| Java | `wasm-node-java` | Via TeaVM |
+| Nim | `wasm-node-nim` | Compiles via Emscripten |
+| Lua | `wasm-node-lua` | Embedded Lua 5.4 interpreter |
+| Grain | `wasm-node-grain` | Native WASM target |
+| MoonBit | `wasm-node-moonbit` | Native WASM target |
 
 ## Installation & Registry
 

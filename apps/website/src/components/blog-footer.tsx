@@ -78,7 +78,12 @@ function FooterSection({
 }
 
 export function BlogFooter() {
-	const { t } = useTranslation();
+	const { t, lang } = useTranslation();
+
+	const localizeHref = (href: string) => {
+		if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:")) return href;
+		return `/${lang}${href}`;
+	};
 
 	return (
 		<footer className="w-full border-t border-border/40 bg-background/50 backdrop-blur-sm">
@@ -116,6 +121,9 @@ export function BlogFooter() {
 						<FooterLink href="/24-hour-solution">
 							{t("footer.link.24h")}
 						</FooterLink>
+					<FooterLink href={localizeHref("/integrations")}>{t("footer.link.integrations")}</FooterLink>
+						<FooterLink href={localizeHref("/whitelabel")}>{t("footer.link.whitelabel")}</FooterLink>
+						<FooterLink href={localizeHref("/security")}>{t("footer.link.security")}</FooterLink>
 					</FooterSection>
 
 					{/* Resources */}

@@ -30,8 +30,8 @@ function readTheme(): ThemeSnapshot {
 	const dynamicStyle = document.getElementById("dynamic-theme");
 	if (dynamicStyle?.textContent) {
 		const section = isDark
-			? dynamicStyle.textContent.split(/\.dark\b/)[1] ?? ""
-			: dynamicStyle.textContent.split(":root")[1]?.split("}")[0] ?? "";
+			? (dynamicStyle.textContent.split(/\.dark\b/)[1] ?? "")
+			: (dynamicStyle.textContent.split(":root")[1]?.split("}")[0] ?? "");
 		const varMatch = section.match(
 			/--primary\s*:\s*oklch\(\s*[\d.%]+\s+[\d.]+\s+([\d.]+)\s*\)/,
 		);
@@ -41,9 +41,9 @@ function readTheme(): ThemeSnapshot {
 	}
 
 	if (hue === FALLBACK_HUE) {
-		for (const sheet of document.styleSheets) {
+		for (const sheet of Array.from(document.styleSheets)) {
 			try {
-				for (const rule of sheet.cssRules) {
+				for (const rule of Array.from(sheet.cssRules)) {
 					const text = rule.cssText;
 					if (!text.includes("--primary")) continue;
 					const isRootRule = text.startsWith(":root");
@@ -132,15 +132,15 @@ export function hashToGradient(
 	const hue2 = (hue1 + 30) % 360;
 	const angle = (Math.abs(hash >> 8) % 4) * 45 + 120;
 
-	const l1 = isDark ? 0.55 : 0.88;
-	const l2 = isDark ? 0.65 : 0.93;
-	const c1 = isDark ? 0.12 : 0.04;
-	const c2 = isDark ? 0.1 : 0.03;
+	const l1 = isDark ? 0.55 : 0.78;
+	const l2 = isDark ? 0.65 : 0.85;
+	const c1 = isDark ? 0.12 : 0.08;
+	const c2 = isDark ? 0.1 : 0.06;
 
 	return {
 		from: `oklch(${l1} ${c1} ${hue1})`,
 		to: `oklch(${l2} ${c2} ${hue2})`,
 		angle,
-		opacity: isDark ? 0.5 : 0.45,
+		opacity: isDark ? 0.5 : 0.6,
 	};
 }

@@ -203,7 +203,6 @@ async fn execute_internal(
         println!("Error flushing buffered sender: {}", err);
     }
 
-
     if let Some(meta) = &meta {
         let (db_fn, write_options) = {
             let guard = flow_like_state.config.read().await;
@@ -221,9 +220,7 @@ async fn execute_internal(
         })?;
         meta.flush(db, write_options.as_ref())
             .await
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-            })?;
+            .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
     }
 
     let _res = flow_like_state.remove_and_cancel_run(&run_id);

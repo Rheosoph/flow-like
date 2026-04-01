@@ -1,6 +1,7 @@
 "use client";
 
 import NextLink from "next/link";
+import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { useActionContext, useExecuteAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -34,6 +35,8 @@ export function A2UILink({
 	surfaceId,
 	onAction,
 }: ComponentProps<LinkComponent>) {
+	const pointerActivationAtRef = useRef(0);
+	const keyboardActivationAtRef = useRef(0);
 	const label = useResolved<string>(component.label) ?? "";
 	const href = useResolved<string>(component.href) ?? "";
 	const route = useResolved<string>(component.route);
@@ -53,6 +56,21 @@ export function A2UILink({
 	const handleClick = (e: React.MouseEvent) => {
 		// Only handle actions in preview mode
 		if (!isPreviewMode) return;
+
+		const now = Date.now();
+		const hasPointerIntent = now - pointerActivationAtRef.current < 1000;
+		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
+
+		if (!hasPointerIntent && !hasKeyboardIntent) {
+			e.preventDefault();
+			console.log("[A2UI Link] Ignoring click without local activation intent:", {
+				componentId,
+			});
+			return;
+		}
+
+		pointerActivationAtRef.current = 0;
+		keyboardActivationAtRef.current = 0;
 
 		if (action) {
 			e.preventDefault();
@@ -120,6 +138,14 @@ export function A2UILink({
 				type="button"
 				className={baseClasses}
 				style={resolveInlineStyle(style)}
+				onPointerDown={() => {
+					pointerActivationAtRef.current = Date.now();
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						keyboardActivationAtRef.current = Date.now();
+					}
+				}}
 				onClick={handleClick}
 				disabled={disabled}
 			>
@@ -141,6 +167,14 @@ export function A2UILink({
 				rel="noopener noreferrer"
 				className={baseClasses}
 				style={resolveInlineStyle(style)}
+				onPointerDown={() => {
+					pointerActivationAtRef.current = Date.now();
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						keyboardActivationAtRef.current = Date.now();
+					}
+				}}
 				onClick={handleClick}
 			>
 				{label}
@@ -154,6 +188,14 @@ export function A2UILink({
 			href={resolvedHref}
 			className={baseClasses}
 			style={resolveInlineStyle(style)}
+			onPointerDown={() => {
+				pointerActivationAtRef.current = Date.now();
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					keyboardActivationAtRef.current = Date.now();
+				}
+			}}
 			onClick={handleClick}
 		>
 			{label}

@@ -1,0 +1,77 @@
+[tasks.setup]
+description = "Install wasm-tools, wit-bindgen CLI, and download WASI adapter"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v wasm-tools &>/dev/null; then
+    echo "Installing wasm-tools..."
+    cargo install wasm-tools
+fi
+
+if ! command -v wit-bindgen &>/dev/null; then
+    echo "Installing wit-bindgen..."
+    cargo install wit-bindgen-cli@0.53.1
+fi
+
+ADAPTER="wasi_snapshot_preview1.reactor.wasm"
+if [ ! -f "$ADAPTER" ]; then
+    echo "Downloading WASI preview1 reactor adapter..."
+    curl -fsSL -o "$ADAPTER" \
+        "https://github.com/bytecodealliance/wasmtime/releases/download/v29.0.1/wasi_snapshot_preview1.reactor.wasm"
+fi
+
+swift package resolve
+"""
+
+[tasks.generate]
+description = "Generate C bindings from WIT"
+depends = ["setup"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+wit-bindgen c --world flow-like-node --out-dir gen wit/flow-like-node.wit
+
+mkdir -p Sources/WitBindings/include
+cp gen/flow_like_node.h Sources/WitBindings/include/
+cp gen/flow_like_node.c Sources/WitBindings/
+cp gen/flow_like_node_component_type.o Sources/WitBindings/
+echo "WIT bindings generated in Sources/WitBindings/"
+"""
+
+[tasks.build]
+description = "Build the WASM component"
+depends = ["generate"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Use swift.org toolchain (not Xcode's) — it includes the WASM backend.
+# Set TOOLCHAINS to your swift.org toolchain identifier, e.g.:
+#   export TOOLCHAINS=org.swift.623202512101a
+# Or install from https://swift.org/download/ and set accordingly.
+swift build --swift-sdk swift-6.2.3-RELEASE_wasm -c release
+
+mkdir -p build
+wasm-tools component embed wit/ .build/wasm32-unknown-wasip1/release/Node.wasm \
+    --world flow-like-node -o build/node.embed.wasm
+
+wasm-tools component new build/node.embed.wasm \
+    --adapt wasi_snapshot_preview1=wasi_snapshot_preview1.reactor.wasm \
+    -o node.wasm
+
+echo "Component written to node.wasm"
+"""
+
+[tasks.test]
+description = "Run tests (native)"
+run = "swift test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+rm -rf .build/ build/ gen/ node.wasm
+rm -f Sources/WitBindings/include/flow_like_node.h
+rm -f Sources/WitBindings/flow_like_node.c
+"""

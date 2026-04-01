@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatAppCategory } from "../../../lib/app-category";
 import type { IApp, IMetadata } from "../../../types";
 import { IAppCategory, IAppStatus, IAppVisibility } from "../../../types";
 import { Badge } from "../../ui/badge";
@@ -411,7 +412,7 @@ export function AppGeneralSettings({
 								<SelectContent>
 									{Object.values(IAppCategory).map((category) => (
 										<SelectItem key={category} value={category}>
-											{category}
+											{formatAppCategory(category)}
 										</SelectItem>
 									))}
 								</SelectContent>
@@ -439,7 +440,7 @@ export function AppGeneralSettings({
 									<SelectItem value="none">None</SelectItem>
 									{Object.values(IAppCategory).map((category) => (
 										<SelectItem key={category} value={category}>
-											{category}
+											{formatAppCategory(category)}
 										</SelectItem>
 									))}
 								</SelectContent>

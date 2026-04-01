@@ -1,0 +1,7 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+dist/
+flow_like_wasm_sdk/wit/
+.DS_Store

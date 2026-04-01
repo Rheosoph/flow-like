@@ -1,0 +1,81 @@
+[tasks."build:all"]
+description = "Build all template WASM nodes"
+run = """
+echo "=== Building Rust ===" && (cd wasm-node-rust && mise run build)
+echo "=== Building Python ===" && (cd wasm-node-python && mise run build)
+echo "=== Building AssemblyScript ===" && (cd wasm-node-assemblyscript && mise run build)
+echo "=== Building Go ===" && (cd wasm-node-go && mise run build)
+echo "=== Building C++ ===" && (cd wasm-node-cpp && mise run build)
+echo "=== Building C# ===" && (cd wasm-node-csharp && mise run build)
+echo "=== Building Kotlin ===" && (cd wasm-node-kotlin && mise run build)
+echo "=== Building TypeScript ===" && (cd wasm-node-typescript && mise run build)
+echo "=== Building Zig ===" && (cd wasm-node-zig && mise run build)
+echo "=== Building MoonBit ===" && (cd wasm-node-moonbit && mise run build)
+echo "=== Building Nim ===" && (cd wasm-node-nim && mise run build)
+echo "=== Building Grain ===" && (cd wasm-node-grain && mise run build)
+echo "=== Building Lua ===" && (cd wasm-node-lua && mise run build)
+echo "=== Building Swift ===" && (cd wasm-node-swift && mise run build)
+echo "=== Building Java ===" && (cd wasm-node-java && mise run build)
+echo "All templates built successfully!"
+"""
+
+[tasks."setup:all"]
+description = "Set up all template environments"
+run = """
+echo "=== Setting up Rust ===" && (cd wasm-node-rust && mise run setup)
+echo "=== Setting up Python ===" && (cd wasm-node-python && mise run setup)
+echo "=== Setting up AssemblyScript ===" && (cd wasm-node-assemblyscript && mise run setup)
+echo "=== Setting up Go ===" && (cd wasm-node-go && mise run setup)
+echo "=== Setting up C++ ===" && (cd wasm-node-cpp && mise run setup)
+echo "=== Setting up C# ===" && (cd wasm-node-csharp && mise run setup)
+echo "=== Setting up Kotlin ===" && (cd wasm-node-kotlin && mise run setup)
+echo "=== Setting up TypeScript ===" && (cd wasm-node-typescript && mise run setup)
+echo "=== Setting up Zig ===" && (cd wasm-node-zig && mise run setup)
+echo "=== Setting up MoonBit ===" && (cd wasm-node-moonbit && mise run setup)
+echo "=== Setting up Nim ===" && (cd wasm-node-nim && mise run setup)
+echo "=== Setting up Grain ===" && (cd wasm-node-grain && mise run setup)
+echo "=== Setting up Lua ===" && (cd wasm-node-lua && mise run setup)
+echo "=== Setting up Swift ===" && (cd wasm-node-swift && mise run setup)
+echo "=== Setting up Java ===" && (cd wasm-node-java && mise run setup)
+echo "All templates set up!"
+"""
+
+[tasks."clean:all"]
+description = "Clean all template build artifacts"
+run = """
+(cd wasm-node-rust && mise run clean)
+(cd wasm-node-python && mise run clean)
+(cd wasm-node-assemblyscript && mise run clean)
+(cd wasm-node-go && mise run clean)
+(cd wasm-node-cpp && mise run clean)
+(cd wasm-node-csharp && mise run clean)
+(cd wasm-node-kotlin && mise run clean)
+(cd wasm-node-typescript && mise run clean)
+(cd wasm-node-zig && mise run clean)
+(cd wasm-node-moonbit && mise run clean)
+(cd wasm-node-nim && mise run clean)
+(cd wasm-node-grain && mise run clean)
+(cd wasm-node-lua && mise run clean)
+(cd wasm-node-swift && mise run clean)
+(cd wasm-node-java && mise run clean)
+echo "All templates cleaned!"
+"""
+
+[tasks."test:all"]
+description = "Run tests for all templates"
+run = """
+echo "=== Testing Rust ===" && (cd wasm-node-rust && mise run test)
+echo "=== Testing Python ===" && (cd wasm-node-python && mise run test)
+echo "=== Testing AssemblyScript ===" && (cd wasm-node-assemblyscript && mise run test)
+echo "=== Testing Go ===" && (cd wasm-node-go && mise run test)
+echo "=== Testing C# ===" && (cd wasm-node-csharp && mise run test)
+echo "=== Testing TypeScript ===" && (cd wasm-node-typescript && mise run test)
+echo "=== Testing Zig ===" && (cd wasm-node-zig && mise run test)
+echo "=== Testing MoonBit ===" && (cd wasm-node-moonbit && mise run test)
+echo "=== Testing Nim ===" && (cd wasm-node-nim && mise run test)
+echo "=== Testing Grain ===" && (cd wasm-node-grain && mise run test)
+echo "=== Testing Lua ===" && (cd wasm-node-lua && mise run test)
+echo "=== Testing Swift ===" && (cd wasm-node-swift && mise run test)
+echo "=== Testing Java ===" && (cd wasm-node-java && mise run test)
+echo "All template tests passed!"
+"""

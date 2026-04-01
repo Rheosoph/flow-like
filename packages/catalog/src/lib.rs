@@ -40,7 +40,7 @@ pub use flow_like_catalog_core::NodeLogic;
 // Re-export core types and utilities
 pub use flow_like_catalog_core::{
     Attachment, BoundingBox, CachedDB, FlowPath, FlowPathRuntime, FlowPathStore, NodeDBConnection,
-    NodeImage, NodeImageWrapper, get_catalog as get_core_catalog, inventory, register_node,
+    NodeImage, NodeImageWrapper, register_node,
 };
 
 // Re-export standard library
@@ -51,6 +51,10 @@ pub use flow_like_catalog_data::{data, events};
 
 // Re-export web modules
 pub use flow_like_catalog_web::{http, mail, web};
+
+// Re-export Telegram and Discord modules
+pub use flow_like_catalog_web::discord;
+pub use flow_like_catalog_web::telegram;
 
 // Re-export media modules
 pub use flow_like_catalog_media::{bit, image};
@@ -68,6 +72,12 @@ pub use flow_like_catalog_llm::generative;
 pub use flow_like_catalog_geo::geo;
 pub use flow_like_catalog_processing::processing;
 
+// Re-export automation modules (desktop only — not available on iOS/Android)
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub use flow_like_catalog_automation::{
+    browser, computer, fingerprint, llm as automation_llm, rpa, selector, vision,
+};
+
 /// Available catalog packages that can be included/excluded
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CatalogPackage {
@@ -81,6 +91,7 @@ pub enum CatalogPackage {
     Llm,
     Processing,
     Geo,
+    Automation,
 }
 
 impl CatalogPackage {
@@ -96,12 +107,13 @@ impl CatalogPackage {
             CatalogPackage::Llm,
             CatalogPackage::Processing,
             CatalogPackage::Geo,
+            CatalogPackage::Automation,
         ]
     }
 
     fn get_nodes(&self) -> Vec<Arc<dyn NodeLogic>> {
         match self {
-            CatalogPackage::Core => flow_like_catalog_core::get_catalog(),
+            CatalogPackage::Core => Vec::new(),
             CatalogPackage::Std => flow_like_catalog_std::get_catalog(),
             CatalogPackage::Data => flow_like_catalog_data::get_catalog(),
             CatalogPackage::Web => flow_like_catalog_web::get_catalog(),
@@ -111,6 +123,7 @@ impl CatalogPackage {
             CatalogPackage::Llm => flow_like_catalog_llm::get_catalog(),
             CatalogPackage::Processing => flow_like_catalog_processing::get_catalog(),
             CatalogPackage::Geo => flow_like_catalog_geo::get_catalog(),
+            CatalogPackage::Automation => flow_like_catalog_automation::get_catalog(),
         }
     }
 }
@@ -130,6 +143,7 @@ impl std::str::FromStr for CatalogPackage {
             "llm" | "genai" | "generative" => Ok(CatalogPackage::Llm),
             "processing" => Ok(CatalogPackage::Processing),
             "geo" | "geolocation" => Ok(CatalogPackage::Geo),
+            "automation" | "rpa" | "browser" | "computer" => Ok(CatalogPackage::Automation),
             _ => Err(format!("Unknown catalog package: {}", s)),
         }
     }

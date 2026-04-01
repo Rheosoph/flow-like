@@ -18,7 +18,7 @@ use serde_json::{json, to_string};
 use std::sync::Arc;
 
 #[cfg(feature = "aws")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AwsRuntimeCredentials {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -30,6 +30,31 @@ pub struct AwsRuntimeCredentials {
     pub expiration: Option<chrono::DateTime<chrono::Utc>>,
     pub content_path_prefix: Option<String>,
     pub user_content_path_prefix: Option<String>,
+}
+
+#[cfg(feature = "aws")]
+impl std::fmt::Debug for AwsRuntimeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsRuntimeCredentials")
+            .field(
+                "access_key_id",
+                &self.access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("meta_bucket", &self.meta_bucket)
+            .field("content_bucket", &self.content_bucket)
+            .field("logs_bucket", &self.logs_bucket)
+            .field("region", &self.region)
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 #[cfg(feature = "aws")]
@@ -127,6 +152,10 @@ impl AwsRuntimeCredentials {
             return Err(flow_like_types::anyhow!("Sub or App ID cannot be empty"));
         }
 
+        // Validate sub and app_id to prevent path traversal and policy injection
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
+
         let role = std::env::var("RUNTIME_ROLE_ARN").map_err(|_| {
             flow_like_types::anyhow!("RUNTIME_ROLE_ARN environment variable not set")
         })?;
@@ -139,9 +168,33 @@ impl AwsRuntimeCredentials {
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
 
+        // Sanitize role_session_name: AWS requires [\w+=,.@-]{2,64}
+        let raw_session = format!("{}-{}", sub, app_id);
+        let session_name: String = raw_session
+            .chars()
+            .filter(|c| {
+                c.is_alphanumeric()
+                    || *c == '-'
+                    || *c == '_'
+                    || *c == '.'
+                    || *c == '@'
+                    || *c == '+'
+                    || *c == '='
+                    || *c == ','
+            })
+            .take(64)
+            .collect();
+        let session_name = if session_name.len() < 2 {
+            format!("session-{}", &flow_like_types::create_id()[..8])
+        } else {
+            session_name
+        };
+
         let policy = match mode {
             CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
             CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
+            CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
+            CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
             CredentialsAccess::InvokeNone => invoke_none_policy(
                 self,
                 &apps_prefix,
@@ -174,7 +227,7 @@ impl AwsRuntimeCredentials {
         let credentials = client
             .assume_role()
             .role_arn(role)
-            .role_session_name(format!("{}-{}", sub, app_id))
+            .role_session_name(session_name)
             .policy(policy)
             .duration_seconds(3600) // 1 hour
             .send()
@@ -268,8 +321,10 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
         self.into_shared_credentials().to_db(app_id).await
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(app_id).await
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(
@@ -656,6 +711,84 @@ fn read_app_policy(
             "Resource": [
                 "*"
             ]
+          }
+        ],
+    });
+
+    policy
+}
+
+fn edit_user_policy(
+    credentials: &AwsRuntimeCredentials,
+    user_prefix: &str,
+) -> flow_like_types::Value {
+    let policy = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.content_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", user_prefix),
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
+            ],
+          }
+        ],
+    });
+
+    policy
+}
+
+fn read_user_policy(
+    credentials: &AwsRuntimeCredentials,
+    user_prefix: &str,
+) -> flow_like_types::Value {
+    let policy = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.content_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", user_prefix),
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
+            ],
           }
         ],
     });

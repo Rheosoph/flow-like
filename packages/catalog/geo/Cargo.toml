@@ -17,7 +17,6 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -30,3 +29,6 @@ urlencoding.workspace = true
 
 # H3 geospatial indexing - only included when execute feature is enabled
 h3o = { git = "https://github.com/TM9657/h3o", rev = "95255f0", features = ["geo"], optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

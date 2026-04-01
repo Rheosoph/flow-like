@@ -1,0 +1,293 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+import { Image } from "astro:assets";
+import designOverview from "../images/index/design-overview.png";
+import designDb from "../images/index/design-db.png";
+import tracing from "../images/index/tracing.png";
+import {
+  LuWorkflow,
+  LuBot,
+  LuChartLine,
+  LuAppWindow,
+} from "react-icons/lu";
+---
+
+<section
+  id="what-you-can-build"
+  class="relative mx-auto max-w-7xl px-4 py-28 lg:px-8 overflow-hidden md:overflow-visible"
+  data-c1="hsl(222 89% 60% / .06)"
+  data-c2="hsl(268 84% 62% / .06)"
+>
+  <!-- Decorative bg -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute inset-0 bg-[radial-gradient(60%_60%_at_20%_20%,var(--c1,transparent),transparent)]"></div>
+    <div class="absolute inset-0 bg-[radial-gradient(60%_60%_at_80%_30%,var(--c2,transparent),transparent)]"></div>
+    <div class="absolute inset-0 [mask-image:radial-gradient(60%_60%_at_50%_40%,black,transparent)] bg-[linear-gradient(to_right,theme(colors.muted.DEFAULT/.12)_1px,transparent_1px),linear-gradient(to_bottom,theme(colors.muted.DEFAULT/.12)_1px,transparent_1px)] bg-[size:36px_36px]"></div>
+    <div class="wycb-glow wycb-glow-1"></div>
+    <div class="wycb-glow wycb-glow-2"></div>
+  </div>
+
+  <div class="relative z-10">
+    <!-- Header -->
+    <div class="text-center mb-20 wycb-reveal">
+      <h2 class="text-4xl font-bold sm:text-5xl bg-gradient-to-r from-foreground via-primary to-secondary bg-clip-text text-transparent leading-tight">
+        {t("v2.build.heading")}
+      </h2>
+    </div>
+
+    <!-- 1) Automations — image right -->
+    <div class="grid items-center gap-10 lg:gap-16 lg:grid-cols-2 mb-28">
+      <div class="wycb-reveal">
+        <div class="inline-flex items-center gap-2.5 rounded-full border border-primary/30 bg-primary/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-primary mb-6 shadow-[0_0_30px_-8px_hsl(var(--primary)/.4)]">
+          <LuWorkflow className="w-4 h-4" />
+          <span>{t("v2.build.auto.pill")}</span>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.build.auto.title")}</h3>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.auto.p1")}
+        </p>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.auto.p2")}
+        </p>
+        <p class="text-sm text-muted-foreground/80">
+          {t("v2.build.auto.p3")}
+        </p>
+      </div>
+      <figure class="group relative overflow-hidden rounded-2xl ring-1 ring-border/40 bg-background/40 backdrop-blur-sm shadow-xl wycb-reveal" data-parallax="6">
+        <Image
+          src={designOverview}
+          alt="Visual workflow — type-safe automation with connected nodes"
+          class="w-full h-auto object-cover select-none transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+          loading="lazy"
+          decoding="async"
+          widths={[768, 1024, 1280, 1600, 1920]}
+          sizes="(min-width:1024px) 50vw, 92vw"
+          format="webp"
+        />
+        <figcaption class="absolute left-3 bottom-3 rounded-md border border-border/50 bg-background/70 backdrop-blur px-2.5 py-1 text-xs">
+          {t("v2.build.auto.caption")}
+        </figcaption>
+      </figure>
+    </div>
+
+    <!-- 2) AI Agents — image left -->
+    <div class="grid items-center gap-10 lg:gap-16 lg:grid-cols-2 mb-28">
+      <figure class="group relative overflow-hidden rounded-2xl ring-1 ring-border/40 bg-background/40 backdrop-blur-sm shadow-xl order-2 lg:order-1 wycb-reveal" data-parallax="4">
+        <Image
+          src={tracing}
+          alt="Agent pipeline with execution tracing — every LLM call logged"
+          class="w-full h-auto object-cover select-none transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+          loading="lazy"
+          decoding="async"
+          widths={[768, 1024, 1280, 1600, 1920]}
+          sizes="(min-width:1024px) 50vw, 92vw"
+          format="webp"
+        />
+        <figcaption class="absolute right-3 bottom-3 rounded-md border border-border/50 bg-background/70 backdrop-blur px-2.5 py-1 text-xs">
+          {t("v2.build.ai.caption")}
+        </figcaption>
+      </figure>
+      <div class="order-1 lg:order-2 wycb-reveal">
+        <div class="inline-flex items-center gap-2.5 rounded-full border border-violet-500/30 bg-violet-500/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-violet-600 dark:text-violet-400 mb-6 shadow-[0_0_30px_-8px_rgba(139,92,246,0.4)]">
+          <LuBot className="w-4 h-4" />
+          <span>{t("v2.build.ai.pill")}</span>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.build.ai.title")}</h3>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.ai.p1")}
+        </p>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed">
+          {t("v2.build.ai.p2")}
+        </p>
+      </div>
+    </div>
+
+    <!-- 3) Dashboards — image right, with BI pipeline mockup -->
+    <div class="grid items-center gap-10 lg:gap-16 lg:grid-cols-2 mb-28">
+      <div class="wycb-reveal">
+        <div class="inline-flex items-center gap-2.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400 mb-6 shadow-[0_0_30px_-8px_rgba(16,185,129,0.4)]">
+          <LuChartLine className="w-4 h-4" />
+          <span>{t("v2.build.dash.pill")}</span>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.build.dash.title")}</h3>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.dash.p1")}
+        </p>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.dash.p2")}
+        </p>
+        <a href="/modern-bi" class="text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:opacity-80 transition-opacity">
+          {t("v2.build.dash.link")}
+        </a>
+      </div>
+      <!-- BI pipeline visualization -->
+      <div class="wycb-reveal" data-parallax="4">
+        <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6 shadow-xl">
+          <!-- Source → Engine → Output -->
+          <div class="flex items-center justify-between gap-3 mb-6">
+            <div class="flex-1 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
+              <div class="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-1">{t("v2.build.dash.sources")}</div>
+              <div class="flex flex-wrap justify-center gap-1.5 text-[10px] text-muted-foreground">
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">Postgres</span>
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">S3</span>
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">MQTT</span>
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">REST</span>
+              </div>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="h-px w-8 bg-border/60"></div>
+              <span class="text-[9px] text-muted-foreground/50">→</span>
+            </div>
+            <div class="flex-1 rounded-xl border border-primary/20 bg-primary/5 p-4 text-center">
+              <div class="text-xs font-medium text-primary mb-1">{t("v2.build.dash.engine")}</div>
+              <div class="flex justify-center gap-1.5 text-[10px] text-muted-foreground">
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">{t("v2.build.dash.transform")}</span>
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">{t("v2.build.dash.detect")}</span>
+              </div>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="h-px w-8 bg-border/60"></div>
+              <span class="text-[9px] text-muted-foreground/50">→</span>
+            </div>
+            <div class="flex-1 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-center">
+              <div class="text-xs font-medium text-amber-600 dark:text-amber-400 mb-1">{t("v2.build.dash.output")}</div>
+              <div class="flex justify-center gap-1.5 text-[10px] text-muted-foreground">
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">{t("v2.build.dash.dashboard")}</span>
+                <span class="px-2 py-0.5 rounded bg-muted/30 border border-border/30">{t("v2.build.dash.mobile")}</span>
+              </div>
+            </div>
+          </div>
+          <!-- Live mock -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="rounded-lg bg-muted/20 p-3 h-20 flex flex-col justify-end">
+              <div class="flex items-end gap-1 h-full">
+                <div class="w-full bg-emerald-500/40 rounded-sm" style="height:60%"></div>
+                <div class="w-full bg-emerald-500/50 rounded-sm" style="height:80%"></div>
+                <div class="w-full bg-emerald-500/60 rounded-sm" style="height:45%"></div>
+                <div class="w-full bg-emerald-500/70 rounded-sm" style="height:90%"></div>
+                <div class="w-full bg-emerald-500/80 rounded-sm" style="height:55%"></div>
+              </div>
+            </div>
+            <div class="rounded-lg bg-muted/20 p-3 h-20 flex flex-col justify-end">
+              <div class="flex items-end gap-1 h-full">
+                <div class="w-full bg-primary/40 rounded-sm" style="height:40%"></div>
+                <div class="w-full bg-primary/50 rounded-sm" style="height:70%"></div>
+                <div class="w-full bg-primary/60 rounded-sm" style="height:55%"></div>
+                <div class="w-full bg-primary/70 rounded-sm" style="height:85%"></div>
+                <div class="w-full bg-primary/80 rounded-sm" style="height:65%"></div>
+              </div>
+            </div>
+            <div class="rounded-lg bg-muted/20 p-3 h-20 flex items-center justify-center">
+              <div class="text-center">
+                <div class="text-lg font-bold text-foreground">98.7%</div>
+                <div class="text-[10px] text-muted-foreground">{t("v2.build.dash.uptime")}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4) Full Applications — image left -->
+    <div class="grid items-center gap-10 lg:gap-16 lg:grid-cols-2">
+      <figure class="group relative overflow-hidden rounded-2xl ring-1 ring-border/40 bg-background/40 backdrop-blur-sm shadow-xl order-2 lg:order-1 wycb-reveal" data-parallax="6">
+        <Image
+          src={designDb}
+          alt="Workflow canvas alongside a running application UI"
+          class="w-full h-auto object-cover select-none transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+          loading="lazy"
+          decoding="async"
+          widths={[768, 1024, 1280, 1600, 1920]}
+          sizes="(min-width:1024px) 50vw, 92vw"
+          format="webp"
+        />
+        <figcaption class="absolute left-3 bottom-3 rounded-md border border-border/50 bg-background/70 backdrop-blur px-2.5 py-1 text-xs">
+          {t("v2.build.app.caption")}
+        </figcaption>
+      </figure>
+      <div class="order-1 lg:order-2 wycb-reveal">
+        <div class="inline-flex items-center gap-2.5 rounded-full border border-amber-500/30 bg-amber-500/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 mb-6 shadow-[0_0_30px_-8px_rgba(245,158,11,0.4)]">
+          <LuAppWindow className="w-4 h-4" />
+          <span>{t("v2.build.app.pill")}</span>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.build.app.title")}</h3>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.app.p1")}
+        </p>
+        <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+          {t("v2.build.app.p2")}
+        </p>
+        <a href="/whitelabel" class="text-sm font-medium text-amber-600 dark:text-amber-400 hover:opacity-80 transition-opacity">
+          {t("v2.build.app.link")}
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .wycb-glow { position: absolute; border-radius: 9999px; filter: blur(100px); pointer-events: none; }
+  .wycb-glow-1 { width: 400px; height: 400px; top: 10%; left: -100px; background: hsl(222 89% 60% / .1); animation: wycb-float 20s ease-in-out infinite; }
+  .wycb-glow-2 { width: 350px; height: 350px; bottom: 15%; right: -80px; background: hsl(268 84% 62% / .1); animation: wycb-float 25s ease-in-out infinite reverse; }
+  @keyframes wycb-float {
+    0%, 100% { transform: translate(0, 0); }
+    33% { transform: translate(30px, -20px); }
+    66% { transform: translate(-20px, 15px); }
+  }
+  .wycb-reveal {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .wycb-reveal.in {
+    opacity: 1;
+    transform: none;
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wycb-reveal { opacity: 1; transform: none; }
+    .wycb-glow { animation: none !important; }
+  }
+</style>
+
+<script is:inline>
+  (() => {
+    const reduce = matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    const reveals = document.querySelectorAll("#what-you-can-build .wycb-reveal");
+    if (reveals.length && !reduce) {
+      const io = new IntersectionObserver(
+        (entries) => { entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }); },
+        { threshold: 0.12 },
+      );
+      reveals.forEach((el) => io.observe(el));
+    } else {
+      reveals.forEach((el) => el.classList.add("in"));
+    }
+
+    // Parallax
+    const parallaxEls = document.querySelectorAll<HTMLElement>("#what-you-can-build [data-parallax]");
+    if (parallaxEls.length && !reduce) {
+      const onScroll = () => {
+        const vh = window.innerHeight;
+        parallaxEls.forEach((el) => {
+          const rect = el.getBoundingClientRect();
+          const depth = Number(el.getAttribute("data-parallax")) || 4;
+          const progress = (rect.top - vh) / (vh + rect.height);
+          const y = Math.round(progress * depth * 6);
+          el.style.transform = `translateY(${y}px)`;
+        });
+      };
+      addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+    }
+  })();
+</script>

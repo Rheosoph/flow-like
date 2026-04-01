@@ -4,6 +4,20 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AuditActorType")]
+pub enum AuditActorType {
+    #[sea_orm(string_value = "USER")]
+    User,
+    #[sea_orm(string_value = "TECHNICAL_USER")]
+    TechnicalUser,
+    #[sea_orm(string_value = "API_KEY")]
+    ApiKey,
+    #[sea_orm(string_value = "SYSTEM")]
+    System,
+    #[sea_orm(string_value = "EXECUTOR")]
+    Executor,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "BitType")]
 pub enum BitType {
     #[sea_orm(string_value = "COURSE")]
@@ -122,6 +136,26 @@ pub enum ExecutionStatus {
     Fatal,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "InteractionStatus")]
+pub enum InteractionStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "RESPONDED")]
+    Responded,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "InvitationStatus")]
+pub enum InvitationStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACCEPTED")]
+    Accepted,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "EXPIRED")]
+    Expired,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "NotificationType")]
 pub enum NotificationType {
     #[sea_orm(string_value = "WORKFLOW")]
@@ -158,6 +192,34 @@ pub enum PurchaseStatus {
     PartiallyRefunded,
     #[sea_orm(string_value = "FAILED")]
     Failed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "PushNotificationTargetPlatform"
+)]
+pub enum PushNotificationTargetPlatform {
+    #[sea_orm(string_value = "IOS")]
+    Ios,
+    #[sea_orm(string_value = "ANDROID")]
+    Android,
+    #[sea_orm(string_value = "DESKTOP")]
+    Desktop,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "PushNotificationTargetProvider"
+)]
+pub enum PushNotificationTargetProvider {
+    #[sea_orm(string_value = "FCM")]
+    Fcm,
+    #[sea_orm(string_value = "AWS_SNS")]
+    AwsSns,
+    #[sea_orm(string_value = "AZURE_NOTIFICATION_HUBS")]
+    AzureNotificationHubs,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "RunMode")]
@@ -302,6 +364,94 @@ pub enum Visibility {
     Offline,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "WasmCompilationStatus"
+)]
+pub enum WasmCompilationStatus {
+    #[sea_orm(string_value = "COMPILED")]
+    Compiled,
+    #[sea_orm(string_value = "LOCAL_ONLY")]
+    LocalOnly,
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "WasmPackageCategory"
+)]
+pub enum WasmPackageCategory {
+    #[sea_orm(string_value = "DOCUMENT_PROCESSING")]
+    DocumentProcessing,
+    #[sea_orm(string_value = "DATA_TRANSFORMATION")]
+    DataTransformation,
+    #[sea_orm(string_value = "WORKFLOW_AUTOMATION")]
+    WorkflowAutomation,
+    #[sea_orm(string_value = "COMMUNICATION")]
+    Communication,
+    #[sea_orm(string_value = "ANALYTICS_REPORTING")]
+    AnalyticsReporting,
+    #[sea_orm(string_value = "FINANCE_BILLING")]
+    FinanceBilling,
+    #[sea_orm(string_value = "COMPLIANCE_REGULATORY")]
+    ComplianceRegulatory,
+    #[sea_orm(string_value = "HR_PEOPLE")]
+    HrPeople,
+    #[sea_orm(string_value = "AI_ML")]
+    AiMl,
+    #[sea_orm(string_value = "INTEGRATION_CONNECTORS")]
+    IntegrationConnectors,
+    #[sea_orm(string_value = "SECURITY_IDENTITY")]
+    SecurityIdentity,
+    #[sea_orm(string_value = "DEVOPS")]
+    Devops,
+    #[sea_orm(string_value = "IOT_INDUSTRIAL")]
+    IotIndustrial,
+    #[sea_orm(string_value = "ROBOTICS_PHYSICAL_AI")]
+    RoboticsPhysicalAi,
+    #[sea_orm(string_value = "GAMING_SIMULATION")]
+    GamingSimulation,
+    #[sea_orm(string_value = "HEALTHCARE")]
+    Healthcare,
+    #[sea_orm(string_value = "VETERINARY")]
+    Veterinary,
+    #[sea_orm(string_value = "LEGAL")]
+    Legal,
+    #[sea_orm(string_value = "MANUFACTURING")]
+    Manufacturing,
+    #[sea_orm(string_value = "AGRICULTURE")]
+    Agriculture,
+    #[sea_orm(string_value = "REAL_ESTATE")]
+    RealEstate,
+    #[sea_orm(string_value = "LOGISTICS")]
+    Logistics,
+    #[sea_orm(string_value = "ENERGY")]
+    Energy,
+    #[sea_orm(string_value = "CONSTRUCTION_TRADES")]
+    ConstructionTrades,
+    #[sea_orm(string_value = "EDUCATION")]
+    Education,
+    #[sea_orm(string_value = "GOVERNMENT_DEFENSE")]
+    GovernmentDefense,
+    #[sea_orm(string_value = "ECOMMERCE")]
+    Ecommerce,
+    #[sea_orm(string_value = "INSURANCE")]
+    Insurance,
+    #[sea_orm(string_value = "TELECOM")]
+    Telecom,
+    #[sea_orm(string_value = "SCIENTIFIC_ENGINEERING")]
+    ScientificEngineering,
+    #[sea_orm(string_value = "GEOSPATIAL")]
+    Geospatial,
+    #[sea_orm(string_value = "MEDIA_CONTENT")]
+    MediaContent,
+    #[sea_orm(string_value = "OTHER")]
+    Other,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "WasmPackageStatus")]
 pub enum WasmPackageStatus {
     #[sea_orm(string_value = "PENDING_REVIEW")]
@@ -314,6 +464,20 @@ pub enum WasmPackageStatus {
     Deprecated,
     #[sea_orm(string_value = "DISABLED")]
     Disabled,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "WasmPackageVisibility"
+)]
+pub enum WasmPackageVisibility {
+    #[sea_orm(string_value = "PRIVATE")]
+    Private,
+    #[sea_orm(string_value = "PUBLIC")]
+    Public,
+    #[sea_orm(string_value = "PUBLIC_REQUEST_ACCESS")]
+    PublicRequestAccess,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "WasmReviewAction")]

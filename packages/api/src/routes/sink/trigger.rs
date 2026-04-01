@@ -14,7 +14,7 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        is_jwt_configured, proxy_sse_response, sign_execution_jwt,
+        is_jwt_configured, proxy_sse_response, resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -121,7 +121,7 @@ pub async fn trigger_event(
     input: TriggerEventInput,
 ) -> FlResult<TriggerResponse> {
     use crate::routes::app::events::db::decrypt_token;
-
+    let encryption_key = &state.encryption_key;
     // Look up sink by event_id
     let sink = event_sink::Entity::find()
         .filter(event_sink::Column::EventId.eq(&input.event_id))
@@ -131,7 +131,7 @@ pub async fn trigger_event(
         .ok_or_else(|| anyhow!("No active sink found for event {}", input.event_id))?;
 
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id).await?;
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id).await?;
 
     // Check JWT is configured
     if !is_jwt_configured() {
@@ -179,14 +179,16 @@ pub async fn trigger_event(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -207,6 +209,7 @@ pub async fn trigger_event(
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -281,6 +284,7 @@ pub async fn trigger_http(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     // Normalize path
     let normalized_path = if path.starts_with('/') {
@@ -371,7 +375,7 @@ pub async fn trigger_http(
     };
 
     // Get the event from database (config lives in Event)
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -428,14 +432,16 @@ pub async fn trigger_http(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -456,6 +462,7 @@ pub async fn trigger_http(
         runtime_variables: None,
         user_context: None, // HTTP sink triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -603,6 +610,7 @@ pub async fn trigger_telegram(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     let client_ip = connect_info.ip();
 
@@ -709,7 +717,7 @@ pub async fn trigger_telegram(
     };
 
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -766,14 +774,16 @@ pub async fn trigger_telegram(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -794,6 +804,7 @@ pub async fn trigger_telegram(
         runtime_variables: None,
         user_context: None, // Telegram webhook triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -926,6 +937,7 @@ pub async fn trigger_discord(
     body: Body,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
+    let encryption_key = &state.encryption_key;
 
     tracing::info!("Discord webhook trigger for event {}", event_id);
 
@@ -1022,7 +1034,7 @@ pub async fn trigger_discord(
 
     // For other interaction types (commands, components, etc.), dispatch async
     // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id)
+    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -1074,14 +1086,16 @@ pub async fn trigger_discord(
     let token = sink
         .pat_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted));
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
         .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted))
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1102,6 +1116,7 @@ pub async fn trigger_discord(
         runtime_variables: None,
         user_context: None, // Discord webhook triggers don't have user context
         profile: sink.profile_json.clone(),
+        wasm_packages,
     };
 
     // Create run record
@@ -1201,10 +1216,7 @@ pub struct ServiceTriggerResponse {
 }
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
-fn validate_sink_trigger_jwt(token: &str) -> Result<SinkTriggerClaims, ApiError> {
-    let secret = std::env::var("SINK_SECRET")
-        .map_err(|_| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
-
+fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerClaims, ApiError> {
     let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
 
@@ -1298,7 +1310,11 @@ pub async fn trigger_service(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Check if token has been revoked (if jti is present)
     if let Some(ref jti) = claims.jti
@@ -1360,7 +1376,7 @@ pub async fn trigger_service(
     }
 
     // Get the event to access its config for additional payload
-    let event = get_event_from_db(&state.db, &request.event_id)
+    let event = get_event_from_db(&state.db, &request.event_id, &sink.app_id)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
@@ -1445,7 +1461,11 @@ pub async fn get_cron_sinks(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Only allow tokens with cron access to list schedules
     if !claims.sink_types.contains(&"cron".to_string()) {
@@ -1537,7 +1557,11 @@ pub async fn get_sink_configs(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::unauthorized("Invalid Authorization header format"))?;
 
-    let claims = validate_sink_trigger_jwt(token)?;
+    let sink_secret = state
+        .sink_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::internal_error(anyhow!("SINK_SECRET not configured")))?;
+    let claims = validate_sink_trigger_jwt(token, sink_secret)?;
 
     // Only allow tokens with access to the requested sink type
     if !claims.sink_types.contains(&query.sink_type)

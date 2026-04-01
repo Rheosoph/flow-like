@@ -3,14 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Default memory limit: 64MB
-pub const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+/// Default memory limit: 256MB (needed for heavy runtimes like Python, Kotlin, C#)
+pub const DEFAULT_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 
-/// Default execution timeout: 30 seconds
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default execution timeout: 120 seconds (heavy runtimes need more startup time)
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Default fuel limit: 10 billion instructions (~10s of compute)
-pub const DEFAULT_FUEL_LIMIT: u64 = 10_000_000_000;
+/// Default fuel limit: 100 billion instructions (~100s of compute)
+pub const DEFAULT_FUEL_LIMIT: u64 = 100_000_000_000;
 
 /// Resource limits for WASM execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,11 +46,11 @@ impl Default for WasmLimits {
             memory_limit: DEFAULT_MEMORY_LIMIT,
             timeout: DEFAULT_TIMEOUT,
             fuel_limit: DEFAULT_FUEL_LIMIT,
-            max_stack_depth: 512,
-            max_tables: 10,
-            max_memories: 1,
-            max_table_elements: 10000,
-            max_instances: 10,
+            max_stack_depth: 1024,
+            max_tables: 100,
+            max_memories: 10,
+            max_table_elements: 100000,
+            max_instances: 100,
         }
     }
 }
@@ -109,65 +109,75 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct WasmCapabilities: u32 {
         /// No capabilities
-        const NONE = 0;
+        const NONE              = 0b00000000_00000000_00000000_00000000;
 
-        // === Basic I/O ===
+        // === Storage ===
         /// Read from storage
-        const STORAGE_READ = 1 << 0;
+        const STORAGE_READ      = 0b00000000_00000000_00000000_00000001;
         /// Write to storage
-        const STORAGE_WRITE = 1 << 1;
+        const STORAGE_WRITE     = 0b00000000_00000000_00000000_00000010;
         /// Delete from storage
-        const STORAGE_DELETE = 1 << 2;
+        const STORAGE_DELETE    = 0b00000000_00000000_00000000_00000100;
 
         // === Network ===
         /// Make HTTP GET requests
-        const HTTP_GET = 1 << 3;
+        const HTTP_GET          = 0b00000000_00000000_00000000_00001000;
         /// Make HTTP POST/PUT/DELETE requests
-        const HTTP_WRITE = 1 << 4;
+        const HTTP_WRITE        = 0b00000000_00000000_00000000_00010000;
+        /// Open WebSocket connections
+        const WEBSOCKET         = 0b00000000_00000000_10000000_00000000;
+        /// Open TCP socket connections
+        const TCP               = 0b00000000_00000001_00000000_00000000;
+        /// Open UDP socket connections
+        const UDP               = 0b00000000_00000010_00000000_00000000;
+        /// Perform DNS lookups
+        const DNS               = 0b00000000_00000100_00000000_00000000;
 
         // === Flow Context ===
         /// Read variables
-        const VARIABLES_READ = 1 << 5;
+        const VARIABLES_READ    = 0b00000000_00000000_00000000_00100000;
         /// Write variables
-        const VARIABLES_WRITE = 1 << 6;
+        const VARIABLES_WRITE   = 0b00000000_00000000_00000000_01000000;
         /// Read cache
-        const CACHE_READ = 1 << 7;
+        const CACHE_READ        = 0b00000000_00000000_00000000_10000000;
         /// Write cache
-        const CACHE_WRITE = 1 << 8;
+        const CACHE_WRITE       = 0b00000000_00000000_00000001_00000000;
 
         // === Authentication ===
         /// Access OAuth tokens
-        const OAUTH = 1 << 9;
+        const OAUTH             = 0b00000000_00000000_00000010_00000000;
         /// Alias for OAuth access
-        const OAUTH_ACCESS = Self::OAUTH.bits();
+        const OAUTH_ACCESS      = Self::OAUTH.bits();
         /// Access execution token
-        const TOKEN = 1 << 10;
+        const TOKEN             = 0b00000000_00000000_00000100_00000000;
 
         // === Streaming ===
         /// Stream responses to client
-        const STREAMING = 1 << 11;
+        const STREAMING         = 0b00000000_00000000_00001000_00000000;
         /// A2UI operations
-        const A2UI = 1 << 12;
+        const A2UI              = 0b00000000_00000000_00010000_00000000;
 
         // === Advanced ===
         /// Access LLM/Model providers
-        const MODELS = 1 << 13;
+        const MODELS            = 0b00000000_00000000_00100000_00000000;
         /// Execute referenced functions
-        const FUNCTIONS = 1 << 14;
+        const FUNCTIONS         = 0b00000000_00000000_01000000_00000000;
 
         // === Compound capabilities ===
         /// All storage operations
-        const STORAGE_ALL = Self::STORAGE_READ.bits() | Self::STORAGE_WRITE.bits() | Self::STORAGE_DELETE.bits();
+        const STORAGE_ALL   = Self::STORAGE_READ.bits() | Self::STORAGE_WRITE.bits() | Self::STORAGE_DELETE.bits();
         /// All HTTP operations
-        const HTTP_ALL = Self::HTTP_GET.bits() | Self::HTTP_WRITE.bits();
+        const HTTP_ALL      = Self::HTTP_GET.bits() | Self::HTTP_WRITE.bits();
         /// Alias for HTTP request capability
-        const HTTP_REQUEST = Self::HTTP_ALL.bits();
+        const HTTP_REQUEST  = Self::HTTP_ALL.bits();
+        /// All network operations (HTTP + WebSocket + TCP + UDP + DNS)
+        const NETWORK_ALL   = Self::HTTP_ALL.bits() | Self::WEBSOCKET.bits() | Self::TCP.bits() | Self::UDP.bits() | Self::DNS.bits();
         /// All variable operations
         const VARIABLES_ALL = Self::VARIABLES_READ.bits() | Self::VARIABLES_WRITE.bits();
         /// All cache operations
-        const CACHE_ALL = Self::CACHE_READ.bits() | Self::CACHE_WRITE.bits();
+        const CACHE_ALL     = Self::CACHE_READ.bits() | Self::CACHE_WRITE.bits();
         /// All authentication
-        const AUTH_ALL = Self::OAUTH.bits() | Self::TOKEN.bits();
+        const AUTH_ALL      = Self::OAUTH.bits() | Self::TOKEN.bits();
 
         /// Standard capabilities for most nodes
         const STANDARD = Self::STORAGE_READ.bits()
@@ -177,7 +187,7 @@ bitflags::bitflags! {
 
         /// Full capabilities
         const ALL = Self::STORAGE_ALL.bits()
-            | Self::HTTP_ALL.bits()
+            | Self::NETWORK_ALL.bits()
             | Self::VARIABLES_ALL.bits()
             | Self::CACHE_ALL.bits()
             | Self::AUTH_ALL.bits()
@@ -231,6 +241,11 @@ impl WasmCapabilities {
                 "http_get" => caps |= Self::HTTP_GET,
                 "http_write" => caps |= Self::HTTP_WRITE,
                 "http_all" | "http" => caps |= Self::HTTP_ALL,
+                "websocket" | "network:websocket" | "ws" => caps |= Self::WEBSOCKET,
+                "tcp" | "network:tcp" => caps |= Self::TCP,
+                "udp" | "network:udp" => caps |= Self::UDP,
+                "dns" | "network:dns" => caps |= Self::DNS,
+                "network_all" | "network" => caps |= Self::NETWORK_ALL,
                 "variables_read" => caps |= Self::VARIABLES_READ,
                 "variables_write" => caps |= Self::VARIABLES_WRITE,
                 "variables_all" | "variables" => caps |= Self::VARIABLES_ALL,
@@ -321,6 +336,44 @@ impl WasmSecurityConfig {
         self.allowed_hosts = Some(hosts);
         self
     }
+
+    /// Build a security config from a set of node-level permissions.
+    /// This is the primary way to derive sandbox capabilities from what
+    /// individual nodes declare they need.
+    pub fn from_node_permissions(permissions: &[flow_like::flow::node::NodePermission]) -> Self {
+        use flow_like::flow::node::NodePermission;
+
+        let mut caps = WasmCapabilities::NONE;
+        for perm in permissions {
+            caps |= match perm {
+                NodePermission::NetworkHttp => WasmCapabilities::HTTP_ALL,
+                NodePermission::NetworkWebsocket => WasmCapabilities::WEBSOCKET,
+                NodePermission::NetworkTcp => WasmCapabilities::TCP,
+                NodePermission::NetworkUdp => WasmCapabilities::UDP,
+                NodePermission::NetworkDns => WasmCapabilities::DNS,
+                NodePermission::StorageRead => WasmCapabilities::STORAGE_READ,
+                NodePermission::StorageWrite => {
+                    WasmCapabilities::STORAGE_WRITE | WasmCapabilities::STORAGE_DELETE
+                }
+                NodePermission::Variables => WasmCapabilities::VARIABLES_ALL,
+                NodePermission::Cache => WasmCapabilities::CACHE_ALL,
+                NodePermission::Streaming => WasmCapabilities::STREAMING,
+                NodePermission::Models => WasmCapabilities::MODELS,
+                NodePermission::A2ui => WasmCapabilities::A2UI,
+                NodePermission::OAuth => WasmCapabilities::OAUTH,
+                NodePermission::Functions => WasmCapabilities::FUNCTIONS,
+            };
+        }
+
+        let has_network = caps.intersects(WasmCapabilities::NETWORK_ALL);
+        Self {
+            limits: WasmLimits::default(),
+            capabilities: caps,
+            allow_wasi: false,
+            allow_wasi_network: has_network,
+            allowed_hosts: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +388,18 @@ mod tests {
         assert!(caps.has(WasmCapabilities::CACHE_READ));
         assert!(caps.has(WasmCapabilities::CACHE_WRITE));
         assert!(!caps.has(WasmCapabilities::STORAGE_WRITE));
+    }
+
+    #[test]
+    fn test_websocket_capability() {
+        let caps = WasmCapabilities::from_names(&["websocket"]);
+        assert!(caps.has(WasmCapabilities::WEBSOCKET));
+        assert!(!caps.has(WasmCapabilities::HTTP_GET));
+
+        let caps = WasmCapabilities::from_names(&["network"]);
+        assert!(caps.has(WasmCapabilities::HTTP_GET));
+        assert!(caps.has(WasmCapabilities::HTTP_WRITE));
+        assert!(caps.has(WasmCapabilities::WEBSOCKET));
     }
 
     #[test]

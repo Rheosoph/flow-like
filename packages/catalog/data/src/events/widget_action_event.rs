@@ -1,7 +1,10 @@
+use flow_like::a2ui::widget::{ActionContextPayload, InputValuesPayload};
+use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -60,11 +63,27 @@ impl NodeLogic for WidgetActionEvent {
         );
 
         node.add_output_pin(
+            "event_name",
+            "Event Name",
+            "The action ID / event name that was triggered",
+            VariableType::String,
+        );
+
+        node.add_output_pin(
             "action_context",
             "Action Context",
             "The context data passed from the widget action (JSON object with field values)",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<ActionContextPayload>();
+
+        node.add_output_pin(
+            "input_values",
+            "Input Values",
+            "Map of component ID to current value for components marked as event-relevant",
+            VariableType::Struct,
+        )
+        .set_schema::<InputValuesPayload>();
 
         node
     }
@@ -81,10 +100,25 @@ impl NodeLogic for WidgetActionEvent {
             .unwrap_or("")
             .to_string();
 
+        let action_id = payload
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("_action_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         let action_context = payload
             .payload
             .as_ref()
             .and_then(|p| p.get("_action_context"))
+            .cloned()
+            .unwrap_or(json!({}));
+
+        let input_values = payload
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("_input_values"))
             .cloned()
             .unwrap_or(json!({}));
 
@@ -96,9 +130,21 @@ impl NodeLogic for WidgetActionEvent {
             .await;
 
         context
+            .get_pin_by_name("event_name")
+            .await?
+            .set_value(json!(action_id))
+            .await;
+
+        context
             .get_pin_by_name("action_context")
             .await?
             .set_value(action_context)
+            .await;
+
+        context
+            .get_pin_by_name("input_values")
+            .await?
+            .set_value(input_values)
             .await;
 
         // Activate execution flow
@@ -108,21 +154,69 @@ impl NodeLogic for WidgetActionEvent {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
         node.error = None;
 
-        // Validate action_id is not empty when provided
-        let action_id = node
-            .get_pin_by_name("action_id")
-            .and_then(|pin| pin.default_value.as_ref())
-            .and_then(|v| {
-                let parsed: flow_like_types::Value = flow_like_types::json::from_slice(v).ok()?;
-                parsed.as_str().map(String::from)
-            })
-            .unwrap_or_default();
+        // Find the InstantiateWidget that references this event via fn_refs
+        let referencing_node = board.nodes.values().find(|n| {
+            n.name == "a2ui_instantiate_widget"
+                && n.fn_refs
+                    .as_ref()
+                    .is_some_and(|refs| refs.fn_refs.contains(&node.id))
+        });
 
-        if action_id.is_empty() {
-            node.error = Some("Action ID should be specified to identify this event".to_string());
+        if let Some(inst_node) = referencing_node {
+            // Read the selected widget name from the InstantiateWidget
+            let selected_widget = inst_node
+                .get_pin_by_name("widget_selector")
+                .and_then(|p| p.default_value.as_ref())
+                .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok());
+
+            if let Some(widget_name) = selected_widget {
+                // Load the app's widgets to get available actions
+                if let Some(app_state) = &board.app_state {
+                    let app_id = board.board_dir.filename().unwrap_or_default().to_string();
+                    if !app_id.is_empty()
+                        && let Ok(app) = App::load(app_id, app_state.clone()).await
+                    {
+                        let widgets = app.get_widgets().await.unwrap_or_default();
+                        if let Some(widget) = widgets.iter().find(|w| w.name == widget_name) {
+                            let action_ids: Vec<String> =
+                                widget.actions.iter().map(|a| a.id.clone()).collect();
+
+                            if let Some(pin) = node.get_pin_mut_by_name("action_id") {
+                                pin.set_options(
+                                    PinOptions::new()
+                                        .set_valid_values(action_ids.clone())
+                                        .build(),
+                                );
+                            }
+
+                            // Validate current action_id against available actions
+                            let action_id = node
+                                .get_pin_by_name("action_id")
+                                .and_then(|p| p.default_value.as_ref())
+                                .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok())
+                                .unwrap_or_default();
+
+                            if !action_id.is_empty()
+                                && !action_ids.is_empty()
+                                && !action_ids.contains(&action_id)
+                            {
+                                node.error = Some(format!(
+                                    "Action '{}' is not defined on widget '{}'",
+                                    action_id, widget_name
+                                ));
+                            }
+
+                            return;
+                        }
+                    }
+                }
+            }
         }
+
+        // Fallback: no referencing InstantiateWidget found.
+        // Empty action_id is valid — it acts as a catch-all handler for all widget actions.
     }
 }

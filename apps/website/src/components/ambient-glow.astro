@@ -1,37 +1,84 @@
 <div
 	id="ambient-flow"
 	aria-hidden="true"
-	class="pointer-events-none fixed inset-0 -z-[80] touch-none select-none"
+	class="pointer-events-none fixed inset-0 touch-none select-none overflow-hidden"
 	style="
-				--c2: hsl(0 100% 63% / .08);
-				--c1: hsl(161 40% 44% / .08);
-				background:
-					radial-gradient(1200px 600px at 20% 10%, var(--c1), transparent 60%),
-					radial-gradient(1200px 600px at 80% 90%, var(--c2), transparent 60%);
-			"
+		--c1: hsl(161 40% 44% / .06);
+		--c2: hsl(0 100% 63% / .06);
+	"
 >
+	<div id="ambient-orb-1" class="absolute -inset-[15%]"></div>
+	<div id="ambient-orb-2" class="absolute -inset-[15%]"></div>
+	<div id="ambient-orb-3" class="absolute -inset-[15%]"></div>
 </div>
 
 <style>
 	#ambient-flow {
 		max-width: 100vw;
 		transition:
-			--c1 700ms ease,
-			--c2 700ms ease,
-			opacity 250ms ease;
+			--c1 1.2s cubic-bezier(.4, 0, .2, 1),
+			--c2 1.2s cubic-bezier(.4, 0, .2, 1),
+			opacity 400ms ease;
+	}
+
+	#ambient-orb-1 {
+		background: radial-gradient(
+			ellipse 55% 45% at 15% 20%,
+			var(--c1),
+			transparent 70%
+		);
+		animation: drift-1 25s ease-in-out infinite alternate;
+	}
+
+	#ambient-orb-2 {
+		background: radial-gradient(
+			ellipse 50% 55% at 85% 75%,
+			var(--c2),
+			transparent 70%
+		);
+		animation: drift-2 30s ease-in-out infinite alternate;
+	}
+
+	#ambient-orb-3 {
+		background: radial-gradient(
+			ellipse 40% 35% at 50% 50%,
+			color-mix(in srgb, var(--c1) 40%, var(--c2) 60%),
+			transparent 70%
+		);
+		opacity: 0.4;
+		animation: drift-3 20s ease-in-out infinite alternate;
+	}
+
+	@keyframes drift-1 {
+		0%   { transform: translate(0, 0); }
+		50%  { transform: translate(3%, 4%); }
+		100% { transform: translate(-2%, 2%); }
+	}
+
+	@keyframes drift-2 {
+		0%   { transform: translate(0, 0); }
+		50%  { transform: translate(-3%, -2%); }
+		100% { transform: translate(2%, -3%); }
+	}
+
+	@keyframes drift-3 {
+		0%   { transform: translate(0, 0); }
+		50%  { transform: translate(4%, -2%); }
+		100% { transform: translate(-2%, 3%); }
 	}
 
 	@media (prefers-reduced-motion: reduce) {
 		#ambient-flow {
 			transition: none !important;
 		}
-		.layers-panel {
-			transition: none !important;
+		#ambient-orb-1,
+		#ambient-orb-2,
+		#ambient-orb-3 {
+			animation: none !important;
 		}
 	}
 
 	@supports (background: paint(worklet)) or (color: oklch(0 0 0)) {
-		/* Register animatable color custom properties (Houdini) */
 		@property --c1 {
 			syntax: "<color>";
 			inherits: true;
@@ -52,18 +99,23 @@
 		if (!ambient || !sections.length) return;
 
 		const supportsHoudini = !!(window.CSS && "registerProperty" in CSS);
-		// Fallback: if we can't animate custom props, softly crossfade opacity on change
+
 		const softFade = () => {
-			ambient.style.opacity = "0.92";
+			ambient.style.opacity = "0.85";
 			requestAnimationFrame(() => {
-				ambient.style.opacity = "1";
+				requestAnimationFrame(() => {
+					ambient.style.opacity = "1";
+				});
 			});
 		};
 
+		let current: Element | null = null;
+
 		const setAmbient = (el: Element) => {
-			const c1 = el.getAttribute("data-c1") || "hsl(222 89% 60% / .08)";
-			const c2 = el.getAttribute("data-c2") || "hsl(268 84% 62% / .08)";
-			// Update CSS variables so background stays the same, only colors change
+			if (el === current) return;
+			current = el;
+			const c1 = el.getAttribute("data-c1") || "hsl(222 89% 60% / .06)";
+			const c2 = el.getAttribute("data-c2") || "hsl(268 84% 62% / .06)";
 			ambient.style.setProperty("--c1", c1);
 			ambient.style.setProperty("--c2", c2);
 			if (!supportsHoudini) softFade();
@@ -72,12 +124,12 @@
 		const io = new IntersectionObserver(
 			(entries) => {
 				entries.forEach((e) => {
-					if (e.isIntersecting && e.intersectionRatio > 0.35) {
+					if (e.isIntersecting && e.intersectionRatio > 0.3) {
 						setAmbient(e.target);
 					}
 				});
 			},
-			{ threshold: [0.35, 0.6, 0.9] },
+			{ threshold: [0.3, 0.5, 0.8] },
 		);
 
 		sections.forEach((s, i) => {

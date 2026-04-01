@@ -1,14 +1,15 @@
 use super::chart_data_utils::{clean_field_name, extract_from_csv_table, parse_csv_text};
 use super::element_utils::extract_element_id;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic},
+    node::{Node, NodeLogic, remove_pin},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::Map, json::json};
+use std::sync::Arc;
 
-/// Supported chart libraries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChartLibrary {
     Nivo,
@@ -25,7 +26,6 @@ impl ChartLibrary {
     }
 }
 
-/// Supported chart types for automatic data transformation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChartType {
     Bar,
@@ -58,9 +58,10 @@ impl ChartType {
     }
 }
 
-/// Push CSV/table data to a chart element (Nivo or Plotly).
+/// Push data to a chart element (Nivo or Plotly).
 ///
-/// Automatically transforms data to the correct format based on chart type and library.
+/// Select a data format (JSON or CSV) and only the relevant pins are shown.
+/// JSON data is passed through directly; CSV/table data is auto-transformed.
 #[crate::register_node]
 #[derive(Default)]
 pub struct PushCsvToChart;
@@ -76,11 +77,12 @@ impl NodeLogic for PushCsvToChart {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "a2ui_push_csv_to_chart",
-            "Push CSV to Chart",
-            "Push CSV or table data to a chart. Supports Nivo and Plotly.",
+            "Push Data to Chart",
+            "Push data to a Nivo or Plotly chart. Select JSON for pre-formatted data or CSV for auto-transformation.",
             "UI/Elements/Charts",
         );
         node.add_icon("/flow/icons/a2ui.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);
 
@@ -92,7 +94,7 @@ impl NodeLogic for PushCsvToChart {
         )
         .set_options(PinOptions::new().set_enforce_schema(false).build());
 
-        node.add_input_pin("library", "Library", "Chart library", VariableType::String)
+        node.add_input_pin("library", "Library", "Nivo or Plotly", VariableType::String)
             .set_options(
                 PinOptions::new()
                     .set_valid_values(vec!["Nivo".to_string(), "Plotly".to_string()])
@@ -101,53 +103,117 @@ impl NodeLogic for PushCsvToChart {
             .set_default_value(Some(json!("Nivo")));
 
         node.add_input_pin(
-            "chart_type",
-            "Chart Type",
-            "Type of chart",
+            "format",
+            "Format",
+            "Data format: JSON (passthrough) or CSV (auto-transform)",
             VariableType::String,
         )
         .set_options(
             PinOptions::new()
-                .set_valid_values(vec![
-                    "Bar".to_string(),
-                    "Line".to_string(),
-                    "Pie".to_string(),
-                    "Scatter".to_string(),
-                    "Area".to_string(),
-                    "Radar".to_string(),
-                    "Heatmap".to_string(),
-                    "Calendar".to_string(),
-                    "Sankey".to_string(),
-                    "Tree".to_string(),
-                ])
+                .set_valid_values(vec!["JSON".to_string(), "CSV".to_string()])
                 .build(),
         )
-        .set_default_value(Some(json!("Bar")));
+        .set_default_value(Some(json!("JSON")));
 
-        node.add_input_pin("csv", "CSV", "CSV text with headers", VariableType::String)
-            .set_options(PinOptions::new().set_enforce_schema(false).build());
-
+        // Default: JSON mode → show data pin
         node.add_input_pin(
-            "table",
-            "Table",
-            "Table data from DataFusion query",
+            "data",
+            "Data",
+            "Chart data as JSON array/object or JSON string",
             VariableType::Struct,
-        )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
-
-        node.add_input_pin(
-            "delimiter",
-            "Delimiter",
-            "CSV delimiter (default: comma)",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!(",")));
+        );
 
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
 
         node.set_long_running(true);
 
         node
+    }
+
+    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+        let format = node
+            .get_pin_by_name("format")
+            .and_then(|pin| pin.default_value.clone())
+            .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok())
+            .unwrap_or_else(|| "JSON".to_string());
+
+        let data_pin = node.get_pin_by_name("data").cloned();
+        let csv_pin = node.get_pin_by_name("csv").cloned();
+        let table_pin = node.get_pin_by_name("table").cloned();
+        let chart_type_pin = node.get_pin_by_name("chart_type").cloned();
+        let delimiter_pin = node.get_pin_by_name("delimiter").cloned();
+
+        match format.as_str() {
+            "JSON" => {
+                remove_pin(node, csv_pin);
+                remove_pin(node, table_pin);
+                remove_pin(node, chart_type_pin);
+                remove_pin(node, delimiter_pin);
+                if data_pin.is_none() {
+                    node.add_input_pin(
+                        "data",
+                        "Data",
+                        "Chart data as JSON array/object or JSON string",
+                        VariableType::Struct,
+                    );
+                }
+            }
+            "CSV" => {
+                remove_pin(node, data_pin);
+                if csv_pin.is_none() {
+                    node.add_input_pin(
+                        "csv",
+                        "Data",
+                        "CSV text with headers",
+                        VariableType::String,
+                    );
+                }
+                if table_pin.is_none() {
+                    node.add_input_pin(
+                        "table",
+                        "Table",
+                        "Table data from DataFusion query",
+                        VariableType::Struct,
+                    )
+                    .set_options(PinOptions::new().set_enforce_schema(false).build());
+                }
+                if chart_type_pin.is_none() {
+                    node.add_input_pin(
+                        "chart_type",
+                        "Chart Type",
+                        "Chart type for auto-transformation",
+                        VariableType::String,
+                    )
+                    .set_options(
+                        PinOptions::new()
+                            .set_valid_values(vec![
+                                "Bar".to_string(),
+                                "Line".to_string(),
+                                "Pie".to_string(),
+                                "Scatter".to_string(),
+                                "Area".to_string(),
+                                "Radar".to_string(),
+                                "Heatmap".to_string(),
+                                "Calendar".to_string(),
+                                "Sankey".to_string(),
+                                "Tree".to_string(),
+                            ])
+                            .build(),
+                    )
+                    .set_default_value(Some(json!("Bar")));
+                }
+                if delimiter_pin.is_none() {
+                    node.add_input_pin(
+                        "delimiter",
+                        "Delimiter",
+                        "CSV delimiter character",
+                        VariableType::String,
+                    )
+                    .set_default_value(Some(json!(",")));
+                }
+            }
+            _ => {}
+        }
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -161,48 +227,107 @@ impl NodeLogic for PushCsvToChart {
         let library = ChartLibrary::from_str(&library_str)
             .ok_or_else(|| flow_like_types::anyhow!("Unknown library: {}", library_str))?;
 
-        let chart_type_str: String = context.evaluate_pin("chart_type").await?;
-        let chart_type = ChartType::from_str(&chart_type_str)
-            .ok_or_else(|| flow_like_types::anyhow!("Unknown chart type: {}", chart_type_str))?;
+        let format: String = context.evaluate_pin("format").await?;
 
-        let delimiter: String = context.evaluate_pin("delimiter").await?;
-
-        // Get data from either table or CSV
-        let (headers, rows) = if let Ok(table_value) = context.evaluate_pin::<Value>("table").await
-        {
-            if !table_value.is_null() {
-                extract_from_csv_table(&table_value)?
-            } else {
-                let csv_text: String = context.evaluate_pin("csv").await?;
-                parse_csv_text(&csv_text, delimiter.chars().next().unwrap_or(','))?
+        match format.as_str() {
+            "JSON" => {
+                let data: Value = context.evaluate_pin("data").await?;
+                let json_value = parse_json_input(data)?;
+                push_json_passthrough(context, &element_id, library, json_value).await
             }
-        } else {
-            let csv_text: String = context.evaluate_pin("csv").await?;
-            parse_csv_text(&csv_text, delimiter.chars().next().unwrap_or(','))?
-        };
-
-        if headers.is_empty() || rows.is_empty() {
-            let update_value = match library {
-                ChartLibrary::Nivo => json!({ "type": "setNivoData", "data": [] }),
-                ChartLibrary::Plotly => json!({ "type": "setChartData", "data": [] }),
-            };
-            context.upsert_element(&element_id, update_value).await?;
-            context.activate_exec_pin("exec_out").await?;
-            return Ok(());
+            "CSV" => {
+                let (headers, rows) =
+                    if let Ok(table_value) = context.evaluate_pin::<Value>("table").await {
+                        if !table_value.is_null() {
+                            extract_from_csv_table(&table_value)?
+                        } else {
+                            read_csv_input(context).await?
+                        }
+                    } else {
+                        read_csv_input(context).await?
+                    };
+                push_tabular(context, &element_id, library, &headers, &rows).await
+            }
+            _ => Err(flow_like_types::anyhow!("Unknown format: {}", format)),
         }
-
-        match library {
-            ChartLibrary::Nivo => {
-                push_nivo_data(context, &element_id, chart_type, &headers, &rows).await?
-            }
-            ChartLibrary::Plotly => {
-                push_plotly_data(context, &element_id, chart_type, &headers, &rows).await?
-            }
-        }
-
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
     }
+}
+
+fn parse_json_input(data: Value) -> flow_like_types::Result<Value> {
+    match data {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(json!([]));
+            }
+            flow_like_types::json::from_str(trimmed)
+                .map_err(|e| flow_like_types::anyhow!("Invalid JSON string: {}", e))
+        }
+        Value::Null => Ok(json!([])),
+        other => Ok(other),
+    }
+}
+
+async fn read_csv_input(
+    context: &mut ExecutionContext,
+) -> flow_like_types::Result<(Vec<String>, Vec<Vec<String>>)> {
+    let csv_text: String = context.evaluate_pin("csv").await?;
+    let delimiter: String = context.evaluate_pin("delimiter").await?;
+    let delim = delimiter.chars().next().unwrap_or(',');
+    parse_csv_text(&csv_text, delim)
+}
+
+async fn push_json_passthrough(
+    context: &mut ExecutionContext,
+    element_id: &str,
+    library: ChartLibrary,
+    data: Value,
+) -> flow_like_types::Result<()> {
+    let msg_type = match library {
+        ChartLibrary::Nivo => "setNivoData",
+        ChartLibrary::Plotly => "setChartData",
+    };
+    context
+        .upsert_element(element_id, json!({ "type": msg_type, "data": data }))
+        .await?;
+    context.activate_exec_pin("exec_out").await?;
+    Ok(())
+}
+
+async fn push_tabular(
+    context: &mut ExecutionContext,
+    element_id: &str,
+    library: ChartLibrary,
+    headers: &[String],
+    rows: &[Vec<String>],
+) -> flow_like_types::Result<()> {
+    if headers.is_empty() || rows.is_empty() {
+        let msg_type = match library {
+            ChartLibrary::Nivo => "setNivoData",
+            ChartLibrary::Plotly => "setChartData",
+        };
+        context
+            .upsert_element(element_id, json!({ "type": msg_type, "data": [] }))
+            .await?;
+        context.activate_exec_pin("exec_out").await?;
+        return Ok(());
+    }
+
+    let chart_type_str: String = context.evaluate_pin("chart_type").await?;
+    let chart_type = ChartType::from_str(&chart_type_str)
+        .ok_or_else(|| flow_like_types::anyhow!("Unknown chart type: {}", chart_type_str))?;
+
+    match library {
+        ChartLibrary::Nivo => {
+            push_nivo_data(context, element_id, chart_type, headers, rows).await?
+        }
+        ChartLibrary::Plotly => {
+            push_plotly_data(context, element_id, chart_type, headers, rows).await?
+        }
+    }
+
+    context.activate_exec_pin("exec_out").await?;
+    Ok(())
 }
 
 async fn push_nivo_data(

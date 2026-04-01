@@ -34,9 +34,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
 
 export function sortItems(items: LibraryItem[], mode: SortMode): LibraryItem[] {
 	if (mode === "alpha") {
-		return items.toSorted((a, b) =>
-			(a.name ?? "").localeCompare(b.name ?? ""),
-		);
+		return items.toSorted((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
 	}
 	return items.toSorted(
 		(a, b) =>

@@ -5,7 +5,7 @@ use rig::{
     OneOrMany,
     client::{ClientBuilderError, CompletionClient},
     completion::{self, CompletionError, CompletionRequest, GetTokenUsage, Usage},
-    message::{self},
+    message::{self, MimeType},
     streaming,
 };
 use serde::{Deserialize, Serialize};
@@ -209,36 +209,85 @@ impl CompletionModel {
             }
         }
 
-        // Ensure alternation between user and assistant messages
-        let mut normalized_messages = Vec::new();
-        let mut last_role: Option<&str> = None;
+        // Many local models (e.g. Gemma 3 via LM Studio) reject system messages
+        // entirely. Merge all system content into the first user message and
+        // guarantee strict user/assistant alternation.
+        let mut system_parts: Vec<String> = Vec::new();
+        let mut non_system: Vec<Value> = Vec::new();
 
-        for message in messages.iter() {
+        for message in &messages {
             if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
-                // Skip system messages in alternation check
                 if role == "system" {
-                    normalized_messages.push(message.clone());
-                    continue;
+                    if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+                        system_parts.push(content.to_string());
+                    }
+                } else {
+                    non_system.push(message.clone());
                 }
+            } else {
+                non_system.push(message.clone());
+            }
+        }
 
-                // Check if we need to insert a placeholder
-                if let Some(last) = last_role
+        // Prepend collected system content to the first user message
+        if !system_parts.is_empty() {
+            let system_text = system_parts.join("\n\n");
+            if let Some(first_user) = non_system
+                .iter_mut()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                let content = first_user.get("content").cloned().unwrap_or(json!(""));
+                if content.is_array() {
+                    // Multimodal content — prepend system text as a text part
+                    let mut parts = vec![json!({"type": "text", "text": system_text})];
+                    parts.extend(content.as_array().unwrap().iter().cloned());
+                    first_user["content"] = json!(parts);
+                } else {
+                    let existing = content.as_str().unwrap_or_default();
+                    first_user["content"] = json!(format!("{system_text}\n\n{existing}"));
+                }
+            } else {
+                // No user message yet — insert one at the front
+                non_system.insert(0, json!({ "role": "user", "content": system_text }));
+            }
+        }
+
+        // Ensure strict user/assistant alternation
+        let mut normalized_messages: Vec<Value> = Vec::new();
+        let mut last_role: Option<String> = None;
+
+        for message in &non_system {
+            if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
+                if let Some(ref last) = last_role
                     && last == role
                 {
-                    // Same role twice in a row, insert placeholder
                     let placeholder_role = if role == "user" { "assistant" } else { "user" };
                     normalized_messages.push(json!({
                         "role": placeholder_role,
                         "content": "[Placeholder message for proper alternation]",
                     }));
                 }
-
                 normalized_messages.push(message.clone());
-                last_role = Some(role);
+                last_role = Some(role.to_string());
             } else {
-                // Message without role, just add it
                 normalized_messages.push(message.clone());
             }
+        }
+
+        // Ensure the conversation starts with a user message
+        if normalized_messages
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| r.as_str())
+            == Some("assistant")
+        {
+            normalized_messages.insert(
+                0,
+                json!({
+                    "role": "user",
+                    "content": "[Start of conversation]",
+                }),
+            );
         }
 
         let messages = normalized_messages;
@@ -311,10 +360,21 @@ impl CompletionModel {
                         .as_ref()
                         .map(|d| format!("{:?}", d).to_lowercase())
                         .unwrap_or_else(|| "auto".to_string());
+                    let url = match &img.data {
+                        message::DocumentSourceKind::Base64(data) => {
+                            let mime = img
+                                .media_type
+                                .as_ref()
+                                .map(|m| m.to_mime_type())
+                                .unwrap_or("image/png");
+                            format!("data:{mime};base64,{data}")
+                        }
+                        other => other.to_string(),
+                    };
                     content_parts.push(json!({
                         "type": "image_url",
                         "image_url": {
-                            "url": img.data.to_string(),
+                            "url": url,
                             "detail": detail
                         }
                     }));

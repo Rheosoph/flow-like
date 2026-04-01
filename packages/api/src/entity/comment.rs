@@ -21,6 +21,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "packageId", column_type = "Text", nullable)]
+    pub package_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -49,6 +51,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     User,
+    #[sea_orm(
+        belongs_to = "super::wasm_package::Entity",
+        from = "Column::PackageId",
+        to = "super::wasm_package::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    WasmPackage,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -66,6 +76,12 @@ impl Related<super::template::Entity> for Entity {
 impl Related<super::user::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::User.def()
+    }
+}
+
+impl Related<super::wasm_package::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WasmPackage.def()
     }
 }
 

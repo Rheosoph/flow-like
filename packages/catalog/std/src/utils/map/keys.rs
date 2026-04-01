@@ -42,13 +42,10 @@ impl NodeLogic for KeysMapNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let map_in = context.evaluate_pin_to_ref("map_in").await?;
 
-        let keys: Vec<String> = {
-            let map_guard = map_in.as_ref().lock().await;
-            map_guard
-                .as_object()
-                .map(|obj| obj.keys().cloned().collect())
-                .unwrap_or_default()
-        };
+        let keys: Vec<String> = map_in
+            .as_object()
+            .map(|obj| obj.keys().cloned().collect())
+            .unwrap_or_default();
 
         context.set_pin_value("keys", json!(keys)).await?;
         Ok(())

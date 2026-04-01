@@ -1,0 +1,7 @@
+.{
+    .name = .flow_like_wasm_node_zig,
+    .version = "0.1.0",
+    .fingerprint = 0xe44fdedfd106de2a,
+    .dependencies = .{},
+    .paths = .{""},
+}

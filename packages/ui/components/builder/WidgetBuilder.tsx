@@ -152,6 +152,7 @@ export interface WidgetBuilderProps {
 		boardVersion?: [number, number, number];
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
+		widgetActions?: { id: string; label: string; description?: string }[];
 	};
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
@@ -686,8 +687,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			id: surfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(presignedComponents ?? components),
+			canvasSettings: presignedCanvasSettings.customCss
+				? { customCss: presignedCanvasSettings.customCss }
+				: undefined,
 		}),
-		[surfaceId, presignedComponents, components],
+		[surfaceId, presignedComponents, components, presignedCanvasSettings.customCss],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -887,7 +891,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			>
 				<div
 					data-canvas-id={canvasId}
-					className="h-full min-h-full rounded-lg border shadow-sm relative"
+					className="min-h-full rounded-lg border shadow-sm relative"
 					style={{
 						backgroundColor: presignedCanvasSettings.backgroundColor,
 						backgroundImage: presignedCanvasSettings.backgroundImage
@@ -898,7 +902,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					data-canvas-background="true"
 				>
 					{/* Interactive BuilderRenderer - wraps each component */}
-					<BuilderRenderer surface={surface} className="w-full h-full" />
+					<BuilderRenderer surface={surface} className="w-full min-h-full" />
 
 					{/* Empty state */}
 					{components.size <= 1 && (
@@ -933,6 +937,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const executionService = useExecutionServiceOptional();
 	const { components, canvasSettings, actionContext, widgetRefs } =
 		useBuilder();
+	const effectiveSurfaceId = actionContext?.pageId ?? surfaceId;
 	const previewCanvasId = useId();
 	const [previewComponents, setPreviewComponents] = useState<Map<
 		string,
@@ -1019,13 +1024,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const activeComponents =
 		presignedComponents ?? previewComponents ?? components;
 
+	// Don't pass canvasSettings to A2UIRenderer — BuilderPreview handles
+	// CSS injection and canvas styling at the outer level to avoid double
+	// scoping and inline-style conflicts.
 	const surface: Surface = useMemo(
 		() => ({
-			id: surfaceId,
+			id: effectiveSurfaceId,
 			rootComponentId: ROOT_ID,
 			components: Object.fromEntries(activeComponents),
 		}),
-		[surfaceId, activeComponents],
+		[effectiveSurfaceId, activeComponents],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1034,6 +1042,22 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
+			if (message.type === "setCanvasSettings") {
+				if (message.surfaceId !== effectiveSurfaceId) return;
+
+				setPresignedCanvasSettings((prev) => {
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+					return { ...prev, ...filtered };
+				});
+				return;
+			}
+
 			if (message.type !== "upsertElement") return;
 
 			const { element_id: elementId, value } = message;
@@ -1041,9 +1065,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 			const [msgSurfaceId, componentId] = elementId.includes("/")
 				? elementId.split("/", 2)
-				: [surfaceId, elementId];
+				: [effectiveSurfaceId, elementId];
 
-			if (msgSurfaceId !== surfaceId) return;
+			if (msgSurfaceId !== effectiveSurfaceId) return;
 
 			setPreviewComponents((prev) => {
 				// Use ref to always get latest components, avoiding stale closure
@@ -1058,7 +1082,6 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					);
 					return prev;
 				}
-
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;
 				let updatedComponent: SurfaceComponent = { ...component };
@@ -1254,7 +1277,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 						};
 						break;
 					}
-					default: {
+					case "setChartData":
+					case "setNivoData": {
+						const data = updateValue.data;
 						const componentData = component.component as unknown as Record<
 							string,
 							unknown
@@ -1263,7 +1288,39 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							...component,
 							component: {
 								...componentData,
-								...updateValue,
+								data: { literalJson: JSON.stringify(data) },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "setChartLayout":
+					case "setNivoConfig": {
+						const configOrLayout = updateValue.layout ?? updateValue.config;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					default: {
+						const { type: _updateType, ...rest } = updateValue;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								...rest,
 							} as unknown as SurfaceComponent["component"],
 						};
 					}
@@ -1274,7 +1331,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				return newMap;
 			});
 		},
-		[surfaceId],
+		[effectiveSurfaceId],
 	); // Removed components - using componentsRef instead
 
 	// Convert components map to elements object for the workflow payload
@@ -1283,14 +1340,14 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		const elements: Record<string, unknown> = {};
 		const currentComponents = componentsRef.current;
 		for (const [componentId, surfaceComponent] of currentComponents.entries()) {
-			const elementId = `${surfaceId}/${componentId}`;
+			const elementId = `${effectiveSurfaceId}/${componentId}`;
 			elements[elementId] = {
 				...surfaceComponent,
 				__element_id: elementId,
 			};
 		}
 		return elements;
-	}, [surfaceId]); // Only depends on surfaceId which doesn't change during preview
+	}, [effectiveSurfaceId]); // Only depends on the stable preview surface id
 
 	// Execute onLoad event when entering preview mode
 	useEffect(() => {
@@ -1405,7 +1462,17 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	]);
 
 	return (
-		<>
+		<div
+			data-canvas-id={previewCanvasId}
+			className="h-full w-full overflow-auto"
+			style={{
+				backgroundColor: presignedCanvasSettings.backgroundColor,
+				backgroundImage: presignedCanvasSettings.backgroundImage
+					? `url(${presignedCanvasSettings.backgroundImage})`
+					: undefined,
+				padding: presignedCanvasSettings.padding,
+			}}
+		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			{presignedCanvasSettings.customCss && (
 				<style
@@ -1417,28 +1484,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					)}
 				/>
 			)}
-			<div
-				data-canvas-id={previewCanvasId}
-				className="h-full w-full overflow-auto"
-				style={{
-					backgroundColor: presignedCanvasSettings.backgroundColor,
-					backgroundImage: presignedCanvasSettings.backgroundImage
-						? `url(${presignedCanvasSettings.backgroundImage})`
-						: undefined,
-					padding: presignedCanvasSettings.padding,
-				}}
-			>
-				<A2UIRenderer
-					surface={surface}
-					widgetRefs={Object.fromEntries(widgetRefs)}
-					onMessage={handleMessage}
-					onA2UIMessage={handleA2UIMessage}
-					className="min-h-full w-full"
-					appId={actionContext?.appId}
-					boardId={actionContext?.boardId}
-					isPreviewMode={true}
-				/>
-			</div>
-		</>
+			<A2UIRenderer
+				surface={surface}
+				widgetRefs={Object.fromEntries(widgetRefs)}
+				onMessage={handleMessage}
+				onA2UIMessage={handleA2UIMessage}
+				className="min-h-full w-full"
+				appId={actionContext?.appId}
+				boardId={actionContext?.boardId}
+				isPreviewMode={true}
+			/>
+		</div>
 	);
 }

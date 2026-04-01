@@ -420,10 +420,9 @@ export class UserState implements IUserState {
 
 		await fetcher(
 			this.backend.profile,
-			`user/pat`,
+			`user/pat/${id}`,
 			{
 				method: "DELETE",
-				body: JSON.stringify({ id }),
 			},
 			this.backend.auth,
 		);

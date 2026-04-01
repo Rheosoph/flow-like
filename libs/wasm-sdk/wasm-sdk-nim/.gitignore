@@ -1,0 +1,4 @@
+nimcache/
+build/
+*.wasm
+.DS_Store

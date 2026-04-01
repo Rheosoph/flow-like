@@ -1,0 +1,23 @@
+{
+	"is-main": true,
+	"import": [
+		"moonbitlang/core/string",
+		{
+			"path": "felix-schultz/flow-like-wasm-sdk",
+			"alias": "sdk"
+		}
+	],
+	"link": {
+		"wasm": {
+			"exports": [
+				"get_node",
+				"get_nodes",
+				"run",
+				"alloc",
+				"dealloc",
+				"get_abi_version"
+			],
+			"export-memory-name": "memory"
+		}
+	}
+}

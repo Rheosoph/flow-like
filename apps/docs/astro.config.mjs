@@ -44,7 +44,7 @@ export default defineConfig({
 					attrs: { id: "posthog", type: "text/javascript" },
 					content: `
 !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init Ce Os As Te Cs Fs capture Ye calculateEventProperties Ls register register_once register_for_session unregister unregister_for_session qs getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey canRenderSurveyAsync identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty zs js createPersonProfile Us Rs Bs opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing get_explicit_consent_status is_capturing clear_opt_in_out_capturing Ds debug L Ns getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
-posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'https://eu.i.posthog.com', autocapture:true, capture_pageview:true, person_profiles:'identified_only' });
+posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i.posthog.com', autocapture:true, capture_pageview:true, person_profiles:'identified_only' });
           `.trim(),
 				},
 			],
@@ -164,6 +164,10 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 											label: "Extraction & Structured Output",
 											slug: "topics/genai/extraction",
 										},
+										{
+											label: "Prompt Templates",
+											slug: "topics/genai/prompt-templates",
+										},
 									],
 								},
 								{
@@ -220,6 +224,10 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 										{
 											label: "Overview",
 											slug: "topics/document-processing/overview",
+										},
+										{
+											label: "Summarization Strategies",
+											slug: "topics/document-processing/summarization-strategies",
 										},
 									],
 								},
@@ -385,6 +393,10 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 					badge: { text: "Devs", variant: "success" },
 					items: [
 						{ label: "WASM Nodes Overview", slug: "dev/wasm-nodes/overview" },
+						{
+							label: "Sandboxing & Permissions",
+							slug: "dev/wasm-nodes/sandboxing",
+						},
 						{ label: "Manifest Format", slug: "dev/wasm-nodes/manifest" },
 						{
 							label: "Publishing to Registry",
@@ -395,10 +407,32 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 							collapsed: true,
 							items: [
 								{ label: "Rust", slug: "dev/wasm-nodes/rust" },
+								{ label: "Go", slug: "dev/wasm-nodes/go" },
 								{ label: "TypeScript", slug: "dev/wasm-nodes/typescript" },
 								{ label: "Python", slug: "dev/wasm-nodes/python" },
-								{ label: "Go", slug: "dev/wasm-nodes/go" },
 								{ label: "C++", slug: "dev/wasm-nodes/cpp" },
+								{ label: "Zig", slug: "dev/wasm-nodes/zig" },
+								{ label: "Swift", slug: "dev/wasm-nodes/swift" },
+								{ label: "C#", slug: "dev/wasm-nodes/csharp" },
+								{
+									label: "AssemblyScript",
+									slug: "dev/wasm-nodes/assemblyscript",
+								},
+								{ label: "Java", slug: "dev/wasm-nodes/java" },
+								{ label: "Kotlin", slug: "dev/wasm-nodes/kotlin" },
+								{ label: "Lua", slug: "dev/wasm-nodes/lua" },
+								{ label: "Grain", slug: "dev/wasm-nodes/grain" },
+								{ label: "MoonBit", slug: "dev/wasm-nodes/moonbit" },
+								{ label: "Nim", slug: "dev/wasm-nodes/nim" },
+							],
+						},
+						{
+							label: "Client SDKs",
+							collapsed: false,
+							items: [
+								{ label: "Overview", slug: "dev/sdks/overview" },
+								{ label: "Node.js / TypeScript", slug: "dev/sdks/nodejs" },
+								{ label: "Python", slug: "dev/sdks/python" },
 							],
 						},
 						{
@@ -439,6 +473,7 @@ posthog.init('phc_hxGZEJaPqyCNzqqfrYyuUDCUSpcc7RSbwh07t4xtfrE', { api_host:'http
 					label: "Reference",
 					collapsed: true,
 					items: [
+						{ label: "Security Architecture", slug: "reference/security" },
 						{ label: "Benchmarks", slug: "reference/benchmarks" },
 						{
 							label: "Markdown Formatting",

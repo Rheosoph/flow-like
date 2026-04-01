@@ -62,8 +62,8 @@ import {
 } from "@tm9657/flow-like-ui/lib/uint8";
 import type { PageListItem } from "@tm9657/flow-like-ui/state/backend-state/page-state";
 import {
-	ActivityIcon,
 	AlertTriangle,
+	Cloud,
 	CodeIcon,
 	CogIcon,
 	EditIcon,
@@ -73,6 +73,7 @@ import {
 	GitBranchIcon,
 	LayersIcon,
 	Loader2,
+	Monitor,
 	Pause,
 	Play,
 	Plus,
@@ -543,6 +544,7 @@ export default function EventsPage({
 							hub={hub}
 							onStartOAuth={onStartOAuth}
 							onRefreshToken={onRefreshToken}
+							isOffline={isOffline ?? undefined}
 						/>
 					)}
 				</div>
@@ -1092,6 +1094,16 @@ function EventConfiguration({
 		};
 	}, [board.data, event.node_id, event.inputs, event.default_page_id]);
 
+	const isDirty = useMemo(() => {
+		if (JSON.stringify(formData) !== JSON.stringify(event)) return true;
+		if (routeForEvent && routePathDraft !== routeForEvent.path) return true;
+		return false;
+	}, [formData, event, routePathDraft, routeForEvent]);
+
+	const enterEdit = useCallback(() => {
+		setIsEditing(true);
+	}, []);
+
 	return (
 		<div className="container mx-auto flex flex-col min-h-0">
 			{/* Breadcrumbs */}
@@ -1102,134 +1114,71 @@ function EventConfiguration({
 					onClick={onDone}
 					className="p-0 h-auto font-normal hover:text-foreground"
 				>
-					Event Configuration
+					Events
 				</Button>
 				<span>/</span>
 				<span className="text-foreground font-medium">{event.name}</span>
 			</div>
 
-			{/* Sticky Header */}
-			<div className="sticky top-0 bg-background py-3 border-b flex items-center justify-between z-10">
-				<div className="flex items-center gap-3">
-					<Settings className="h-6 w-6" />
-					<div>
-						<h1 className="text-xl font-bold tracking-tight">{event.name}</h1>
-						<p className="text-sm text-muted-foreground">Event Configuration</p>
+			{/* Content */}
+			<div className="space-y-6 pb-24">
+				{/* Status */}
+				<div className="flex flex-wrap items-center gap-4 rounded-lg border bg-card p-4">
+					<div className="flex items-center gap-2.5">
+						<div
+							className={`w-2.5 h-2.5 rounded-full ${formData.active ? "bg-green-500" : "bg-orange-500"}`}
+						/>
+						<span className="text-sm font-medium">
+							{formData.active ? "Active" : "Inactive"}
+						</span>
 					</div>
-				</div>
-				<div className="flex items-center gap-2">
-					{isEditing ? (
-						<>
-							<Badge
-								variant="outline"
-								className="bg-orange-100 text-orange-800 border-orange-300"
-							>
-								Editing
-							</Badge>
-							<Button variant="outline" size="sm" onClick={handleCancel}>
-								Cancel
-							</Button>
-							<Button
-								size="sm"
-								onClick={() => handleSave()}
-								className="gap-1 bg-orange-600 hover:bg-orange-700"
-							>
-								<SaveIcon className="h-4 w-4" />
-								Save
-							</Button>
-						</>
-					) : (
-						<Button onClick={() => setIsEditing(true)} className="gap-1">
-							<EditIcon className="h-4 w-4" />
-							Edit
-						</Button>
+					{isOffline !== null && (
+						<span
+							className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+						>
+							{isOffline ? (
+								<><Monitor className="h-3 w-3" /> Local</>
+							) : (
+								<><Cloud className="h-3 w-3" /> Online</>
+							)}
+						</span>
 					)}
+					<div className="flex-1" />
+					{board.data?.nodes?.[formData.node_id] && formData.node_id && (
+						<EventTypeConfiguration
+							eventConfig={eventMapping}
+							disabled={!isEditing}
+							node={board.data?.nodes?.[formData.node_id]}
+							event={formData}
+							onUpdate={(type) => {
+								if (!isEditing) enterEdit();
+								handleInputChange("event_type", type);
+							}}
+							hub={hub}
+							canExecuteLocally={!isOffline}
+						/>
+					)}
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => {
+							if (!isEditing) enterEdit();
+							handleInputChange("active", !formData.active);
+						}}
+						className="gap-2"
+					>
+						{formData.active ? (
+							<><Pause className="h-4 w-4" /> Deactivate</>
+						) : (
+							<><Play className="h-4 w-4" /> Activate</>
+						)}
+					</Button>
 				</div>
-			</div>
-
-			{/* Content - scrolls with parent ScrollArea */}
-			<div className="space-y-8 pt-8 pb-8">
-				{/* Floating Save Button for mobile/small screens */}
-				{isEditing && (
-					<div className="fixed bottom-6 right-6 flex items-center gap-2 z-50 md:hidden">
-						<Button
-							variant="outline"
-							onClick={handleCancel}
-							className="shadow-lg"
-						>
-							Cancel
-						</Button>
-						<Button
-							onClick={() => handleSave()}
-							className="gap-2 shadow-lg bg-orange-600 hover:bg-orange-700"
-						>
-							<SaveIcon className="h-4 w-4" />
-							Save Changes
-						</Button>
-					</div>
-				)}
-
-				{/* Status Card */}
-				<Card>
-					<CardHeader>
-						<CardTitle className="flex items-center gap-2">
-							<ActivityIcon className="h-5 w-5" />
-							Event Status
-						</CardTitle>
-					</CardHeader>
-					<CardContent className="flex flex-col space-y-4">
-						<div>
-							{board.data?.nodes?.[formData.node_id] && formData.node_id && (
-								<EventTypeConfiguration
-									eventConfig={eventMapping}
-									disabled={!isEditing}
-									node={board.data?.nodes?.[formData.node_id]}
-									event={formData}
-									onUpdate={(type) => {
-										handleInputChange("event_type", type);
-									}}
-									hub={hub}
-									canExecuteLocally={!isOffline}
-								/>
-							)}
-						</div>
-						<div className="flex items-center justify-between">
-							<div className="flex items-center gap-3">
-								<div
-									className={`w-3 h-3 rounded-full ${event.active ? "bg-green-500" : "bg-orange-500"}`}
-								/>
-								<span className="font-medium">
-									{event.active ? "Active" : "Inactive"}
-								</span>
-							</div>
-							{isEditing && (
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() => handleInputChange("active", !formData.active)}
-									className="gap-2"
-								>
-									{formData.active ? (
-										<>
-											<Pause className="h-4 w-4" />
-											Deactivate
-										</>
-									) : (
-										<>
-											<Play className="h-4 w-4" />
-											Activate
-										</>
-									)}
-								</Button>
-							)}
-						</div>
-					</CardContent>
-				</Card>
 
 				{/* Main Configuration */}
-				<div className="space-y-8">
+				<div className="space-y-6">
 					{/* Top Row - Essential Information */}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 						{/* Basic Information */}
 						<Card>
 							<CardHeader>
@@ -1250,9 +1199,13 @@ function EventConfiguration({
 											}
 										/>
 									) : (
-										<p className="mt-1 text-sm text-muted-foreground">
+										<button
+											type="button"
+											className="mt-1 text-sm text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+											onClick={enterEdit}
+										>
 											{event.name}
-										</p>
+										</button>
 									)}
 								</div>
 								<div>
@@ -1266,9 +1219,13 @@ function EventConfiguration({
 											rows={3}
 										/>
 									) : (
-										<p className="mt-1 text-sm text-muted-foreground">
-											{event.description || "No description provided"}
-										</p>
+										<button
+											type="button"
+											className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+											onClick={enterEdit}
+										>
+											{event.description || "Click to add a description"}
+										</button>
 									)}
 								</div>
 								{uiEventTypeSet.has(formData.event_type) ||
@@ -1292,9 +1249,13 @@ function EventConfiguration({
 												</p>
 											</div>
 										) : (
-											<p className="mt-1 text-sm text-muted-foreground font-mono">
+											<button
+												type="button"
+												className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+												onClick={enterEdit}
+											>
 												{routeForEvent?.path ?? "No route configured"}
-											</p>
+											</button>
 										)}
 									</div>
 								) : null}
@@ -1346,17 +1307,25 @@ function EventConfiguration({
 								<CardContent className="space-y-4">
 									<div>
 										<Label>Flow</Label>
-										<p className="mt-1 text-sm text-muted-foreground font-mono">
+										<button
+											type="button"
+											className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
+											onClick={enterEdit}
+										>
 											{board.data?.name ?? "BOARD NOT FOUND!"}
-										</p>
+										</button>
 									</div>
 									<div>
 										<Label>Flow Version</Label>
-										<p className="mt-1 text-sm text-muted-foreground">
+										<button
+											type="button"
+											className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
+											onClick={enterEdit}
+										>
 											{event.board_version
 												? event.board_version.join(".")
 												: "Latest"}
-										</p>
+										</button>
 									</div>
 									<div>
 										<Label className="group flex items-center hover:underline">
@@ -1809,7 +1778,10 @@ function EventConfiguration({
 									Node Configuration
 								</CardTitle>
 							</CardHeader>
-							<CardContent className="space-y-4 flex flex-col items-start">
+							<CardContent
+							className={`space-y-4 flex flex-col items-start ${!isEditing ? "cursor-pointer" : ""}`}
+							onClick={!isEditing ? enterEdit : undefined}
+						>
 								<EventTranslation
 									appId={appId}
 									eventType={formData.event_type}
@@ -1820,6 +1792,7 @@ function EventConfiguration({
 									nodeId={formData.node_id}
 									hub={hub}
 									eventId={event.id}
+									canExecuteLocally={!isOffline}
 									onUpdate={(config) => {
 										console.dir(config);
 										if (!isEditing) setIsEditing(true);
@@ -1833,35 +1806,61 @@ function EventConfiguration({
 						</Card>
 					)}
 
-					{/* Notes Section - Full width at bottom */}
-					{(event.notes || isEditing) && (
-						<Card>
-							<CardHeader>
-								<CardTitle className="flex items-center gap-2">
-									<StickyNote className="h-5 w-5" />
-									Notes
-								</CardTitle>
-							</CardHeader>
-							<CardContent>
-								{isEditing ? (
-									<Textarea
-										value={formData.notes?.NOTES ?? ""}
-										onChange={(e) =>
-											handleInputChange("notes", { NOTES: e.target.value })
-										}
-										placeholder="Add notes about this event..."
-										rows={4}
-									/>
-								) : (
-									<p className="text-sm text-muted-foreground whitespace-pre-wrap">
-										{event.notes?.NOTES ?? "No notes added"}
-									</p>
-								)}
-							</CardContent>
-						</Card>
-					)}
+					{/* Notes */}
+					<Card>
+						<CardHeader>
+							<CardTitle className="flex items-center gap-2">
+								<StickyNote className="h-5 w-5" />
+								Notes
+							</CardTitle>
+						</CardHeader>
+						<CardContent>
+							{isEditing ? (
+								<Textarea
+									value={formData.notes?.NOTES ?? ""}
+									onChange={(e) =>
+										handleInputChange("notes", { NOTES: e.target.value })
+									}
+									placeholder="Add notes about this event..."
+									rows={4}
+								/>
+							) : (
+								<button
+									type="button"
+									className="text-sm text-muted-foreground whitespace-pre-wrap text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+									onClick={enterEdit}
+								>
+									{event.notes?.NOTES ?? "Click to add notes..."}
+								</button>
+							)}
+						</CardContent>
+					</Card>
 				</div>
 			</div>
+
+			{/* Floating Save Bar */}
+			{isEditing && (
+				<div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+					<div className="container mx-auto flex items-center justify-between py-3 px-4">
+						<p className="text-sm text-muted-foreground">
+							{isDirty ? "You have unsaved changes" : "Editing mode"}
+						</p>
+						<div className="flex items-center gap-2">
+							<Button variant="outline" size="sm" onClick={handleCancel}>
+								Discard
+							</Button>
+							<Button
+								size="sm"
+								onClick={() => handleSave()}
+								disabled={!isDirty}
+							>
+								<SaveIcon className="h-4 w-4 mr-1.5" />
+								Save Changes
+							</Button>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* PAT Selector Dialog */}
 			<PatSelectorDialog
@@ -2192,6 +2191,8 @@ interface IEventsTableProps {
 	consentStore?: IOAuthConsentStore;
 	/** Hub configuration for OAuth provider resolution */
 	hub?: IHub;
+	/** Whether the app is offline (local-only) */
+	isOffline?: boolean;
 	/** Callback to start OAuth authorization for a provider */
 	onStartOAuth?: (provider: IOAuthProvider) => Promise<void>;
 	/** Optional callback to refresh expired tokens */
@@ -2216,6 +2217,7 @@ function EventsTable({
 	hub,
 	onStartOAuth,
 	onRefreshToken,
+	isOffline,
 }: Readonly<IEventsTableProps>) {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -2696,6 +2698,17 @@ function EventsTable({
 										{sinkActive ? "Active" : "Inactive"}
 									</span>
 								)}
+								{requiresSink && (
+									<span
+										className={`text-xs px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+									>
+										{isOffline ? (
+											<><Monitor className="h-3 w-3" /> Local</>
+										) : (
+											<><Cloud className="h-3 w-3" /> Online</>
+										)}
+									</span>
+								)}
 							</div>
 							{event.description && (
 								<div className="text-xs text-muted-foreground truncate mt-0.5">
@@ -2988,6 +3001,15 @@ function EventsTable({
 																className={`text-xs px-2 py-0.5 rounded-full inline-block ${sinkActive ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"}`}
 															>
 																{sinkActive ? "Sink Active" : "Sink Inactive"}
+															</div>
+															<div
+																className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
+															>
+																{isOffline ? (
+																	<><Monitor className="h-3 w-3" /> Local</>
+																) : (
+																	<><Cloud className="h-3 w-3" /> Online</>
+																)}
 															</div>
 															{!sinkActive && (
 																<TableActivateSinkButton

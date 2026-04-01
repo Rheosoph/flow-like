@@ -1,17 +1,6 @@
 "use client";
 
-import { EmptyState } from "../ui/empty-state";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { useBackend } from "../../state/backend-state";
-import { useInvoke } from "../../hooks/use-invoke";
-import { useIsMobile } from "../../hooks/use-mobile";
-import { useMobileHeader } from "../ui/mobile-header";
-import { useSpotlightStore } from "../../state/spotlight-state";
-import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { useQueryClient } from "@tanstack/react-query";
-import { useMiniSearch } from "react-minisearch";
 import {
 	ArrowDownAZ,
 	Clock,
@@ -26,8 +15,18 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { LibraryItem, SortMode } from "./library-types";
-import { CATEGORY_COLORS, sortItems } from "./library-types";
+import { useMiniSearch } from "react-minisearch";
+import { useInvoke } from "../../hooks/use-invoke";
+import { useIsMobile } from "../../hooks/use-mobile";
+import { formatAppCategory } from "../../lib/app-category";
+import type { IProfileApp } from "../../lib/schema/profile/profile";
+import { useBackend } from "../../state/backend-state";
+import { useSpotlightStore } from "../../state/spotlight-state";
+import { Button } from "../ui/button";
+import { EmptyState } from "../ui/empty-state";
+import { Input } from "../ui/input";
+import { useMobileHeader } from "../ui/mobile-header";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import {
 	FavoritesSection,
 	JoinInline,
@@ -37,6 +36,8 @@ import {
 	SearchResults,
 	Section,
 } from "./library-sub-components";
+import type { LibraryItem, SortMode } from "./library-types";
+import { CATEGORY_COLORS, sortItems } from "./library-types";
 
 export interface LibraryPageProps {
 	onAppClick?: (appId: string) => void;
@@ -79,6 +80,11 @@ export function LibraryPage({
 		[onAppClickProp, queryClient, router],
 	);
 
+	const appHref = useCallback(
+		(appId: string) => `/use?id=${appId}`,
+		[],
+	);
+
 	const handleSettingsClick = useCallback(
 		(appId: string) => router.push(`/library/config?id=${appId}`),
 		[router],
@@ -106,9 +112,7 @@ export function LibraryPage({
 	const activeAppIds = useMemo(
 		() =>
 			new Set(
-				(currentProfile.data?.hub_profile.apps ?? []).map(
-					(a) => a.app_id,
-				),
+				(currentProfile.data?.hub_profile.apps ?? []).map((a) => a.app_id),
 			),
 		[currentProfile.data],
 	);
@@ -124,9 +128,7 @@ export function LibraryPage({
 	const allItems = useMemo(
 		() =>
 			currentProfile.data
-				? allAvailableItems.filter((item) =>
-						activeAppIds.has(item.id),
-					)
+				? allAvailableItems.filter((item) => activeAppIds.has(item.id))
 				: [],
 		[allAvailableItems, activeAppIds, currentProfile.data],
 	);
@@ -175,9 +177,7 @@ export function LibraryPage({
 	const pinnedItems = useMemo(
 		() =>
 			sortItems(
-				allItems.filter(
-					(item) => profileAppMap.get(item.id)?.pinned,
-				),
+				allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
 				sortMode,
 			),
 		[allItems, profileAppMap, sortMode],
@@ -210,8 +210,7 @@ export function LibraryPage({
 	const categorizedItems = useMemo(() => {
 		const groups = new Map<string, LibraryItem[]>();
 		for (const item of itemsForDisplay) {
-			const cat = item.app.primary_category ?? "Other";
-			const label = cat.replace(/([A-Z])/g, " $1").trim();
+			const label = formatAppCategory(item.app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(item);
 			groups.set(label, existing);
@@ -248,10 +247,7 @@ export function LibraryPage({
 	}, [itemsForDisplay, removeAll, addAll, clearSearch]);
 
 	const menuActions = useMemo(
-		() => [
-			...(extraMobileActions ?? []),
-			<JoinInline key="join-inline" />,
-		],
+		() => [...(extraMobileActions ?? []), <JoinInline key="join-inline" />],
 		[extraMobileActions],
 	);
 
@@ -261,12 +257,9 @@ export function LibraryPage({
 	});
 
 	const isLoading = apps.isLoading || currentProfile.isLoading;
-	const refetchApps = useCallback(
-		async () => {
-			await apps.refetch();
-		},
-		[apps],
-	);
+	const refetchApps = useCallback(async () => {
+		await apps.refetch();
+	}, [apps]);
 
 	if (isLoading) {
 		return (
@@ -295,9 +288,7 @@ export function LibraryPage({
 								label: "Create Your First App",
 								onClick: () => {
 									useSpotlightStore.getState().open();
-									useSpotlightStore
-										.getState()
-										.setMode("quick-create");
+									useSpotlightStore.getState().setMode("quick-create");
 								},
 							},
 						]}
@@ -332,7 +323,9 @@ export function LibraryPage({
 
 	return (
 		<main className="flex flex-col w-full flex-1 min-h-0">
-			<div className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}>
+			<div
+				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}
+			>
 				<div className="flex items-center gap-2">
 					<div className="relative flex-1 max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
@@ -398,9 +391,7 @@ export function LibraryPage({
 									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									onClick={() => {
 										useSpotlightStore.getState().open();
-										useSpotlightStore
-											.getState()
-											.setMode("quick-create");
+										useSpotlightStore.getState().setMode("quick-create");
 									}}
 								>
 									<Plus className="h-4 w-4" />
@@ -412,20 +403,14 @@ export function LibraryPage({
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
-									variant={
-										visibilityMode
-											? "secondary"
-											: "ghost"
-									}
+									variant={visibilityMode ? "secondary" : "ghost"}
 									size="icon"
 									className={`h-8 w-8 rounded-full ${
 										visibilityMode
 											? "text-primary bg-primary/10"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									}`}
-									onClick={() =>
-										setVisibilityMode((v) => !v)
-									}
+									onClick={() => setVisibilityMode((v) => !v)}
 								>
 									{visibilityMode ? (
 										<EyeOff className="h-4 w-4" />
@@ -435,9 +420,7 @@ export function LibraryPage({
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>
-								{visibilityMode
-									? "Exit visibility mode"
-									: "Show / hide apps"}
+								{visibilityMode ? "Exit visibility mode" : "Show / hide apps"}
 							</TooltipContent>
 						</Tooltip>
 					</div>
@@ -445,15 +428,16 @@ export function LibraryPage({
 
 				{visibilityMode && (
 					<p className="text-xs text-muted-foreground/40">
-						Click any app to toggle it in your library. Faded apps
-						are hidden.
+						Click any app to toggle it in your library. Faded apps are hidden.
 					</p>
 				)}
 			</div>
 
 			{renderExtras?.({ refetchApps })}
 
-			<div className={`flex-1 overflow-auto pb-8 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}>
+			<div
+				className={`flex-1 overflow-auto pb-8 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+			>
 				{isSearching ? (
 					<SearchResults
 						items={(searchResults as LibraryItem[]) ?? []}
@@ -463,6 +447,7 @@ export function LibraryPage({
 						visibilityMode={visibilityMode}
 						activeAppIds={activeAppIds}
 						onToggleVisibility={handleToggleVisibility}
+						appHref={appHref}
 						isMobile={isMobile}
 					/>
 				) : (
@@ -472,6 +457,7 @@ export function LibraryPage({
 								items={pinnedItems}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								appHref={appHref}
 								isMobile={isMobile}
 							/>
 						)}
@@ -482,21 +468,21 @@ export function LibraryPage({
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
 								onReorder={handleFavoriteReorder}
+								appHref={appHref}
 								isMobile={isMobile}
 							/>
 						)}
 
-						{(pinnedItems.length > 0 ||
-							favoriteItems.length > 0) &&
-							!visibilityMode && (
-								<div className="border-t border-border/10" />
-							)}
+						{(pinnedItems.length > 0 || favoriteItems.length > 0) &&
+							!visibilityMode && <div className="border-t border-border/10" />}
 
 						{recentItems.length > 0 && (
 							<Section
 								title="Recently updated"
 								icon={
-									isMobile ? undefined : <Clock className="h-3.5 w-3.5 text-muted-foreground/50" />
+									isMobile ? undefined : (
+										<Clock className="h-3.5 w-3.5 text-muted-foreground/50" />
+									)
 								}
 								items={recentItems}
 								onAppClick={handleAppClick}
@@ -504,6 +490,7 @@ export function LibraryPage({
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}
+								appHref={appHref}
 								isMobile={isMobile}
 								showSeeAll={isMobile}
 							/>
@@ -511,9 +498,7 @@ export function LibraryPage({
 
 						{recentItems.length > 0 &&
 							categorizedItems.length > 0 &&
-							!isMobile && (
-								<div className="border-t border-border/10" />
-							)}
+							!isMobile && <div className="border-t border-border/10" />}
 
 						{categorizedItems.map(({ label, items }) => (
 							<Section
@@ -525,6 +510,7 @@ export function LibraryPage({
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}
+								appHref={appHref}
 								categoryColor={isMobile ? undefined : CATEGORY_COLORS[label]}
 								isMobile={isMobile}
 								showSeeAll={isMobile}

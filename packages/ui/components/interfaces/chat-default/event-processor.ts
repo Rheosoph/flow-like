@@ -1,6 +1,7 @@
 import { createId } from "@paralleldrive/cuid2";
 import { IRole, Response } from "../../../lib";
-import type { IAttachment, IMessage, IPlanStep } from "./chat-db";
+import type { IInteractionRequest } from "../../../lib/schema/interaction";
+import type { IAttachment, IChatUsageStat, IMessage, IPlanStep } from "./chat-db";
 
 export interface ProcessChatEventsResult {
 	intermediateResponse: Response;
@@ -10,6 +11,7 @@ export interface ProcessChatEventsResult {
 	tmpGlobalState: any;
 	done: boolean;
 	shouldUpdate: boolean;
+	interactions?: IInteractionRequest[];
 }
 
 interface BackendReasoning {
@@ -84,6 +86,7 @@ export function processChatEvents(
 		done,
 	} = initialState;
 	let shouldUpdate = false;
+	const interactions: IInteractionRequest[] = [];
 	const { appId, eventId, sessionId } = initialState;
 
 	const addAttachments = (newAttachments: IAttachment[]) => {
@@ -233,6 +236,23 @@ export function processChatEvents(
 			}
 		}
 
+		if (ev.event_type === "interaction_request") {
+			const interaction = ev.payload as IInteractionRequest;
+			console.debug(
+				"[Chat] Received interaction_request:",
+				interaction.id,
+				interaction.interaction_type?.type,
+				"status:",
+				interaction.status,
+				"expires_at:",
+				interaction.expires_at,
+				"has_jwt:",
+				!!interaction.responder_jwt,
+			);
+			interactions.push(interaction);
+			shouldUpdate = true;
+		}
+
 		if (ev.event_type === "chat_global_session") {
 			if (tmpGlobalState) {
 				tmpGlobalState = {
@@ -248,6 +268,15 @@ export function processChatEvents(
 				};
 			}
 		}
+
+		if (ev.event_type === "chat_usage_stat") {
+			const stat = ev.payload as IChatUsageStat;
+			if (!responseMessage.usage_stats) {
+				responseMessage.usage_stats = [];
+			}
+			responseMessage.usage_stats.push(stat);
+			shouldUpdate = true;
+		}
 	}
 
 	return {
@@ -258,5 +287,6 @@ export function processChatEvents(
 		tmpGlobalState,
 		done,
 		shouldUpdate,
+		interactions: interactions.length > 0 ? interactions : undefined,
 	};
 }

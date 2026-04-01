@@ -188,6 +188,7 @@ impl NodeLogic for CopilotCustomAgentNode {
             "Configures a custom agent",
             "AI/GitHub/Copilot/Config",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

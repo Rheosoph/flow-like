@@ -1,6 +1,6 @@
 use crate::{
-    ensure_permission,
-    entity::{membership, role},
+    audit_branch, ensure_permission,
+    entity::{app_package, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -10,7 +10,10 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use flow_like::hub::MemberLeavePolicy;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
+};
 
 /// Users are allowed to remove other users if they are admin. If the remove themselfes they are allowed to do so regardless of their role
 #[utoipa::path(
@@ -73,10 +76,43 @@ pub async fn remove_user(
         }
     }
 
+    let membership_id = membership.id.clone();
+
+    match state.platform_config.wasm_registry_config.on_member_leave {
+        MemberLeavePolicy::Stale => {
+            let packages = app_package::Entity::find()
+                .filter(app_package::Column::MembershipId.eq(membership_id.clone()))
+                .all(&txn)
+                .await?;
+
+            for pkg in packages {
+                let mut active: app_package::ActiveModel = pkg.into();
+                active.stale = Set(true);
+                active.membership_id = Set(None);
+                active.update(&txn).await?;
+            }
+        }
+        MemberLeavePolicy::Remove => {
+            app_package::Entity::delete_many()
+                .filter(app_package::Column::MembershipId.eq(membership_id.clone()))
+                .exec(&txn)
+                .await?;
+        }
+    }
+
     let membership: membership::ActiveModel = membership.into();
     membership.delete(&txn).await?;
 
     txn.commit().await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.remove",
+        "Membership",
+        sub,
+        "User removed from team"
+    );
     Ok(Json(()))
 }

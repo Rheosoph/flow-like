@@ -1,0 +1,17 @@
+pub mod add_image_stamp;
+pub mod add_page_numbers;
+pub mod add_watermark;
+pub mod compress;
+pub mod decrypt;
+pub mod encrypt;
+pub mod extract_pages;
+pub mod extract_text;
+pub mod fill_form;
+pub mod list_form_fields;
+pub mod merge;
+pub mod metadata;
+pub mod page_count;
+pub mod replace_image;
+pub mod replace_text;
+pub mod rotate_pages;
+pub mod split;

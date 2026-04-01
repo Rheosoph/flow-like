@@ -1,0 +1,51 @@
+---
+interface Props {
+  t: (key: string) => string;
+  accent: string;
+}
+
+const { t, accent } = Astro.props;
+
+const theme: Record<string, Record<string, string>> = {
+  orange:  { bg: "from-orange-600 to-orange-500", ring: "#ea580c", dot: "#fb923c" },
+  emerald: { bg: "from-emerald-600 to-emerald-500", ring: "#059669", dot: "#34d399" },
+  blue:    { bg: "from-blue-600 to-blue-500",    ring: "#2563eb", dot: "#60a5fa" },
+  violet:  { bg: "from-violet-600 to-violet-500",  ring: "#7c3aed", dot: "#a78bfa" },
+  red:     { bg: "from-red-600 to-red-500",      ring: "#dc2626", dot: "#f87171" },
+  cyan:    { bg: "from-cyan-600 to-cyan-500",     ring: "#0891b2", dot: "#22d3ee" },
+  amber:   { bg: "from-amber-600 to-amber-500",    ring: "#d97706", dot: "#fbbf24" },
+};
+
+const c = theme[accent] ?? theme.orange;
+---
+
+<section class="relative py-24 sm:py-32 overflow-hidden">
+  <div class={`absolute inset-0 bg-gradient-to-br ${c.bg} opacity-95`}></div>
+  <div class="absolute inset-0 opacity-[0.06]" aria-hidden="true">
+    <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="cta-dots" width="24" height="24" patternUnits="userSpaceOnUse">
+          <circle cx="2" cy="2" r="1" fill="white"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#cta-dots)" />
+    </svg>
+  </div>
+
+  <div class="relative max-w-3xl mx-auto px-6 lg:px-8 text-center">
+    <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+      {t("ind.cta.headline")}
+    </h2>
+    <p class="text-lg text-white/80 leading-relaxed mb-10 max-w-2xl mx-auto">
+      {t("ind.cta.description")}
+    </p>
+    <div class="flex flex-wrap justify-center gap-4">
+      <a href="mailto:industry@flow-like.com?subject=Demo%20Request" class="inline-flex items-center px-8 py-3.5 rounded-lg bg-white text-gray-900 font-semibold transition-colors hover:bg-gray-100">
+        {t("ind.cta.demo")}
+      </a>
+      <a href="/download" class="inline-flex items-center px-8 py-3.5 rounded-lg border-2 border-white/30 text-white font-semibold transition-colors hover:bg-white/10">
+        {t("ind.cta.download")}
+      </a>
+    </div>
+  </div>
+</section>

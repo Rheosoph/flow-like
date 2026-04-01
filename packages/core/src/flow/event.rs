@@ -88,6 +88,7 @@ pub struct ChatEventParameters {
     pub allow_file_upload: Option<bool>,
     pub allow_voice_input: Option<bool>,
     pub allow_voice_output: Option<bool>,
+    pub allow_voice_mode: Option<bool>,
     pub tools: Option<Vec<String>>,
     pub default_tools: Option<Vec<String>>,
     pub example_messages: Option<Vec<String>>,

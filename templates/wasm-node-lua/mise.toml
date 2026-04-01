@@ -1,0 +1,15 @@
+[tools]
+cmake = "latest"
+
+[tasks.setup]
+description = "Configure build with Emscripten (fetches Lua 5.4 source + SDK)"
+run = "mkdir -p build && cd build && emcmake cmake .."
+
+[tasks.build]
+description = "Build the WASM node"
+depends = ["setup"]
+run = "cd build && emmake make"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf build/"

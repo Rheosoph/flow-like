@@ -1,0 +1,33 @@
+[tasks.setup]
+description = "Verify Grain compiler availability"
+run = """
+echo "Checking prerequisites..."
+command -v grain >/dev/null 2>&1 || { echo "ERROR: Grain compiler not found. Install via: curl -sSL https://grain-lang.org/install.sh | bash"; exit 1; }
+echo "Setup OK: $(grain --version)"
+"""
+
+[tasks.build]
+description = "Compile Grain SDK modules"
+run = """
+mkdir -p target
+grain compile --release --no-gc --elide-type-info -o target/sdk.wasm sdk.gr
+echo "SDK compiled to target/sdk.wasm"
+"""
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf target/"
+
+[tasks.publish]
+description = "Grain package publishing (source distribution)"
+run = """
+echo "Grain does not have a centralized package registry yet."
+echo "Packages are distributed via Git and imported with relative paths:"
+echo ""
+echo "  grain compile --release --no-gc -I ../wasm-sdk-grain -o build/node.wasm src/main.gr"
+echo ""
+echo "To distribute this SDK:"
+echo "  1. Users clone this repo or add it as a git submodule"
+echo "  2. Reference via -I flag during compilation"
+echo "  3. Tag releases: git tag wasm-sdk-grain/v0.1.0 && git push origin wasm-sdk-grain/v0.1.0"
+"""

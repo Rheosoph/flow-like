@@ -1,0 +1,28 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.wit-copy]
+description = "Copy canonical WIT from packages/wasm/wit/"
+run = "mkdir -p flow_like_wasm_sdk/wit && cp ../../packages/wasm/wit/flow-like-node.wit flow_like_wasm_sdk/wit/flow-like-node.wit"
+
+[tasks.wit-clean]
+description = "Remove local WIT copy"
+run = "rm -rf flow_like_wasm_sdk/wit"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "uv sync --group dev"
+
+[tasks.build]
+description = "Build the SDK package"
+depends = ["wit-copy"]
+run = "uv build"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest -v"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = ["rm -rf dist/ *.egg-info .pytest_cache", "rm -rf flow_like_wasm_sdk/wit"]

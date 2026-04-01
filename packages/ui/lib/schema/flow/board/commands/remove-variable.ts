@@ -1,4 +1,5 @@
 export interface IRemoveVariable {
+	layer_id?: null | string;
 	variable: IVariable;
 	[property: string]: any;
 }

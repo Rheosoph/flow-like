@@ -1,8 +1,8 @@
 //! Presign LanceDB access endpoint
 //!
-//! This endpoint provides presigned access to LanceDB tables, allowing clients to directly
-//! query the database without proxying through the API. This is useful for performance-sensitive
-//! operations and reducing server load.
+//! This endpoint provides presigned access to the scoped LanceDB database root, allowing clients
+//! to directly query the database without proxying through the API. This is useful for
+//! performance-sensitive operations and reducing server load.
 //!
 //! The endpoint supports both read-only and read-write access based on user permissions.
 
@@ -23,7 +23,10 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PresignDbAccessRequest {
-    /// Name of the LanceDB table to access
+    /// Requested table name for client convenience.
+    ///
+    /// Credentials returned by this endpoint are scoped to the user/app database path,
+    /// not to an individual table.
     pub table_name: String,
     /// Access mode: "read" or "write"
     #[serde(default = "default_access_mode")]
@@ -34,13 +37,17 @@ fn default_access_mode() -> String {
     "read".to_string()
 }
 
+fn scoped_db_path(sub: &str, app_id: &str) -> String {
+    format!("users/{}/apps/{}/db", sub, app_id)
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PresignDbAccessResponse {
     /// Shared credentials for direct storage access
     pub shared_credentials: serde_json::Value,
-    /// Base database path for this app (apps/{app_id}/storage/db)
+    /// Base database path for the scoped user database (users/{sub}/apps/{app_id}/db)
     pub db_path: String,
-    /// The table name
+    /// Requested table name echoed back to the client
     pub table_name: String,
     /// Access mode granted
     pub access_mode: String,
@@ -49,11 +56,11 @@ pub struct PresignDbAccessResponse {
     pub expiration: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Presign access to a LanceDB table
+/// Presign access to a scoped LanceDB database
 ///
 /// This endpoint generates presigned credentials for direct client-side access to LanceDB.
-/// The credentials are scoped to the specific app and user, with permissions based on the
-/// requested access mode and user's role permissions.
+/// The credentials are scoped to the specific app and user database path, with permissions
+/// based on the requested access mode and user's role permissions.
 ///
 /// # Access Modes
 /// - `read`: Read-only access (requires ReadFiles permission)
@@ -68,7 +75,7 @@ pub struct PresignDbAccessResponse {
 /// ```json
 /// {
 ///   "provider": "aws",
-///   "uri": "s3://bucket/apps/app-id/storage/db",
+///   "uri": "s3://bucket/users/user-id/apps/app-id/db",
 ///   "storage_options": {
 ///     "aws_access_key_id": "ASIA...",
 ///     "aws_secret_access_key": "...",
@@ -85,7 +92,7 @@ pub struct PresignDbAccessResponse {
 /// ```json
 /// {
 ///   "provider": "azure",
-///   "uri": "az://container/apps/app-id/storage/db",
+///   "uri": "az://container/users/user-id/apps/app-id/db",
 ///   "storage_options": {
 ///     "azure_storage_account_name": "account",
 ///     "azure_storage_sas_token": "..."
@@ -99,7 +106,7 @@ pub struct PresignDbAccessResponse {
     post,
     path = "/apps/{app_id}/db/presign",
     tag = "database",
-    description = "Get shared credentials for direct LanceDB access.",
+    description = "Get shared credentials for direct LanceDB access to the scoped user/app database.",
     params(
         ("app_id" = String, Path, description = "Application ID")
     ),
@@ -162,7 +169,7 @@ pub async fn presign_db_access(
         ApiError::internal("Failed to serialize shared credentials")
     })?;
 
-    let db_path = format!("apps/{}/storage/db", app_id);
+    let db_path = scoped_db_path(&sub, &app_id);
 
     // Get expiration time if available
     let expiration = get_credentials_expiration(&scoped_credentials);
@@ -189,5 +196,6 @@ fn get_credentials_expiration(
         RuntimeCredentials::Gcp(gcp) => gcp.expiration,
         #[cfg(feature = "r2")]
         RuntimeCredentials::R2(r2) => r2.expiration,
+        RuntimeCredentials::Mixed(mixed) => get_credentials_expiration(&mixed.content),
     }
 }

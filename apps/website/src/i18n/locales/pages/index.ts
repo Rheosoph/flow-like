@@ -23,3 +23,6 @@ export { tCompare, translationsCompare } from "./compare";
 
 // Data Deletion Page
 export { tDataDeletion, translationsDataDeletion } from "./data-deletion";
+
+// Developers Page
+export { tDevelopers, translationsDevelopers } from "./developers";

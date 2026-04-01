@@ -3,8 +3,10 @@
 import {
 	ActivityIcon,
 	BookOpenIcon,
+	CheckIcon,
 	CircleCheckIcon,
 	CoinsIcon,
+	CopyIcon,
 	CornerRightUpIcon,
 	ExternalLinkIcon,
 	InfoIcon,
@@ -31,6 +33,7 @@ import { Separator } from "../../ui/separator";
 import { Sheet, SheetContent, SheetHeader } from "../../ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { typeToColor } from "../utils";
+import { NODE_PERMISSION_LABELS } from "../../../lib/permission/node-permission";
 
 export interface FlowNodeInfoOverlayHandle {
 	openNodeInfo: (node: INode) => void;
@@ -176,6 +179,47 @@ const OverviewSection = memo(({ node }: { node: INode }) => {
 });
 OverviewSection.displayName = "OverviewSection";
 
+function formatPermission(perm: string): { label: string; icon: string } {
+	return NODE_PERMISSION_LABELS[perm as keyof typeof NODE_PERMISSION_LABELS] ?? { label: perm, icon: "🔒" };
+}
+
+const PermissionsSection = memo(({ node }: { node: INode }) => {
+	const permissions = node.wasm?.permissions;
+	if (!permissions?.length && !node.wasm?.package_id) return null;
+
+	return (
+		<div className="space-y-3 md:space-y-4">
+			<h3 className="text-xs md:text-sm font-semibold tracking-wide text-muted-foreground uppercase">
+				WASM Node
+			</h3>
+			{node.wasm?.package_id && (
+				<div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
+					<span className="shrink-0">Package:</span>
+					<span className="truncate">{node.wasm.package_id}</span>
+				</div>
+			)}
+			{permissions && permissions.length > 0 ? (
+				<div className="flex flex-wrap gap-1.5">
+					{permissions.map((perm) => {
+						const { label, icon } = formatPermission(perm);
+						return (
+							<Badge key={perm} variant="secondary" className="text-xs gap-1">
+								<span>{icon}</span>
+								{label}
+							</Badge>
+						);
+					})}
+				</div>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					No additional permissions required.
+				</p>
+			)}
+		</div>
+	);
+});
+PermissionsSection.displayName = "PermissionsSection";
+
 const DocsPreview = memo(({ url }: { url: string }) => {
 	const [showPreview, setShowPreview] = useState(true);
 	const togglePreview = useCallback(() => setShowPreview((prev) => !prev), []);
@@ -219,6 +263,45 @@ const DocsPreview = memo(({ url }: { url: string }) => {
 });
 DocsPreview.displayName = "DocsPreview";
 
+const CopySchemaButton = memo(
+	({
+		schema,
+		unrefValue,
+	}: { schema: string; unrefValue: (key: string) => string }) => {
+		const [copied, setCopied] = useState(false);
+
+		const handleCopy = useCallback(() => {
+			const resolved = unrefValue(schema);
+			navigator.clipboard.writeText(resolved).then(() => {
+				setCopied(true);
+				setTimeout(() => setCopied(false), 2000);
+			});
+		}, [schema, unrefValue]);
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-5 w-5 md:h-6 md:w-6"
+					onClick={handleCopy}
+				>
+					{copied ? (
+						<CheckIcon className="w-3 h-3 text-emerald-500" />
+					) : (
+						<CopyIcon className="w-3 h-3" />
+					)}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent>
+				<p className="text-xs">{copied ? "Copied!" : "Copy Schema"}</p>
+			</TooltipContent>
+		</Tooltip>
+	);
+});
+CopySchemaButton.displayName = "CopySchemaButton";
+
 const PinInfo = memo(
 	({ pin, unrefValue }: { pin: IPin; unrefValue: (key: string) => string }) => {
 		const color = typeToColor(pin.data_type);
@@ -238,6 +321,12 @@ const PinInfo = memo(
 								{pin.friendly_name}
 							</h4>
 							<div className="flex items-center gap-1 shrink-0">
+								{pin.schema && (
+									<CopySchemaButton
+										schema={pin.schema}
+										unrefValue={unrefValue}
+									/>
+								)}
 								<Badge
 									variant="outline"
 									className="text-[9px] md:text-[10px] px-1 md:px-1.5 py-0 h-4 md:h-5"
@@ -659,6 +748,13 @@ export const FlowNodeInfoOverlay = forwardRef<
 					{/* Left side - Node info */}
 					<div className="flex-1 overflow-y-auto space-y-6 md:space-y-8 py-4 px-4 md:py-6 md:px-6 min-w-0">
 						<OverviewSection node={selectedNode} />
+
+						{selectedNode.wasm && (
+							<>
+								<Separator />
+								<PermissionsSection node={selectedNode} />
+							</>
+						)}
 
 						<Separator />
 						<PinsSection

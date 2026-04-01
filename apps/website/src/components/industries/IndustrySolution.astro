@@ -1,0 +1,82 @@
+---
+interface Props {
+  t: (key: string) => string;
+  accent: string;
+}
+
+const { t, accent } = Astro.props;
+
+const theme: Record<string, Record<string, string>> = {
+  orange:  { badge: "bg-orange-500/15 text-orange-300 border-orange-500/30",  border: "border-orange-500/20 hover:border-orange-500/50",  iconBg: "bg-orange-500/10", iconText: "text-orange-400", glow: "group-hover:shadow-orange-500/5" },
+  emerald: { badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30", border: "border-emerald-500/20 hover:border-emerald-500/50", iconBg: "bg-emerald-500/10", iconText: "text-emerald-400", glow: "group-hover:shadow-emerald-500/5" },
+  blue:    { badge: "bg-blue-500/15 text-blue-300 border-blue-500/30",     border: "border-blue-500/20 hover:border-blue-500/50",    iconBg: "bg-blue-500/10", iconText: "text-blue-400",   glow: "group-hover:shadow-blue-500/5" },
+  violet:  { badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",  border: "border-violet-500/20 hover:border-violet-500/50",  iconBg: "bg-violet-500/10", iconText: "text-violet-400", glow: "group-hover:shadow-violet-500/5" },
+  red:     { badge: "bg-red-500/15 text-red-300 border-red-500/30",       border: "border-red-500/20 hover:border-red-500/50",     iconBg: "bg-red-500/10", iconText: "text-red-400",    glow: "group-hover:shadow-red-500/5" },
+  cyan:    { badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",     border: "border-cyan-500/20 hover:border-cyan-500/50",    iconBg: "bg-cyan-500/10", iconText: "text-cyan-400",   glow: "group-hover:shadow-cyan-500/5" },
+  amber:   { badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",   border: "border-amber-500/20 hover:border-amber-500/50",   iconBg: "bg-amber-500/10", iconText: "text-amber-400",  glow: "group-hover:shadow-amber-500/5" },
+};
+
+const c = theme[accent] ?? theme.orange;
+
+const iconPaths = [
+  "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+  "M6 3v12M18 9a9 9 0 0 1-9 9",
+  "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z",
+  "M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9",
+  "M4 5h16v2H4zm0 6h16v2H4zm0 6h16v2H4z",
+];
+const iconExtras = [
+  null,
+  null,
+  [{ tag: "circle", cx: "18", cy: "6", r: "3" }, { tag: "circle", cx: "6", cy: "18", r: "3" }],
+  [{ tag: "circle", cx: "12", cy: "12", r: "3" }],
+  null,
+  null,
+];
+
+const solutions = Array.from({ length: 12 }, (_, i) => i + 1)
+  .filter((i) => {
+    const key = `ind.solution.item${i}.title`;
+    return t(key) !== key;
+  })
+  .map((i) => ({
+    title: t(`ind.solution.item${i}.title`),
+    desc: t(`ind.solution.item${i}.desc`),
+    pathD: iconPaths[(i - 1) % iconPaths.length],
+    extras: iconExtras[(i - 1) % iconExtras.length],
+  }));
+---
+
+<section id="solution" class="relative py-24 sm:py-32">
+  <div class="max-w-7xl mx-auto px-6 lg:px-8">
+    <div class="text-center max-w-2xl mx-auto mb-16">
+      <div class={`inline-flex items-center px-3 py-1 rounded-full border text-xs font-medium mb-4 ${c.badge}`}>
+        {t("ind.solution.tagline")}
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-foreground mb-4">
+        {t("ind.solution.headline")}
+      </h2>
+      <p class="text-lg text-muted-foreground leading-relaxed">
+        {t("ind.solution.description")}
+      </p>
+    </div>
+
+    <div class="grid gap-6 sm:grid-cols-2">
+      {solutions.map((s) => (
+        <div class={`group relative rounded-xl border bg-card/50 backdrop-blur-sm p-8 transition-all duration-300 ${c.border} ${c.glow} group-hover:shadow-lg`}>
+          <div class={`w-12 h-12 rounded-lg flex items-center justify-center mb-5 ${c.iconBg}`}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class={`w-6 h-6 ${c.iconText}`}>
+              <path d={s.pathD} />
+              {s.extras?.map((e: any) => (
+                <circle cx={e.cx} cy={e.cy} r={e.r} />
+              ))}
+            </svg>
+          </div>
+          <h3 class="text-lg font-semibold text-foreground mb-2">{s.title}</h3>
+          <p class="text-sm text-muted-foreground leading-relaxed">{s.desc}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

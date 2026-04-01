@@ -9,7 +9,7 @@ use crate::{
         node::{Node, NodeState},
         oauth::OAuthToken,
         pin::PinType,
-        utils::{evaluate_pin_value, evaluate_pin_value_reference},
+        utils::evaluate_pin_value,
         variable::{Variable, VariableType},
     },
     profile::Profile,
@@ -161,6 +161,8 @@ pub struct ExecutionContext {
     pub sub_traces: Vec<Trace>,
     pub app_state: Arc<FlowLikeState>,
     pub variables: Arc<Mutex<AHashMap<String, Variable>>>,
+    /// Function-scoped local variables. Checked before global `variables` during resolution.
+    pub local_variables: Option<Arc<Mutex<AHashMap<String, Variable>>>>,
     pub started_by: Option<Vec<Arc<InternalPin>>>,
     pub cache: Arc<RwLock<AHashMap<String, Arc<dyn Cacheable>>>>,
     pub stage: ExecutionStage,
@@ -226,6 +228,7 @@ impl ExecutionContext {
             app_state: state.clone(),
             node: node.clone(),
             variables: variables.clone(),
+            local_variables: None,
             cache: cache.clone(),
             log_level,
             stage,
@@ -251,6 +254,10 @@ impl ExecutionContext {
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub fn callback(&self) -> &InterComCallback {
+        &self.callback
     }
 
     pub async fn event_id(&self) -> Option<String> {
@@ -295,6 +302,7 @@ impl ExecutionContext {
             app_state: state.clone(),
             node: node.clone(),
             variables: variables.clone(),
+            local_variables: None,
             cache: cache.clone(),
             log_level,
             stage,
@@ -447,11 +455,49 @@ impl ExecutionContext {
         context.context_pin_overrides = self.context_pin_overrides.clone();
         context.cancellation_token = self.cancellation_token.clone();
         context.user_context = self.user_context.clone();
+        context.local_variables = self.local_variables.clone();
+
+        context
+    }
+
+    /// Create a sub-context for function execution with isolated local variables.
+    /// The function's local variables are cloned with fresh values so parallel
+    /// invocations of the same function don't interfere with each other.
+    pub async fn create_function_context(
+        &self,
+        node: &Arc<InternalNode>,
+        function_variables: &std::collections::HashMap<String, Variable>,
+    ) -> ExecutionContext {
+        let mut context = self.create_sub_context(node).await;
+
+        // Clone the function's local variables with fresh value handles
+        let mut local_vars = AHashMap::with_capacity(function_variables.len());
+        for (var_id, var) in function_variables {
+            let value = match &var.default_value {
+                Some(bytes) => {
+                    flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                }
+                None => Value::Null,
+            };
+            let mut cloned_var = var.clone();
+            cloned_var.value = Arc::new(Mutex::new(value));
+            local_vars.insert(var_id.clone(), cloned_var);
+        }
+
+        context.local_variables = Some(Arc::new(Mutex::new(local_vars)));
+        context.context_pin_overrides = Some(BTreeMap::new());
 
         context
     }
 
     pub async fn get_variable(&self, variable_id: &str) -> flow_like_types::Result<Variable> {
+        // Check local (function-scoped) variables first
+        if let Some(local) = &self.local_variables
+            && let Some(variable) = local.lock().await.get(variable_id).cloned()
+        {
+            return Ok(variable);
+        }
+
         if let Some(variable) = self.variables.lock().await.get(variable_id).cloned() {
             return Ok(variable);
         }
@@ -473,6 +519,18 @@ impl ExecutionContext {
             return Ok(payload);
         }
         Err(flow_like_types::anyhow!("Payload not found"))
+    }
+
+    pub async fn get_board(&self) -> flow_like_types::Result<Arc<super::super::board::Board>> {
+        let board = self
+            .run
+            .upgrade()
+            .ok_or_else(|| flow_like_types::anyhow!("Run not found"))?
+            .lock()
+            .await
+            .board
+            .clone();
+        Ok(board)
     }
 
     /// Returns the run's payload without checking if this node is the entry point.
@@ -547,6 +605,15 @@ impl ExecutionContext {
     }
 
     pub async fn set_variable(&self, variable: Variable) {
+        // If local variables exist and contain this variable, update there
+        if let Some(local) = &self.local_variables {
+            let mut local_vars = local.lock().await;
+            if local_vars.contains_key(&variable.id) {
+                local_vars.insert(variable.id.clone(), variable);
+                return;
+            }
+        }
+
         let mut variables = self.variables.lock().await;
         variables.insert(variable.id.clone(), variable);
     }
@@ -556,6 +623,16 @@ impl ExecutionContext {
         variable_id: &str,
         value: Value,
     ) -> flow_like_types::Result<()> {
+        // Check local variables first
+        if let Some(local) = &self.local_variables
+            && let Some(var) = local.lock().await.get(variable_id)
+        {
+            let value_ref = var.value.clone();
+            let mut guard = value_ref.lock().await;
+            *guard = value;
+            return Ok(());
+        }
+
         let value_ref = self
             .variables
             .lock()
@@ -694,12 +771,9 @@ impl ExecutionContext {
         Ok(value)
     }
 
-    pub async fn evaluate_pin_to_ref(
-        &self,
-        name: &str,
-    ) -> flow_like_types::Result<Arc<Mutex<Value>>> {
+    pub async fn evaluate_pin_to_ref(&self, name: &str) -> flow_like_types::Result<Value> {
         let pin = self.get_pin_by_name(name).await?;
-        let value = evaluate_pin_value_reference(pin).await?;
+        let value = evaluate_pin_value(pin, &self.context_pin_overrides).await?;
         Ok(value)
     }
 
@@ -730,27 +804,17 @@ impl ExecutionContext {
         pin: &Arc<InternalPin>,
         value: Value,
     ) -> flow_like_types::Result<()> {
-        // Direct access - no lock needed for id
         let pin_id = pin.id();
 
-        // CRITICAL: If this specific pin was overridden in the context,
-        // we should update the override map instead of the actual pin value
-        // to prevent race conditions in parallel execution
-        if let Some(overrides) = &self.context_pin_overrides
-            && overrides.contains_key(pin_id)
-        {
-            // This pin was already overridden, so update the override
-            self.override_pin_value(pin_id, value);
-            return Ok(());
-        }
-
-        // For pins that haven't been overridden, set the actual pin value
-        // BUT if we're in an override context, also add it to overrides to maintain isolation
+        // When in an override context, write to BOTH the override map AND the
+        // shared pin. The override map provides per-invocation isolation so
+        // read_outputs can read the correct value for each parallel call.
+        // The shared pin write keeps bridge pin chains, get_raw_value() checks,
+        // and other non-override-aware code paths working.
         if self.context_pin_overrides.is_some() {
             self.override_pin_value(pin_id, value.clone());
         }
 
-        // Only value access needs locking
         pin.set_value(value).await;
         Ok(())
     }
@@ -813,6 +877,16 @@ impl ExecutionContext {
         self.sub_traces.extend(sub_traces);
         if let Some(result) = &context.result {
             self.result = Some(result.clone());
+        }
+        // Propagate pin overrides back so function contexts accumulate
+        // all pin values written during the exec chain, ensuring parallel
+        // invocations each read their own isolated output values.
+        if let Some(child_overrides) = context.context_pin_overrides.take()
+            && !child_overrides.is_empty()
+        {
+            self.context_pin_overrides
+                .get_or_insert_with(BTreeMap::new)
+                .extend(child_overrides);
         }
     }
 
@@ -1001,6 +1075,16 @@ impl ExecutionContext {
         components: Vec<crate::a2ui::SurfaceComponent>,
     ) -> flow_like_types::Result<()> {
         let message = crate::a2ui::A2UIServerMessage::surface_update(surface_id, components);
+        self.stream_a2ui_update(message).await
+    }
+
+    pub async fn stream_a2ui_set_canvas_settings(
+        &mut self,
+        surface_id: &str,
+        canvas_settings: crate::a2ui::CanvasSettings,
+    ) -> flow_like_types::Result<()> {
+        let message =
+            crate::a2ui::A2UIServerMessage::set_canvas_settings(surface_id, canvas_settings);
         self.stream_a2ui_update(message).await
     }
 

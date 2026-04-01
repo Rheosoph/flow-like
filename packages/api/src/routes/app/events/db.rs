@@ -291,14 +291,36 @@ pub async fn sync_event_with_sink_tokens(
         None
     };
 
+    let cron_scheduled_for = if event.event_type == "cron" {
+        extract_scheduled_for(&event.config)
+    } else {
+        None
+    };
+
+    // Determine the sink path:
+    // - For HTTP/API events, extract from event config (path field)
+    // - For other events, use the UI route
+    let sink_path = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        extract_http_path(&event.config).or_else(|| event.route.clone())
+    } else {
+        event.route.clone()
+    };
+
+    // Extract auth token from HTTP event config
+    let config_auth_token = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        extract_http_auth_token(&event.config)
+    } else {
+        None
+    };
+
     // Encrypt PAT if provided
-    let pat_encrypted = pat.map(encrypt_token);
+    let pat_encrypted = pat.map(|p| encrypt_token(p, &state.encryption_key));
 
     // Encrypt OAuth tokens if provided
     let oauth_tokens_encrypted = oauth_tokens.and_then(|tokens| {
         serde_json::to_string(tokens)
             .ok()
-            .map(|json| encrypt_token(&json))
+            .map(|json| encrypt_token(&json, &state.encryption_key))
     });
 
     // Sync the sink (creates if not exists, updates if exists)
@@ -309,14 +331,16 @@ pub async fn sync_event_with_sink_tokens(
             event_id: event.id.clone(),
             app_id: app_id.to_string(),
             sink_type: sink_type.to_string(),
-            path: event.route.clone(),
-            auth_token: None,     // Auth token is set separately
+            path: sink_path,
+            auth_token: config_auth_token,
             webhook_secret: None, // Webhook secret is set separately
             cron_expression,
             cron_timezone,
+            cron_scheduled_for,
             pat_encrypted,
             oauth_tokens_encrypted,
             profile_json,
+            active: Some(event.active),
         },
     )
     .await?;
@@ -324,42 +348,22 @@ pub async fn sync_event_with_sink_tokens(
     Ok(())
 }
 
-/// Lazily initialized encryption key derived from SINK_TOKEN_ENCRYPTION_KEY env var
-static ENCRYPTION_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
-    let key_material = std::env::var("SINK_TOKEN_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        tracing::warn!(
-            "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
-            Set SINK_TOKEN_ENCRYPTION_KEY in production!"
-        );
-        "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
-    });
-    *blake3::hash(key_material.as_bytes()).as_bytes()
-});
-
-fn get_encryption_key() -> &'static [u8; 32] {
-    &ENCRYPTION_KEY
-}
-
 /// Encrypt a token using AES-256-GCM
 /// Returns base64-encoded ciphertext with prepended nonce
-fn encrypt_token(token: &str) -> String {
+fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
 
-    let key = get_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
 
-    // Generate random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Encrypt
     let ciphertext = cipher
         .encrypt(nonce, token.as_bytes())
         .expect("Encryption failed");
 
-    // Prepend nonce to ciphertext and base64 encode
     let mut combined = nonce_bytes.to_vec();
     combined.extend(ciphertext);
     base64::engine::general_purpose::STANDARD.encode(combined)
@@ -367,26 +371,22 @@ fn encrypt_token(token: &str) -> String {
 
 /// Decrypt a token using AES-256-GCM
 /// Expects base64-encoded ciphertext with prepended nonce
-pub fn decrypt_token(encrypted: &str) -> Option<String> {
+pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
 
-    let key = get_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
 
-    // Decode base64
     let combined = base64::engine::general_purpose::STANDARD
         .decode(encrypted)
         .ok()?;
 
-    // Split nonce (12 bytes) and ciphertext
     if combined.len() < 12 {
         return None;
     }
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    // Decrypt
     let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
     String::from_utf8(plaintext).ok()
 }
@@ -428,6 +428,53 @@ fn extract_cron_timezone(config: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Extract scheduled_for from event config bytes (for one-time cron events)
+fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::ScheduledLocal> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+    let sf = value
+        .get("scheduled_for")
+        .or_else(|| value.get("scheduledFor"))?;
+
+    let date = sf.get("date").and_then(|v| v.as_str())?.to_string();
+    let time = sf.get("time").and_then(|v| v.as_str())?.to_string();
+
+    Some(flow_like_sinks::ScheduledLocal { date, time })
+}
+
+/// Extract HTTP path from event config bytes (for api/http/webhook events)
+fn extract_http_path(config: &[u8]) -> Option<String> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+
+    value
+        .get("path")
+        .or_else(|| value.get("path_suffix"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Extract HTTP auth token from event config bytes (for api/http/webhook events)
+fn extract_http_auth_token(config: &[u8]) -> Option<String> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+
+    value
+        .get("auth_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 /// Delete an event from the database
 pub async fn delete_event_from_db(
     db: &DatabaseConnection,
@@ -454,12 +501,15 @@ pub async fn delete_event_with_sink(
     Ok(())
 }
 
-/// Get an event from the database by ID
+/// Get an event from the database by ID, validating it belongs to the given app.
+/// This prevents cross-app event access.
 pub async fn get_event_from_db(
     db: &DatabaseConnection,
     event_id: &str,
+    app_id: &str,
 ) -> flow_like_types::Result<CoreEvent> {
     let model = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
         .one(db)
         .await?
         .ok_or_else(|| anyhow!("Event not found: {}", event_id))?;
@@ -467,12 +517,17 @@ pub async fn get_event_from_db(
     db_model_to_event(model)
 }
 
-/// Get an event from the database by ID, returning None if not found
+/// Get an event from the database by ID, validating it belongs to the given app.
+/// Returns None if not found.
 pub async fn get_event_from_db_opt(
     db: &DatabaseConnection,
     event_id: &str,
+    app_id: &str,
 ) -> flow_like_types::Result<Option<CoreEvent>> {
-    let model = event::Entity::find_by_id(event_id).one(db).await?;
+    let model = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .one(db)
+        .await?;
 
     match model {
         Some(m) => Ok(Some(db_model_to_event(m)?)),
@@ -611,7 +666,7 @@ pub async fn get_event_with_fallback(
     event_id: &str,
 ) -> flow_like_types::Result<CoreEvent> {
     // Try DB first
-    if let Some(event) = get_event_from_db_opt(db, event_id).await? {
+    if let Some(event) = get_event_from_db_opt(db, event_id, &app.id).await? {
         return Ok(event);
     }
 
@@ -633,7 +688,7 @@ pub async fn get_event_with_fallback_opt(
     event_id: &str,
 ) -> flow_like_types::Result<Option<CoreEvent>> {
     // Try DB first
-    if let Some(event) = get_event_from_db_opt(db, event_id).await? {
+    if let Some(event) = get_event_from_db_opt(db, event_id, &app.id).await? {
         return Ok(Some(event));
     }
 

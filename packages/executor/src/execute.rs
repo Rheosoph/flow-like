@@ -2,7 +2,7 @@
 //!
 //! Environment-agnostic flow execution with batched callback reporting
 
-use crate::config::{model_provider_config_from_env, ExecutorConfig};
+use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::jwt::{verify_jwt_async, ExecutorClaims};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
@@ -11,6 +11,7 @@ use flow_like::flow::board::Board;
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::{InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
+use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
 use flow_like::utils::http::HTTPClient;
@@ -21,9 +22,17 @@ use flow_like_types::intercom::BufferedInterComHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+/// Cached prepared registry - initialized once on first access.
+/// Contains the static catalog nodes only; WASM nodes are overlaid per-request.
+pub(crate) static PREPARED_REGISTRY: LazyLock<FlowNodeRegistryInner> = LazyLock::new(|| {
+    let catalog = get_catalog();
+    let catalog_arc = Arc::new(catalog);
+    FlowNodeRegistryInner::prepare(&catalog_arc)
+});
 
 /// API-compatible event input format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +105,6 @@ pub async fn execute(
     ));
 
     // Build FlowLike state
-    let catalog = get_catalog();
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
     flow_config.register_app_meta_store(meta_store.clone());
     flow_config.register_log_store(log_store);
@@ -113,27 +121,50 @@ pub async fn execute(
     }
 
     // Load model provider configuration from environment
-    let model_provider_config = model_provider_config_from_env();
+    let model_provider_config = ModelProviderConfiguration::default();
 
     let http_client = HTTPClient::new_without_refetch();
     let state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
 
-    let catalog_arc = Arc::new(catalog);
-    let registry = FlowNodeRegistryInner::prepare(&catalog_arc);
+    let mut registry = PREPARED_REGISTRY.clone();
+
+    // Load WASM packages from presigned URLs if any are specified
+    if let Some(ref wasm_packages) = request.wasm_packages {
+        if !wasm_packages.is_empty() {
+            match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
+                Ok(wasm_nodes) => {
+                    tracing::info!(count = wasm_nodes.len(), "Loaded WASM nodes for execution");
+                    for logic in wasm_nodes {
+                        let node = logic.get_node();
+                        registry.insert(node, logic);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to load WASM packages");
+                }
+            }
+        }
+    }
+
     state.node_registry.write().await.node_registry = Arc::new(registry);
 
     let state = Arc::new(state);
 
-    // Load board using pre-resolved board_id and version
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Board::load(storage_root, board_id, state.clone(), request.board_version)
+    let board = Arc::new(
+        Board::load(
+            storage_root.clone(),
+            board_id,
+            state.clone(),
+            request.board_version,
+        )
         .await
         .map_err(|e| {
             ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
-        })?;
-    let board = Arc::new(board);
+        })?,
+    );
 
     // Send start event to API
     send_event(
@@ -171,7 +202,15 @@ pub async fn execute(
         .unwrap_or_default();
 
     // Create run payload with the node_id to execute
-    let profile = Profile::default();
+    let mut profile: Profile = request
+        .profile
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
+
+    // Always use the API's callback URL as hub for remote interactions
+    profile.hub = claims.callback_url.clone();
+
     let run_payload = RunPayload {
         id: request.node_id.clone(),
         payload: request.payload.clone(),
@@ -230,7 +269,7 @@ pub async fn execute(
         request.stream_state,
         callback,
         Some(request.credentials.clone()),
-        request.token.clone(),
+        Some(request.executor_jwt.clone()),
         oauth_tokens,
         Some(claims.run_id.clone()),
     )
@@ -341,10 +380,18 @@ pub async fn execute(
     };
 
     let progress_url = format!(
-        "{}/progress",
-        claims.callback_url.trim_end_matches("/events")
+        "{}/api/v1/execution/progress",
+        claims.callback_url.trim_end_matches('/')
     );
-    let _ = send_progress(&progress_url, &executor_jwt, &progress_update, &config).await;
+    let http_client = reqwest::Client::new();
+    let _ = send_progress(
+        &progress_url,
+        &executor_jwt,
+        &progress_update,
+        &config,
+        &http_client,
+    )
+    .await;
 
     Ok(ExecutionResult {
         run_id: claims.run_id,
@@ -393,6 +440,11 @@ async fn run_callback_batcher(
     executor_jwt: String,
     config: ExecutorConfig,
 ) {
+    let events_url = format!(
+        "{}/api/v1/execution/events",
+        claims.callback_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
     let mut batch = Vec::new();
     let mut interval = tokio::time::interval(config.batch_interval());
 
@@ -402,10 +454,11 @@ async fn run_callback_batcher(
                 if !batch.is_empty() {
                     let events = std::mem::take(&mut batch);
                     if let Err(e) = send_events_to_api(
-                        &claims.callback_url,
+                        &events_url,
                         &executor_jwt,
                         events,
                         &config,
+                        &client,
                     ).await {
                         tracing::warn!(error = %e, "Failed to send events batch");
                     }
@@ -418,10 +471,11 @@ async fn run_callback_batcher(
                         if batch.len() >= config.max_batch_size {
                             let events = std::mem::take(&mut batch);
                             if let Err(e) = send_events_to_api(
-                                &claims.callback_url,
+                                &events_url,
                                 &executor_jwt,
                                 events,
                                 &config,
+                                &client,
                             ).await {
                                 tracing::warn!(error = %e, "Failed to send events batch");
                             }
@@ -431,10 +485,11 @@ async fn run_callback_batcher(
                         if !batch.is_empty() {
                             let events = std::mem::take(&mut batch);
                             let _ = send_events_to_api(
-                                &claims.callback_url,
+                                &events_url,
                                 &executor_jwt,
                                 events,
                                 &config,
+                                &client,
                             ).await;
                         }
                         break;
@@ -463,6 +518,7 @@ async fn send_events_to_api(
     jwt: &str,
     events: Vec<ExecutionEvent>,
     config: &ExecutorConfig,
+    client: &reqwest::Client,
 ) -> Result<(), ExecutorError> {
     let api_events: Vec<ApiEventInput> = events
         .into_iter()
@@ -473,7 +529,6 @@ async fn send_events_to_api(
         .collect();
 
     let request = PushEventsRequest { events: api_events };
-    let client = reqwest::Client::new();
 
     for attempt in 0..=config.callback_retries {
         let result = client
@@ -513,9 +568,8 @@ async fn send_progress(
     jwt: &str,
     progress: &ProgressUpdateRequest,
     config: &ExecutorConfig,
+    client: &reqwest::Client,
 ) -> Result<(), ExecutorError> {
-    let client = reqwest::Client::new();
-
     for attempt in 0..=config.callback_retries {
         let result = client
             .post(url)

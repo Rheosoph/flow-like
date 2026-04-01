@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-flow-like-api = { workspace = true, features = ["aws"] }
 aws_lambda_events = { version = "0.16.1", default-features = false, features = ["sqs", "s3"] }
 
 aws-config.workspace = true
 aws-sdk-dynamodb.workspace = true
 
+sea-orm.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tracing.workspace = true
@@ -21,7 +21,7 @@ chrono.workspace = true
 urlencoding.workspace = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

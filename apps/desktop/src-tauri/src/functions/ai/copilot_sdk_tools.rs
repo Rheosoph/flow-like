@@ -523,7 +523,7 @@ WORKFLOW:
 
 /// Create all Copilot SDK tools for frontend/A2UI context
 pub fn create_frontend_tools() -> Vec<(Tool, ToolHandler)> {
-    vec![create_emit_ui_tool()]
+    vec![create_emit_ui_tool(), create_get_component_schema_tool()]
 }
 
 /// Emit UI tool - output A2UI JSON components
@@ -630,16 +630,650 @@ EXAMPLE - Simple card:
         let canvas = args.get("canvasSettings").cloned().unwrap_or(json!({}));
         let components = args.get("components").cloned().unwrap_or(json!([]));
 
+        // Validate components and collect errors
+        let (validated_components, validation_errors) = validate_ui_components(&components);
+
+        if !validation_errors.is_empty() {
+            let error_list = validation_errors.join("\n- ");
+            let result = json!({
+                "status": "validation_errors",
+                "errors": validation_errors,
+                "rootComponentId": root_id,
+                "canvasSettings": canvas,
+                "components": validated_components,
+                "message": format!(
+                    "UI rendered with {} validation error(s). Fix these and call emit_ui again:\n- {}",
+                    validation_errors.len(),
+                    error_list
+                )
+            });
+            return ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default());
+        }
+
         let result = json!({
             "status": "rendered",
             "rootComponentId": root_id,
             "canvasSettings": canvas,
-            "components": components,
-            "message": "UI components have been rendered"
+            "components": validated_components,
+            "message": "UI components have been rendered successfully"
         });
 
         ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
     });
 
     (tool, handler)
+}
+
+/// Component schema lookup tool
+fn create_get_component_schema_tool() -> (Tool, ToolHandler) {
+    let tool = Tool::new("get_component_schema")
+        .description(
+            r#"Look up the detailed schema for one or more A2UI component types. Call this BEFORE generating components you haven't used before.
+
+Returns: Full property list with types, required fields, BoundValue format, and a working example.
+
+AVAILABLE TYPES:
+Layout: column, row, grid, stack, scrollArea, box, center, spacer, absolute, aspectRatio, overlay
+Display: text, image, icon, video, lottie, markdown, badge, avatar, progress, spinner, divider, skeleton, iframe
+Interactive: button, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, link
+Container: card, modal, tabs, accordion, drawer, tooltip, popover
+Data: table, nivoChart, plotlyChart, filePreview
+Vision: boundingBoxOverlay, imageLabeler, imageHotspot
+Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap"#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "component_types": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Array of component type names to look up (e.g., [\"card\", \"text\", \"button\"])"
+                }
+            },
+            "required": ["component_types"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let types = args
+            .get("component_types")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if types.is_empty() {
+            return ToolResultObject::text(
+                "Please provide at least one component type to look up.",
+            );
+        }
+
+        let mut docs = Vec::new();
+        for comp_type in &types {
+            docs.push(format!(
+                "## {}\n{}",
+                comp_type,
+                get_component_schema_doc(comp_type)
+            ));
+        }
+
+        ToolResultObject::text(docs.join("\n\n---\n\n"))
+    });
+
+    (tool, handler)
+}
+
+// =============================================================================
+// VALIDATION HELPERS
+// =============================================================================
+
+/// Known props per component type (mirrors validateComponents.ts)
+fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]> {
+    match component_type {
+        "row" => Some(&["gap", "align", "justify", "wrap", "reverse"]),
+        "column" => Some(&["gap", "align", "justify", "reverse", "wrap"]),
+        "stack" => Some(&["align", "width", "height"]),
+        "grid" => Some(&["columns", "rows", "gap", "columnGap", "rowGap", "autoFlow"]),
+        "scrollArea" => Some(&["direction"]),
+        "aspectRatio" => Some(&["ratio"]),
+        "absolute" => Some(&["width", "height"]),
+        "box" => Some(&["as", "semanticRole"]),
+        "center" => Some(&["inline"]),
+        "spacer" => Some(&["size", "flex", "direction", "flexible"]),
+        "overlay" => Some(&["baseComponentId", "overlays"]),
+        "widgetInstance" => Some(&["widgetId", "widgetInputs", "bindOutputs"]),
+        "text" => Some(&[
+            "content", "variant", "size", "weight", "color", "align", "truncate", "maxLines",
+        ]),
+        "image" => Some(&[
+            "src",
+            "alt",
+            "fit",
+            "fallback",
+            "fallbackSrc",
+            "loading",
+            "aspectRatio",
+            "width",
+            "height",
+        ]),
+        "icon" => Some(&["name", "size", "color", "strokeWidth"]),
+        "video" => Some(&[
+            "src", "poster", "autoplay", "autoPlay", "loop", "muted", "controls", "width", "height",
+        ]),
+        "lottie" => Some(&["src", "autoplay", "loop", "speed", "width", "height"]),
+        "markdown" => Some(&["content", "allowHtml"]),
+        "divider" => Some(&["orientation", "thickness", "color"]),
+        "badge" => Some(&["content", "text", "variant", "color"]),
+        "avatar" => Some(&["src", "fallback", "size"]),
+        "progress" => Some(&["value", "max", "showLabel", "variant", "color"]),
+        "spinner" => Some(&["size", "color"]),
+        "skeleton" => Some(&["width", "height", "rounded", "variant"]),
+        "iframe" => Some(&[
+            "src",
+            "srcdoc",
+            "width",
+            "height",
+            "sandbox",
+            "allow",
+            "title",
+            "referrerPolicy",
+            "border",
+            "loading",
+        ]),
+        "table" => Some(&[
+            "columns",
+            "data",
+            "caption",
+            "striped",
+            "bordered",
+            "hoverable",
+            "compact",
+            "stickyHeader",
+            "sortable",
+            "searchable",
+            "paginated",
+            "pageSize",
+            "selectable",
+            "showPagination",
+        ]),
+        "plotlyChart" => Some(&[
+            "chartType",
+            "data",
+            "title",
+            "layout",
+            "config",
+            "height",
+            "width",
+        ]),
+        "nivoChart" => Some(&[
+            "chartType",
+            "data",
+            "height",
+            "width",
+            "colors",
+            "colorScheme",
+            "showLegend",
+            "legendPosition",
+            "margin",
+            "axisBottom",
+            "axisLeft",
+            "animate",
+            "motionConfig",
+            "style",
+        ]),
+        "filePreview" => Some(&["url", "mimeType", "width", "height"]),
+        "boundingBoxOverlay" => Some(&[
+            "src",
+            "boxes",
+            "showLabels",
+            "showConfidence",
+            "normalized",
+            "width",
+            "height",
+        ]),
+        "button" => Some(&[
+            "label",
+            "variant",
+            "size",
+            "disabled",
+            "loading",
+            "icon",
+            "iconPosition",
+            "tooltip",
+        ]),
+        "textField" => Some(&[
+            "value",
+            "placeholder",
+            "label",
+            "helperText",
+            "error",
+            "disabled",
+            "inputType",
+            "type",
+            "multiline",
+            "rows",
+            "maxLength",
+            "required",
+        ]),
+        "select" => Some(&[
+            "value",
+            "options",
+            "placeholder",
+            "label",
+            "disabled",
+            "multiple",
+            "searchable",
+        ]),
+        "slider" => Some(&[
+            "value",
+            "min",
+            "max",
+            "step",
+            "disabled",
+            "showValue",
+            "label",
+        ]),
+        "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
+        "switch" => Some(&["checked", "label", "disabled"]),
+        "radioGroup" => Some(&["value", "options", "disabled", "orientation", "label"]),
+        "dateTimeInput" => Some(&["value", "mode", "min", "max", "disabled", "label"]),
+        "fileInput" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "accept",
+            "multiple",
+            "maxSize",
+            "maxFiles",
+            "disabled",
+            "error",
+        ]),
+        "imageInput" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "accept",
+            "multiple",
+            "maxSize",
+            "maxFiles",
+            "disabled",
+            "error",
+            "aspectRatio",
+            "showPreview",
+        ]),
+        "imageLabeler" => Some(&["src", "labels", "boxes", "disabled", "width", "height"]),
+        "imageHotspot" => Some(&["src", "hotspots", "markerStyle", "width", "height"]),
+        "link" => Some(&[
+            "href",
+            "label",
+            "text",
+            "route",
+            "queryParams",
+            "external",
+            "target",
+            "variant",
+            "underline",
+            "disabled",
+            "openInNewTab",
+        ]),
+        "card" => Some(&[
+            "title",
+            "description",
+            "footer",
+            "hoverable",
+            "clickable",
+            "variant",
+            "padding",
+            "headerImage",
+            "headerIcon",
+        ]),
+        "modal" => Some(&[
+            "open",
+            "title",
+            "description",
+            "closeOnOverlay",
+            "closeOnEscape",
+            "showCloseButton",
+            "size",
+            "centered",
+        ]),
+        "tabs" => Some(&["value", "tabs", "orientation", "variant", "defaultValue"]),
+        "accordion" => Some(&[
+            "items",
+            "multiple",
+            "defaultExpanded",
+            "collapsible",
+            "type",
+        ]),
+        "drawer" => Some(&[
+            "open",
+            "side",
+            "title",
+            "size",
+            "overlay",
+            "closable",
+            "description",
+        ]),
+        "tooltip" => Some(&["content", "side", "delayMs", "maxWidth"]),
+        "popover" => Some(&[
+            "open",
+            "contentComponentId",
+            "side",
+            "trigger",
+            "closeOnClickOutside",
+            "content",
+        ]),
+        "canvas2d" => Some(&["width", "height", "backgroundColor", "pixelPerfect"]),
+        "sprite" => Some(&[
+            "src", "x", "y", "width", "height", "rotation", "scale", "opacity", "flipX", "flipY",
+            "zIndex",
+        ]),
+        "shape" => Some(&[
+            "shapeType",
+            "x",
+            "y",
+            "width",
+            "height",
+            "radius",
+            "points",
+            "fill",
+            "stroke",
+            "strokeWidth",
+        ]),
+        "scene3d" => Some(&[
+            "width",
+            "height",
+            "cameraType",
+            "cameraPosition",
+            "backgroundColor",
+            "controlMode",
+            "fixedView",
+            "autoRotateSpeed",
+            "enableControls",
+            "enableZoom",
+            "enablePan",
+            "fov",
+            "near",
+            "far",
+            "target",
+            "ambientLight",
+            "directionalLight",
+            "showGrid",
+            "showAxes",
+        ]),
+        "model3d" => Some(&[
+            "src",
+            "position",
+            "rotation",
+            "scale",
+            "castShadow",
+            "receiveShadow",
+            "animation",
+            "autoRotate",
+            "rotateSpeed",
+            "viewerHeight",
+            "backgroundColor",
+            "cameraDistance",
+            "fov",
+            "cameraAngle",
+            "cameraPosition",
+            "cameraTarget",
+            "enableControls",
+            "enableZoom",
+            "enablePan",
+            "autoRotateCamera",
+            "cameraRotateSpeed",
+            "ambientLight",
+            "directionalLight",
+            "fillLight",
+            "rimLight",
+            "lightColor",
+            "lightingPreset",
+            "showGround",
+            "groundColor",
+            "enableReflections",
+            "environment",
+            "environmentSource",
+            "useHdrBackground",
+            "polyhavenHdri",
+            "polyhavenResolution",
+        ]),
+        "dialogue" => Some(&["text", "speakerName", "typewriter", "speed", "portrait"]),
+        "characterPortrait" => {
+            Some(&["image", "expression", "position", "width", "height", "flip"])
+        }
+        "choiceMenu" => Some(&["choices", "title", "layout", "columns"]),
+        "inventoryGrid" => Some(&["items", "columns", "rows", "cellSize", "showTooltips"]),
+        "healthBar" => Some(&[
+            "value",
+            "maxValue",
+            "label",
+            "fillColor",
+            "variant",
+            "showLabel",
+            "size",
+            "animated",
+        ]),
+        "miniMap" => Some(&[
+            "mapImage",
+            "width",
+            "height",
+            "markers",
+            "playerX",
+            "playerY",
+            "viewportWidth",
+            "viewportHeight",
+            "zoom",
+        ]),
+        _ => None,
+    }
+}
+
+/// Required props per component type
+fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
+    match component_type {
+        "text" => &["content"],
+        "image" => &["src"],
+        "icon" => &["name"],
+        "video" => &["src"],
+        "lottie" => &["src"],
+        "markdown" => &["content"],
+        "badge" => &["content"],
+        "progress" => &["value"],
+        "button" => &["label"],
+        "textField" => &["value"],
+        "select" => &["value", "options"],
+        "slider" => &["value"],
+        "checkbox" => &["checked"],
+        "switch" => &["checked"],
+        "radioGroup" => &["value", "options"],
+        "dateTimeInput" => &["value"],
+        "fileInput" => &["value"],
+        "imageInput" => &["value"],
+        "link" => &["href"],
+        "modal" => &["open"],
+        "tabs" => &["value"],
+        "canvas2d" => &["width", "height"],
+        "sprite" => &["src", "x", "y"],
+        "shape" => &["shapeType", "x", "y"],
+        "scene3d" => &["width", "height"],
+        "model3d" => &["src"],
+        "aspectRatio" => &["ratio"],
+        "boundingBoxOverlay" => &["src"],
+        _ => &[],
+    }
+}
+
+const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions"];
+
+/// Validate an array of components and return (validated_components, errors)
+fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
+    let mut errors = Vec::new();
+
+    let arr = match components.as_array() {
+        Some(a) => a,
+        None => {
+            errors.push("'components' must be an array".to_string());
+            return (json!([]), errors);
+        }
+    };
+
+    let all_ids: std::collections::HashSet<String> = arr
+        .iter()
+        .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    let mut validated = Vec::new();
+
+    for comp in arr {
+        let id = match comp.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                errors.push(
+                    "Component missing 'id' field - every component needs a unique id".to_string(),
+                );
+                continue;
+            }
+        };
+
+        let component = match comp.get("component") {
+            Some(c) if c.is_object() => c,
+            _ => {
+                errors.push(format!("{}: missing 'component' object", id));
+                continue;
+            }
+        };
+
+        let comp_type = match component.get("type").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => {
+                errors.push(format!("{}: missing 'component.type' field", id));
+                continue;
+            }
+        };
+
+        // Check if component type is known
+        let known = known_props_for_type(comp_type);
+        if known.is_none() {
+            errors.push(format!(
+                "{}: unknown component type '{}'. Use get_component_schema to look up available types.",
+                id, comp_type
+            ));
+            continue;
+        }
+        let known_set = known.unwrap();
+
+        // Check for unknown props
+        if let Some(obj) = component.as_object() {
+            for key in obj.keys() {
+                let k = key.as_str();
+                if !BASE_PROPS.contains(&k) && !known_set.contains(&k) {
+                    errors.push(format!(
+                        "{}: unknown prop '{}' on '{}'. Use get_component_schema(\"{}\") to see valid props.",
+                        id, k, comp_type, comp_type
+                    ));
+                }
+            }
+        }
+
+        // Check required props
+        for required in required_props_for_type(comp_type) {
+            if component.get(*required).is_none() {
+                errors.push(format!(
+                    "{}: missing required prop '{}' on '{}'. This prop is mandatory.",
+                    id, required, comp_type
+                ));
+            }
+        }
+
+        // Validate BoundValue format for non-structural props
+        if let Some(obj) = component.as_object() {
+            for (key, value) in obj {
+                let k = key.as_str();
+                if BASE_PROPS.contains(&k) || k == "type" {
+                    continue;
+                }
+                // Structural props (arrays/objects holding non-BoundValue data) - skip
+                if matches!(
+                    k,
+                    "tabs"
+                        | "items"
+                        | "overlays"
+                        | "columns"
+                        | "data"
+                        | "boxes"
+                        | "hotspots"
+                        | "markers"
+                        | "choices"
+                ) {
+                    continue;
+                }
+                // Check if value should be BoundValue but is a bare primitive
+                if (value.is_string() || value.is_number() || value.is_boolean())
+                    && known_set.contains(&k)
+                    && k != "type"
+                {
+                    errors.push(format!(
+                            "{}: prop '{}' uses a bare value. Wrap it as BoundValue: string→{{\"literalString\": \"{}\"}}, number→{{\"literalNumber\": {}}}, bool→{{\"literalBool\": {}}}",
+                            id, k,
+                            value.as_str().unwrap_or("..."),
+                            value.as_f64().map(|n| n.to_string()).unwrap_or_else(|| "...".to_string()),
+                            value.as_bool().map(|b| b.to_string()).unwrap_or_else(|| "...".to_string()),
+                        ));
+                }
+            }
+        }
+
+        // Validate children references
+        if let Some(children) = component.get("children")
+            && let Some(explicit_list) = children.get("explicitList").and_then(|v| v.as_array())
+        {
+            for child_ref in explicit_list {
+                if let Some(child_id) = child_ref.as_str()
+                    && !all_ids.contains(child_id)
+                {
+                    errors.push(format!(
+                        "{}: children references '{}' which doesn't exist in the components array",
+                        id, child_id
+                    ));
+                }
+            }
+        }
+
+        validated.push(comp.clone());
+    }
+
+    (json!(validated), errors)
+}
+
+/// Get detailed schema documentation for a component type
+fn get_component_schema_doc(component_type: &str) -> String {
+    use flow_like::a2ui::copilot::get_component_schema;
+
+    let base_doc = get_component_schema(component_type);
+
+    // Add BoundValue reminder and known props list
+    if let Some(props) = known_props_for_type(component_type) {
+        let required = required_props_for_type(component_type);
+        let prop_list: Vec<String> = props
+            .iter()
+            .map(|p| {
+                if required.contains(p) {
+                    format!("- {} (REQUIRED)", p)
+                } else {
+                    format!("- {}", p)
+                }
+            })
+            .collect();
+
+        format!(
+            "{}\n\n### Valid Props\n{}\n\n### BoundValue Reminder\nAll props must use BoundValue format:\n- String: {{\"literalString\": \"text\"}}\n- Number: {{\"literalNumber\": 42}}\n- Boolean: {{\"literalBool\": true}}\n- Options: {{\"literalOptions\": [{{\"value\": \"v\", \"label\": \"L\"}}]}}\n- Children: {{\"explicitList\": [\"child-id-1\"]}}",
+            base_doc,
+            prop_list.join("\n")
+        )
+    } else {
+        base_doc
+    }
 }

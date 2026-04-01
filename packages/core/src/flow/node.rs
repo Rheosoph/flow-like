@@ -97,6 +97,63 @@ pub struct FnRefs {
     pub can_be_referenced_by_fns: bool,
 }
 
+/// Permissions a WASM node can request.
+/// Each node declares exactly which capabilities it needs so the sandbox
+/// and UI can enforce/display them precisely.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum NodePermission {
+    /// Outbound HTTP requests
+    #[serde(rename = "network:http")]
+    NetworkHttp,
+    /// WebSocket connections
+    #[serde(rename = "network:websocket")]
+    NetworkWebsocket,
+    /// TCP socket access
+    #[serde(rename = "network:tcp")]
+    NetworkTcp,
+    /// UDP socket access
+    #[serde(rename = "network:udp")]
+    NetworkUdp,
+    /// DNS lookups
+    #[serde(rename = "network:dns")]
+    NetworkDns,
+    /// Read from node/user storage
+    #[serde(rename = "storage:read")]
+    StorageRead,
+    /// Write to node/user storage
+    #[serde(rename = "storage:write")]
+    StorageWrite,
+    /// Access flow variables
+    #[serde(rename = "variables")]
+    Variables,
+    /// Access execution cache
+    #[serde(rename = "cache")]
+    Cache,
+    /// Stream responses to the client
+    #[serde(rename = "streaming")]
+    Streaming,
+    /// Access LLM / model providers
+    #[serde(rename = "models")]
+    Models,
+    /// Dynamic UI (Agent-to-UI)
+    #[serde(rename = "a2ui")]
+    A2ui,
+    /// OAuth authentication
+    #[serde(rename = "oauth")]
+    OAuth,
+    /// Call other functions/sub-flows
+    #[serde(rename = "functions")]
+    Functions,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct NodeWasm {
+    pub package_id: String,
+    #[serde(default)]
+    pub permissions: Vec<NodePermission>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct Node {
     pub id: String,
@@ -127,6 +184,9 @@ pub struct Node {
     /// Schema version for node migration. When catalog version > placed version, pins are synced.
     /// None means unversioned (legacy). Bump this when changing pins in get_node().
     pub version: Option<u32>,
+    /// WASM metadata for external nodes. None for built-in catalog nodes.
+    /// Populated automatically when placing or pasting nodes; never trust frontend-supplied values.
+    pub wasm: Option<NodeWasm>,
 }
 
 impl Node {
@@ -154,6 +214,7 @@ impl Node {
             required_oauth_scopes: None,
             only_offline: false,
             version: None,
+            wasm: None,
         }
     }
 
@@ -565,6 +626,10 @@ impl Node {
 
         if let Some(layer) = &self.layer {
             hasher.append(layer.as_bytes());
+        }
+
+        if let Some(wasm) = &self.wasm {
+            hasher.append(wasm.package_id.as_bytes());
         }
 
         self.hash = Some(hasher.finalize64());

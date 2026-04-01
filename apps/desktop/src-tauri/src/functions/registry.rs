@@ -1,15 +1,97 @@
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriRegistryState, TauriSettingsState},
+    state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
 };
+use flow_like::flow::node::NodeLogic;
 use flow_like_wasm::{
     client::RegistryClient,
     registry::{CachedPackage, InstalledPackage, RegistryConfig, SearchFilters, SearchResults},
 };
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
+
+/// Get the registry client with the auth token refreshed on the stored instance.
+/// This ensures every API-calling command uses a fresh token and the stored
+/// client stays up-to-date for future calls (e.g. search uses stored token).
+async fn get_client_with_token(
+    app_handle: &AppHandle,
+    token: Option<String>,
+) -> Result<RegistryClient, TauriFunctionError> {
+    use tauri::Manager;
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| TauriFunctionError::new("Registry state not found"))?;
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| TauriFunctionError::new("Registry client not initialized"))?;
+    if let Some(t) = token {
+        client.set_auth_token(Some(t));
+    }
+    Ok(client.clone())
+}
+
+fn emit_package_status(app_handle: &AppHandle, package_id: &str, status: &str) {
+    let _ = app_handle.emit(
+        "package-status",
+        serde_json::json!({ "packageId": package_id, "status": status }),
+    );
+}
+
+fn clear_package_status(app_handle: &AppHandle, package_id: &str) {
+    emit_package_status(app_handle, package_id, "idle");
+}
+
+async fn reload_wasm_nodes(
+    app_handle: &AppHandle,
+    emit_catalog_updated: bool,
+) -> Result<(), TauriFunctionError> {
+    let registry_client = TauriRegistryState::get_client(app_handle).await?;
+    let flow_state = TauriFlowLikeState::construct(app_handle).await?;
+
+    let installed = registry_client.list_installed().await.unwrap_or_default();
+
+    if installed.is_empty() {
+        if emit_catalog_updated {
+            let _ = app_handle.emit("catalog-updated", ());
+        }
+        return Ok(());
+    }
+
+    let engine = TauriWasmEngineState::construct(app_handle)
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+
+    let mut wasm_nodes: Vec<Arc<dyn NodeLogic>> = Vec::new();
+
+    for pkg in &installed {
+        match registry_client.load_nodes(&pkg.id, engine.clone()).await {
+            Ok(nodes) => {
+                for node in nodes {
+                    wasm_nodes.push(Arc::new(node));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load package '{}': {}", pkg.id, e);
+            }
+        }
+    }
+
+    if !wasm_nodes.is_empty() {
+        let registry_guard = flow_state.node_registry.clone();
+        let mut registry = registry_guard.write().await;
+        registry.push_nodes(wasm_nodes);
+    }
+
+    if emit_catalog_updated {
+        let _ = app_handle.emit("catalog-updated", ());
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchFiltersInput {
     #[serde(default)]
     pub query: Option<String>,
@@ -23,6 +105,8 @@ pub struct SearchFiltersInput {
     pub verified_only: Option<bool>,
     #[serde(default)]
     pub include_deprecated: Option<bool>,
+    #[serde(default)]
+    pub include_disabled: Option<bool>,
     #[serde(default)]
     pub sort_by: Option<String>,
     #[serde(default)]
@@ -53,6 +137,7 @@ impl From<SearchFiltersInput> for SearchFilters {
             author: input.author,
             verified_only: input.verified_only.unwrap_or(false),
             include_deprecated: input.include_deprecated.unwrap_or(false),
+            include_disabled: input.include_disabled.unwrap_or(false),
             sort_by: sort_by.unwrap_or_default(),
             sort_desc: input.sort_desc.unwrap_or(true),
             offset: input.offset.unwrap_or(0),
@@ -65,8 +150,9 @@ impl From<SearchFiltersInput> for SearchFilters {
 pub async fn registry_search_packages(
     app_handle: AppHandle,
     filters: SearchFiltersInput,
+    token: Option<String>,
 ) -> Result<SearchResults, TauriFunctionError> {
-    let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
+    let registry_client = get_client_with_token(&app_handle, token).await?;
     let search_filters: SearchFilters = filters.into();
     let results = registry_client.search(&search_filters).await?;
     Ok(results)
@@ -87,11 +173,23 @@ pub async fn registry_install_package(
     app_handle: AppHandle,
     package_id: String,
     version: Option<String>,
+    token: Option<String>,
 ) -> Result<CachedPackage, TauriFunctionError> {
-    let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
+    emit_package_status(&app_handle, &package_id, "downloading");
+    let registry_client = get_client_with_token(&app_handle, token.clone()).await?;
     let installed = registry_client
-        .install(&package_id, version.as_deref())
-        .await?;
+        .install(&package_id, version.as_deref(), token.as_deref())
+        .await
+        .inspect_err(|_e| {
+            emit_package_status(&app_handle, &package_id, "error");
+        })?;
+
+    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
+        tracing::warn!("Failed to reload WASM nodes after install: {:?}", e);
+    } else {
+        clear_package_status(&app_handle, &package_id);
+    }
+
     Ok(installed)
 }
 
@@ -102,6 +200,11 @@ pub async fn registry_uninstall_package(
 ) -> Result<(), TauriFunctionError> {
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
     registry_client.uninstall(&package_id).await?;
+
+    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
+        tracing::warn!("Failed to reload WASM nodes after uninstall: {:?}", e);
+    }
+
     Ok(())
 }
 
@@ -139,11 +242,23 @@ pub async fn registry_update_package(
     app_handle: AppHandle,
     package_id: String,
     version: Option<String>,
+    token: Option<String>,
 ) -> Result<CachedPackage, TauriFunctionError> {
-    let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
+    emit_package_status(&app_handle, &package_id, "downloading");
+    let registry_client = get_client_with_token(&app_handle, token.clone()).await?;
     let installed = registry_client
-        .install(&package_id, version.as_deref())
-        .await?;
+        .install(&package_id, version.as_deref(), token.as_deref())
+        .await
+        .inspect_err(|_e| {
+            emit_package_status(&app_handle, &package_id, "error");
+        })?;
+
+    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
+        tracing::warn!("Failed to reload WASM nodes after update: {:?}", e);
+    } else {
+        clear_package_status(&app_handle, &package_id);
+    }
+
     Ok(installed)
 }
 
@@ -157,9 +272,10 @@ pub struct PackageUpdate {
 #[tauri::command]
 pub async fn registry_check_for_updates(
     app_handle: AppHandle,
+    token: Option<String>,
 ) -> Result<Vec<PackageUpdate>, TauriFunctionError> {
-    let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
-    let update_tuples = registry_client.check_updates().await?;
+    let registry_client = get_client_with_token(&app_handle, token.clone()).await?;
+    let update_tuples = registry_client.check_updates(token.as_deref()).await?;
 
     let updates: Vec<PackageUpdate> = update_tuples
         .into_iter()
@@ -171,6 +287,24 @@ pub async fn registry_check_for_updates(
         .collect();
 
     Ok(updates)
+}
+
+#[tauri::command]
+pub async fn registry_set_auth_token(
+    app_handle: AppHandle,
+    token: Option<String>,
+) -> Result<(), TauriFunctionError> {
+    use tauri::Manager;
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| TauriFunctionError::new("Registry state not found"))?;
+
+    let mut guard = state.0.lock().await;
+    if let Some(client) = guard.as_mut() {
+        client.set_auth_token(token);
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +321,16 @@ pub async fn registry_load_local(
     let registry_client = TauriRegistryState::get_client(&app_handle).await?;
     let local_path = std::path::Path::new(&path);
     let cached = registry_client.load_local(local_path).await?;
+
+    // Register in the installed list so reload_wasm_nodes can find it
+    let _ = registry_client
+        .register_local_package(local_path, cached.entry.manifest.clone())
+        .await;
+
+    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
+        tracing::warn!("Failed to reload WASM nodes after local load: {:?}", e);
+    }
+
     Ok(cached)
 }
 
@@ -208,9 +352,20 @@ pub async fn registry_init(
 
     let default_registry = config
         .and_then(|c| c.registry_url)
-        .unwrap_or_else(|| "https://api.flow-like.com/registry".to_string());
+        .unwrap_or_else(|| "https://api.flow-like.com/api/v1/registry".to_string());
 
     drop(settings_guard);
+
+    // Preserve auth token from existing client (if any) so re-init doesn't
+    // lose the token that was set via pushAuthContext / setAuthToken.
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
+
+    let existing_token = {
+        let guard = state.0.lock().await;
+        guard.as_ref().and_then(|c| c.auth_token().cloned())
+    };
 
     let registry_config = RegistryConfig {
         default_registry,
@@ -220,17 +375,21 @@ pub async fn registry_init(
         cache_duration_hours: 24 * 7,
         auto_update_index: true,
         allow_unverified: false,
+        auth_token: existing_token,
     };
 
     let client = RegistryClient::new(registry_config)?;
     client.init().await?;
 
-    let state = app_handle
-        .try_state::<TauriRegistryState>()
-        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
-
     let mut guard = state.0.lock().await;
     *guard = Some(client);
+    drop(guard);
+
+    if let Err(e) = reload_wasm_nodes(&app_handle, false).await {
+        tracing::warn!("Failed to load WASM nodes during registry init: {:?}", e);
+    }
+
+    super::developer::register_all_developer_packages(&app_handle).await;
 
     Ok(())
 }

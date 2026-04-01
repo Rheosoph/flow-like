@@ -1,0 +1,43 @@
+#!/bin/bash
+# Create an awesome Gource visualization video for flow-like
+
+echo "Creating flow-like development visualization..."
+echo "This will take some time depending on your git history size."
+echo ""
+
+# Create output directory if it doesn't exist
+mkdir -p output
+
+gource \
+  -1920x1080 \
+  --seconds-per-day 3 \
+  --auto-skip-seconds 1 \
+  --multi-sampling \
+  --title "365+ days of Flow-Like" \
+  --caption-file gource_captions.txt \
+  --caption-size 24 \
+  --caption-duration 5 \
+  --date-format "%B %d, %Y" \
+  --hide mouse,progress \
+  --file-idle-time 0 \
+  --max-file-lag 0.5 \
+  --bloom-multiplier 1.2 \
+  --bloom-intensity 0.5 \
+  --camera-mode track \
+  --dir-name-depth 3 \
+  --font-size 22 \
+  --elasticity 0.1 \
+  -o - \
+  | ffmpeg -y -r 60 -f image2pipe -vcodec ppm -i - \
+    -vcodec libx264 \
+    -preset slow \
+    -pix_fmt yuv420p \
+    -crf 18 \
+    -threads 0 \
+    -bf 2 \
+    -movflags +faststart \
+    output/flow-like-gource.mp4
+
+echo ""
+echo "Video created successfully!"
+echo "Output: output/flow-like-gource.mp4"

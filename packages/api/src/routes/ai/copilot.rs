@@ -268,6 +268,7 @@ fn user_access_token(user: &AppUser) -> Option<String> {
         AppUser::OpenID(u) => Some(u.access_token.clone()),
         AppUser::PAT(_u) => None,
         AppUser::APIKey(_k) => None,
+        AppUser::Executor(_e) => None,
         AppUser::Unauthorized => None,
     }
 }

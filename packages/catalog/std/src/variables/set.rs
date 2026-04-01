@@ -103,7 +103,7 @@ impl NodeLogic for SetVariable {
             }
         };
 
-        let var_ref_variable = match board.get_variable(&var_ref_value) {
+        let var_ref_variable = match board.get_any_variable(&var_ref_value) {
             Some(var) => var,
             None => {
                 node.error = Some("Variable not found!".to_string());

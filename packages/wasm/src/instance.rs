@@ -42,12 +42,16 @@ impl WasmInstance {
         module: Arc<WasmModule>,
         security: WasmSecurityConfig,
     ) -> WasmResult<Self> {
-        // Create linker with host functions
-        let mut linker = Linker::new(engine.engine());
+        // Use the engine that compiled/deserialized this module to ensure
+        // Store, Linker, and Module are all tied to the same Engine instance.
+        // This is critical for the Pulley fallback on iOS where the
+        // module may come from a different engine than the primary one.
+        let module_engine = module.module().engine();
+
+        let mut linker = Linker::new(module_engine);
         register_host_functions(&mut linker)?;
 
-        // Create store with host state
-        let mut store = Store::new(engine.engine(), StoreData::new(security.capabilities));
+        let mut store = Store::new(module_engine, StoreData::new(security.capabilities));
 
         // Configure store limits
         let fuel_limit = security.limits.fuel_limit;
@@ -71,6 +75,21 @@ impl WasmInstance {
                 WasmError::instantiation(format!("Failed to instantiate module: {}", e))
             })?;
 
+        // Call _initialize if exported (needed for WASI reactor modules like Kotlin/Wasm)
+        if let Ok(init) = instance.get_typed_func::<(), ()>(&mut store, "_initialize") {
+            init.call_async(&mut store, ()).await.map_err(|e| {
+                WasmError::instantiation(format!("Failed to call _initialize: {}", e))
+            })?;
+        }
+
+        // Call _start if exported (needed for Grain, MoonBit and similar runtimes)
+        if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            start
+                .call_async(&mut store, ())
+                .await
+                .map_err(|e| WasmError::instantiation(format!("Failed to call _start: {}", e)))?;
+        }
+
         // Get memory export
         let memory =
             instance
@@ -78,6 +97,9 @@ impl WasmInstance {
                 .ok_or_else(|| WasmError::MissingExport {
                     export_name: "memory".to_string(),
                 })?;
+
+        // Store memory reference in StoreData so host functions can access it
+        store.data_mut().memory = Some(memory);
 
         // Get function exports
         // Try get_node (single-node) first, then get_nodes (multi-node package)
@@ -311,13 +333,31 @@ impl WasmInstance {
             Ok(ptr as u32)
         } else {
             // Use bump allocator
-            let allocator = self
-                .store
-                .data_mut()
-                .allocator
-                .as_mut()
-                .ok_or_else(|| WasmError::Internal("Allocator not initialized".to_string()))?;
-            allocator.bump_alloc(size, 8)
+            let ptr = {
+                let allocator =
+                    self.store.data_mut().allocator.as_mut().ok_or_else(|| {
+                        WasmError::Internal("Allocator not initialized".to_string())
+                    })?;
+                allocator.bump_alloc(size, 8)?
+            };
+
+            // Grow WASM memory if the allocation extends beyond current size
+            let end = ptr as u64 + size as u64;
+            let current_size = self.memory.data_size(&self.store) as u64;
+            if end > current_size {
+                let page_size: u64 = 65536;
+                let needed_pages = end.saturating_sub(current_size).div_ceil(page_size);
+                self.memory
+                    .grow(&mut self.store, needed_pages)
+                    .map_err(|e| {
+                        WasmError::memory_access(format!(
+                            "Failed to grow memory by {} pages: {}",
+                            needed_pages, e
+                        ))
+                    })?;
+            }
+
+            Ok(ptr)
         }
     }
 

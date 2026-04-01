@@ -1,0 +1,206 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const stats = [
+  { value: "1,000+", raw: 1000, suffix: "+", label: t("v3.proof.stat.nodes") },
+  { value: "15+", raw: 15, suffix: "+", label: t("v3.proof.stat.languages") },
+  { value: "~0.6ms", raw: 0.6, suffix: "ms", prefix: "~", label: t("v3.proof.stat.execution"), decimals: 1 },
+  { value: "1,000x", raw: 1000, suffix: "x", label: t("v3.proof.stat.faster") },
+  { value: "0", raw: 0, suffix: "", label: t("v3.proof.stat.rewrite") },
+];
+
+const quotes = [
+  { text: t("v3.proof.quote1"), author: t("v3.proof.quote1.author") },
+  { text: t("v3.proof.quote2"), author: t("v3.proof.quote2.author") },
+  { text: t("v3.proof.quote3"), author: t("v3.proof.quote3.author") },
+];
+
+const logos = [
+  "Docker", "Kubernetes", "PostgreSQL", "Kafka", "Slack",
+  "Jira", "Azure", "AWS", "GitHub", "Grafana",
+  "Redis", "MongoDB", "Terraform", "Jenkins", "GitLab",
+];
+---
+
+<section class="proof-belt relative isolate overflow-hidden py-10 md:py-14">
+  <!-- Gradient background -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="absolute inset-0 bg-gradient-to-r from-indigo-950/[0.04] via-indigo-900/[0.06] to-indigo-950/[0.04]"></div>
+    <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent"></div>
+    <div class="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent"></div>
+  </div>
+
+  <!-- Desktop: three-column row -->
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:gap-8">
+
+      <!-- Left: Logo ticker -->
+      <div class="proof-ticker relative w-full lg:w-1/3 overflow-hidden py-4 lg:py-0 mask-fade">
+        <div class="proof-ticker__track flex items-center gap-10 whitespace-nowrap" aria-hidden="true">
+          {[...logos, ...logos].map((name) => (
+            <span class="proof-ticker__logo inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground/50 select-none">
+              <svg class="h-5 w-5 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="4" />
+                <text x="12" y="16" text-anchor="middle" font-size="8" stroke="none" fill="currentColor" font-family="system-ui">{name.slice(0, 2)}</text>
+              </svg>
+              {name}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <!-- Center: Stats -->
+      <div class="w-full lg:w-1/3 py-6 lg:py-0">
+        <div class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-3" id="proof-stats">
+          {stats.map((s, i) => (
+            <div class={`text-center ${i === stats.length - 1 ? "col-span-2 sm:col-span-1" : ""}`}>
+              <span
+                class="proof-stat block font-mono text-2xl font-bold tracking-tight text-foreground"
+                data-raw={s.raw}
+                data-suffix={s.suffix}
+                data-prefix={s.prefix ?? ""}
+                data-decimals={s.decimals ?? 0}
+              >
+                {s.value}
+              </span>
+              <span class="mt-0.5 block text-xs text-muted-foreground">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <!-- Right: Rotating quote -->
+      <div class="w-full lg:w-1/3 py-4 lg:py-0">
+        <div class="proof-quotes relative min-h-[80px] flex items-center" id="proof-quotes">
+          {quotes.map((q, i) => (
+            <blockquote
+              class={`proof-quote absolute inset-0 flex flex-col justify-center transition-opacity duration-700 ${i === 0 ? "opacity-100" : "opacity-0"}`}
+              data-index={i}
+            >
+              <p class="text-sm italic leading-relaxed text-muted-foreground">"{q.text}"</p>
+              <footer class="mt-2 text-xs font-medium text-muted-foreground/70">— {q.author}</footer>
+            </blockquote>
+          ))}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<style>
+  /* Marquee */
+  .proof-ticker__track {
+    animation: proof-marquee 30s linear infinite;
+  }
+
+  @keyframes proof-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+
+  .mask-fade {
+    mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+  }
+
+  /* Quote fade is handled via Tailwind opacity + JS toggling */
+
+  @media (prefers-reduced-motion: reduce) {
+    .proof-ticker__track {
+      animation: none !important;
+    }
+    .proof-quote {
+      transition: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initCountUp() {
+    const container = document.getElementById("proof-stats");
+    if (!container) return;
+
+    const els = container.querySelectorAll<HTMLElement>(".proof-stat");
+    let animated = false;
+
+    function formatNumber(n: number, decimals: number): string {
+      if (decimals > 0) return n.toFixed(decimals);
+      if (n >= 1000) return n.toLocaleString("en-US");
+      return String(Math.round(n));
+    }
+
+    function animate() {
+      if (animated) return;
+      animated = true;
+
+      for (const el of els) {
+        const raw = parseFloat(el.dataset.raw ?? "0");
+        const suffix = el.dataset.suffix ?? "";
+        const prefix = el.dataset.prefix ?? "";
+        const decimals = parseInt(el.dataset.decimals ?? "0", 10);
+        const duration = 1200;
+        const start = performance.now();
+
+        function tick(now: number) {
+          const elapsed = now - start;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const current = raw * eased;
+          el.textContent = `${prefix}${formatNumber(current, decimals)}${suffix}`;
+          if (progress < 1) requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+      }
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      animate();
+      return;
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            animate();
+            io.disconnect();
+          }
+        }
+      },
+      { threshold: 0.3 },
+    );
+    io.observe(container);
+  }
+
+  function initQuoteRotation() {
+    const container = document.getElementById("proof-quotes");
+    if (!container) return;
+
+    const quotes = container.querySelectorAll<HTMLElement>(".proof-quote");
+    if (quotes.length < 2) return;
+
+    let current = 0;
+
+    setInterval(() => {
+      quotes[current].classList.remove("opacity-100");
+      quotes[current].classList.add("opacity-0");
+      current = (current + 1) % quotes.length;
+      quotes[current].classList.remove("opacity-0");
+      quotes[current].classList.add("opacity-100");
+    }, 6000);
+  }
+
+  initCountUp();
+  initQuoteRotation();
+</script>

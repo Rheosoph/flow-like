@@ -1,0 +1,84 @@
+[tools]
+cmake = "latest"
+
+[tasks.setup]
+description = "Install wasi-sdk, wasm-tools, and wit-bindgen CLI"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -- wasi-sdk --
+WASI_SDK_VERSION=25
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)  WASI_SDK_ARCH="x86_64-linux" ;;
+    Linux-aarch64) WASI_SDK_ARCH="aarch64-linux" ;;
+    Darwin-x86_64) WASI_SDK_ARCH="x86_64-macos" ;;
+    Darwin-arm64)  WASI_SDK_ARCH="arm64-macos" ;;
+    *) echo "Unsupported platform"; exit 1 ;;
+esac
+WASI_SDK_DIR="$HOME/.wasi-sdk/wasi-sdk-${WASI_SDK_VERSION}.0"
+if [ ! -d "$WASI_SDK_DIR" ]; then
+    echo "Installing wasi-sdk ${WASI_SDK_VERSION}..."
+    mkdir -p "$HOME/.wasi-sdk"
+    curl -fsSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${WASI_SDK_ARCH}.tar.gz" \
+        | tar xz -C "$HOME/.wasi-sdk"
+    # Normalize directory name
+    if [ ! -d "$WASI_SDK_DIR" ]; then
+        mv "$HOME/.wasi-sdk"/wasi-sdk-${WASI_SDK_VERSION}.0-* "$WASI_SDK_DIR"
+    fi
+fi
+echo "wasi-sdk: $WASI_SDK_DIR"
+
+# -- wasm-tools --
+if ! command -v wasm-tools &>/dev/null; then
+    echo "Installing wasm-tools..."
+    cargo install wasm-tools
+fi
+
+# -- wit-bindgen --
+if ! command -v wit-bindgen &>/dev/null; then
+    echo "Installing wit-bindgen..."
+    cargo install wit-bindgen-cli@0.53.1
+fi
+
+# -- WASI preview1 reactor adapter --
+ADAPTER="$HOME/.wasi-sdk/wasi_snapshot_preview1.reactor.wasm"
+if [ ! -f "$ADAPTER" ]; then
+    echo "Downloading WASI preview1 reactor adapter..."
+    curl -fsSL "https://github.com/bytecodealliance/wasmtime/releases/download/v31.0.0/wasi_snapshot_preview1.reactor.wasm" \
+        -o "$ADAPTER"
+fi
+"""
+
+[tasks.generate]
+description = "Generate C bindings from WIT"
+run = "wit-bindgen c --world flow-like-node --out-dir gen wit/flow-like-node.wit"
+
+[tasks.build]
+description = "Build the WASM component"
+depends = ["generate"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+WASI_SDK_VERSION=25
+export WASI_SDK_PATH="$HOME/.wasi-sdk/wasi-sdk-${WASI_SDK_VERSION}.0"
+ADAPTER="$HOME/.wasi-sdk/wasi_snapshot_preview1.reactor.wasm"
+
+mkdir -p build && cd build
+cmake .. -DCMAKE_TOOLCHAIN_FILE="$WASI_SDK_PATH/share/cmake/wasi-sdk.cmake"
+make
+
+cd ..
+wasm-tools component new build/node.wasm \
+    --adapt "wasi_snapshot_preview1=$ADAPTER" \
+    -o node.wasm
+echo "Component written to node.wasm"
+"""
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+rm -rf build/ gen/ node.wasm
+"""
+

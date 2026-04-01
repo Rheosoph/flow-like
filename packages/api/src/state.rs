@@ -9,6 +9,9 @@ use flow_like::flow_like_storage::Path;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::hub::{Environment, Hub};
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner};
+use flow_like_secrets::{
+    EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
+};
 use flow_like_types::bail;
 use flow_like_types::{Result, Value};
 use hyper_util::{
@@ -22,10 +25,12 @@ use jsonwebtoken::{
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
 use crate::entity::role;
 use crate::execution::{DispatchConfig, Dispatcher};
 use crate::mail::{DynMailClient, create_mail_client};
+use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
@@ -42,6 +47,12 @@ pub enum CachedAuth {
     PAT { sub: String },
     /// API key with key_id and app_id
     ApiKey { key_id: String, app_id: String },
+    /// Executor JWT with sub, app_id, run_id
+    Executor {
+        sub: String,
+        app_id: String,
+        run_id: String,
+    },
     /// Invalid/expired token
     Invalid,
 }
@@ -59,11 +70,16 @@ pub struct State {
     pub registry: Arc<FlowNodeRegistryInner>,
     pub provider: Arc<ModelProviderConfiguration>,
     pub dispatcher: Arc<Dispatcher>,
+    pub compilation_dispatcher: Arc<CompilationDispatcher>,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
+    pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
+    pub meta_bucket: Arc<FlowLikeStore>,
     pub response_cache: moka::sync::Cache<String, Value>,
+    /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
+    pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
     /// Auth token cache: token_hash -> CachedAuth
     /// Short TTL (240s) to balance security vs performance
     pub auth_cache: moka::sync::Cache<String, CachedAuth>,
@@ -71,26 +87,128 @@ pub struct State {
     pub wasm_registry: Option<Arc<ServerRegistry>>,
     /// Sink scheduler for cron events (AWS EventBridge, K8s CronJobs, or in-memory)
     pub sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>>,
+    /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
+    pub secrets: Arc<SecretStore>,
+    /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
+    pub encryption_key: [u8; 32],
+    /// HMAC secret for signing/verifying sink trigger JWTs
+    pub sink_secret: Option<String>,
 }
 
 impl State {
     pub async fn new(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
+        secret_store_config: Option<SecretStoreConfig>,
     ) -> Self {
+        let secrets = {
+            let config = secret_store_config.unwrap_or_else(|| {
+                let prefix = std::env::var("SECRET_PREFIX").ok();
+                SecretStoreConfig::default()
+                    .with_provider(ProviderConfig::Env(EnvProviderConfig { prefix }))
+            });
+            Arc::new(SecretStore::new(config).expect("Failed to create secret store"))
+        };
+
+        // Batch-fetch all secrets under the prefix (e.g. SSM GetParametersByPath)
+        // so individual get_secret() calls below hit the warm cache.
+        secrets.warmup().await;
+
+        let sink_secret = secrets
+            .get_secret_string(&SecretRef::new("SINK_SECRET"))
+            .await
+            .ok()
+            .map(|s| s.expose_secret().to_string());
+
+        if sink_secret.is_none() {
+            tracing::warn!(
+                "SINK_SECRET not configured — sink trigger endpoints will be unavailable"
+            );
+        }
+
+        let encryption_key = {
+            let key_material = secrets
+                .get_secret_string(&SecretRef::new("SINK_TOKEN_ENCRYPTION_KEY"))
+                .await
+                .map(|s| s.expose_secret().to_string())
+                .unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
+                        Set SINK_TOKEN_ENCRYPTION_KEY in production!"
+                    );
+                    "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
+                });
+            *blake3::hash(key_material.as_bytes()).as_bytes()
+        };
+
+        // Initialize backend JWT keys from the secret store
+        {
+            let backend_key = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KEY"))
+                .await;
+            if let Err(ref e) = backend_key {
+                tracing::error!("Failed to fetch BACKEND_KEY from secret store: {e}");
+            }
+            let backend_key = backend_key.ok().map(|s| s.expose_secret().to_string());
+            tracing::info!(
+                "BACKEND_KEY resolved: {}",
+                if backend_key.is_some() { "yes" } else { "no" }
+            );
+
+            let backend_pub = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_PUB"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            let backend_kid = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KID"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+
+            crate::backend_jwt::init(
+                backend_key.as_deref(),
+                backend_pub.as_deref(),
+                backend_kid.clone(),
+            );
+            crate::audit::sign::init(backend_key.as_deref(), backend_kid);
+        }
+
         let platform_config: Hub =
             serde_json::from_str(CONFIG).expect("Failed to parse config file");
 
         let jwks = flow_like_types::json::from_str::<JwkSet>(JWKS).expect("Failed to parse JWKS");
 
-        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let mut opt = ConnectOptions::new(db_url.to_owned());
+        // Create content + meta buckets from master credentials (same mechanism
+        // that board/storage already uses — works with IAM roles, STS, etc.)
+        let master_creds = RuntimeCredentials::master_credentials()
+            .await
+            .expect("Failed to load master credentials");
+        let content_bucket = Arc::new(
+            master_creds
+                .to_store(false)
+                .await
+                .expect("Failed to create content store from master credentials"),
+        );
+        let meta_bucket = Arc::new(
+            master_creds
+                .to_store(true)
+                .await
+                .expect("Failed to create meta store from master credentials"),
+        );
+
+        let db_url = secrets
+            .get_secret_string(&SecretRef::new("DATABASE_URL"))
+            .await
+            .expect("DATABASE_URL must be set");
+        let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
         opt.max_connections(10)
             .min_connections(1)
             .connect_timeout(Duration::from_secs(8))
+            .connect_lazy(true)
             .sqlx_logging(platform_config.environment == Environment::Development);
 
         let db = Database::connect(opt)
@@ -98,9 +216,14 @@ impl State {
             .expect("Failed to connect to database");
 
         let stripe_client = if platform_config.features.premium {
-            let stripe_key =
-                std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
-            let stripe_client = stripe::Client::new(stripe_key);
+            let stripe_key = secrets
+                .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))
+                .await
+                .expect("STRIPE_SECRET_KEY must be set");
+            let exposed = stripe_key.expose_secret();
+            let preview: String = exposed.chars().take(8).collect();
+            tracing::info!("Stripe client initialized (key starts with: {preview}…)");
+            let stripe_client = stripe::Client::new(exposed);
             Some(stripe_client)
         } else {
             None
@@ -124,7 +247,7 @@ impl State {
 
         let cache = moka::sync::Cache::builder()
             .max_capacity(32 * 1024 * 1024) // 32 MB
-            .time_to_live(Duration::from_secs(30 * 60)) // 30 minutes
+            .time_to_live(Duration::from_secs(20 * 60)) // 20 minutes — credentials are valid for 1h, so cached ones always have ≥40min remaining
             .build();
 
         let response_cache = moka::sync::Cache::builder()
@@ -146,12 +269,25 @@ impl State {
 
         // Initialize dispatcher once with env config (caches AWS/Redis clients)
         let dispatch_config = DispatchConfig::from_env();
-        let dispatcher = Dispatcher::new(dispatch_config).await;
+        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone())).await;
 
-        // Initialize WASM registry if enabled (uses PostgreSQL + CDN)
+        // Initialize compilation dispatcher (mirrors execution dispatcher pattern)
+        let compilation_config = CompilationDispatchConfig::from_env();
+        tracing::info!(backend = ?compilation_config.backend, "Compilation dispatch backend");
+        let compilation_dispatcher = Arc::new(
+            CompilationDispatcher::new(
+                compilation_config,
+                content_bucket.clone(),
+                meta_bucket.clone(),
+            )
+            .await,
+        );
+
+        // Initialize WASM registry if enabled (uses PostgreSQL)
         let wasm_registry = if platform_config.features.wasm_registry {
-            let cdn_base_url = platform_config.cdn.clone();
-            let registry = ServerRegistry::new(db.clone(), cdn_bucket.clone(), cdn_base_url);
+            let registry =
+                ServerRegistry::new(db.clone(), content_bucket.clone(), meta_bucket.clone())
+                    .with_compilation_dispatcher(compilation_dispatcher.clone());
             Some(Arc::new(registry))
         } else {
             None
@@ -231,6 +367,7 @@ impl State {
             provider: Arc::new(provider),
             registry: Arc::new(registry),
             dispatcher: Arc::new(dispatcher),
+            compilation_dispatcher,
             permission_cache: moka::sync::Cache::builder()
                 .max_capacity(32 * 1024 * 1024)
                 .time_to_live(Duration::from_secs(120))
@@ -240,8 +377,14 @@ impl State {
                 .time_to_live(Duration::from_secs(30 * 60))
                 .build(),
             credentials_cache: cache,
+            content_bucket,
             cdn_bucket,
+            meta_bucket,
             response_cache,
+            wasm_permission_cache: moka::sync::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(Duration::from_secs(120))
+                .build(),
             // Auth cache: max 10k entries, 60s TTL for security
             // Entries are keyed by token hash to avoid storing raw tokens
             auth_cache: moka::sync::Cache::builder()
@@ -250,6 +393,9 @@ impl State {
                 .build(),
             wasm_registry,
             sink_scheduler,
+            secrets,
+            encryption_key,
+            sink_secret,
         }
     }
 
@@ -437,6 +583,54 @@ impl State {
     pub fn invalidate_permission(&self, sub: &str, app_id: &str) {
         let key = format!("{}:{}", sub, app_id);
         self.permission_cache.invalidate(&key);
+    }
+
+    pub fn check_wasm_permission(
+        &self,
+        user_id: &str,
+        package_id: &str,
+    ) -> Option<WasmPackagePermission> {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.get(&key)
+    }
+
+    pub fn put_wasm_permission(
+        &self,
+        user_id: &str,
+        package_id: &str,
+        perm: WasmPackagePermission,
+    ) {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.insert(key, perm);
+    }
+
+    pub fn invalidate_wasm_permission(&self, user_id: &str, package_id: &str) {
+        let key = format!("wasm:{}:{}", user_id, package_id);
+        self.wasm_permission_cache.invalidate(&key);
+    }
+
+    pub async fn invalidate_role_permissions(
+        &self,
+        role_id: &str,
+        app_id: &str,
+    ) -> flow_like_types::Result<()> {
+        use crate::entity::membership;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+        let user_ids: Vec<String> = membership::Entity::find()
+            .filter(membership::Column::RoleId.eq(role_id))
+            .filter(membership::Column::AppId.eq(app_id))
+            .select_only()
+            .column(membership::Column::UserId)
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+
+        for user_id in &user_ids {
+            self.invalidate_permission(user_id, app_id);
+        }
+
+        Ok(())
     }
 
     pub fn get_cache<T>(&self, key: &str) -> Option<T>

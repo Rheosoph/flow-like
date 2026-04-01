@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../../hooks";
+import { hashToGradient, useThemeInfo } from "../../../hooks/use-theme-gradient";
 import { useBackend } from "../../../state/backend-state";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -461,7 +462,7 @@ export function FlowTemplateSelector({
 							</div>
 
 							{/* Template Grid/List */}
-							<ScrollArea className="flex-1">
+							<ScrollArea className="flex-1 min-h-0">
 								{viewMode === "grid" ? (
 									<div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 										{filteredTemplates.map((template) => {
@@ -555,6 +556,7 @@ function InlineTemplatePreview({
 	onBack: () => void;
 	onDismiss?: () => void;
 }) {
+	const { primaryHue, isDark } = useThemeInfo();
 	const backend = useBackend();
 	const templateBoard = useInvoke(
 		backend.templateState.getTemplate,
@@ -627,9 +629,17 @@ function InlineTemplatePreview({
 							className="h-10 w-10 rounded-lg object-cover shrink-0"
 						/>
 					) : (
-						<div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/10 to-violet-500/10 flex items-center justify-center shrink-0">
-							<LayoutTemplate className="h-5 w-5 text-primary/70" />
-						</div>
+						(() => {
+							const g = hashToGradient(template.appId, primaryHue, isDark);
+							return (
+								<div
+									className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0"
+									style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+								>
+									<LayoutTemplate className="h-5 w-5 text-white/80" />
+								</div>
+							);
+						})()
 					)}
 					<div className="flex-1 min-w-0">
 						{template.metadata?.tags && template.metadata.tags.length > 0 && (
@@ -704,6 +714,7 @@ function QuickTemplateItem({
 	appName?: string;
 	onClick: () => void;
 }) {
+	const { primaryHue, isDark } = useThemeInfo();
 	return (
 		<button
 			type="button"
@@ -717,9 +728,17 @@ function QuickTemplateItem({
 					className="h-10 w-10 rounded-lg object-cover shrink-0"
 				/>
 			) : (
-				<div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/10 to-violet-500/10 flex items-center justify-center shrink-0 group-hover:from-primary/20 group-hover:to-violet-500/20 transition-colors">
-					<LayoutTemplate className="h-5 w-5 text-primary/70 group-hover:text-primary transition-colors" />
-				</div>
+				(() => {
+					const g = hashToGradient(template.appId, primaryHue, isDark);
+					return (
+						<div
+							className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0 transition-opacity group-hover:opacity-80"
+							style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+						>
+							<LayoutTemplate className="h-5 w-5 text-white/80 group-hover:text-white transition-colors" />
+						</div>
+					);
+				})()
 			)}
 			<div className="flex-1 min-w-0">
 				<div className="flex items-center gap-1.5">
@@ -756,6 +775,7 @@ function BrowserPreviewPane({
 	onApply: () => void;
 	onClose: () => void;
 }) {
+	const { primaryHue, isDark } = useThemeInfo();
 	const backend = useBackend();
 	const templateBoard = useInvoke(
 		backend.templateState.getTemplate,
@@ -818,9 +838,17 @@ function BrowserPreviewPane({
 								className="h-12 w-12 rounded-xl object-cover shrink-0"
 							/>
 						) : (
-							<div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary/10 to-violet-500/10 flex items-center justify-center shrink-0">
-								<LayoutTemplate className="h-6 w-6 text-primary/70" />
-							</div>
+							(() => {
+								const g = hashToGradient(template.appId, primaryHue, isDark);
+								return (
+									<div
+										className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0"
+										style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+									>
+										<LayoutTemplate className="h-6 w-6 text-white/80" />
+									</div>
+								);
+							})()
 						)}
 						<div className="flex-1 min-w-0">
 							<h2 className="text-lg font-semibold text-foreground">
@@ -905,6 +933,7 @@ function BrowserTemplateCard({
 	isSelected?: boolean;
 	onClick: () => void;
 }) {
+	const { primaryHue, isDark } = useThemeInfo();
 	return (
 		<button
 			type="button"
@@ -916,7 +945,7 @@ function BrowserTemplateCard({
 			}`}
 		>
 			{/* Preview placeholder */}
-			<div className="aspect-video bg-gradient-to-br from-muted/50 to-muted/30 relative overflow-hidden flex items-center justify-center">
+			<div className="aspect-video relative overflow-hidden flex items-center justify-center">
 				{appThumbnail ? (
 					<img
 						src={appThumbnail}
@@ -924,21 +953,29 @@ function BrowserTemplateCard({
 						className="absolute inset-0 w-full h-full object-cover"
 					/>
 				) : (
-					<div className="flex flex-col items-center gap-2">
-						{appIcon ? (
-							<img
-								src={appIcon}
-								alt=""
-								className="h-12 w-12 rounded-xl object-cover"
-							/>
-						) : (
-							<div className="h-12 w-12 rounded-xl bg-background/80 flex items-center justify-center">
-								<LayoutTemplate className="h-6 w-6 text-primary/60" />
-							</div>
-						)}
-					</div>
+					<>
+						{(() => {
+							const g = hashToGradient(template.appId, primaryHue, isDark);
+							return (
+								<div
+									className="absolute inset-0"
+									style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+								/>
+							);
+						})()}
+						<div className="relative flex flex-col items-center gap-2">
+							{appIcon ? (
+								<img
+									src={appIcon}
+									alt=""
+									className="h-12 w-12 rounded-xl object-cover"
+								/>
+							) : (
+								<LayoutTemplate className="h-8 w-8 text-white/80" />
+							)}
+						</div>
+					</>
 				)}
-				<div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 				{/* App name badge */}
 				{appName && (
 					<div className="absolute top-2 left-2">
@@ -993,6 +1030,7 @@ function BrowserTemplateRow({
 	isSelected?: boolean;
 	onClick: () => void;
 }) {
+	const { primaryHue, isDark } = useThemeInfo();
 	return (
 		<button
 			type="button"
@@ -1010,9 +1048,17 @@ function BrowserTemplateRow({
 					className="h-12 w-12 rounded-lg object-cover shrink-0"
 				/>
 			) : (
-				<div className="h-12 w-12 rounded-lg bg-gradient-to-br from-primary/10 to-violet-500/10 flex items-center justify-center shrink-0">
-					<LayoutTemplate className="h-6 w-6 text-primary/70" />
-				</div>
+				(() => {
+					const g = hashToGradient(template.appId, primaryHue, isDark);
+					return (
+						<div
+							className="h-12 w-12 rounded-lg flex items-center justify-center shrink-0"
+							style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+						>
+							<LayoutTemplate className="h-6 w-6 text-white/80" />
+						</div>
+					);
+				})()
 			)}
 			<div className="flex-1 min-w-0">
 				<div className="flex items-center gap-2">

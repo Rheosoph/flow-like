@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import { useMemo } from "react";
 import { useBackend, useInvoke } from "../../../..";
 import {
 	Select,
@@ -8,6 +9,7 @@ import {
 	SelectLabel,
 	SelectTrigger,
 } from "../../../../components/ui/select";
+import type { IVariable } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -19,12 +21,14 @@ export function VarVariable({
 	value,
 	boardId,
 	appId,
+	currentLayerId,
 	setValue,
 }: Readonly<{
 	pin: IPin;
 	value: number[] | undefined | null;
 	boardId: string;
 	appId: string;
+	currentLayerId?: string;
 	setValue: (value: any) => void;
 }>) {
 	const backend = useBackend();
@@ -32,6 +36,15 @@ export function VarVariable({
 		appId,
 		boardId,
 	]);
+
+	const allVariables = useMemo<Record<string, IVariable>>(() => {
+		if (!board.data) return {};
+		if (currentLayerId) {
+			const layer = board.data.layers?.[currentLayerId];
+			return { ...board.data.variables, ...layer?.variables };
+		}
+		return { ...board.data.variables };
+	}, [board.data, currentLayerId]);
 
 	return (
 		<div className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden">
@@ -48,7 +61,7 @@ export function VarVariable({
 					<small className="text-start text-[10px] m-0! truncate">
 						{!board.data && "Loading..."}
 						{board.data &&
-							(board?.data?.variables?.[parseUint8ArrayToJson(value)]?.name ??
+							(allVariables[parseUint8ArrayToJson(value)]?.name ??
 								"No Variable Selected")}
 					</small>
 					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
@@ -56,13 +69,11 @@ export function VarVariable({
 				<SelectContent className="bg-background">
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
-						{Object.values(board?.data?.variables ?? {})?.map((variable) => {
-							return (
-								<SelectItem key={variable.id} value={variable.id}>
-									{variable.name}
-								</SelectItem>
-							);
-						})}
+						{Object.values(allVariables).map((variable) => (
+							<SelectItem key={variable.id} value={variable.id}>
+								{variable.name}
+							</SelectItem>
+						))}
 					</SelectGroup>
 				</SelectContent>
 			</Select>

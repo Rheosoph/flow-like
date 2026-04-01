@@ -39,10 +39,8 @@ pub fn handle_deep_link(app_handle: &AppHandle, urls: &Vec<Url>) {
             }
         }
 
-        if is_app_universal_link(url) {
-            if handle_universal_link(app_handle, url) {
-                continue;
-            }
+        if is_app_universal_link(url) && handle_universal_link(app_handle, url) {
+            continue;
         }
 
         if url.scheme() == "flow-like" {
@@ -272,10 +270,10 @@ fn handle_store(app_handle: &AppHandle, url: &Url) {
 
     if app_id.is_none() {
         let path = url.path().trim_matches('/');
-        if let Some(rest) = path.strip_prefix("store/") {
-            if !rest.is_empty() {
-                app_id = Some(rest.to_string());
-            }
+        if let Some(rest) = path.strip_prefix("store/")
+            && !rest.is_empty()
+        {
+            app_id = Some(rest.to_string());
         }
     }
 

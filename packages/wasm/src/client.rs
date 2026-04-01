@@ -3,14 +3,18 @@
 use crate::{
     manifest::PackageManifest,
     registry::{
-        CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, LocalRegistryState,
-        PackageSource, PackageSummary, PackageVersion, PublishRequest, PublishResponse,
-        RegistryConfig, RegistryEntry, RegistryIndex, SearchFilters, SearchResults,
+        CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
+        LocalRegistryState, PackageSource, PackageVersion, PublishRequest, PublishResponse,
+        RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
     },
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Registry client for managing WASM packages
@@ -38,9 +42,20 @@ impl RegistryClient {
         tokio::fs::create_dir_all(&self.config.cache_dir).await?;
         tokio::fs::create_dir_all(self.config.cache_dir.join("packages")).await?;
         tokio::fs::create_dir_all(self.config.cache_dir.join("manifests")).await?;
+        tokio::fs::create_dir_all(self.config.cache_dir.join("wasm").join("nodes")).await?;
 
         self.load_state().await?;
         Ok(())
+    }
+
+    fn versioned_wasm_path(&self, package_id: &str, version: &str) -> PathBuf {
+        self.config
+            .cache_dir
+            .join("wasm")
+            .join("nodes")
+            .join(package_id)
+            .join(version)
+            .join("node.wasm")
     }
 
     async fn load_state(&self) -> Result<()> {
@@ -62,142 +77,91 @@ impl RegistryClient {
         Ok(())
     }
 
-    /// Fetch package index from remote registry
-    pub async fn fetch_index(&self, registry_url: &str) -> Result<RegistryIndex> {
-        let url = format!("{}/index.json", registry_url);
-        let response = self.http_client.get(&url).send().await?;
+    /// Set the auth token for authenticated API requests
+    pub fn set_auth_token(&mut self, token: Option<String>) {
+        self.config.auth_token = token;
+    }
+
+    /// Get the current auth token (if any)
+    pub fn auth_token(&self) -> Option<&String> {
+        self.config.auth_token.as_ref()
+    }
+
+    fn build_search_url(&self, filters: &SearchFilters, include_own: bool) -> String {
+        let base = format!("{}/search", self.config.default_registry);
+        let mut url = reqwest::Url::parse(&base).expect("invalid registry URL");
+
+        {
+            let mut params = url.query_pairs_mut();
+            if let Some(q) = &filters.query {
+                params.append_pair("query", q);
+            }
+            if let Some(cat) = &filters.category {
+                params.append_pair("category", cat);
+            }
+            for kw in &filters.keywords {
+                params.append_pair("keywords", kw);
+            }
+            if let Some(author) = &filters.author {
+                params.append_pair("author", author);
+            }
+            if filters.verified_only {
+                params.append_pair("verified_only", "true");
+            }
+            if filters.include_deprecated {
+                params.append_pair("include_deprecated", "true");
+            }
+            if filters.include_disabled {
+                params.append_pair("include_disabled", "true");
+            }
+            params.append_pair("offset", &filters.offset.to_string());
+            params.append_pair("limit", &filters.limit.to_string());
+            let sort_str = match filters.sort_by {
+                crate::registry::SortField::Relevance => "relevance",
+                crate::registry::SortField::Name => "name",
+                crate::registry::SortField::Downloads => "downloads",
+                crate::registry::SortField::UpdatedAt => "updated_at",
+                crate::registry::SortField::CreatedAt => "created_at",
+            };
+            params.append_pair("sort_by", sort_str);
+            params.append_pair("sort_desc", &filters.sort_desc.to_string());
+            if include_own {
+                params.append_pair("include_own", "true");
+            }
+        }
+
+        url.to_string()
+    }
+
+    /// Search packages via the remote registry API
+    pub async fn search_with_token(
+        &self,
+        filters: &SearchFilters,
+        auth_token: Option<&str>,
+    ) -> Result<SearchResults> {
+        let effective_token = auth_token
+            .map(String::from)
+            .or_else(|| self.config.auth_token.clone());
+        let url = self.build_search_url(filters, effective_token.is_some());
+
+        let mut request = self.http_client.get(&url);
+        if let Some(token) = &effective_token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let response = request.send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to fetch registry index: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Failed to search registry: {}", response.status()));
         }
 
-        let index: RegistryIndex = response.json().await?;
-
-        let index_file = sanitize_filename(registry_url);
-        let index_path = self
-            .config
-            .cache_dir
-            .join(format!("{}.index.json", index_file));
-        let data = serde_json::to_string_pretty(&index)?;
-        tokio::fs::write(&index_path, data).await?;
-
-        let mut state = self.state.write().await;
-        state
-            .index_refresh
-            .insert(registry_url.to_string(), Utc::now());
-        drop(state);
-        self.save_state().await?;
-
-        Ok(index)
+        let results: SearchResults = response.json().await?;
+        Ok(results)
     }
 
-    /// Get cached index (offline-first)
-    pub async fn get_index(&self) -> Result<RegistryIndex> {
-        let registry_url = &self.config.default_registry;
-        let index_file = sanitize_filename(registry_url);
-        let index_path = self
-            .config
-            .cache_dir
-            .join(format!("{}.index.json", index_file));
-
-        let state = self.state.read().await;
-        let last_refresh = state.index_refresh.get(registry_url).cloned();
-        drop(state);
-
-        let should_refresh = match last_refresh {
-            Some(time) => {
-                let age_hours = Utc::now().signed_duration_since(time).num_hours();
-                age_hours >= self.config.cache_duration_hours as i64
-            }
-            None => true,
-        };
-
-        if !should_refresh && index_path.exists() {
-            let data = tokio::fs::read_to_string(&index_path).await?;
-            if let Ok(index) = serde_json::from_str::<RegistryIndex>(&data) {
-                return Ok(index);
-            }
-        }
-
-        match self.fetch_index(registry_url).await {
-            Ok(index) => Ok(index),
-            Err(e) => {
-                if index_path.exists() {
-                    tracing::warn!("Using stale index due to network error: {}", e);
-                    let data = tokio::fs::read_to_string(&index_path).await?;
-                    Ok(serde_json::from_str(&data)?)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Search packages with filters
+    /// Search packages via the remote registry API (uses stored token)
     pub async fn search(&self, filters: &SearchFilters) -> Result<SearchResults> {
-        let index = self.get_index().await?;
-
-        let mut results: Vec<PackageSummary> = index
-            .packages
-            .into_iter()
-            .filter(|pkg| {
-                if let Some(query) = &filters.query {
-                    let q = query.to_lowercase();
-                    let name_match = pkg.name.to_lowercase().contains(&q);
-                    let desc_match = pkg.description.to_lowercase().contains(&q);
-                    let keyword_match = pkg.keywords.iter().any(|k| k.to_lowercase().contains(&q));
-                    if !name_match && !desc_match && !keyword_match {
-                        return false;
-                    }
-                }
-
-                if filters.verified_only && !pkg.verified {
-                    return false;
-                }
-
-                true
-            })
-            .collect();
-
-        let total_count = results.len();
-
-        match filters.sort_by {
-            crate::registry::SortField::Downloads => {
-                results.sort_by(|a, b| {
-                    if filters.sort_desc {
-                        b.download_count.cmp(&a.download_count)
-                    } else {
-                        a.download_count.cmp(&b.download_count)
-                    }
-                });
-            }
-            crate::registry::SortField::Name => {
-                results.sort_by(|a, b| {
-                    if filters.sort_desc {
-                        b.name.cmp(&a.name)
-                    } else {
-                        a.name.cmp(&b.name)
-                    }
-                });
-            }
-            _ => {}
-        }
-
-        let results: Vec<PackageSummary> = results
-            .into_iter()
-            .skip(filters.offset)
-            .take(filters.limit)
-            .collect();
-
-        Ok(SearchResults {
-            packages: results,
-            total_count,
-            offset: filters.offset,
-            limit: filters.limit,
-        })
+        self.search_with_token(filters, None).await
     }
 
     /// Download and cache a package
@@ -205,6 +169,7 @@ impl RegistryClient {
         &self,
         package_id: &str,
         version: Option<&str>,
+        auth_token: Option<&str>,
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
@@ -216,6 +181,7 @@ impl RegistryClient {
                     entry: RegistryEntry {
                         id: installed.id.clone(),
                         manifest: installed.manifest.clone(),
+                        nodes: vec![],
                         versions: vec![PackageVersion {
                             version: installed.version.clone(),
                             wasm_hash: String::new(),
@@ -244,10 +210,18 @@ impl RegistryClient {
         let request = DownloadRequest {
             package_id: package_id.to_string(),
             version: version.map(String::from),
+            target_platform: Some(crate::aot_cache::host_platform_key()),
         };
 
         let url = format!("{}/download", self.config.default_registry);
-        let response = self.http_client.post(&url).json(&request).send().await?;
+        let mut req = self.http_client.post(&url).json(&request);
+        let effective_token = auth_token
+            .map(String::from)
+            .or_else(|| self.config.auth_token.clone());
+        if let Some(token) = &effective_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let response = req.send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to download package: {}", response.status()));
@@ -273,31 +247,70 @@ impl RegistryClient {
             return Err(anyhow!("No download URL or WASM data in response"));
         };
 
-        let cache_key = format!("{}@{}", download.package_id, download.version);
-        let wasm_path = self
-            .config
-            .cache_dir
-            .join("packages")
-            .join(format!("{}.wasm", cache_key));
-
+        let wasm_path = self.versioned_wasm_path(&download.package_id, &download.version);
+        if let Some(parent) = wasm_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         tokio::fs::write(&wasm_path, &wasm_data).await?;
 
-        let installed = InstalledPackage {
-            id: download.package_id.clone(),
+        // If the server provided a precompiled .cwasm, download and store it
+        // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
+        if let Some(cwasm_url) = &download.cwasm_download_url {
+            match self
+                .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
+                }
+                Err(e) => tracing::error!(
+                    "Failed to download cwasm for {}: {}",
+                    download.package_id,
+                    e
+                ),
+            }
+        }
+
+        let now = Utc::now();
+        let wasm_hash = Some(calculate_hash(&wasm_data));
+        let installed_version = InstalledVersion {
             version: download.version.clone(),
-            source: PackageSource::Remote {
-                registry_url: self.config.default_registry.clone(),
-                download_url: download.download_url.clone().unwrap_or(url.clone()),
-            },
-            installed_at: Utc::now(),
             wasm_path: wasm_path.clone(),
+            installed_at: now,
             manifest: download.manifest.clone(),
+            metadata: download.metadata.clone(),
+            wasm_hash: wasm_hash.clone(),
         };
 
         let mut state = self.state.write().await;
-        state
-            .installed
-            .insert(download.package_id.clone(), installed);
+        if let Some(existing) = state.installed.get_mut(&download.package_id) {
+            existing.version = download.version.clone();
+            existing.installed_at = now;
+            existing.wasm_path = wasm_path.clone();
+            existing.manifest = download.manifest.clone();
+            existing.metadata = download.metadata.clone();
+            existing
+                .versions
+                .insert(download.version.clone(), installed_version);
+        } else {
+            let installed = InstalledPackage {
+                id: download.package_id.clone(),
+                version: download.version.clone(),
+                source: PackageSource::Remote {
+                    registry_url: self.config.default_registry.clone(),
+                    download_url: download.download_url.clone().unwrap_or(url.clone()),
+                },
+                installed_at: now,
+                wasm_path: wasm_path.clone(),
+                manifest: download.manifest.clone(),
+                versions: HashMap::from([(download.version.clone(), installed_version)]),
+                metadata: download.metadata.clone(),
+                wasm_hash,
+            };
+            state
+                .installed
+                .insert(download.package_id.clone(), installed);
+        }
         drop(state);
         self.save_state().await?;
 
@@ -305,6 +318,7 @@ impl RegistryClient {
             entry: RegistryEntry {
                 id: download.package_id.clone(),
                 manifest: download.manifest,
+                nodes: vec![],
                 versions: vec![PackageVersion {
                     version: download.version.clone(),
                     wasm_hash: calculate_hash(&wasm_data),
@@ -332,8 +346,49 @@ impl RegistryClient {
     }
 
     /// Install a package (download + register)
-    pub async fn install(&self, package_id: &str, version: Option<&str>) -> Result<CachedPackage> {
-        self.download_package(package_id, version).await
+    pub async fn install(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+    ) -> Result<CachedPackage> {
+        self.download_package(package_id, version, auth_token).await
+    }
+
+    pub async fn install_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        auth_token: Option<&str>,
+    ) -> Result<CachedPackage> {
+        let state = self.state.read().await;
+        if let Some(installed) = state.installed.get(package_id) {
+            if let Some(iv) = installed.get_version(version) {
+                if iv.wasm_path.exists() {
+                    let wasm_data = tokio::fs::read(&iv.wasm_path).await?;
+                    return Ok(self.cached_package_from_version(installed, iv, wasm_data));
+                }
+            }
+        }
+        drop(state);
+
+        self.download_package(package_id, Some(version), auth_token)
+            .await
+    }
+
+    pub async fn batch_install(
+        &self,
+        packages: &[(String, Option<String>)],
+        auth_token: Option<&str>,
+    ) -> Result<Vec<(String, Result<CachedPackage>)>> {
+        let mut results = Vec::with_capacity(packages.len());
+        for (package_id, version) in packages {
+            let result = self
+                .install(package_id, version.as_deref(), auth_token)
+                .await;
+            results.push((package_id.clone(), result));
+        }
+        Ok(results)
     }
 
     /// Uninstall a package
@@ -358,21 +413,78 @@ impl RegistryClient {
         Ok(state.installed.values().cloned().collect())
     }
 
+    /// Check which local packages have a changed WASM file on disk.
+    /// Returns a list of (package_id, stored_hash, current_hash) for stale packages.
+    pub async fn check_local_staleness(&self) -> Vec<(String, String, String)> {
+        let state = self.state.read().await;
+        let locals: Vec<_> = state
+            .installed
+            .values()
+            .filter(|p| matches!(p.source, PackageSource::Local { .. }))
+            .cloned()
+            .collect();
+        drop(state);
+
+        let mut stale = Vec::new();
+        for pkg in locals {
+            let stored_hash = match &pkg.wasm_hash {
+                Some(h) => h.clone(),
+                None => continue,
+            };
+            let current_hash = match tokio::fs::read(&pkg.wasm_path).await {
+                Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+                Err(_) => continue,
+            };
+            if stored_hash != current_hash {
+                stale.push((pkg.id.clone(), stored_hash, current_hash));
+            }
+        }
+        stale
+    }
+
+    /// Update the stored wasm_hash for a local package after reloading.
+    pub async fn update_local_hash(&self, package_id: &str, new_hash: String) -> Result<()> {
+        let mut state = self.state.write().await;
+        if let Some(pkg) = state.installed.get_mut(package_id) {
+            if matches!(pkg.source, PackageSource::Local { .. }) {
+                pkg.wasm_hash = Some(new_hash.clone());
+                for iv in pkg.versions.values_mut() {
+                    iv.wasm_hash = Some(new_hash.clone());
+                }
+            }
+        }
+        drop(state);
+        self.save_state().await?;
+        Ok(())
+    }
+
     /// Check for updates to installed packages
-    pub async fn check_updates(&self) -> Result<Vec<(String, String, String)>> {
+    pub async fn check_updates(
+        &self,
+        auth_token: Option<&str>,
+    ) -> Result<Vec<(String, String, String)>> {
         let state = self.state.read().await;
         let installed: Vec<_> = state
             .installed
             .iter()
+            .filter(|(_, v)| !matches!(v.source, PackageSource::Local { .. }))
             .map(|(k, v)| (k.clone(), v.version.clone()))
             .collect();
         drop(state);
 
-        let index = self.get_index().await?;
-        let mut updates = Vec::new();
+        if installed.is_empty() {
+            return Ok(Vec::new());
+        }
 
+        let filters = SearchFilters {
+            limit: 200,
+            ..Default::default()
+        };
+        let results = self.search_with_token(&filters, auth_token).await?;
+
+        let mut updates = Vec::new();
         for (id, current_version) in installed {
-            if let Some(pkg) = index.packages.iter().find(|p| p.id == id) {
+            if let Some(pkg) = results.packages.iter().find(|p| p.id == id) {
                 if pkg.latest_version != current_version {
                     updates.push((id, current_version, pkg.latest_version.clone()));
                 }
@@ -442,6 +554,7 @@ impl RegistryClient {
         let entry = RegistryEntry {
             id: manifest.id.clone(),
             manifest: manifest.clone(),
+            nodes: vec![],
             versions: vec![PackageVersion {
                 version: manifest.version.clone(),
                 wasm_hash: calculate_hash(&wasm_data),
@@ -468,6 +581,68 @@ impl RegistryClient {
             cached_at: Utc::now(),
             expires_at: None,
         })
+    }
+
+    /// Register a local package in the installed list without downloading.
+    /// Used for developer projects so they appear in `list_installed()`.
+    pub async fn register_local_package(
+        &self,
+        wasm_path: &Path,
+        manifest: PackageManifest,
+    ) -> Result<InstalledPackage> {
+        let now = Utc::now();
+        let wasm_hash = match tokio::fs::read(wasm_path).await {
+            Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
+            Err(_) => None,
+        };
+        let version_entry = InstalledVersion {
+            version: manifest.version.clone(),
+            wasm_path: wasm_path.to_path_buf(),
+            installed_at: now,
+            manifest: manifest.clone(),
+            metadata: None,
+            wasm_hash: wasm_hash.clone(),
+        };
+        let installed = InstalledPackage {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            source: PackageSource::Local {
+                path: wasm_path.to_path_buf(),
+            },
+            installed_at: now,
+            wasm_path: wasm_path.to_path_buf(),
+            manifest,
+            versions: HashMap::from([(version_entry.version.clone(), version_entry)]),
+            metadata: None,
+            wasm_hash,
+        };
+
+        let mut state = self.state.write().await;
+        state
+            .installed
+            .insert(installed.id.clone(), installed.clone());
+        drop(state);
+        self.save_state().await?;
+
+        Ok(installed)
+    }
+
+    /// Unregister a local package without deleting its WASM file.
+    pub async fn unregister_local_package(&self, package_id: &str) -> Result<bool> {
+        let mut state = self.state.write().await;
+        let was_local = state
+            .installed
+            .get(package_id)
+            .map(|p| matches!(p.source, PackageSource::Local { .. }))
+            .unwrap_or(false);
+        if !was_local {
+            return Ok(false);
+        }
+        state.installed.remove(package_id);
+        state.cache_metadata.remove(package_id);
+        drop(state);
+        self.save_state().await?;
+        Ok(true)
     }
 
     /// Clear all cached packages
@@ -499,19 +674,52 @@ impl RegistryClient {
         state.installed.get(package_id).cloned()
     }
 
-    /// Load a WASM node from an installed package
-    /// Returns the WasmNodeLogic with security config based on package permissions
-    pub async fn load_node(
+    fn cached_package_from_version(
+        &self,
+        installed: &InstalledPackage,
+        iv: &InstalledVersion,
+        wasm_data: Vec<u8>,
+    ) -> CachedPackage {
+        CachedPackage {
+            entry: RegistryEntry {
+                id: installed.id.clone(),
+                manifest: iv.manifest.clone(),
+                nodes: vec![],
+                versions: vec![PackageVersion {
+                    version: iv.version.clone(),
+                    wasm_hash: String::new(),
+                    wasm_size: wasm_data.len() as u64,
+                    download_url: None,
+                    published_at: iv.installed_at,
+                    min_flow_like_version: None,
+                    release_notes: None,
+                    yanked: false,
+                }],
+                status: crate::registry::PackageStatus::Active,
+                download_count: 0,
+                created_at: iv.installed_at,
+                updated_at: iv.installed_at,
+                source: installed.source.clone(),
+                verified: false,
+            },
+            wasm_data,
+            cached_at: iv.installed_at,
+            expires_at: None,
+        }
+    }
+
+    /// Load WASM nodes from an installed package
+    /// Returns one WasmNodeLogic per node definition (supports multi-node packages)
+    pub async fn load_nodes(
         &self,
         package_id: &str,
         engine: Arc<crate::WasmEngine>,
-    ) -> Result<crate::WasmNodeLogic> {
+    ) -> Result<Vec<crate::WasmNodeLogic>> {
         let installed = self
             .get_installed(package_id)
             .await
             .ok_or_else(|| anyhow!("Package '{}' is not installed", package_id))?;
 
-        // Load WASM binary
         let wasm_bytes = tokio::fs::read(&installed.wasm_path).await.map_err(|e| {
             anyhow!(
                 "Failed to read WASM file at {:?}: {}",
@@ -520,37 +728,173 @@ impl RegistryClient {
             )
         })?;
 
-        // Create security config from manifest permissions
-        let security = installed.manifest.permissions.to_security_config();
+        // Inject precompiled .cwasm into AOT cache if available
+        Self::inject_precompiled_if_available(&wasm_bytes, &installed.wasm_path, &engine);
 
-        // Compute hash for module caching
-        let hash = calculate_hash(&wasm_bytes);
+        let manifest_security = installed.manifest.permissions.to_security_config();
+        let loaded = engine.load_auto(&wasm_bytes).await?;
+        let wasm_hash = loaded.hash().to_string();
 
-        // Create module from WASM bytes
-        let module = Arc::new(crate::WasmModule::from_bytes(&engine, &wasm_bytes, hash).await?);
+        let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
+            cached
+        } else {
+            let mut instance = loaded
+                .instantiate(&engine, manifest_security.clone())
+                .await?;
+            let defs = instance.call_get_nodes().await?;
+            engine.cache_definitions(wasm_hash, defs.clone());
+            defs
+        };
 
-        Ok(crate::WasmNodeLogic::new(module, engine, security))
+        let nodes: Vec<crate::WasmNodeLogic> = definitions
+            .into_iter()
+            .map(|def| {
+                let node_security =
+                    crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
+                        .with_limits(manifest_security.limits.clone());
+                crate::WasmNodeLogic::from_loaded_with_target(
+                    loaded.clone(),
+                    engine.clone(),
+                    node_security,
+                    def,
+                )
+                .with_package_id(package_id.to_string())
+            })
+            .collect();
+
+        Ok(nodes)
+    }
+
+    pub async fn load_nodes_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        engine: Arc<crate::WasmEngine>,
+    ) -> Result<Vec<crate::WasmNodeLogic>> {
+        let installed = self
+            .get_installed(package_id)
+            .await
+            .ok_or_else(|| anyhow!("Package '{}' is not installed", package_id))?;
+
+        let iv = installed
+            .get_version(version)
+            .ok_or_else(|| anyhow!("Version '{}' not installed for '{}'", version, package_id))?;
+
+        let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
+        let manifest_security = iv.manifest.permissions.to_security_config();
+
+        // Inject precompiled .cwasm into AOT cache if available
+        Self::inject_precompiled_if_available(&wasm_bytes, &iv.wasm_path, &engine);
+
+        let loaded = engine.load_auto(&wasm_bytes).await?;
+        let wasm_hash = loaded.hash().to_string();
+
+        let definitions = if let Some(cached) = engine.get_cached_definitions(&wasm_hash) {
+            cached
+        } else {
+            let mut instance = loaded
+                .instantiate(&engine, manifest_security.clone())
+                .await?;
+            let defs = instance.call_get_nodes().await?;
+            engine.cache_definitions(wasm_hash, defs.clone());
+            defs
+        };
+
+        Ok(definitions
+            .into_iter()
+            .map(|def| {
+                let node_security =
+                    crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
+                        .with_limits(manifest_security.limits.clone());
+                crate::WasmNodeLogic::from_loaded_with_target(
+                    loaded.clone(),
+                    engine.clone(),
+                    node_security,
+                    def,
+                )
+                .with_package_id(package_id.to_string())
+            })
+            .collect())
     }
 
     /// Load all nodes from all installed packages
     pub async fn load_all_nodes(
         &self,
         engine: Arc<crate::WasmEngine>,
-    ) -> Result<Vec<(String, crate::WasmNodeLogic)>> {
+    ) -> Result<Vec<(String, Vec<crate::WasmNodeLogic>)>> {
         let state = self.state.read().await;
         let package_ids: Vec<String> = state.installed.keys().cloned().collect();
         drop(state);
 
-        let mut nodes = Vec::new();
+        let mut packages = Vec::new();
         for package_id in package_ids {
-            match self.load_node(&package_id, engine.clone()).await {
-                Ok(node) => nodes.push((package_id, node)),
+            match self.load_nodes(&package_id, engine.clone()).await {
+                Ok(nodes) => packages.push((package_id, nodes)),
                 Err(e) => {
                     tracing::warn!("Failed to load package '{}': {}", package_id, e);
                 }
             }
         }
-        Ok(nodes)
+        Ok(packages)
+    }
+
+    /// Download a precompiled `.cwasm` artifact and store it next to the `.wasm` file.
+    async fn download_cwasm(
+        &self,
+        cwasm_url: &str,
+        expected_checksum: Option<&str>,
+        wasm_path: &Path,
+    ) -> Result<()> {
+        let cwasm_response = self.http_client.get(cwasm_url).send().await?;
+        if !cwasm_response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to download cwasm: {}",
+                cwasm_response.status()
+            ));
+        }
+        let cwasm_bytes = cwasm_response.bytes().await?.to_vec();
+
+        if let Some(expected) = expected_checksum {
+            let actual = blake3::hash(&cwasm_bytes).to_hex().to_string();
+            if actual != expected {
+                return Err(anyhow!(
+                    "cwasm checksum mismatch: expected {}, got {}",
+                    expected,
+                    actual
+                ));
+            }
+        }
+
+        let cwasm_path = wasm_path.with_extension("cwasm");
+        tokio::fs::write(&cwasm_path, &cwasm_bytes).await?;
+
+        Ok(())
+    }
+
+    /// If a `.cwasm` file exists next to the `.wasm`, inject it into the AOT
+    /// cache so `load_module` / `load_component` can find it without compiling.
+    fn inject_precompiled_if_available(
+        wasm_bytes: &[u8],
+        wasm_path: &Path,
+        engine: &crate::WasmEngine,
+    ) {
+        let cwasm_path = wasm_path.with_extension("cwasm");
+        let cwasm_bytes = match std::fs::read(&cwasm_path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+
+        let wasm_hash = calculate_hash(wasm_bytes);
+        if let Some(aot) = engine.aot_cache() {
+            if let Err(e) = aot.inject_module(&wasm_hash, &cwasm_bytes) {
+                tracing::warn!("Failed to inject cwasm into AOT cache: {}", e);
+            } else {
+                tracing::info!(
+                    "Injected precompiled cwasm into AOT cache for {}",
+                    wasm_hash
+                );
+            }
+        }
     }
 }
 

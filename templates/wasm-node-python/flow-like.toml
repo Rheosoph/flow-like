@@ -1,0 +1,43 @@
+description = "Template for creating Flow-Like WASM nodes in Python"
+id = "com.example.custom-node-python"
+keywords = [
+    "template",
+    "example",
+]
+license = "MIT"
+manifest_version = 1
+name = "Custom Node (Python) New"
+repository = "https://github.com/example/flow-like-nodes"
+version = "0.1.0"
+wasm_path = "build/node.wasm"
+
+[[authors]]
+name = "Your Name"
+
+[[nodes]]
+category = "Custom/WASM/Storage"
+description = "Writes text content to a file at the given FlowPath"
+id = "write_text_py"
+name = "Write Text"
+
+[[nodes]]
+category = "Custom/WASM/AI"
+description = "AI agent that looks up real weather conditions using LangChain tool-use"
+id = "weather_agent_py"
+name = "Weather Agent"
+
+[permissions]
+memory = "standard"
+timeout = "standard"
+
+[permissions.filesystem]
+node_storage = true
+user_storage = true
+
+[permissions.network]
+allowed_hosts = ["geocoding-api.open-meteo.com", "api.open-meteo.com"]
+dns_enabled = false
+http_enabled = true
+tcp_enabled = false
+udp_enabled = false
+websocket_enabled = false

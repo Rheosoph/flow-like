@@ -27,15 +27,24 @@ export class WebDatabaseState implements IDatabaseState {
 		return map[indexType] ?? "Auto";
 	}
 
+	private scopeParam(userScoped?: boolean): string {
+		return userScoped ? "scope=user" : "";
+	}
+
+	private scopeQuery(userScoped?: boolean): string {
+		return userScoped ? "?scope=user" : "";
+	}
+
 	async buildIndex(
 		appId: string,
 		tableName: string,
 		column: string,
 		indexType: IIndexType,
 		optimize?: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/index`,
+			`apps/${appId}/db/${tableName}/index${this.scopeQuery(userScoped)}`,
 			{
 				column,
 				index_type: this.indexTypeToString(indexType),
@@ -49,9 +58,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		items: any[],
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/items`,
+			`apps/${appId}/db/${tableName}/items${this.scopeQuery(userScoped)}`,
 			{ items },
 			this.backend.auth,
 		);
@@ -61,9 +71,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		query: string,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/delete`,
+			`apps/${appId}/db/${tableName}/delete${this.scopeQuery(userScoped)}`,
 			{ query },
 			this.backend.auth,
 		);
@@ -74,10 +85,12 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]> {
 		const params = new URLSearchParams();
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
+		if (userScoped) params.set("scope", "user");
 
 		try {
 			return await apiGet<any[]>(
@@ -95,11 +108,17 @@ export class WebDatabaseState implements IDatabaseState {
 		query: IQueryTablePayload,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]> {
+		const params = new URLSearchParams();
+		if (offset !== undefined) params.set("offset", offset.toString());
+		if (limit !== undefined) params.set("limit", limit.toString());
+		if (userScoped) params.set("scope", "user");
+
 		try {
 			return await apiPost<any[]>(
-				`apps/${appId}/db/${tableName}/query`,
-				{ ...query, offset, limit },
+				`apps/${appId}/db/${tableName}/query?${params}`,
+				{ ...query },
 				this.backend.auth,
 			);
 		} catch {
@@ -107,10 +126,10 @@ export class WebDatabaseState implements IDatabaseState {
 		}
 	}
 
-	async countItems(appId: string, tableName: string): Promise<number> {
+	async countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number> {
 		try {
 			const result = await apiGet<number>(
-				`apps/${appId}/db/${tableName}/count`,
+				`apps/${appId}/db/${tableName}/count${this.scopeQuery(userScoped)}`,
 				this.backend.auth,
 			);
 			return result ?? 0;
@@ -119,17 +138,17 @@ export class WebDatabaseState implements IDatabaseState {
 		}
 	}
 
-	async getSchema(appId: string, tableName: string): Promise<any> {
+	async getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any> {
 		return apiGet<any>(
-			`apps/${appId}/db/${tableName}/schema`,
+			`apps/${appId}/db/${tableName}/schema${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
 		);
 	}
 
-	async getIndices(appId: string, tableName: string): Promise<IIndexConfig[]> {
+	async getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]> {
 		try {
 			return await apiGet<IIndexConfig[]>(
-				`apps/${appId}/db/${tableName}/indices`,
+				`apps/${appId}/db/${tableName}/indices${this.scopeQuery(userScoped)}`,
 				this.backend.auth,
 			);
 		} catch {
@@ -141,9 +160,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		indexName: string,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiDelete(
-			`apps/${appId}/db/${tableName}/index/${indexName}`,
+			`apps/${appId}/db/${tableName}/index/${indexName}${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
 		);
 	}
@@ -156,13 +176,22 @@ export class WebDatabaseState implements IDatabaseState {
 		}
 	}
 
+	async listTablesUser(appId: string): Promise<string[]> {
+		try {
+			return await apiGet<string[]>(`apps/${appId}/db/user`, this.backend.auth);
+		} catch {
+			return [];
+		}
+	}
+
 	async optimize(
 		appId: string,
 		tableName: string,
 		keepVersions?: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/optimize`,
+			`apps/${appId}/db/${tableName}/optimize${this.scopeQuery(userScoped)}`,
 			{ keep_versions: keepVersions },
 			this.backend.auth,
 		);
@@ -173,9 +202,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		filter: string,
 		updates: Record<string, any>,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPut(
-			`apps/${appId}/db/${tableName}/update`,
+			`apps/${appId}/db/${tableName}/update${this.scopeQuery(userScoped)}`,
 			{ filter, updates },
 			this.backend.auth,
 		);
@@ -185,11 +215,12 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		columns: string[],
+		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/drop-columns`,
-			{ columns },
+		await apiDelete(
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
+			{ columns },
 		);
 	}
 
@@ -197,9 +228,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		column: IAddColumnPayload,
+		userScoped?: boolean,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/add-column`,
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			column,
 			this.backend.auth,
 		);
@@ -210,9 +242,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		column: string,
 		nullable: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/alter-column`,
+		await apiPut(
+			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			{ column, nullable },
 			this.backend.auth,
 		);

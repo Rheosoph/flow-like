@@ -22,9 +22,13 @@ export function useHub() {
 			const protocol = (profile.data?.secure ?? true) ? "https" : "http";
 			hubUrl = `${protocol}://${hubUrl}`;
 		}
-		const hubData = await fetch(`${hubUrl}/api/v1`, {});
-		const hubJson: IHub = await hubData.json();
-		setHub(hubJson);
+		try {
+			const hubData = await fetch(`${hubUrl}/api/v1`, {});
+			const hubJson: IHub = await hubData.json();
+			setHub(hubJson);
+		} catch (err) {
+			console.error("Failed to fetch hub config:", err);
+		}
 	}, [profile.data?.hub]);
 
 	useEffect(() => {

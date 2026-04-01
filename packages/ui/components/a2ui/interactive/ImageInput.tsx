@@ -7,6 +7,7 @@ import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -48,8 +49,8 @@ export function A2UIImageInput({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<ImageInputComponent>) {
+	const onAction = useOnAction();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
 	const value = useResolved<ImageData | ImageData[]>(component.value);
@@ -184,13 +185,17 @@ export function A2UIImageInput({
 			setByPath(component.value.path, newValue);
 		}
 
+		const successfulUploads = uploadedImages.filter((img) => img.backendUrl);
+		const urls = successfulUploads.map((img) => img.backendUrl as string);
+		const actionValue = multiple ? urls : urls[0];
+
 		onAction?.({
 			type: "userAction",
 			name: "change",
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: newValue },
+			context: { value: actionValue },
 		});
 
 		if (inputRef.current) inputRef.current.value = "";
@@ -206,13 +211,17 @@ export function A2UIImageInput({
 			setByPath(component.value.path, newValue);
 		}
 
+		const urls = multiple
+			? newImages.map((img) => img.backendUrl).filter(Boolean)
+			: null;
+
 		onAction?.({
 			type: "userAction",
 			name: "change",
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: newValue },
+			context: { value: urls },
 		});
 	};
 

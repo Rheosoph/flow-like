@@ -15,27 +15,66 @@ interface Tip {
 }
 
 const TIPS: Tip[] = [
-	{ emoji: "⌨️", text: "Press Ctrl+K to open the command palette from anywhere." },
+	{
+		emoji: "⌨️",
+		text: "Press Ctrl+K to open the command palette from anywhere.",
+	},
 	{ emoji: "🔗", text: "Connect nodes by dragging from one pin to another." },
-	{ emoji: "📦", text: "Browse community packages in the Registry to extend your workflows." },
+	{
+		emoji: "📦",
+		text: "Browse community packages in the Registry to extend your workflows.",
+	},
 	{ emoji: "💾", text: "Your flows auto-save — no need to hit save manually." },
-	{ emoji: "🔍", text: "Use the search bar in the node catalog to find nodes quickly." },
-	{ emoji: "🎯", text: "Double-click the canvas to create a new node at that position." },
-	{ emoji: "📋", text: "Select multiple nodes with Shift+Click to move them together." },
-	{ emoji: "🧪", text: "Test individual nodes by right-clicking and selecting 'Run'." },
+	{
+		emoji: "🔍",
+		text: "Use the search bar in the node catalog to find nodes quickly.",
+	},
+	{
+		emoji: "🎯",
+		text: "Double-click the canvas to create a new node at that position.",
+	},
+	{
+		emoji: "📋",
+		text: "Select multiple nodes with Shift+Click to move them together.",
+	},
+	{
+		emoji: "🧪",
+		text: "Test individual nodes by right-clicking and selecting 'Run'.",
+	},
 	{ emoji: "🌙", text: "Toggle dark mode in Settings → Appearance." },
 	{ emoji: "🔄", text: "Undo with Ctrl+Z — works for node connections too." },
 	{ emoji: "📊", text: "Use the Data Viewer node to inspect values mid-flow." },
-	{ emoji: "⚡", text: "Pin frequently used nodes to the toolbar for faster access." },
+	{
+		emoji: "⚡",
+		text: "Pin frequently used nodes to the toolbar for faster access.",
+	},
 ];
 
 const HINTS: Tip[] = [
-	{ emoji: "🖥️", text: "Try Flow Like Studio — the desktop app for offline editing and local execution." },
-	{ emoji: "🤖", text: "FlowPilot can generate entire workflows from a text description." },
-	{ emoji: "🧩", text: "Build custom nodes with WASM — use any language that compiles to WebAssembly." },
-	{ emoji: "☁️", text: "Deploy flows to the cloud with one click from the Studio." },
-	{ emoji: "📱", text: "Flow Like Studio syncs your projects across all your devices." },
-	{ emoji: "🔐", text: "Studio supports local-only mode — your data never leaves your machine." },
+	{
+		emoji: "🖥️",
+		text: "Try Flow Like Studio — the desktop app for offline editing and local execution.",
+	},
+	{
+		emoji: "🤖",
+		text: "FlowPilot can generate entire workflows from a text description.",
+	},
+	{
+		emoji: "🧩",
+		text: "Build custom nodes with WASM — use any language that compiles to WebAssembly.",
+	},
+	{
+		emoji: "☁️",
+		text: "Deploy flows to the cloud with one click from the Studio.",
+	},
+	{
+		emoji: "📱",
+		text: "Flow Like Studio syncs your projects across all your devices.",
+	},
+	{
+		emoji: "🔐",
+		text: "Studio supports local-only mode — your data never leaves your machine.",
+	},
 ];
 
 function pickRandom<T>(arr: readonly T[], exclude?: number): number {
@@ -59,11 +98,7 @@ function FlowLogo() {
 
 			{/* glass container */}
 			<div className="relative h-12 w-12 rounded-xl bg-muted/40 border border-border/60 backdrop-blur-sm flex items-center justify-center shadow-sm">
-				<svg
-					className="h-6 w-6 text-primary"
-					viewBox="0 0 24 24"
-					fill="none"
-				>
+				<svg className="h-6 w-6 text-primary" viewBox="0 0 24 24" fill="none">
 					<path
 						d="M5 8h3a4 4 0 0 1 4 4v0a4 4 0 0 0 4 4h3"
 						stroke="currentColor"
@@ -80,7 +115,13 @@ function FlowLogo() {
 					/>
 					<circle cx="5" cy="8" r="1.5" fill="currentColor" opacity="0.5" />
 					<circle cx="5" cy="16" r="1.5" fill="currentColor" opacity="0.5" />
-					<circle cx="12" cy="12" r="2" fill="currentColor" className="ls-center-dot" />
+					<circle
+						cx="12"
+						cy="12"
+						r="2"
+						fill="currentColor"
+						className="ls-center-dot"
+					/>
 					<circle cx="19" cy="8" r="1.5" fill="currentColor" opacity="0.5" />
 					<circle cx="19" cy="16" r="1.5" fill="currentColor" opacity="0.5" />
 				</svg>
@@ -123,7 +164,9 @@ function TipCard({ tip, transitioning }: { tip: Tip; transitioning: boolean }) {
 				<span className="text-lg leading-none shrink-0" aria-hidden>
 					{tip.emoji}
 				</span>
-				<p className="text-[13px] text-foreground/70 leading-relaxed">{tip.text}</p>
+				<p className="text-[13px] text-foreground/70 leading-relaxed">
+					{tip.text}
+				</p>
 			</div>
 		</div>
 	);
@@ -175,7 +218,9 @@ export function LoadingScreen({
 					{message ? (
 						<p className="text-sm text-foreground/70">{message}</p>
 					) : (
-						<p className="text-sm text-muted-foreground/60">Loading your workspace</p>
+						<p className="text-sm text-muted-foreground/60">
+							Loading your workspace
+						</p>
 					)}
 					{clamped > 0 && (
 						<p className="text-xs tabular-nums text-muted-foreground/40">
@@ -199,7 +244,10 @@ export function LoadingScreen({
 			</div>
 
 			{/* minimal footer label */}
-			<div className="absolute bottom-5 flex flex-col items-center gap-1 ls-enter" style={{ animationDelay: "0.3s" }}>
+			<div
+				className="absolute bottom-5 flex flex-col items-center gap-1 ls-enter"
+				style={{ animationDelay: "0.3s" }}
+			>
 				<span className="text-[10px] tracking-widest uppercase text-muted-foreground/30">
 					Flow Like
 				</span>

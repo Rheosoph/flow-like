@@ -1,0 +1,780 @@
+---
+import "@tm9657/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import PostHog from "../posthog.astro";
+import { Header } from "../header";
+import { BlogFooter } from "../blog-footer";
+import { tIntegrations } from "../../i18n/locales/pages/integrations";
+import { buildAlternateLinks, getOgLocale } from "../../lib/seo";
+
+interface Props { lang?: string; }
+const { lang = "en" } = Astro.props;
+const t = (key: string) => tIntegrations(lang, key);
+
+const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
+const siteUrl = typeof site === "string" ? site : site.toString();
+const canonical = new URL(Astro.url.pathname, siteUrl).toString();
+const alternateLinks = buildAlternateLinks(siteUrl, Astro.url.pathname);
+const ogLocale = getOgLocale(lang);
+
+const title = t("integrations.meta.title");
+const desc = t("integrations.meta.description");
+const cover = "/og.png";
+
+const categories = [
+  { key: "data", color: "emerald", icon: "database" },
+  { key: "api", color: "blue", icon: "globe" },
+  { key: "ai", color: "violet", icon: "brain" },
+  { key: "messaging", color: "amber", icon: "message" },
+  { key: "cloud", color: "indigo", icon: "cloud" },
+  { key: "productivity", color: "pink", icon: "grid" },
+  { key: "iot", color: "cyan", icon: "cpu" },
+  { key: "files", color: "orange", icon: "file" },
+];
+
+const customFeatures = [
+  { key: "lang", icon: "terminal" },
+  { key: "sandbox", icon: "shield" },
+  { key: "registry", icon: "package" },
+  { key: "template", icon: "box" },
+];
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+
+    <title>{title}</title>
+    <meta name="description" content={desc} />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href={canonical} />
+    {alternateLinks.map((alt) => (
+      <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />
+    ))}
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flow-Like" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={desc} />
+    <meta property="og:image" content={cover} />
+    <meta property="og:locale" content={ogLocale} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={desc} />
+    <meta name="twitter:image" content={cover} />
+
+    <PostHog />
+
+    <style is:global>
+      body {
+        background-image: radial-gradient(
+          color-mix(in srgb, var(--muted) 20%, transparent) 1px,
+          transparent 1px
+        ) !important;
+        background-size: 16px 16px !important;
+        background-attachment: scroll !important;
+      }
+    </style>
+    <style>
+      .int-reveal {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      .int-reveal.is-visible {
+        opacity: 1;
+        transform: none;
+        transition: opacity 0.5s ease, transform 0.5s ease;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .int-reveal {
+          transition: none !important;
+          transform: none !important;
+          opacity: 1 !important;
+        }
+      }
+    </style>
+  </head>
+  <body
+    class="bg-background text-foreground antialiased overflow-x-hidden max-w-full"
+  >
+    <Header client:load />
+
+    <main class="pt-16">
+      <!-- HERO -->
+      <section
+        class="relative isolate py-16 md:py-24 lg:py-32 overflow-hidden"
+        data-c1="hsl(192 85% 55% / .06)"
+        data-c2="hsl(222 89% 60% / .06)"
+      >
+        <div class="mx-auto max-w-7xl px-6 lg:px-8 text-center int-reveal">
+          <p
+            class="text-[11px] font-medium tracking-[0.3em] uppercase text-primary mb-4"
+          >
+            {t("integrations.hero.tagline")}
+          </p>
+          <h1
+            class="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6"
+          >
+            {t("integrations.hero.headline")}{" "}
+            <span
+              class="bg-linear-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent"
+            >
+              {t("integrations.hero.headline.highlight")}
+            </span>
+          </h1>
+          <p class="text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
+            {t("integrations.hero.description")}
+          </p>
+          <div class="flex flex-wrap justify-center gap-4">
+            <a
+              href="#categories"
+              class="inline-flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-xl font-medium hover:bg-primary/90 transition-colors"
+            >
+              {t("integrations.hero.cta")}
+              <svg
+                class="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                ><path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 9l-7 7-7-7"></path></svg
+              >
+            </a>
+            <a
+              href="#custom"
+              class="inline-flex items-center gap-2 border border-border px-6 py-3 rounded-xl font-medium hover:bg-accent transition-colors"
+            >
+              {t("integrations.hero.cta.custom")}
+              <svg
+                class="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                ><path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 5l7 7-7 7"></path></svg
+              >
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEATURED INTEGRATIONS -->
+      <section class="relative py-16 sm:py-24" data-c1="hsl(222 89% 60% / .04)" data-c2="hsl(161 50% 45% / .04)">
+        <div class="mx-auto max-w-7xl px-6 lg:px-8">
+          <div class="text-center mb-12 lg:mb-16 int-reveal">
+            <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-primary mb-4">
+              {t("integrations.featured.tagline")}
+            </p>
+            <h2 class="text-4xl sm:text-5xl font-bold tracking-tight mb-6">
+              {t("integrations.featured.headline")}
+            </h2>
+            <p class="text-xl text-muted-foreground max-w-2xl mx-auto">
+              {t("integrations.featured.description")}
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 max-w-5xl mx-auto int-reveal">
+            <!-- Microsoft -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-blue-500/30 hover:shadow-lg hover:shadow-blue-500/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center group-hover:bg-blue-500/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6"><rect width="11" height="11" fill="#F25022"/><rect x="12.5" width="11" height="11" fill="#7FBA00"/><rect y="12.5" width="11" height="11" fill="#00A4EF"/><rect x="12.5" y="12.5" width="11" height="11" fill="#FFB900"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.microsoft.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.microsoft.desc")}</p>
+              </div>
+            </div>
+            <!-- Google -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-red-500/30 hover:shadow-lg hover:shadow-red-500/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center group-hover:bg-red-500/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.google.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.google.desc")}</p>
+              </div>
+            </div>
+            <!-- Databricks -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-red-600/30 hover:shadow-lg hover:shadow-red-600/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-red-600/10 flex items-center justify-center group-hover:bg-red-600/15 transition-colors">
+                <svg viewBox="0 0 24 24" class="w-6 h-6 fill-[#FF3621]"><path d="M.95 14.184L12 20.403l9.919-5.55v2.21L12 22.662l-10.484-5.96-.565.308v.77L12 24l11.05-6.218v-4.317l-.515-.309L12 19.118l-9.867-5.653v-2.21L12 16.805l11.05-6.218V6.32l-.515-.308L12 11.974 2.647 6.681 12 1.388l7.76 4.368.668-.411v-.566L12 0 .95 6.27v.72L12 13.207l9.919-5.55v2.26L12 15.52 1.516 9.56l-.565.308Z"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.databricks.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.databricks.desc")}</p>
+              </div>
+            </div>
+            <!-- Snowflake -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-sky-500/30 hover:shadow-lg hover:shadow-sky-500/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-sky-500/10 flex items-center justify-center group-hover:bg-sky-500/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-[#29B5E8]"><path d="M24 3.459c0 .646-.418 1.18-1.141 1.18-.723 0-1.142-.534-1.142-1.18 0-.647.419-1.18 1.142-1.18.723 0 1.141.533 1.141 1.18zm-.228 0c0-.533-.38-.951-.913-.951s-.913.38-.913.95c0 .533.38.952.913.952.57 0 .913-.419.913-.951zm-1.37-.533h.495c.266 0 .456.152.456.38 0 .153-.076.229-.19.305l.19.266v.038h-.266l-.19-.266h-.229v.266h-.266zm.495.228h-.229v.267h.229c.114 0 .152-.038.152-.114.038-.077-.038-.153-.152-.153zM7.602 12.4c.038-.151.076-.304.076-.456 0-.114-.038-.228-.038-.342-.114-.343-.304-.647-.646-.838l-4.87-2.777c-.685-.38-1.56-.152-1.94.533-.381.685-.153 1.56.532 1.94l2.701 1.56-2.701 1.56c-.685.38-.913 1.256-.533 1.94.38.685 1.256.914 1.94.533l4.832-2.777c.343-.267.571-.533.647-.876zm1.332 2.626c-.266-.038-.57.038-.837.19l-4.832 2.777c-.685.38-.913 1.256-.532 1.94.38.686 1.255.914 1.94.533l2.701-1.56v3.12c0 .8.647 1.408 1.446 1.408.799 0 1.407-.647 1.407-1.408v-5.592c0-.761-.57-1.37-1.293-1.408zm4.946-6.088c.266.038.57-.038.837-.19l4.832-2.777c.685-.38.913-1.256.532-1.94-.38-.686-1.255-.914-1.94-.533l-2.701 1.56V1.975c0-.799-.647-1.408-1.446-1.408-.799 0-1.446.609-1.446 1.408V7.53c0 .76.609 1.37 1.332 1.407zM3.265 5.97l4.832 2.777c.266.152.533.19.837.19.723-.038 1.331-.684 1.331-1.407V1.975c0-.799-.646-1.408-1.407-1.408-.799 0-1.446.647-1.446 1.408v3.12l-2.701-1.56c-.685-.38-1.56-.152-1.94.533-.419.646-.19 1.521.494 1.902zm9.093 6.011a.412.412 0 00-.114-.266l-.57-.571a.346.346 0 00-.267-.114.412.412 0 00-.266.114l-.571.57a.411.411 0 00-.114.267c0 .076.038.19.114.267l.57.57a.345.345 0 00.267.114c.076 0 .19-.038.266-.114l.571-.57a.412.412 0 00.114-.267zm1.598.533L11.94 14.53c-.039.038-.153.114-.229.114h-.608a.411.411 0 01-.267-.114L8.82 12.514a.408.408 0 01-.076-.229v-.608c0-.076.038-.19.114-.267l2.016-2.016a.41.41 0 01.267-.114h.608a.41.41 0 01.267.114l2.016 2.016a.347.347 0 01.114.267v.608c-.076.077-.114.19-.19.229zm5.593 5.44l-4.832-2.777c-.266-.152-.57-.19-.837-.152-.723.038-1.332.684-1.332 1.408v5.554c0 .8.647 1.408 1.408 1.408.799 0 1.446-.647 1.446-1.408v-3.12l2.7 1.56c.686.38 1.561.152 1.941-.533.419-.646.19-1.521-.494-1.94zm2.549-7.533l-2.701 1.56 2.7 1.56c.686.38.914 1.256.533 1.94-.38.685-1.255.913-1.94.533l-4.832-2.778a1.644 1.644 0 01-.647-.798c-.037-.153-.076-.305-.076-.457 0-.114.039-.228.039-.342.114-.343.342-.647.646-.837l4.832-2.778c.685-.38 1.56-.152 1.94.533.457.609.19 1.484-.494 1.864"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.snowflake.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.snowflake.desc")}</p>
+              </div>
+            </div>
+            <!-- Notion -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-foreground/20 hover:shadow-lg hover:shadow-foreground/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-foreground/5 flex items-center justify-center group-hover:bg-foreground/10 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.notion.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.notion.desc")}</p>
+              </div>
+            </div>
+            <!-- Confluence -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-blue-600/30 hover:shadow-lg hover:shadow-blue-600/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-blue-600/10 flex items-center justify-center group-hover:bg-blue-600/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-[#1868DB]"><path d="M.87 18.257c-.248.382-.53.875-.763 1.245a.764.764 0 0 0 .255 1.04l4.965 3.054a.764.764 0 0 0 1.058-.26c.199-.332.454-.763.733-1.221 1.967-3.247 3.945-2.853 7.508-1.146l4.957 2.337a.764.764 0 0 0 1.028-.382l2.364-5.346a.764.764 0 0 0-.382-1 599.851 599.851 0 0 1-4.965-2.361C10.911 10.97 5.224 11.185.87 18.257zM23.131 5.743c.249-.405.531-.875.764-1.25a.764.764 0 0 0-.256-1.034L18.675.404a.764.764 0 0 0-1.058.26c-.195.335-.451.763-.734 1.225-1.966 3.246-3.945 2.85-7.508 1.146L4.437.694a.764.764 0 0 0-1.027.382L1.046 6.422a.764.764 0 0 0 .382 1c1.039.49 3.105 1.467 4.965 2.361 6.698 3.246 12.392 3.029 16.738-4.04z"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.confluence.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.confluence.desc")}</p>
+              </div>
+            </div>
+            <!-- Jira -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-blue-500/30 hover:shadow-lg hover:shadow-blue-500/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center group-hover:bg-blue-500/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-[#0052CC]"><path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.jira.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.jira.desc")}</p>
+              </div>
+            </div>
+            <!-- GitHub -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-foreground/20 hover:shadow-lg hover:shadow-foreground/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-foreground/5 flex items-center justify-center group-hover:bg-foreground/10 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.github.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.github.desc")}</p>
+              </div>
+            </div>
+            <!-- Discord -->
+            <div class="group relative flex flex-col items-center gap-3 p-5 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/15 transition-colors">
+<svg viewBox="0 0 24 24" class="w-6 h-6 fill-[#5865F2]"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-semibold">{t("integrations.featured.discord.name")}</p>
+                <p class="text-[11px] text-muted-foreground leading-snug mt-1">{t("integrations.featured.discord.desc")}</p>
+              </div>
+            </div>
+            <!-- + More -->
+            <div class="group relative flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border border-dashed border-border/50 bg-card/30 hover:bg-card/60 hover:border-primary/30 transition-all duration-300">
+              <div class="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/15 transition-colors">
+                <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6v12m6-6H6"/></svg>
+              </div>
+              <p class="text-xs text-muted-foreground text-center font-medium">{t("integrations.featured.more")}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CATEGORIES -->
+      <section
+        id="categories"
+        class="relative py-16 sm:py-24 lg:py-32"
+        data-c1="hsl(268 84% 62% / .06)"
+        data-c2="hsl(222 89% 60% / .06)"
+      >
+        <div class="mx-auto max-w-7xl px-6 lg:px-8">
+          <div class="text-center mb-12 lg:mb-20 int-reveal">
+            <p
+              class="text-[11px] font-medium tracking-[0.3em] uppercase text-primary mb-4"
+            >
+              {t("integrations.cat.title")}
+            </p>
+            <h2
+              class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
+            >
+              {t("integrations.cat.title")}
+            </h2>
+            <p class="text-xl text-muted-foreground max-w-2xl mx-auto">
+              {t("integrations.cat.description")}
+            </p>
+          </div>
+
+          <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {
+              categories.map((cat, i) => (
+                <div
+                  class="group relative p-6 sm:p-8 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card transition-all duration-500 overflow-hidden int-reveal"
+                  style={`transition-delay: ${i * 60}ms`}
+                >
+                  <div
+                    class:list={[
+                      "absolute -inset-px rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl",
+                      cat.color === "emerald" && "bg-emerald-500/20",
+                      cat.color === "blue" && "bg-blue-500/20",
+                      cat.color === "violet" && "bg-violet-500/20",
+                      cat.color === "amber" && "bg-amber-500/20",
+                      cat.color === "indigo" && "bg-indigo-500/20",
+                      cat.color === "pink" && "bg-pink-500/20",
+                      cat.color === "cyan" && "bg-cyan-500/20",
+                      cat.color === "orange" && "bg-orange-500/20",
+                    ]}
+                  />
+
+                  <div class="relative">
+                    <div
+                      class:list={[
+                        "w-14 h-14 rounded-2xl flex items-center justify-center mb-5 transition-colors duration-300",
+                        cat.color === "emerald" &&
+                          "bg-emerald-500/10 text-emerald-500 group-hover:bg-emerald-500/20",
+                        cat.color === "blue" &&
+                          "bg-blue-500/10 text-blue-500 group-hover:bg-blue-500/20",
+                        cat.color === "violet" &&
+                          "bg-violet-500/10 text-violet-500 group-hover:bg-violet-500/20",
+                        cat.color === "amber" &&
+                          "bg-amber-500/10 text-amber-500 group-hover:bg-amber-500/20",
+                        cat.color === "indigo" &&
+                          "bg-indigo-500/10 text-indigo-500 group-hover:bg-indigo-500/20",
+                        cat.color === "pink" &&
+                          "bg-pink-500/10 text-pink-500 group-hover:bg-pink-500/20",
+                        cat.color === "cyan" &&
+                          "bg-cyan-500/10 text-cyan-500 group-hover:bg-cyan-500/20",
+                        cat.color === "orange" &&
+                          "bg-orange-500/10 text-orange-500 group-hover:bg-orange-500/20",
+                      ]}
+                    >
+                      {cat.icon === "database" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <ellipse
+                            cx="12"
+                            cy="5"
+                            rx="9"
+                            ry="3"
+                            stroke-width="1.5"
+                          />
+                          <path
+                            d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"
+                            stroke-width="1.5"
+                          />
+                          <path
+                            d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"
+                            stroke-width="1.5"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "globe" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke-width="1.5"
+                          />
+                          <path
+                            d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"
+                            stroke-width="1.5"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "brain" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M12 2a7 7 0 00-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 002 2h4a2 2 0 002-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 00-7-7z"
+                          />
+                          <path
+                            stroke-linecap="round"
+                            stroke-width="1.5"
+                            d="M9 21h6M10 17v4M14 17v4"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "message" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "cloud" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "grid" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <rect
+                            x="3"
+                            y="3"
+                            width="7"
+                            height="7"
+                            rx="1"
+                            stroke-width="1.5"
+                          />
+                          <rect
+                            x="14"
+                            y="3"
+                            width="7"
+                            height="7"
+                            rx="1"
+                            stroke-width="1.5"
+                          />
+                          <rect
+                            x="3"
+                            y="14"
+                            width="7"
+                            height="7"
+                            rx="1"
+                            stroke-width="1.5"
+                          />
+                          <rect
+                            x="14"
+                            y="14"
+                            width="7"
+                            height="7"
+                            rx="1"
+                            stroke-width="1.5"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "cpu" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <rect
+                            x="4"
+                            y="4"
+                            width="16"
+                            height="16"
+                            rx="2"
+                            stroke-width="1.5"
+                          />
+                          <rect
+                            x="9"
+                            y="9"
+                            width="6"
+                            height="6"
+                            rx="1"
+                            stroke-width="1.5"
+                          />
+                          <path
+                            stroke-width="1.5"
+                            d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"
+                          />
+                        </svg>
+                      )}
+                      {cat.icon === "file" && (
+                        <svg
+                          class="w-7 h-7"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                          />
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M14 2v6h6M16 13H8M16 17H8M10 9H8"
+                          />
+                        </svg>
+                      )}
+                    </div>
+
+                    <h3 class="text-lg font-semibold mb-2 group-hover:text-foreground transition-colors">
+                      {t(`integrations.cat.${cat.key}.title`)}
+                    </h3>
+                    <p class="text-sm text-muted-foreground leading-relaxed mb-4">
+                      {t(`integrations.cat.${cat.key}.desc`)}
+                    </p>
+
+                    <span
+                      class:list={[
+                        "inline-flex items-center text-xs font-medium px-3 py-1 rounded-full",
+                        cat.color === "emerald" &&
+                          "bg-emerald-500/10 text-emerald-400",
+                        cat.color === "blue" && "bg-blue-500/10 text-blue-400",
+                        cat.color === "violet" &&
+                          "bg-violet-500/10 text-violet-400",
+                        cat.color === "amber" &&
+                          "bg-amber-500/10 text-amber-400",
+                        cat.color === "indigo" &&
+                          "bg-indigo-500/10 text-indigo-400",
+                        cat.color === "pink" && "bg-pink-500/10 text-pink-400",
+                        cat.color === "cyan" && "bg-cyan-500/10 text-cyan-400",
+                        cat.color === "orange" &&
+                          "bg-orange-500/10 text-orange-400",
+                      ]}
+                    >
+                      {t(`integrations.cat.${cat.key}.count`)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <!-- CUSTOM NODES -->
+      <section
+        id="custom"
+        class="relative py-16 sm:py-24 lg:py-32"
+        data-c1="hsl(161 50% 45% / .06)"
+        data-c2="hsl(268 84% 62% / .06)"
+      >
+        <div
+          class="absolute inset-0 bg-linear-to-b from-transparent via-primary/5 to-transparent pointer-events-none"
+        >
+        </div>
+
+        <div class="mx-auto max-w-7xl px-6 lg:px-8 relative">
+          <div class="text-center mb-12 lg:mb-20 int-reveal">
+            <p
+              class="text-[11px] font-medium tracking-[0.3em] uppercase text-primary mb-4"
+            >
+              {t("integrations.custom.tagline")}
+            </p>
+            <h2
+              class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6"
+            >
+              {t("integrations.custom.headline")}
+            </h2>
+            <p class="text-xl text-muted-foreground max-w-2xl mx-auto">
+              {t("integrations.custom.description")}
+            </p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {
+              customFeatures.map((feat, i) => (
+                <div
+                  class="group relative p-6 sm:p-8 rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm hover:bg-card transition-all duration-500 overflow-hidden int-reveal"
+                  style={`transition-delay: ${i * 80}ms`}
+                >
+                  <div class="absolute -inset-px rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-xl bg-primary/10" />
+
+                  <div class="relative">
+                    <div class="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                      {feat.icon === "terminal" && (
+                        <svg
+                          class="w-6 h-6"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M4 17l6-5-6-5M12 19h8"
+                          />
+                        </svg>
+                      )}
+                      {feat.icon === "shield" && (
+                        <svg
+                          class="w-6 h-6"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+                          />
+                        </svg>
+                      )}
+                      {feat.icon === "package" && (
+                        <svg
+                          class="w-6 h-6"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"
+                          />
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"
+                          />
+                        </svg>
+                      )}
+                      {feat.icon === "box" && (
+                        <svg
+                          class="w-6 h-6"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.5"
+                            d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"
+                          />
+                        </svg>
+                      )}
+                    </div>
+                    <h3 class="text-lg font-semibold mb-2">
+                      {t(`integrations.custom.${feat.key}.title`)}
+                    </h3>
+                    <p class="text-sm text-muted-foreground leading-relaxed">
+                      {t(`integrations.custom.${feat.key}.desc`)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section
+        class="relative py-20 md:py-28 overflow-hidden"
+        data-c1="hsl(222 89% 60% / .08)"
+        data-c2="hsl(268 84% 62% / .08)"
+      >
+        <div class="mx-auto max-w-7xl px-6 lg:px-8 text-center int-reveal">
+          <h2 class="text-4xl sm:text-5xl font-bold tracking-tight mb-6">
+            {t("integrations.cta.headline")}
+          </h2>
+          <p class="text-xl text-muted-foreground max-w-xl mx-auto mb-10">
+            {t("integrations.cta.description")}
+          </p>
+          <div class="flex flex-wrap justify-center gap-4">
+            <a
+              href="https://docs.flow-like.com"
+              target="_blank"
+              rel="noreferrer"
+              class="inline-flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-xl font-medium hover:bg-primary/90 transition-colors"
+            >
+              {t("integrations.cta.button")}
+              <svg
+                class="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                ><path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M5 12h14M12 5l7 7-7 7"></path></svg
+              >
+            </a>
+            <a
+              href="https://github.com/TM9657/flow-like/issues"
+              target="_blank"
+              rel="noreferrer"
+              class="inline-flex items-center gap-2 border border-border px-6 py-3 rounded-xl font-medium hover:bg-accent transition-colors"
+            >
+              {t("integrations.cta.github")}
+              <svg
+                class="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                ><path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"
+                ></path></svg
+              >
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <BlogFooter client:load />
+
+    <script>
+      const revealEls = document.querySelectorAll(".int-reveal");
+      if ("IntersectionObserver" in window) {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries)
+              if (e.isIntersecting) {
+                e.target.classList.add("is-visible");
+                io.unobserve(e.target);
+              }
+          },
+          { rootMargin: "0px 0px -10% 0px", threshold: 0.15 },
+        );
+        revealEls.forEach((el) => io.observe(el));
+      } else {
+        revealEls.forEach((el) => el.classList.add("is-visible"));
+      }
+    </script>
+  </body>
+</html>

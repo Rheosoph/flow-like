@@ -1,19 +1,17 @@
 use crate::{entity::pat, error::ApiError, middleware::jwt::AppUser, state::AppState};
-use axum::{Extension, Json, extract::State};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
-
-#[derive(Debug, Deserialize, Serialize, ToSchema)]
-pub struct DeletePatInput {
-    pub id: String,
-}
 
 #[utoipa::path(
     delete,
-    path = "/user/pat",
+    path = "/user/pat/{pat_id}",
     tag = "user",
-    request_body = DeletePatInput,
+    params(
+        ("pat_id" = String, Path, description = "Personal access token ID")
+    ),
     responses(
         (status = 200, description = "Personal access token deleted"),
         (status = 401, description = "Unauthorized")
@@ -22,20 +20,16 @@ pub struct DeletePatInput {
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /user/pat", skip(state, user, input))]
+#[tracing::instrument(name = "DELETE /user/pat/:pat_id", skip(state, user))]
 pub async fn delete_pat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Json(input): Json<DeletePatInput>,
+    Path(pat_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
 
     pat::Entity::delete_many()
-        .filter(
-            pat::Column::Id
-                .eq(input.id)
-                .and(pat::Column::UserId.eq(sub)),
-        )
+        .filter(pat::Column::Id.eq(pat_id).and(pat::Column::UserId.eq(sub)))
         .exec(&state.db)
         .await?;
 

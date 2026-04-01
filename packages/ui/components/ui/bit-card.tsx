@@ -230,7 +230,7 @@ export function BitCard({
 
 	const isInProfile =
 		(currentProfile.data?.hub_profile.bits || []).findIndex(
-			(id) => id.split(":")[1] === bit.id,
+			(id) => id.split(":").pop() === bit.id,
 		) > -1;
 
 	const isProfileCompatible = [

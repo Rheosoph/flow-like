@@ -1,0 +1,151 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const formAction = "https://650afa0c.sibforms.com/serve/MUIFAFXOXcuOw6rHKrCvv5lDLbFzAZJDpDAfNCOt5PX8ibIwurqvFXXjTBiRQHJU9rldi-SiK988AtVd5MEKj1u2JhcKWMLmhfhbtq_aXC0IJGczM6v3mvf06FjJaUbU6_KXQIGVcbVQNYHAQuwlyT0EeHtx_NVrGtHOE4rlyg3PTicbGv2e_q4HrAnizfNvDIfAr9CtcGdyz0DsTQ==";
+const turnstileSiteKey = "0x4AAAAAACLfuGyDAsHciBgR";
+---
+
+<section class="nl-section relative isolate overflow-hidden py-20 md:py-28">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="nl-orb nl-orb--primary"></div>
+    <div class="nl-orb nl-orb--accent"></div>
+    <div class="absolute inset-0 bg-gradient-to-b from-transparent via-primary/[0.03] to-transparent"></div>
+  </div>
+
+  <div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 text-center">
+    <span class="inline-block rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary mb-6">
+      {t("v3.newsletter.label" as TranslationKey) !== "v3.newsletter.label" ? t("v3.newsletter.label" as TranslationKey) : "Stay in the loop"}
+    </span>
+
+    <h2 class="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-4">
+      {t("v3.newsletter.headline" as TranslationKey) !== "v3.newsletter.headline" ? t("v3.newsletter.headline" as TranslationKey) : "Get product updates & engineering insights"}
+    </h2>
+
+    <p class="text-base sm:text-lg text-muted-foreground leading-relaxed max-w-xl mx-auto mb-8">
+      {t("v3.newsletter.inline")}
+    </p>
+
+    <form
+      id="nlv3-form"
+      method="POST"
+      action={formAction}
+      data-type="subscription"
+      class="mx-auto max-w-md space-y-4"
+    >
+      <div id="nlv3-error" class="hidden p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm" role="alert">
+        <span>{t("newsletter.error")}</span>
+      </div>
+      <div id="nlv3-success" class="hidden p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-700 dark:text-green-400 text-sm" role="status">
+        <span>{t("newsletter.success")}</span>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-center gap-3">
+        <label for="nlv3-email" class="sr-only">{t("newsletter.email.label")}</label>
+        <input
+          type="email"
+          id="nlv3-email"
+          name="EMAIL"
+          required
+          autocomplete="email"
+          placeholder="you@example.com"
+          class="w-full sm:flex-1 rounded-full border border-border/50 bg-background/80 px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-colors backdrop-blur-sm"
+        />
+
+        <button
+          type="submit"
+          class="shrink-0 w-full sm:w-auto rounded-full bg-foreground text-background px-7 py-3 text-sm font-semibold hover:bg-foreground/90 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-black/15 flex items-center justify-center gap-2"
+        >
+          <span class="nlv3-btn-text">Subscribe</span>
+          <svg class="nlv3-btn-loader hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        </button>
+      </div>
+
+      <div class="flex items-start gap-3 text-left">
+        <input type="checkbox" id="nlv3-optin" name="OPT_IN" value="1" required class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary/50" />
+        <label for="nlv3-optin" class="text-sm text-muted-foreground">{t("newsletter.optin")}</label>
+      </div>
+
+      <div id="nlv3-captcha" class="cf-turnstile" data-sitekey={turnstileSiteKey} data-callback="handleNlv3Captcha" data-theme="auto"></div>
+
+      <input type="text" name="email_address_check" value="" class="hidden" tabindex="-1" aria-hidden="true" />
+      <input type="hidden" name="locale" value={lang} />
+
+      <p class="text-xs text-muted-foreground/50">
+        {t("v3.newsletter.privacy")}
+      </p>
+    </form>
+  </div>
+</section>
+
+<style>
+  .nl-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+  }
+  .nl-orb--primary {
+    width: 400px;
+    height: 400px;
+    top: -100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.1), transparent 70%);
+  }
+  .nl-orb--accent {
+    width: 300px;
+    height: 300px;
+    bottom: -80px;
+    right: 20%;
+    background: radial-gradient(circle, hsl(280 60% 55% / 0.08), transparent 70%);
+  }
+</style>
+
+<script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+<script>
+  (function () {
+    const form = document.getElementById('nlv3-form') as HTMLFormElement;
+    const errorEl = document.getElementById('nlv3-error');
+    const successEl = document.getElementById('nlv3-success');
+
+    (window as any).handleNlv3Captcha = function () {
+      document.getElementById('nlv3-captcha')?.dispatchEvent(new Event('captchaChange'));
+    };
+
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+      const btnText = btn.querySelector('.nlv3-btn-text');
+      const btnLoader = btn.querySelector('.nlv3-btn-loader');
+
+      btn.disabled = true;
+      btnText?.classList.add('hidden');
+      btnLoader?.classList.remove('hidden');
+      errorEl?.classList.add('hidden');
+      successEl?.classList.add('hidden');
+
+      try {
+        await fetch(form.action, { method: 'POST', body: new FormData(form), mode: 'no-cors' });
+        successEl?.classList.remove('hidden');
+        form.reset();
+        if ((window as any).turnstile) (window as any).turnstile.reset();
+      } catch {
+        errorEl?.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btnText?.classList.remove('hidden');
+        btnLoader?.classList.add('hidden');
+      }
+    });
+  })();
+</script>

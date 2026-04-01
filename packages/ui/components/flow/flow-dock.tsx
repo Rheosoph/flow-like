@@ -16,10 +16,11 @@ import { PanelTopOpen } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 
-type IFlowDockItem = {
+export type IFlowDockItem = {
 	title: string;
 	icon: React.ReactNode;
 	onClick: () => Promise<void> | void;
+	onContextMenu?: () => Promise<void> | void;
 	separator?: string;
 	highlight?: boolean;
 	special?: boolean;

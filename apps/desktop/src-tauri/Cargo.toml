@@ -23,20 +23,23 @@ plist = "1.8.0"
 
 [dependencies]
 flow-like = { workspace = true, features = ["tauri", "local-ml"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local"] }
 flow-like-types.workspace = true
 flow-like-wasm.workspace = true
+
 tauri = { version = "2.9.5", features = [
     "protocol-asset",
     "macos-private-api",
     "tray-icon",
 ] }
 window-vibrancy = "0.6.0"
+
 anyhow = "1.0.95"
 sentry.workspace = true
 sentry-tracing.workspace = true
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 tracing = { version = "0.1.41", features = ["async-await", "attributes"] }
+
 dirs-next.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
@@ -44,6 +47,7 @@ serde_json.workspace = true
 image.workspace = true
 imageproc.workspace = true
 webp.workspace = true
+
 tauri-plugin = "2.5.2"
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-log = "2.8.0"
@@ -55,14 +59,20 @@ tauri-plugin-http = "2.5.6"
 tauri-plugin-devtools = "2.0.1"
 tauri-plugin-fs = "2.4.5"
 urlencoding.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
 tauri-plugin-opener = "2.5.3"
+
 tracing-oslog = "0.3.0"
+
 rusqlite = { version = "0.32.0", features = ["bundled-full", "serde_json"] }
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"] }
 teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
+
 pulldown-cmark = "0.12"
 lazy_static = "1.5.0"
 async-trait.workspace = true
+dashmap.workspace = true
 cron = "0.15.0"
 chrono.workspace = true
 axum = "0.8.6"
@@ -70,19 +80,43 @@ tower = "0.5.2"
 chrono-tz.workspace = true
 mimalloc.workspace = true
 sysinfo = "0.37.2"
+
+blake3.workspace = true
+tauri-plugin-flow-like-dexie-blob-offload.workspace = true
 copilot-sdk.workspace = true
 once_cell = "1.21.3"
 tokio.workspace = true
 rayon = "1.11.0"
+tauri-plugin-remote-push = { git = "https://github.com/TM9657/tauri-plugin-remote-push.git", branch = "main" }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.9.0"
+xcap = "0.8.1"
+arboard = "3.6.1"
+rdev.workspace = true
+enigo = "0.6.1"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
 macos-app-nap = "0.0.1"
+core-graphics = "0.25"
+objc2 = "0.6.3"
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_Accessibility",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+] }
+webview2-com = "0.38"
+
+[target."cfg(target_os = \"linux\")".dependencies]
+atspi = "0.25"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target."cfg(target_os = \"ios\")".dependencies]
 objc2 = "0.6.3"
@@ -91,7 +125,7 @@ objc2 = "0.6.3"
 panic = "abort"
 codegen-units = 1
 lto = "fat"
-opt-level = "z"
+opt-level = "s"
 strip = true
 incremental = false
 split-debuginfo = "unpacked" # macOS
@@ -108,5 +142,3 @@ incremental = true
 
 [profile.dev.package."*"]
 opt-level = 0
-
-

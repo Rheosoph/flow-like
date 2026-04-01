@@ -1,0 +1,75 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install WASI workload
+        run: dotnet workload install wasi-experimental
+
+      - name: Install wasi-sdk
+        run: |
+          curl -fsSL https://github.com/aspect-build/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz -o wasi-sdk.tar.gz || \
+            curl -fsSL https://github.com/nickvidal/aspect-build/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz -o wasi-sdk.tar.gz
+          mkdir -p .tools
+          tar xzf wasi-sdk.tar.gz -C .tools
+          WASI_DIR=$(ls -d .tools/wasi-sdk-* | head -1)
+          echo "WASI_SDK_PATH=$PWD/$WASI_DIR" >> $GITHUB_ENV
+
+      - name: Fetch WIT definition
+        run: |
+          mkdir -p wit
+          curl -fsSL https://raw.githubusercontent.com/TM9657/flow-like/dev/packages/wasm/wit/flow-like-node.wit -o wit/flow-like-node.wit
+
+      - run: dotnet restore
+
+      - name: Build
+        run: >
+          dotnet publish -c Release
+          /p:WasmSingleFileBundle=true
+          /p:WasiClangLinkOptimizationFlag=-O0
+          /p:WasiClangCompileOptimizationFlag=-O0
+          /p:WasiBitcodeCompileOptimizationFlag=-O0
+
+      - name: Test
+        run: dotnet test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node
+          path: |
+            bin/Release/net10.0/wasi-wasm/AppBundle/FlowLikeWasmNode.wasm
+            flow-like.toml
+            README.md
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-node
+          path: release-files
+
+      - name: Create tarball
+        run: tar czf flow-like-node-csharp-${{ github.ref_name }}.tar.gz -C release-files .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flow-like-node-csharp-${{ github.ref_name }}.tar.gz

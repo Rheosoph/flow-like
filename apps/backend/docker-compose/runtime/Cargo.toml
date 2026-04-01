@@ -7,7 +7,7 @@ description = "Flow-Like Docker Compose Execution Runtime"
 [dependencies]
 flow-like.workspace = true
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure"] }
-flow-like-catalog = { workspace = true, features = ["execute", "local-ml"] }
+flow-like-catalog = { workspace = true, features = ["execute", "local-ml", "remote"] }
 flow-like-executor = { workspace = true, features = ["all-execute"] }
 flow-like-storage.workspace = true
 mimalloc.workspace = true
@@ -25,7 +25,7 @@ tracing-opentelemetry.workspace = true
 tokio = { version = "1", features = ["full"] }
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

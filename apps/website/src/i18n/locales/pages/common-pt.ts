@@ -187,7 +187,7 @@ export const ptCommon = {
 		"Sim! Flow-Like é totalmente auto-hospedável. Você pode executá-lo em sua própria infraestrutura, on-premise ou em ambientes air-gapped. O app desktop funciona completamente offline.",
 	"pricing.faq.q3": "Há preços por usuário?",
 	"pricing.faq.a3":
-		"Não. Acreditamos que automação deve ser acessível para toda sua organização. Todos os planos suportam usuários ilimitados. Você só paga com base no uso (recursos na nuvem), não por quantidade de funcionários.",
+		"A maioria dos planos usa preços por assento. Nosso plano Enterprise inclui usuários e execuções ilimitados — você só paga com base no uso (recursos na nuvem), não por quantidade de funcionários.",
 	"pricing.faq.q4": "O que está incluído no acesso a modelos IA?",
 	"pricing.faq.a4":
 		"O acesso a modelos IA cobre recursos como FlowPilot (nosso assistente IA), sugestões inteligentes de workflows e automação em linguagem natural através de nossos modelos hospedados.",
@@ -212,4 +212,15 @@ export const ptCommon = {
 	"pricing.ctaSection.enterprise": "Contatar vendas empresariais",
 	"pricing.ctaSection.startingAt":
 		"A partir de €1.999 · Propriedade completa do código · Implante em qualquer lugar",
+
+	// Navigation – page links
+	"header.integrations": "Integrações",
+	"header.security": "Segurança",
+	"footer.link.integrations": "Integrações",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Segurança",
+
+	"pricing.faq.moreQuestions": "Ainda tem dúvidas?",
+	"pricing.faq.contactUs": "Estamos aqui para ajudar",
+	"pricing.faq.contactButton": "Fale conosco",
 };

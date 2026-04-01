@@ -5,9 +5,9 @@ import {
 	getSmoothStepPath,
 	getStraightPath,
 } from "@xyflow/react";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
-export function FlowExecutionEdge(props: EdgeProps) {
+export const FlowExecutionEdge = memo(function FlowExecutionEdge(props: EdgeProps) {
 	const {
 		id,
 		sourceX,
@@ -97,4 +97,4 @@ export function FlowExecutionEdge(props: EdgeProps) {
 			/>
 		</>
 	);
-}
+});

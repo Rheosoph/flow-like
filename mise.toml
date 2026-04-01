@@ -1,0 +1,458 @@
+# ──────────────────────────────────────────────
+# Flow-Like — root mise configuration
+# ──────────────────────────────────────────────
+# Replaces the script section of the root package.json.
+# Usage:  mise run <task>          e.g.  mise run dev:desktop
+#         mise run <task> --help   for per-task docs
+# ──────────────────────────────────────────────
+
+[tools]
+bun = "latest"
+rust = "latest"
+node = "22"
+python = "3.12"
+uv = "latest"
+
+# ── Dev ──────────────────────────────────────
+
+[tasks."dev:desktop"]
+description = "Start Tauri desktop dev server (auto-detects platform/arch)"
+run = """
+OS=$(uname -s 2>/dev/null || echo "Windows")
+ARCH=$(uname -m 2>/dev/null || echo "x86_64")
+case "$OS" in
+  Darwin)
+    if [ "$ARCH" = "arm64" ]; then
+      mise run dev:desktop:mac:arm
+    else
+      mise run dev:desktop:mac:intel
+    fi
+    ;;
+  Linux)
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+      mise run dev:desktop:linux:arm
+    else
+      mise run dev:desktop:linux:x64
+    fi
+    ;;
+  *)
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+      mise run dev:desktop:win:arm
+    else
+      mise run dev:desktop:win:x64
+    fi
+    ;;
+esac
+"""
+
+[tasks."dev:desktop:local"]
+description = "Desktop + local API + runtime"
+run = "mise run dev:api & mise run dev:runtime & bun run --cwd ./apps/desktop dev:auto"
+
+[tasks."dev:web"]
+description = "Start Next.js web dev server"
+run = "bun run --cwd ./apps/web dev"
+
+[tasks."dev:web:local"]
+description = "Web + local API + runtime"
+run = "mise run dev:api & mise run dev:runtime & bun run --cwd ./apps/web dev"
+
+[tasks."dev:ios"]
+description = "Start iOS dev build"
+run = "bun run --cwd ./apps/desktop dev:ios"
+
+[tasks."dev:android"]
+description = "Start Android dev build"
+run = "bun run --cwd ./apps/desktop dev:android"
+
+[tasks."dev:android-studio"]
+description = "Open Android Studio dev build"
+run = "bun run --cwd ./apps/desktop dev:android-studio"
+
+[tasks."dev:ios:host"]
+description = "iOS dev with host networking"
+run = "bun run --cwd ./apps/desktop dev:ios:host"
+
+[tasks."dev:android:host"]
+description = "Android dev with host networking"
+run = "bun run --cwd ./apps/desktop dev:android:host"
+
+[tasks."dev:desktop:mac:arm"]
+description = "Desktop dev for macOS ARM"
+run = "set -a && source ./apps/desktop/.env && set +a && bun run --cwd ./apps/desktop dev:mac:arm"
+
+[tasks."dev:desktop:mac:intel"]
+description = "Desktop dev for macOS Intel"
+run = "bun run --cwd ./apps/desktop dev:mac:intel"
+
+[tasks."dev:desktop:win:arm"]
+description = "Desktop dev for Windows ARM"
+run = "bun run --cwd ./apps/desktop dev:win:arm"
+
+[tasks."dev:desktop:win:x64"]
+description = "Desktop dev for Windows x64"
+run = "bun run --cwd ./apps/desktop dev:win:x64"
+
+[tasks."dev:desktop:linux:x64"]
+description = "Desktop dev for Linux x64"
+run = "bun run --cwd ./apps/desktop dev:linux:x64"
+
+[tasks."dev:xcode"]
+description = "Open Xcode project"
+run = "bun run --cwd ./apps/desktop dev:xcode"
+
+[tasks."dev:api"]
+description = "Start local API server"
+run = "bun run --cwd ./apps/backend/local/api dev"
+
+[tasks."dev:api:restart"]
+description = "Restart local API server"
+run = "pkill -f 'flow-like-api' || true && mise run dev:api"
+
+[tasks."dev:runtime"]
+description = "Start local runtime server"
+run = "bun run --cwd ./apps/backend/local/runtime dev"
+
+[tasks."dev:embedded"]
+description = "Start embedded dev server"
+run = "bun run --cwd ./apps/embedded dev"
+
+[tasks."dev:website"]
+description = "Start website dev server"
+run = "bun run --cwd ./apps/website dev"
+
+[tasks."dev:docs"]
+description = "Start docs dev server"
+run = "bun run --cwd ./apps/docs dev"
+
+# ── Build ────────────────────────────────────
+
+[tasks."build:desktop"]
+description = "Build Tauri desktop app (auto-detects platform/arch)"
+run = """
+OS=$(uname -s 2>/dev/null || echo "Windows")
+ARCH=$(uname -m 2>/dev/null || echo "x86_64")
+case "$OS" in
+  Darwin)
+    if [ "$ARCH" = "arm64" ]; then
+      bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.macos.arm.conf.json --verbose
+    else
+      bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.macos.intel.conf.json --verbose
+    fi
+    ;;
+  Linux)
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+      bun run --cwd ./apps/desktop tauri build --verbose
+    else
+      bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.linux.x64.conf.json --verbose
+    fi
+    ;;
+  *)
+    bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.win.x64.conf.json --verbose
+    ;;
+esac
+"""
+
+[tasks."build:web"]
+description = "Build Next.js web app"
+run = "bun run --cwd ./apps/web build"
+
+[tasks."build:website"]
+description = "Build marketing website"
+run = "bun run --cwd ./apps/website build"
+
+[tasks."build:docs"]
+description = "Build documentation site"
+run = "bun run --cwd ./apps/docs build"
+
+[tasks."build:embedded"]
+description = "Build embedded app"
+run = "bun run --cwd ./apps/embedded build"
+
+[tasks."build:xcode"]
+description = "Build Xcode project"
+run = "bun run --cwd ./apps/desktop build:xcode"
+
+[tasks."build:android"]
+description = "Build Android app"
+run = "bun run --cwd ./apps/desktop build:android"
+
+# ── Deploy ───────────────────────────────────
+
+[tasks."deploy:website"]
+description = "Deploy website"
+run = "bun run --cwd ./apps/website deploy"
+
+[tasks."deploy:website:force"]
+description = "Deploy website (force)"
+run = "bun run --cwd ./apps/website deploy:force"
+
+[tasks."deploy:web"]
+description = "Deploy web app"
+run = "bun run --cwd ./apps/web deploy"
+
+[tasks."deploy:web:force"]
+description = "Deploy web app (force)"
+run = "bun run --cwd ./apps/web deploy:force"
+
+[tasks."deploy:docs"]
+description = "Deploy docs"
+run = "bun run --cwd ./apps/docs deploy"
+
+[tasks."deploy:docs:force"]
+description = "Deploy docs (force)"
+run = "bun run --cwd ./apps/docs deploy:force"
+
+[tasks."deploy:embedded"]
+description = "Deploy embedded app"
+run = "bun run --cwd ./apps/embedded deploy"
+
+# ── Publish: Platform SDKs ───────────────────
+
+[tasks."publish:platform:nodejs"]
+description = "Publish Node.js platform SDK"
+run = "bun publish --cwd ./libs/platform/nodejs --access public"
+
+[tasks."publish:platform:python"]
+description = "Publish Python platform SDK"
+dir = "libs/platform/python"
+run = "uv build && uv publish"
+
+# ── Publish: WASM SDKs ──────────────────────
+
+[tasks."publish:wasm:ts"]
+description = "Publish TypeScript WASM SDK"
+run = "bun run --cwd ./libs/wasm-sdk/wasm-sdk-typescript publish:npm"
+
+[tasks."publish:wasm:as"]
+description = "Publish AssemblyScript WASM SDK"
+run = "bun run --cwd ./libs/wasm-sdk/wasm-sdk-assemblyscript publish:npm"
+
+[tasks."publish:wasm:python"]
+description = "Publish Python WASM SDK"
+dir = "libs/wasm-sdk/wasm-sdk-python"
+run = "uv build && uv publish"
+
+[tasks."publish:wasm:rust:macros"]
+description = "Publish Rust WASM SDK proc-macros crate"
+dir = "libs/wasm-sdk/wasm-sdk-macros"
+run = "cargo publish"
+
+[tasks."publish:wasm:rust"]
+description = "Publish Rust WASM SDK (macros + core)"
+depends = ["publish:wasm:rust:macros"]
+dir = "libs/wasm-sdk/wasm-sdk-rust"
+run = """
+echo "Waiting for crates.io to index macros crate..."
+sleep 30
+cargo publish
+"""
+
+[tasks."test:wasm:rust:lint"]
+description = "Run lint/quality tests for the Rust WASM template nodes"
+run = """
+echo "==> Running template lint tests..."
+HOST=$(rustc -vV | awk '/^host:/ { print $2 }')
+cd templates/wasm-node-rust && cargo test --target "$HOST" --test lint -- --nocapture
+"""
+
+[tasks."test:catalog:lint"]
+description = "Run lint/quality tests for the native catalog node definitions"
+run = """
+echo "==> Running catalog lint tests..."
+cargo test --package flow-like-catalog --test lint_catalog -- --nocapture
+"""
+
+[tasks."test:wasm:rust:e2e"]
+description = "Build Rust template + run e2e integration tests via host runtime"
+depends = ["test:wasm:rust:lint"]
+run = """
+echo "==> Building Rust WASM template..."
+cd templates/wasm-node-rust && cargo build --release
+echo "==> Running e2e tests..."
+cd ../../packages/wasm && cargo test --test rust_sdk_e2e_test -- --nocapture
+"""
+
+[tasks."publish:wasm:csharp"]
+description = "Publish C# WASM SDK to NuGet"
+dir = "libs/wasm-sdk/wasm-sdk-csharp"
+run = """
+set -a && source ../../../.env && set +a
+dotnet pack -c Release
+dotnet nuget push bin/Release/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "$NUGET_TOKEN"
+"""
+
+[tasks."publish:wasm:kotlin"]
+description = "Publish Kotlin WASM SDK to Maven Central"
+dir = "libs/wasm-sdk/wasm-sdk-kotlin"
+tools = { java = "21", kotlin = "2.1" }
+run = """
+set -a && source ../../../.env && set +a
+ORG_GRADLE_PROJECT_mavenCentralUsername="$MAVEN_USERNAME" \
+ORG_GRADLE_PROJECT_mavenCentralPassword="$MAVEN_PASSWORD" \
+ORG_GRADLE_PROJECT_signingInMemoryKey="${GPG_SIGNING_KEY:-}" \
+ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="${GPG_SIGNING_PASSWORD:-}" \
+./gradlew publishAndReleaseToMavenCentral
+"""
+
+[tasks."publish:wasm:go"]
+description = "Tag and push Go WASM SDK release"
+run = "git tag libs/wasm-sdk/wasm-sdk-go/v0.1.0 && git push --tags"
+
+[tasks."publish:wasm:zig"]
+description = "Tag and push Zig WASM SDK release"
+run = "git tag libs/wasm-sdk/wasm-sdk-zig/v0.1.0 && git push --tags"
+
+[tasks."publish:wasm:cpp"]
+description = "Tag and push C++ WASM SDK release"
+run = "git tag libs/wasm-sdk/wasm-sdk-cpp/v0.1.0 && git push --tags"
+
+[tasks."publish:wasm:java"]
+description = "Publish Java WASM SDK to Maven Central"
+dir = "libs/wasm-sdk/wasm-sdk-java"
+tools = { java = "21", maven = "3.9" }
+run = """
+set -a && source ../../../.env && set +a
+SETTINGS=$(mktemp)
+cat > "$SETTINGS" <<EOF
+<settings>
+  <servers>
+    <server>
+      <id>central</id>
+      <username>${MAVEN_USERNAME}</username>
+      <password>${MAVEN_PASSWORD}</password>
+    </server>
+  </servers>
+  <profiles>
+    <profile>
+      <id>gpg</id>
+      <properties>
+        <gpg.passphrase>${GPG_SIGNING_PASSWORD:-}</gpg.passphrase>
+      </properties>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>gpg</activeProfile>
+  </activeProfiles>
+</settings>
+EOF
+mvn deploy -P release -DskipTests -s "$SETTINGS"
+rm -f "$SETTINGS"
+"""
+
+[tasks."publish:wasm:swift"]
+description = "Tag and push Swift WASM SDK release"
+run = "git tag libs/wasm-sdk/wasm-sdk-swift/v0.1.0 && git push --tags"
+
+[tasks."publish:wasm:nim"]
+description = "Publish Nim WASM SDK to Nimble"
+dir = "libs/wasm-sdk/wasm-sdk-nim"
+run = "nimble publish"
+
+[tasks."publish:wasm:lua"]
+description = "Publish Lua WASM SDK to LuaRocks"
+dir = "libs/wasm-sdk/wasm-sdk-lua"
+run = """
+set -a && source ../../../.env && set +a
+command -v luarocks >/dev/null 2>&1 || { echo "Installing luarocks via brew..."; brew install luarocks; }
+luarocks upload flow-like-wasm-sdk-0.1.0-1.rockspec --api-key="$LUAROCKS_API_KEY"
+"""
+
+[tasks."publish:wasm:grain"]
+description = "Tag and push Grain WASM SDK release"
+run = "git tag libs/wasm-sdk/wasm-sdk-grain/v0.1.0 && git push --tags"
+
+# ── Database ─────────────────────────────────
+
+[tasks."db:view"]
+description = "Open database viewer"
+run = "bun run --cwd packages/api db:view"
+
+[tasks."db:push:sync"]
+description = "Push and sync database schema"
+run = "bun run --cwd packages/api db:push:sync"
+
+# ── Quality ──────────────────────────────────
+
+[tasks.fix]
+description = "Auto-fix lint issues (clippy + fmt + biome)"
+run = "cargo clippy --fix && cargo fmt && bunx biome check --write"
+
+[tasks.check]
+description = "Run all checks without fixing"
+run = "cargo clippy && cargo fmt --check && bunx biome check"
+
+[tasks.bench]
+description = "Run all benchmarks"
+run = "cargo bench"
+
+[tasks."bench:flows"]
+description = "Run flow benchmarks"
+run = "cargo bench -p flow-like-catalog --bench flow_bench"
+
+[tasks.bloat]
+description = "Show binary size breakdown"
+run = "cargo bloat --release -n 10"
+
+# ── Codegen / Tooling ───────────────────────
+
+[tasks.schema]
+description = "Generate TypeScript schemas from Rust types"
+run = "bun run ./tools/generate-schema.ts"
+
+[tasks.licenses]
+description = "Generate third-party license reports"
+run = "bun run ./tools/generate-licenses.ts"
+
+[tasks.license]
+description = "Generate desktop license bundles"
+run = """
+cd apps/desktop/src-tauri && cargo license -j > ./assets/licenses.json
+cd ../../..
+bunx license-report --output=json > apps/desktop/src-tauri/assets/licenses-node.json
+bun run ./tools/license-bundle.ts
+"""
+
+[tasks.version]
+description = "Bump patch version"
+run = "npm version patch -m 'Increment version to %s'"
+
+[tasks.setup]
+description = "Install required cargo tools (postinstall equivalent)"
+run = "cargo install cargo-license cargo-watch systemfd --locked"
+
+# ── Tools ────────────────────────────────────
+
+[tasks."tool:model-eval"]
+description = "Run model evaluation pipeline (fetch AA benchmarks → normalize → update DB)"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run index.ts"
+
+[tasks."tool:model-eval:dryrun"]
+description = "Dry-run model evaluation — show diff of what would change without writing to DB"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run index.ts --dry-run"
+
+[tasks."tool:seed-models"]
+description = "Seed LlmModel records from Artificial Analysis API (no Bit updates)"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run seed-models.ts"
+
+# ── Templates ────────────────────────────────
+
+[tasks."templates:build"]
+description = "Build all WASM node templates"
+dir = "templates"
+run = "mise run build:all"
+
+[tasks."templates:setup"]
+description = "Install toolchains for all templates"
+dir = "templates"
+run = "mise run setup:all"
+
+[tasks."templates:clean"]
+description = "Clean all template build artifacts"
+dir = "templates"
+run = "mise run clean:all"
+
+[tasks."templates:test"]
+description = "Run tests for all templates"
+dir = "templates"
+run = "mise run test:all"

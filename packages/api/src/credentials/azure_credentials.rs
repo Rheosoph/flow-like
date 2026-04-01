@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[cfg(feature = "azure")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureRuntimeCredentials {
     /// SAS token for meta container
     pub meta_sas_token: Option<String>,
@@ -35,6 +35,39 @@ pub struct AzureRuntimeCredentials {
     pub content_path_prefix: Option<String>,
     /// User-level content path prefix (e.g., "users/{sub}/apps/{app_id}")
     pub user_content_path_prefix: Option<String>,
+}
+
+#[cfg(feature = "azure")]
+impl std::fmt::Debug for AzureRuntimeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureRuntimeCredentials")
+            .field(
+                "meta_sas_token",
+                &self.meta_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "content_sas_token",
+                &self.content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "user_content_sas_token",
+                &self.user_content_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "logs_sas_token",
+                &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("meta_container", &self.meta_container)
+            .field("content_container", &self.content_container)
+            .field("logs_container", &self.logs_container)
+            .field("account_name", &self.account_name)
+            .field(
+                "account_key",
+                &self.account_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 #[cfg(feature = "azure")]
@@ -116,6 +149,8 @@ impl AzureRuntimeCredentials {
         if sub.is_empty() || app_id.is_empty() {
             return Err(flow_like_types::anyhow!("Sub or App ID cannot be empty"));
         }
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
 
         let account_key = self
             .account_key
@@ -196,6 +231,44 @@ impl AzureRuntimeCredentials {
                     None,
                     Some(format!("apps/{}", app_id)),
                     None,
+                )
+            }
+            CredentialsAccess::EditUser => {
+                let user_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("users/{}/apps/{}", sub, app_id),
+                    "rwdl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    None,
+                    Some(user_content_sas),
+                    None,
+                    None,
+                    Some(format!("users/{}/apps/{}", sub, app_id)),
+                )
+            }
+            CredentialsAccess::ReadUser => {
+                let user_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("users/{}/apps/{}", sub, app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    None,
+                    Some(user_content_sas),
+                    None,
+                    None,
+                    Some(format!("users/{}/apps/{}", sub, app_id)),
                 )
             }
             CredentialsAccess::InvokeNone => {
@@ -373,6 +446,8 @@ impl AzureRuntimeCredentials {
         if sub.is_empty() || app_id.is_empty() {
             return Err(flow_like_types::anyhow!("Sub or App ID cannot be empty"));
         }
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
 
         let account_key = self
             .account_key
@@ -385,6 +460,8 @@ impl AzureRuntimeCredentials {
         let permissions = match mode {
             CredentialsAccess::EditApp => "racwdl",
             CredentialsAccess::ReadApp => "rl",
+            CredentialsAccess::EditUser => "racwdl",
+            CredentialsAccess::ReadUser => "rl",
             CredentialsAccess::InvokeNone => "racwdl",
             CredentialsAccess::InvokeRead => "rl",
             CredentialsAccess::InvokeWrite => "racwdl",
@@ -397,11 +474,15 @@ impl AzureRuntimeCredentials {
 
         // Determine the directory path based on access mode
         // EditApp/ReadApp: apps/{app_id}
+        // EditUser/ReadUser: users/{sub}/apps/{app_id}
         // InvokeRead/InvokeWrite/InvokeNone: both app and user paths
         // ReadLogs: logs/{app_id}
         let (app_directory, user_directory) = match mode {
             CredentialsAccess::EditApp | CredentialsAccess::ReadApp => {
                 (Some(format!("apps/{}", app_id)), None)
+            }
+            CredentialsAccess::EditUser | CredentialsAccess::ReadUser => {
+                (None, Some(format!("users/{}/apps/{}", sub, app_id)))
             }
             CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
@@ -673,8 +754,10 @@ impl RuntimeCredentialsTrait for AzureRuntimeCredentials {
         self.into_shared_credentials().to_db(app_id).await
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(app_id).await
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

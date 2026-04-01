@@ -1,0 +1,32 @@
+{
+	"name": "@flow-like/wasm-sdk-typescript",
+	"version": "0.1.1",
+	"description": "SDK for building Flow-Like WASM nodes in TypeScript",
+	"license": "MIT",
+	"repository": "https://github.com/TM9657/flow-like",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": ["dist/", "src/", "wit/"],
+	"scripts": {
+		"build": "tsc",
+		"build:publish": "tsc --declaration --declarationMap --sourceMap",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"prepublishOnly": "bun run build:publish",
+		"publish:npm": "bun run build:publish && bun publish --access public"
+	},
+	"dependencies": {
+		"@sinclair/typebox": "^0.34.0"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.0",
+		"vitest": "^3.0.0"
+	}
+}

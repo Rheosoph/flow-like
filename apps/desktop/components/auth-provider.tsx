@@ -433,14 +433,18 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	useEffect(() => {
 		if (!(backend instanceof TauriBackend)) return;
 
-		void Promise.allSettled([
-			invalidate(backend.userState.getInfo, []),
-			invalidate(backend.userState.getNotifications, []),
-			invalidate(backend.userState.getProfile, []),
-			invalidate(backend.userState.getSettingsProfile, []),
-			invalidate(backend.userState.getProfiles, []),
-			invalidate(backend.appState.getApps, []),
-		]);
+		(async () => {
+			// Ensure user record exists in DB before profile operations
+			await invalidate(backend.userState.getInfo, []);
+
+			void Promise.allSettled([
+				invalidate(backend.userState.getNotifications, []),
+				invalidate(backend.userState.getProfile, []),
+				invalidate(backend.userState.getSettingsProfile, []),
+				invalidate(backend.userState.getProfiles, []),
+				invalidate(backend.appState.getApps, []),
+			]);
+		})();
 	}, [backend, auth?.isAuthenticated, auth?.user?.profile?.sub, invalidate]);
 
 	return (

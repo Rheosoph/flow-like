@@ -1,0 +1,24 @@
+---
+import { LuArrowDown } from "react-icons/lu";
+
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section class="relative py-16 overflow-hidden">
+  <div class="max-w-5xl mx-auto px-4">
+    <!-- Divider with "Choose your path" -->
+    <div class="flex items-center gap-4 mb-4">
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-border to-transparent"></div>
+      <span class="text-sm font-medium text-muted-foreground uppercase tracking-widest">{t("dev.pathpicker.label")}</span>
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-border to-transparent"></div>
+    </div>
+
+    <div class="flex justify-center">
+      <LuArrowDown className="w-5 h-5 text-muted-foreground/50 animate-bounce" />
+    </div>
+  </div>
+</section>

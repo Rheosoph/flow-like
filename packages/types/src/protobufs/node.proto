@@ -45,6 +45,12 @@ message Node {
     map<string, StringList> required_oauth_scopes = 22;
     bool only_offline = 23;
     optional uint32 version = 24;
+    optional NodeWasm wasm = 25;
+}
+
+message NodeWasm {
+    string package_id = 1;
+    repeated string permissions = 2;
 }
 
 message StringList {

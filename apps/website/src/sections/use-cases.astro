@@ -27,36 +27,45 @@ const useCases = [
     title: t("usecases.shopfloor"),
     description: t("usecases.shopfloor.desc"),
     color: "text-orange-600",
+    href: "/industries/shopfloor",
   },
   {
     icon: LuChartLine,
     title: t("usecases.finance"),
     description: t("usecases.finance.desc"),
     color: "text-emerald-600",
+    href: "/industries/finance",
   },
   {
     icon: LuBriefcase,
     title: t("usecases.office"),
     description: t("usecases.office.desc"),
     color: "text-blue-600",
+    href: "/industries/office",
   },
   {
     icon: LuBot,
     title: t("usecases.ai"),
     description: t("usecases.ai.desc"),
     color: "text-violet-600",
+    href: "/industries/ai-agents",
   },
   {
     icon: LuShield,
     title: t("usecases.gov"),
     description: t("usecases.gov.desc"),
     color: "text-red-600",
+    href: "/industries/gov-defense",
   },
 ];
 ---
 
 <!-- Sharp tilted white section that overlays into previous dark section -->
-<section class="relative -mt-20 pt-32 pb-24">
+<section
+  class="relative -mt-20 pt-32 pb-24"
+  data-c1="hsl(222 80% 58% / .06)"
+  data-c2="hsl(268 70% 60% / .06)"
+>
   <!-- White background with sharp tilted top edge -->
   <div
     class="absolute inset-0 bg-[#fafafa]"
@@ -79,7 +88,7 @@ const useCases = [
     <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-px bg-neutral-200">
       {useCases.map((useCase) => (
         <a
-          href="#"
+          href={useCase.href}
           class="group bg-[#fafafa] p-8 hover:bg-white transition-colors"
         >
           <useCase.icon className={`w-5 h-5 ${useCase.color} mb-6`} />

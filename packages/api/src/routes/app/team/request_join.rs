@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     entity::{app, join_queue, membership, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -85,6 +86,15 @@ pub async fn request_join(
 
         membership.insert(&txn).await?;
         txn.commit().await?;
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "membership.join",
+            "membership",
+            sub,
+            "Auto-joined public app"
+        );
         return Ok(Json(()));
     }
 
@@ -118,12 +128,21 @@ pub async fn request_join(
         existing_request.updated_at = Set(chrono::Utc::now().naive_utc());
         existing_request.update(&txn).await?;
         txn.commit().await?;
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "membership.request",
+            "join_queue",
+            sub,
+            "Join request updated"
+        );
         return Ok(Json(()));
     }
 
     let new_request = join_queue::ActiveModel {
         id: Set(create_id()),
-        user_id: Set(sub),
+        user_id: Set(sub.clone()),
         app_id: Set(app_id.clone()),
         comment: Set(params.comment),
         created_at: Set(chrono::Utc::now().naive_utc()),
@@ -132,5 +151,14 @@ pub async fn request_join(
 
     new_request.insert(&txn).await?;
     txn.commit().await?;
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.request",
+        "join_queue",
+        sub,
+        "Join request submitted"
+    );
     Ok(Json(()))
 }

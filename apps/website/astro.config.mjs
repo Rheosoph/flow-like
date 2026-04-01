@@ -1,4 +1,5 @@
 import react from "@astrojs/react";
+import cloudflare from "@astrojs/cloudflare";
 import tailwindcss from "@tailwindcss/vite";
 import compressor from "astro-compressor";
 import { defineConfig } from "astro/config";
@@ -10,6 +11,7 @@ import sitemap from "@astrojs/sitemap";
 // https://astro.build/config
 export default defineConfig({
 	site: "https://flow-like.com",
+	adapter: cloudflare(),
 	i18n: {
 		defaultLocale: "en",
 		locales: ["en", "de", "es", "fr", "zh", "ja", "ko", "pt", "it", "nl", "sv"],
@@ -20,7 +22,13 @@ export default defineConfig({
 	integrations: [
 		// markdoc(),
 		// robotsTxt(),
-		sitemap(),
+		sitemap({
+			customPages: [
+				"https://flow-like.com/store",
+				"https://flow-like.com/store/packages",
+				"https://flow-like.com/store/apps",
+			],
+		}),
 		// playformCompress(),
 		react(),
 		mdx({
@@ -39,6 +47,9 @@ export default defineConfig({
 		define: {
 			"process.env": {},
 		},
+		resolve: {
+			dedupe: ["react", "react-dom"],
+		},
 		ssr: {
 			noExternal: [
 				"katex",
@@ -46,13 +57,34 @@ export default defineConfig({
 				"@tm9657/flow-like-ui",
 				"lodash-es",
 				"@platejs/math",
+				"@platejs/markdown",
+				"platejs",
 				"react-lite-youtube-embed",
 				"react-tweet",
 			],
 		},
-		plugins: [tailwindcss()],
+		plugins: [
+			tailwindcss(),
+			{
+				name: "force-react-ssr-optimize",
+				configEnvironment(name, options) {
+					if (name === "ssr" || name === "prerender") {
+						return {
+							optimizeDeps: {
+								include: [
+									"react",
+									"react/jsx-runtime",
+									"react/jsx-dev-runtime",
+									"react-dom",
+									"react-dom/server",
+								],
+							},
+						};
+					}
+				},
+			},
+		],
 	},
-	output: "static",
 	markdown: {
 		syntaxHighlight: "shiki",
 		shikiConfig: {

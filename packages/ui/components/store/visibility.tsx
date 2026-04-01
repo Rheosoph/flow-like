@@ -1,6 +1,6 @@
 "use client";
-import { IAppVisibility } from "../../lib/schema/app/app";
 import { Globe, KeyRound, Lock, Shield } from "lucide-react";
+import { IAppVisibility } from "../../lib/schema/app/app";
 
 export function visibilityLabel(v: IAppVisibility) {
 	switch (v) {

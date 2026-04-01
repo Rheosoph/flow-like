@@ -24,6 +24,8 @@ pub enum RemoteEmbeddingProvider {
     HuggingfaceEndpoint,
     /// Cloudflare Workers AI
     CloudflareWorkersAI,
+    /// Internal embedding gateway
+    Internal,
 }
 
 /// Configuration for remote execution via API proxy
@@ -39,6 +41,9 @@ pub struct RemoteExecutionConfig {
     /// Which remote provider implementation to use
     #[serde(default)]
     pub implementation: Option<RemoteEmbeddingProvider>,
+    /// Deployed model ID for the upstream provider (e.g., Internal gateway model name)
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -115,6 +120,7 @@ pub struct ModelProviderConfiguration {
     pub moonshot_config: Vec<MoonshotConfig>,
     pub galadriel_config: Vec<GaladrielConfig>,
     pub mira_config: Vec<MiraConfig>,
+    pub mozilla_config: Vec<MozillaConfig>,
     pub xai_config: Vec<XAIConfig>,
 }
 
@@ -220,6 +226,12 @@ pub struct GaladrielConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MiraConfig {
+    pub api_key: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MozillaConfig {
     pub api_key: Option<String>,
     pub endpoint: Option<String>,
 }

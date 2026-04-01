@@ -170,10 +170,21 @@ impl Command for CopyPasteCommand {
 
         for node in self.original_nodes.iter() {
             let mut new_node = node.clone();
-            let blueprint_node = node_registry
-                .get_node(&node.name)
-                .ok()
-                .unwrap_or(node.clone());
+            let blueprint_node = node_registry.get_node(&node.name).ok();
+
+            // If the pasted node is external (has wasm metadata) but not in the registry, reject it
+            if blueprint_node.is_none() && node.wasm.is_some() {
+                return Err(flow_like_types::anyhow!(
+                    "External node '{}' from package '{}' is not installed. Please install the package first.",
+                    node.friendly_name,
+                    node.wasm
+                        .as_ref()
+                        .map(|w| w.package_id.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+
+            let blueprint_node = blueprint_node.unwrap_or(node.clone());
             let old_id = new_node.id.clone();
             let new_id = create_id();
             translated_connection.insert(old_id, new_id.clone());
@@ -184,6 +195,7 @@ impl Command for CopyPasteCommand {
             new_node.scores = blueprint_node.scores.clone();
             new_node.start = blueprint_node.start;
             new_node.event_callback = blueprint_node.event_callback;
+            new_node.wasm = blueprint_node.wasm.clone();
 
             // Preserve user-customized friendly_name and description for start nodes (events)
             let is_start_node = blueprint_node.start.unwrap_or(false);
@@ -267,8 +279,26 @@ impl Command for CopyPasteCommand {
                         }
                     }
 
-                    pin.schema = blueprint_pin.schema.clone();
-                    pin.options = blueprint_pin.options.clone();
+                    // Translate function_layer_id when pasting CallFunction nodes
+                    if pin.name == "function_layer_id"
+                        && let Some(ref_bytes) = pin.default_value.as_ref()
+                        && let Ok(layer_ref) = from_slice::<String>(ref_bytes)
+                        && let Some(new_layer_id) = layer_translation.get(&layer_ref)
+                        && let Ok(bytes) = flow_like_types::json::to_vec(new_layer_id)
+                    {
+                        pin.default_value = Some(bytes);
+                    }
+
+                    // Only override schema/options from the blueprint if the blueprint
+                    // actually defines them. Dynamic schemas (set by on_update, not
+                    // in get_node()) must survive the paste cycle so that on_update
+                    // can find the schema on the first pass without clearing pins.
+                    if blueprint_pin.schema.is_some() {
+                        pin.schema = blueprint_pin.schema.clone();
+                    }
+                    if blueprint_pin.options.is_some() {
+                        pin.options = blueprint_pin.options.clone();
+                    }
 
                     if new_node.start.unwrap_or(false)
                         && pin.pin_type == PinType::Input

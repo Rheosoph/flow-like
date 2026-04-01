@@ -63,9 +63,7 @@ impl NodeLogic for StringUnescapeNode {
             }
         }
 
-        context
-            .set_pin_value("unescaped", json!(result))
-            .await?;
+        context.set_pin_value("unescaped", json!(result)).await?;
         Ok(())
     }
 }

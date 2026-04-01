@@ -1,6 +1,6 @@
 "use client";
-import { Skeleton } from "../ui/skeleton";
 import { Package } from "lucide-react";
+import { Skeleton } from "../ui/skeleton";
 
 export function StoreEmptyState({
 	title,

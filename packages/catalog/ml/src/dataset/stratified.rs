@@ -125,11 +125,9 @@ impl NodeLogic for StratifiedSplitNode {
         let test = test.load(context).await?;
         let train = train.load(context).await?;
 
-        let source_db = source.db.read().await.clone();
-        let mut test_db = test.db.read().await.clone();
-        let mut train_db = train.db.read().await.clone();
-
-        let source_table = source_db.raw().await?;
+        source.ensure_flushed().await?;
+        let source_guard = source.db.read().await;
+        let source_table = source_guard.inner().raw().await?;
         let query = source_table.query();
         let mut item_stream = query.execute().await?;
 
@@ -173,10 +171,10 @@ impl NodeLogic for StratifiedSplitNode {
         };
 
         if !all_train_items.is_empty() {
-            train_db.insert(all_train_items).await?;
+            train.db.write().await.insert(all_train_items).await?;
         }
         if !all_test_items.is_empty() {
-            test_db.insert(all_test_items).await?;
+            test.db.write().await.insert(all_test_items).await?;
         }
 
         context.activate_exec_pin("exec_out").await?;

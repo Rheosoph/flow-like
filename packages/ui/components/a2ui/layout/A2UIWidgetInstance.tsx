@@ -1,12 +1,18 @@
 "use client";
 
-import { useCallback } from "react";
+import { createContext, useCallback, useContext } from "react";
 import {
 	type ComponentProps,
 	getComponentRenderer,
 } from "../ComponentRegistry";
 import { useWidgetRefs } from "../WidgetRefsContext";
-import type { ActionBinding, Style } from "../types";
+import type { A2UIComponent, ActionBinding, Style } from "../types";
+
+export interface InlineWidgetDef {
+	name: string;
+	rootComponentId: string;
+	components: { id: string; component: Record<string, unknown>; style?: Style }[];
+}
 
 export interface WidgetInstanceComponentProps {
 	widgetId: string;
@@ -16,6 +22,19 @@ export interface WidgetInstanceComponentProps {
 	styleOverride?: Record<string, unknown>;
 	actionBindings?: Record<string, ActionBinding>;
 	style?: Style;
+	inlineWidgetDef?: InlineWidgetDef;
+}
+
+interface WidgetInstanceContextValue {
+	instanceId: string;
+	widgetId: string;
+	actionBindings: Record<string, ActionBinding>;
+}
+
+const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(null);
+
+export function useWidgetInstance(): WidgetInstanceContextValue | null {
+	return useContext(WidgetInstanceContext);
 }
 
 /**
@@ -29,11 +48,12 @@ export function A2UIWidgetInstance({
 	onAction,
 }: ComponentProps) {
 	const props = component as unknown as WidgetInstanceComponentProps;
-	const { instanceId, widgetId } = props;
+	const { instanceId, widgetId, inlineWidgetDef, actionBindings } = props;
 	const widgetRefsContext = useWidgetRefs();
 
-	// Get widget definition from refs
-	const widgetDef = widgetRefsContext?.getWidgetRef(instanceId);
+	// Get widget definition from refs, fall back to inline definition
+	const fromRefs = widgetRefsContext?.getWidgetRef(instanceId);
+	const widgetDef = fromRefs ?? inlineWidgetDef;
 
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(
@@ -51,10 +71,11 @@ export function A2UIWidgetInstance({
 				return null;
 			}
 
-			const Renderer = getComponentRenderer(childComponent.component.type);
+			const componentType = childComponent.component.type as string;
+			const Renderer = getComponentRenderer(componentType);
 			if (!Renderer) {
 				console.warn(
-					`Unknown component type: ${childComponent.component.type}`,
+					`Unknown component type: ${componentType}`,
 				);
 				return null;
 			}
@@ -62,10 +83,10 @@ export function A2UIWidgetInstance({
 			return (
 				<Renderer
 					key={childId}
-					component={childComponent.component}
+					component={childComponent.component as A2UIComponent}
 					componentId={childId}
 					surfaceId={surfaceId}
-					style={childComponent.style ?? childComponent.component.style}
+					style={childComponent.style ?? (childComponent.component.style as Style | undefined)}
 					onAction={onAction}
 					renderChild={(nestedChildId) =>
 						renderWidgetChild(nestedChildId, currentWidgetDef)
@@ -88,17 +109,27 @@ export function A2UIWidgetInstance({
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
 				Widget definition missing rootComponentId
-			</div>
+		</div>
 		);
 	}
 
+	console.log("[A2UI WidgetInstance] rendering:", { instanceId, widgetId, actionBindings, hasInlineDef: !!inlineWidgetDef, rootComponentId: widgetDef?.rootComponentId });
+
 	return (
-		<div
-			data-widget-instance={instanceId}
-			data-widget-id={widgetId}
-			className="contents"
+		<WidgetInstanceContext.Provider
+			value={{
+				instanceId,
+				widgetId,
+				actionBindings: actionBindings ?? {},
+			}}
 		>
-			{renderWidgetChild(widgetDef.rootComponentId, widgetDef)}
-		</div>
+			<div
+				data-widget-instance={instanceId}
+				data-widget-id={widgetId}
+				className="contents"
+			>
+				{renderWidgetChild(widgetDef.rootComponentId, widgetDef)}
+			</div>
+		</WidgetInstanceContext.Provider>
 	);
 }

@@ -268,6 +268,31 @@ impl Board {
                 }
             }
 
+            for layer in self.layers.values_mut() {
+                for node in layer.nodes.values_mut() {
+                    let old_hash = node.hash;
+
+                    let node_logic = match self.logic_nodes.get(&node.name) {
+                        Some(logic) => Arc::clone(logic),
+                        None => match registry.instantiate(node) {
+                            Ok(new_logic) => {
+                                self.logic_nodes
+                                    .insert(node.name.clone(), Arc::clone(&new_logic));
+                                Arc::clone(&new_logic)
+                            }
+                            Err(_) => continue,
+                        },
+                    };
+                    node_logic.on_update(node, reference.clone()).await;
+
+                    node.hash();
+
+                    if node.hash != old_hash {
+                        changed = true;
+                    }
+                }
+            }
+
             if !changed {
                 break;
             }
@@ -365,6 +390,11 @@ impl Board {
             if let Some(pin) = layer.pins.get(pin_id) {
                 return Some(pin);
             }
+            for node in layer.nodes.values() {
+                if let Some(pin) = node.pins.get(pin_id) {
+                    return Some(pin);
+                }
+            }
         }
 
         None
@@ -398,6 +428,19 @@ impl Board {
 
     pub fn get_variable(&self, variable_id: &str) -> Option<&Variable> {
         self.variables.get(variable_id)
+    }
+
+    /// Search for a variable in board globals AND all layer-scoped variables.
+    pub fn get_any_variable(&self, variable_id: &str) -> Option<Variable> {
+        if let Some(var) = self.variables.get(variable_id) {
+            return Some(var.clone());
+        }
+        for layer in self.layers.values() {
+            if let Some(var) = layer.variables.get(variable_id) {
+                return Some(var.clone());
+            }
+        }
+        None
     }
 
     pub async fn create_version(

@@ -188,7 +188,7 @@ export const frCommon = {
 		"Oui ! Flow-Like est entièrement auto-hébergeable. Vous pouvez l'exécuter sur votre propre infrastructure, sur site ou dans des environnements air-gapped. L'application de bureau fonctionne entièrement hors ligne.",
 	"pricing.faq.q3": "Y a-t-il une tarification par utilisateur ?",
 	"pricing.faq.a3":
-		"Non. Nous croyons que l'automatisation devrait être accessible à toute votre organisation. Tous les plans supportent des utilisateurs illimités. Vous ne payez que selon l'utilisation (fonctionnalités cloud), pas par nombre d'employés.",
+		"La plupart des plans utilisent une tarification par siège. Notre plan Enterprise inclut des utilisateurs et des exécutions illimités — vous ne payez que selon l'utilisation (fonctionnalités cloud), pas par nombre d'employés.",
 	"pricing.faq.q4": "Qu'est-ce qui est inclus dans l'accès aux modèles IA ?",
 	"pricing.faq.a4":
 		"L'accès aux modèles IA couvre des fonctionnalités comme FlowPilot (notre assistant IA), les suggestions intelligentes de workflows et l'automatisation en langage naturel via nos modèles hébergés.",
@@ -215,4 +215,15 @@ export const frCommon = {
 	"pricing.ctaSection.enterprise": "Contacter les ventes entreprise",
 	"pricing.ctaSection.startingAt":
 		"À partir de 1 999 € · Propriété complète du code · Déployez n'importe où",
+
+	// Navigation – page links
+	"header.integrations": "Intégrations",
+	"header.security": "Sécurité",
+	"footer.link.integrations": "Intégrations",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Sécurité",
+
+	"pricing.faq.moreQuestions": "Encore des questions ?",
+	"pricing.faq.contactUs": "Nous sommes là pour vous aider",
+	"pricing.faq.contactButton": "Contactez-nous",
 };

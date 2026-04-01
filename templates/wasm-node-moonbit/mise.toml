@@ -1,0 +1,27 @@
+[tasks.setup]
+description = "Validate local SDK dependency and prepare environment"
+run = """
+if [ ! -d "../wasm-sdk-moonbit" ]; then
+	echo "Missing ../wasm-sdk-moonbit"
+	echo "Copy templates/wasm-sdk-moonbit next to this template before building."
+	exit 1
+fi
+moon check
+"""
+
+[tasks.build]
+description = "Build the WASM node"
+run = """
+moon build --target wasm --release
+mkdir -p build
+cp _build/wasm/release/build/custom-node-moonbit.wasm build/node.wasm
+echo "Built: build/node.wasm"
+"""
+
+[tasks.test]
+description = "Run unit tests"
+run = "moon test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf _build/ build/ .mooncakes/"

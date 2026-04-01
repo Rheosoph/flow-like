@@ -1,280 +1,295 @@
-/**
- * Control Flow Nodes - Logic and branching utilities
- *
- * This example demonstrates control flow nodes including
- * conditionals, comparisons, and logic gates.
- */
-
 import {
-	type ExecutionInput,
-	ExecutionResult,
+	type Context,
+	DataType,
+	type ExecutionResult,
+	FlowNode,
 	NodeDefinition,
+	NodePackage,
 	PinDefinition,
-	parseInput,
-	serializeDefinition,
-	serializeResult,
-} from "../assembly/sdk";
+} from "@flow-like/wasm-sdk/assembly/index";
 
-// ============================================================================
-// If Branch Node
-// ============================================================================
+export {
+	alloc,
+	dealloc,
+	get_abi_version,
+} from "@flow-like/wasm-sdk/assembly/index";
 
-export function get_if_branch_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "if_branch_as";
-	def.friendly_name = "If Branch (AS)";
-	def.description = "Branches execution based on a condition";
-	def.category = "Control/Flow";
+export class IfBranchNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "if_branch_as";
+		def.friendly_name = "If Branch (AS)";
+		def.description = "Routes execution based on a condition";
+		def.category = "Control Flow";
 
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input(
-			"condition",
-			"Condition",
-			"Branch condition",
-			"Bool",
-		).withDefault("false"),
-	);
-	def.addPin(
-		PinDefinition.output("true_branch", "True", "Executes if true", "Exec"),
-	);
-	def.addPin(
-		PinDefinition.output("false_branch", "False", "Executes if false", "Exec"),
-	);
-
-	return serializeDefinition(def);
-}
-
-export function run_if_branch(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const condition = getBoolInput(input, "condition", false);
-
-	const result = ExecutionResult.success();
-	if (condition) {
-		result.activateExec("true_branch");
-	} else {
-		result.activateExec("false_branch");
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"condition",
+				"Condition",
+				"Branch condition",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.output(
+				"true_branch",
+				"True",
+				"Executes when true",
+				DataType.Exec,
+			),
+		);
+		def.addPin(
+			PinDefinition.output(
+				"false_branch",
+				"False",
+				"Executes when false",
+				DataType.Exec,
+			),
+		);
+		return def;
 	}
 
-	return serializeResult(result);
-}
-
-// ============================================================================
-// Compare Node
-// ============================================================================
-
-export function get_compare_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "compare_as";
-	def.friendly_name = "Compare (AS)";
-	def.description = "Compares two numbers";
-	def.category = "Control/Logic";
-
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input("a", "A", "First value", "F64").withDefault("0.0"),
-	);
-	def.addPin(
-		PinDefinition.input("b", "B", "Second value", "F64").withDefault("0.0"),
-	);
-	def.addPin(PinDefinition.output("exec_out", "Done", "Complete", "Exec"));
-	def.addPin(
-		PinDefinition.output("equal", "A == B", "Values are equal", "Bool"),
-	);
-	def.addPin(
-		PinDefinition.output("less_than", "A < B", "A is less than B", "Bool"),
-	);
-	def.addPin(
-		PinDefinition.output(
-			"greater_than",
-			"A > B",
-			"A is greater than B",
-			"Bool",
-		),
-	);
-
-	return serializeDefinition(def);
-}
-
-export function run_compare(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const a = getF64Input(input, "a", 0.0);
-	const b = getF64Input(input, "b", 0.0);
-
-	const result = ExecutionResult.success();
-	result.setOutput("equal", (a == b).toString());
-	result.setOutput("less_than", (a < b).toString());
-	result.setOutput("greater_than", (a > b).toString());
-	result.activateExec("exec_out");
-
-	return serializeResult(result);
-}
-
-// ============================================================================
-// AND Gate Node
-// ============================================================================
-
-export function get_and_gate_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "and_gate_as";
-	def.friendly_name = "AND Gate (AS)";
-	def.description = "Returns true only if both inputs are true";
-	def.category = "Control/Logic";
-
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input("a", "A", "First input", "Bool").withDefault("false"),
-	);
-	def.addPin(
-		PinDefinition.input("b", "B", "Second input", "Bool").withDefault("false"),
-	);
-	def.addPin(PinDefinition.output("exec_out", "Done", "Complete", "Exec"));
-	def.addPin(PinDefinition.output("result", "Result", "A AND B", "Bool"));
-
-	return serializeDefinition(def);
-}
-
-export function run_and_gate(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const a = getBoolInput(input, "a", false);
-	const b = getBoolInput(input, "b", false);
-
-	const result = ExecutionResult.success();
-	result.setOutput("result", (a && b).toString());
-	result.activateExec("exec_out");
-
-	return serializeResult(result);
-}
-
-// ============================================================================
-// OR Gate Node
-// ============================================================================
-
-export function get_or_gate_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "or_gate_as";
-	def.friendly_name = "OR Gate (AS)";
-	def.description = "Returns true if either input is true";
-	def.category = "Control/Logic";
-
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input("a", "A", "First input", "Bool").withDefault("false"),
-	);
-	def.addPin(
-		PinDefinition.input("b", "B", "Second input", "Bool").withDefault("false"),
-	);
-	def.addPin(PinDefinition.output("exec_out", "Done", "Complete", "Exec"));
-	def.addPin(PinDefinition.output("result", "Result", "A OR B", "Bool"));
-
-	return serializeDefinition(def);
-}
-
-export function run_or_gate(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const a = getBoolInput(input, "a", false);
-	const b = getBoolInput(input, "b", false);
-
-	const result = ExecutionResult.success();
-	result.setOutput("result", (a || b).toString());
-	result.activateExec("exec_out");
-
-	return serializeResult(result);
-}
-
-// ============================================================================
-// NOT Gate Node
-// ============================================================================
-
-export function get_not_gate_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "not_gate_as";
-	def.friendly_name = "NOT Gate (AS)";
-	def.description = "Inverts a boolean value";
-	def.category = "Control/Logic";
-
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input("value", "Value", "Input value", "Bool").withDefault(
-			"false",
-		),
-	);
-	def.addPin(PinDefinition.output("exec_out", "Done", "Complete", "Exec"));
-	def.addPin(PinDefinition.output("result", "Result", "NOT Value", "Bool"));
-
-	return serializeDefinition(def);
-}
-
-export function run_not_gate(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const value = getBoolInput(input, "value", false);
-
-	const result = ExecutionResult.success();
-	result.setOutput("result", (!value).toString());
-	result.activateExec("exec_out");
-
-	return serializeResult(result);
-}
-
-// ============================================================================
-// Gate Node (conditional pass-through)
-// ============================================================================
-
-export function get_gate_definition(): i64 {
-	const def = new NodeDefinition();
-	def.name = "gate_as";
-	def.friendly_name = "Gate (AS)";
-	def.description = "Only passes execution if the gate is open";
-	def.category = "Control/Flow";
-
-	def.addPin(PinDefinition.input("exec", "Execute", "Trigger", "Exec"));
-	def.addPin(
-		PinDefinition.input("is_open", "Is Open", "Gate state", "Bool").withDefault(
-			"true",
-		),
-	);
-	def.addPin(
-		PinDefinition.output("exec_out", "Out", "Passes if gate open", "Exec"),
-	);
-
-	return serializeDefinition(def);
-}
-
-export function run_gate(ptr: i32, len: i32): i64 {
-	const input = parseInput(ptr, len);
-	const isOpen = getBoolInput(input, "is_open", true);
-
-	const result = ExecutionResult.success();
-	if (isOpen) {
-		result.activateExec("exec_out");
+	execute(ctx: Context): ExecutionResult {
+		if (ctx.getBool("condition")) {
+			ctx.activateExec("true_branch");
+		} else {
+			ctx.activateExec("false_branch");
+		}
+		return ctx.finish();
 	}
-	// If gate is closed, no exec output is activated
-
-	return serializeResult(result);
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
+export class CompareNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "compare_as";
+		def.friendly_name = "Compare Numbers (AS)";
+		def.description = "Compares two numbers and outputs comparison results";
+		def.category = "Control Flow";
 
-function getBoolInput(
-	input: ExecutionInput,
-	name: string,
-	defaultValue: bool,
-): bool {
-	if (input.inputs.has(name)) {
-		return input.inputs.get(name) == "true";
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"a",
+				"A",
+				"First number",
+				DataType.F64,
+			).withDefaultF64(0.0),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"b",
+				"B",
+				"Second number",
+				DataType.F64,
+			).withDefaultF64(0.0),
+		);
+		def.addPin(
+			PinDefinition.output("exec_out", "Done", "Complete", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.output("equal", "Equal", "A equals B", DataType.Bool),
+		);
+		def.addPin(
+			PinDefinition.output("greater", "Greater", "A > B", DataType.Bool),
+		);
+		def.addPin(PinDefinition.output("less", "Less", "A < B", DataType.Bool));
+		return def;
 	}
-	return defaultValue;
+
+	execute(ctx: Context): ExecutionResult {
+		const a = ctx.getF64("a");
+		const b = ctx.getF64("b");
+		ctx.setBool("equal", a == b);
+		ctx.setBool("greater", a > b);
+		ctx.setBool("less", a < b);
+		return ctx.success();
+	}
 }
 
-function getF64Input(
-	input: ExecutionInput,
-	name: string,
-	defaultValue: f64,
-): f64 {
-	if (input.inputs.has(name)) {
-		return F64.parseFloat(input.inputs.get(name));
+export class AndGateNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "and_gate_as";
+		def.friendly_name = "AND Gate (AS)";
+		def.description = "Logical AND of two boolean inputs";
+		def.category = "Control Flow/Logic";
+
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"a",
+				"A",
+				"First boolean",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"b",
+				"B",
+				"Second boolean",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.output("exec_out", "Done", "Complete", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.output("result", "Result", "A AND B", DataType.Bool),
+		);
+		return def;
 	}
-	return defaultValue;
+
+	execute(ctx: Context): ExecutionResult {
+		ctx.setBool("result", ctx.getBool("a") && ctx.getBool("b"));
+		return ctx.success();
+	}
+}
+
+export class OrGateNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "or_gate_as";
+		def.friendly_name = "OR Gate (AS)";
+		def.description = "Logical OR of two boolean inputs";
+		def.category = "Control Flow/Logic";
+
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"a",
+				"A",
+				"First boolean",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"b",
+				"B",
+				"Second boolean",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.output("exec_out", "Done", "Complete", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.output("result", "Result", "A OR B", DataType.Bool),
+		);
+		return def;
+	}
+
+	execute(ctx: Context): ExecutionResult {
+		ctx.setBool("result", ctx.getBool("a") || ctx.getBool("b"));
+		return ctx.success();
+	}
+}
+
+export class NotGateNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "not_gate_as";
+		def.friendly_name = "NOT Gate (AS)";
+		def.description = "Logical NOT of a boolean input";
+		def.category = "Control Flow/Logic";
+
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"value",
+				"Value",
+				"Boolean to negate",
+				DataType.Bool,
+			).withDefaultBool(false),
+		);
+		def.addPin(
+			PinDefinition.output("exec_out", "Done", "Complete", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.output("result", "Result", "NOT value", DataType.Bool),
+		);
+		return def;
+	}
+
+	execute(ctx: Context): ExecutionResult {
+		ctx.setBool("result", !ctx.getBool("value"));
+		return ctx.success();
+	}
+}
+
+export class GateNode extends FlowNode {
+	define(): NodeDefinition {
+		const def = new NodeDefinition();
+		def.name = "gate_as";
+		def.friendly_name = "Gate (AS)";
+		def.description = "Passes execution only when the gate is open";
+		def.category = "Control Flow";
+
+		def.addPin(
+			PinDefinition.input("exec", "Execute", "Trigger", DataType.Exec),
+		);
+		def.addPin(
+			PinDefinition.input(
+				"open",
+				"Open",
+				"Gate state",
+				DataType.Bool,
+			).withDefaultBool(true),
+		);
+		def.addPin(
+			PinDefinition.output(
+				"passed",
+				"Passed",
+				"Fires when gate is open",
+				DataType.Exec,
+			),
+		);
+		def.addPin(
+			PinDefinition.output(
+				"blocked",
+				"Blocked",
+				"Fires when gate is closed",
+				DataType.Exec,
+			),
+		);
+		return def;
+	}
+
+	execute(ctx: Context): ExecutionResult {
+		if (ctx.getBool("open")) {
+			ctx.activateExec("passed");
+		} else {
+			ctx.activateExec("blocked");
+		}
+		return ctx.finish();
+	}
+}
+
+const pkg = new NodePackage();
+pkg.register(new IfBranchNode());
+pkg.register(new CompareNode());
+pkg.register(new AndGateNode());
+pkg.register(new OrGateNode());
+pkg.register(new NotGateNode());
+pkg.register(new GateNode());
+
+export function get_nodes(): i64 {
+	return pkg.getNodes();
+}
+
+export function run(ptr: i32, len: i32): i64 {
+	return pkg.run(ptr, len);
 }

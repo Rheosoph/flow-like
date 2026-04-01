@@ -7,15 +7,31 @@ import {
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
-	useTransition,
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import type { IEventPayloadChat } from "../../../lib";
+import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
+import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { VoiceMode } from "./VoiceMode";
+
+type ChatItem =
+	| { type: "message"; data: IMessage; timestamp: number }
+	| { type: "interaction"; data: IInteractionRequest; timestamp: number }
+	| {
+			type: "interaction-group";
+			data: IInteractionRequest[];
+			timestamp: number;
+	  };
+
+function getInteractionCreatedAt(interaction: IInteractionRequest): number {
+	return (interaction.expires_at - interaction.ttl_seconds) * 1000;
+}
 
 function getMessageTextContent(message: IMessage): string {
 	const content = message.inner.content;
@@ -33,6 +49,8 @@ export interface IChatProps {
 	) => void | Promise<void>;
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
+	activeInteractions?: IInteractionRequest[];
+	onRespondToInteraction?: (interactionId: string, value: any) => void;
 }
 
 export interface IChatRef {
@@ -47,7 +65,15 @@ export interface IChatRef {
 
 const ChatInner = forwardRef<IChatRef, IChatProps>(
 	(
-		{ messages, onSendMessage, onMessageUpdate, config = {}, sessionId },
+		{
+			messages,
+			onSendMessage,
+			onMessageUpdate,
+			config = {},
+			sessionId,
+			activeInteractions,
+			onRespondToInteraction,
+		},
 		ref,
 	) => {
 		const { resolvedTheme } = useTheme();
@@ -63,7 +89,66 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
-		const [, startMessagesTransition] = useTransition();
+		const pendingMessageRef = useRef<IMessage | null>(null);
+		const rafIdRef = useRef<number | null>(null);
+		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+
+		// Cleanup RAF on unmount
+		useEffect(() => {
+			return () => {
+				if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+			};
+		}, []);
+
+		const chatItems = useMemo(() => {
+			const filtered = currentMessage
+				? localMessages.filter((msg) => msg.id !== currentMessage.id)
+				: localMessages;
+			return filtered
+				.map((msg) => ({
+					type: "message" as const,
+					data: msg,
+					timestamp: msg.timestamp,
+				}))
+				.sort((a, b) => a.timestamp - b.timestamp);
+		}, [localMessages, currentMessage]);
+
+		// Interactions are rendered separately after currentMessage to avoid ordering issues
+		const interactionItems = useMemo<ChatItem[]>(() => {
+			if (!activeInteractions || activeInteractions.length === 0) return [];
+
+			const items: ChatItem[] = [];
+			let settledGroup: IInteractionRequest[] = [];
+
+			const flushGroup = () => {
+				if (settledGroup.length > 0) {
+					items.push({
+						type: "interaction-group",
+						data: settledGroup,
+						timestamp: 0,
+					});
+					settledGroup = [];
+				}
+			};
+
+			for (const interaction of activeInteractions) {
+				const remaining = Math.max(
+					0,
+					Math.floor((interaction.expires_at * 1000 - Date.now()) / 1000),
+				);
+				const isPending = interaction.status === "pending" && remaining > 0;
+
+				if (!isPending) {
+					settledGroup.push(interaction);
+				} else {
+					flushGroup();
+					items.push({ type: "interaction", data: interaction, timestamp: 0 });
+				}
+			}
+			flushGroup();
+
+			return items;
+		}, [activeInteractions]);
 
 		useEffect(() => {
 			isSendingRef.current = isSending;
@@ -79,11 +164,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setSendingContent("");
 		}, [sessionId]);
 
-		// Sync external messages with local state
+		// Sync external messages with local state (no useTransition to avoid flash gap)
 		useEffect(() => {
-			startMessagesTransition(() => {
-				setLocalMessages(messages);
-			});
+			setLocalMessages(messages);
 
 			// Clear optimistic sending state when the user message appears in DB
 			if (isSendingRef.current) {
@@ -93,7 +176,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					setSendingContent("");
 				}
 			}
+		}, [messages]);
 
+		// Update active tools based on last user message and available tools
+		useEffect(() => {
 			const lastUserMessage = messages
 				.slice()
 				.reverse()
@@ -111,7 +197,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 
 			setDefaultActiveTools(config?.default_tools ?? []);
-		}, [messages, config?.tools]);
+		}, [messages, config?.tools, config?.default_tools]);
 
 		// Initial scroll to bottom when messages first load
 		useEffect(() => {
@@ -201,6 +287,14 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[onSendMessage, scrollToBottom],
 		);
 
+		const handleVoiceModeSend = useCallback(
+			async (audioFile: File) => {
+				setVoiceModeOpen(false);
+				await handleSendMessage("", undefined, undefined, audioFile);
+			},
+			[handleSendMessage],
+		);
+
 		// iOS keyboard/open focus handling to reduce layout jump and zoom
 		useEffect(() => {
 			const onFocusIn = (e: FocusEvent) => {
@@ -252,9 +346,24 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			ref,
 			() => ({
 				pushCurrentMessageUpdate: (message: IMessage) => {
-					setCurrentMessage(message);
+					// Throttle updates via requestAnimationFrame to avoid per-event re-renders
+					pendingMessageRef.current = message;
+					if (rafIdRef.current === null) {
+						rafIdRef.current = requestAnimationFrame(() => {
+							rafIdRef.current = null;
+							if (pendingMessageRef.current) {
+								setCurrentMessage(pendingMessageRef.current);
+							}
+						});
+					}
 				},
 				clearCurrentMessageUpdate: () => {
+					// Cancel pending RAF and clear immediately
+					if (rafIdRef.current !== null) {
+						cancelAnimationFrame(rafIdRef.current);
+						rafIdRef.current = null;
+					}
+					pendingMessageRef.current = null;
 					setCurrentMessage(null);
 				},
 				pushMessage: (message: IMessage) => {
@@ -290,13 +399,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center flex-grow max-h-full"
 						style={{ WebkitOverflowScrolling: "touch" }}
 					>
-						{localMessages.map((message) => (
+						{chatItems.map((item) => (
 							<div
 								className="w-full max-w-screen-lg px-1 sm:px-4"
-								key={message.id}
+								key={`msg-${item.data.id}`}
 							>
 								<MessageComponent
-									message={message}
+									message={item.data as IMessage}
 									onMessageUpdate={onMessageUpdate}
 								/>
 							</div>
@@ -324,20 +433,37 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									</div>
 								</div>
 							)}
-						{currentMessage &&
-							!localMessages.some((m) => m.id === currentMessage.id) && (
+						{currentMessage && (
 								<div
-									className="w-full max-w-screen-lg px-4 relative"
-									key={currentMessage.id}
+									className="w-full max-w-screen-lg px-4"
+									key={`msg-${currentMessage.id}`}
 								>
-									<PuffLoader
-										color={resolvedTheme === "dark" ? "white" : "black"}
-										className="mt-2 absolute left-0 top-0 translate-y-[2.5rem] translate-x-[-100%]"
-										size={30}
-									/>
 									<MessageComponent loading message={currentMessage} />
 								</div>
 							)}
+						{interactionItems.map((item) =>
+							item.type === "interaction-group" ? (
+								<div
+									className="w-full max-w-screen-lg px-4 flex flex-col items-start"
+									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
+								>
+									<InteractionGroup
+										interactions={item.data as IInteractionRequest[]}
+										onRespond={onRespondToInteraction ?? (() => {})}
+									/>
+								</div>
+							) : (
+								<div
+									className="w-full max-w-screen-lg px-4 flex flex-col items-start"
+									key={`int-${(item.data as IInteractionRequest).id}`}
+								>
+									<Interaction
+										interaction={item.data as IInteractionRequest}
+										onRespond={onRespondToInteraction ?? (() => {})}
+									/>
+								</div>
+							),
+						)}
 						<div ref={messagesEndRef} />
 					</div>
 
@@ -357,10 +483,22 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={config?.allow_voice_input ?? true}
+								onVoiceModeToggle={
+									(config?.allow_voice_mode ?? true)
+										? () => setVoiceModeOpen(true)
+										: undefined
+								}
 							/>
 						)}
 					</div>
 				</div>
+
+				{/* Voice Mode Overlay */}
+				<VoiceMode
+					open={voiceModeOpen}
+					onClose={() => setVoiceModeOpen(false)}
+					onSend={handleVoiceModeSend}
+				/>
 			</main>
 		);
 	},

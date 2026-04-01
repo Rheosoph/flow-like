@@ -31,6 +31,7 @@ text-splitter = {version = "0.27.0", features = ["markdown", "tokenizers", "tikt
 tokenizers = {version="0.22.2", default-features = false, features = ["onig"]}
 schemars.workspace = true
 futures.workspace = true
+tracing.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tiktoken-rs = "0.7.0"
 aws-config = { workspace = true, features = ["behavior-version-latest"] }

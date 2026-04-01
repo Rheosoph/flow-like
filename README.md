@@ -36,13 +36,15 @@ Flow-Like is a **visual workflow automation platform** that runs entirely on you
 
 ## Why Flow-Like?
 
-### Your workflows run on *your* device. Nowhere else.
+### You decide where your workflows run. Not us.
 
-Most workflow tools run in someone else's cloud. Your data leaves your machine, passes through third-party servers, and you hope for the best. If you're offline, you're stuck.
+Most workflow tools force you into their cloud. Your data leaves your machine, passes through third-party servers, and you're locked into their infrastructure. Offline? Stuck. Want to self-host? Pay enterprise prices.
 
-Flow-Like runs **entirely on your hardware** — your laptop, your server, your phone. Your data never leaves your device unless you want it to. No cloud dependency, no vendor holding your workflows hostage, no "please upgrade to enterprise for self-hosting."
+Flow-Like runs **wherever you choose** — your laptop, your phone, your private server, or cloud infrastructure you control. Your data stays where you put it. No forced cloud dependency, no vendor lock-in, no "upgrade to enterprise for basic autonomy."
 
-This isn't just a privacy feature. It means you can automate in air-gapped environments, on factory floors, in hospital networks, on mobile devices in the field, or simply on your couch without Wi-Fi. **Write once, run anywhere you have a device.**
+**Local-first by default. Cloud-ready when you need it.**
+
+Automate on your couch without Wi-Fi. Deploy to your own AWS/GCP/Azure. Run in air-gapped factory networks. Process sensitive data in hospital environments. Your workflows, your infrastructure, your rules.
 
 ### A Rust engine fast enough to run on a phone
 
@@ -181,13 +183,25 @@ Package workflows as shareable applications with built-in storage. Run them offl
 ## Build from Source
 
 ```bash
-# Prerequisites: Rust, Bun, Tauri prerequisites, Protobuf compiler
+# Prerequisites: mise, Rust, Bun, Tauri prerequisites, Protobuf compiler
 # Full guide: https://docs.flow-like.com/contributing/getting-started/
 
 git clone https://github.com/TM9657/flow-like.git
 cd flow-like
-bun install
-bun run build:desktop
+mise trust && mise install   # install toolchains (Rust, Bun, Node, Python, uv)
+bun install                  # install Node packages
+mise run build:desktop       # production build
+```
+
+All dev / build / deploy tasks are defined in the root [`mise.toml`](./mise.toml).
+Run `mise tasks` to see every available task, or `mise run <task>` to execute one:
+
+```bash
+mise run dev:desktop:mac:arm   # dev mode – macOS Apple Silicon
+mise run dev:web               # dev mode – Next.js web app
+mise run build:desktop         # production desktop build
+mise run fix                   # auto-fix lint (clippy + fmt + biome)
+mise run check                 # run all checks without fixing
 ```
 
 > 💡 Platform-specific hints for macOS, Windows, and Linux are in the [docs](https://docs.flow-like.com/).
@@ -203,6 +217,17 @@ Embed the visual editor in your application, or run the engine headlessly behind
 - **SSO** — OIDC/JWT with scoped secrets per tenant
 - **Usage Metering** — Per-tenant quotas, event tracking, audit trails
 - **SDKs & APIs** — Control workflows programmatically
+
+### 🔌 SDKs
+
+Integrate Flow-Like into your applications with official SDKs:
+
+| Language | Package | Install |
+|----------|---------|---------|
+| **Node.js / TypeScript** | [`@flow-like/sdk`](https://www.npmjs.com/package/@flow-like/sdk) | `npm install @flow-like/sdk` |
+| **Python** | [`flow-like`](https://pypi.org/project/flow-like/) | `uv add flow-like` |
+
+Both SDKs support workflows, file management, LanceDB, chat completions, embeddings, and optional [LangChain](https://www.langchain.com/) integration. **[→ SDK Docs](https://docs.flow-like.com/dev/sdks/overview)**
 
 Perfect for SaaS platforms, internal tools, client portals, and embedded automation.
 
@@ -282,7 +307,7 @@ Flow-Like stands on the shoulders of incredible open-source projects:
 
 **Data:** [Zustand](https://github.com/pmndrs/zustand) · [TanStack Query](https://github.com/TanStack/query) · [Dexie.js](https://github.com/dexie/Dexie.js) · [SeaORM](https://github.com/SeaQL/sea-orm) · [Zod](https://github.com/colinhacks/zod)
 
-**Tooling:** [Bun](https://github.com/oven-sh/bun) · [Vite](https://github.com/vitejs/vite) · [Biome](https://github.com/biomejs/biome)
+**Tooling:** [mise](https://github.com/jdx/mise) · [Bun](https://github.com/oven-sh/bun) · [Vite](https://github.com/vitejs/vite) · [Biome](https://github.com/biomejs/biome)
 
 Thank you to all maintainers and contributors of these projects! 🙏
 

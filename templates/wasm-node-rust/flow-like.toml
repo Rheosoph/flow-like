@@ -1,0 +1,26 @@
+description = "Template for creating Flow-Like WASM nodes in Rust"
+id = "com.example.custom-node-rust"
+keywords = [
+    "template",
+    "example",
+]
+license = "MIT"
+manifest_version = 1
+name = "Custom Node (Rust)"
+repository = "https://github.com/example/flow-like-nodes"
+version = "0.1.0"
+
+[[authors]]
+name = "Your Name"
+
+[[nodes]]
+category = "Custom/WASM"
+description = "A template WASM node built with Rust"
+id = "my_custom_node"
+name = "My Custom Node"
+
+# Resource limits for the package sandbox (memory & timeout).
+# Permissions are declared per-node in Rust code via `node.add_permission(NodePermission::*)`.
+[permissions]
+memory = "standard"
+timeout = "standard"

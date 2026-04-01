@@ -1,0 +1,31 @@
+[tools]
+go = "1.25"
+"aqua:tinygo-org/tinygo" = "0.40"
+
+[tasks.setup]
+description = "Install wit-bindgen-go for WIT code generation"
+run = "go install go.bytecodealliance.org/cmd/wit-bindgen-go@latest"
+
+[tasks.generate]
+description = "Generate Go bindings from WIT"
+depends = ["setup"]
+run = "wit-bindgen-go generate --world flow-like-node --out gen ./wit"
+
+[tasks.build]
+description = "Build the WASM component"
+depends = ["generate"]
+run = """
+go mod tidy
+GOFLAGS=-buildvcs=false tinygo build -o node.wasm -target wasip2 -no-debug -wit-package ./wit -wit-world flow-like-node ./
+"""
+
+[tasks.test]
+description = "Run unit tests"
+run = "go test ./..."
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+rm -f node.wasm
+rm -rf gen/
+"""

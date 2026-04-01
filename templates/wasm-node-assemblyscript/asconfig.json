@@ -19,6 +19,7 @@
 	"options": {
 		"bindings": "esm",
 		"exportRuntime": true,
-		"runtime": "stub"
+		"runtime": "stub",
+		"enable": ["simd", "relaxed-simd"]
 	}
 }

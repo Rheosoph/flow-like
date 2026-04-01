@@ -46,10 +46,7 @@ impl NodeLogic for SizeMapNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let map_in = context.evaluate_pin_to_ref("map_in").await?;
 
-        let size = {
-            let map_guard = map_in.as_ref().lock().await;
-            map_guard.as_object().map(|obj| obj.len()).unwrap_or(0)
-        };
+        let size = map_in.as_object().map(|obj| obj.len()).unwrap_or(0);
 
         context.set_pin_value("size", json!(size)).await?;
         Ok(())

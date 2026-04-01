@@ -25,6 +25,8 @@ pub struct AwsStorageConfig {
     pub region: String,
     pub endpoint: Option<String>,
     pub content_bucket: String,
+    pub cdn_bucket: String,
+    pub meta_bucket: String,
     pub use_path_style: bool,
 }
 
@@ -34,6 +36,8 @@ pub struct R2StorageConfig {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub content_bucket: String,
+    pub cdn_bucket: String,
+    pub meta_bucket: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +45,8 @@ pub struct AzureStorageConfig {
     pub account_name: String,
     pub account_key: Option<String>,
     pub content_container: String,
+    pub cdn_container: String,
+    pub meta_container: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -48,6 +54,8 @@ pub struct GcpStorageConfig {
     pub project_id: String,
     pub service_account_key: Option<String>,
     pub content_bucket: String,
+    pub cdn_bucket: String,
+    pub meta_bucket: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -57,6 +65,8 @@ pub struct S3StorageConfig {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub content_bucket: String,
+    pub cdn_bucket: String,
+    pub meta_bucket: String,
     pub use_path_style: bool,
 }
 
@@ -80,6 +90,47 @@ impl StorageConfig {
             StorageConfig::S3(c) => &c.content_bucket,
         }
     }
+
+    pub fn meta_bucket(&self) -> &str {
+        match self {
+            StorageConfig::Aws(c) => &c.meta_bucket,
+            StorageConfig::Azure(c) => &c.meta_container,
+            StorageConfig::Gcp(c) => &c.meta_bucket,
+            StorageConfig::R2(c) => &c.meta_bucket,
+            StorageConfig::S3(c) => &c.meta_bucket,
+        }
+    }
+
+    pub fn cdn_bucket(&self) -> &str {
+        match self {
+            StorageConfig::Aws(c) => &c.cdn_bucket,
+            StorageConfig::Azure(c) => &c.cdn_container,
+            StorageConfig::Gcp(c) => &c.cdn_bucket,
+            StorageConfig::R2(c) => &c.cdn_bucket,
+            StorageConfig::S3(c) => &c.cdn_bucket,
+        }
+    }
+}
+
+/// Resolve the meta bucket name.
+///
+/// Precedence: `META_BUCKET` env → provider-specific env → `CONTENT_BUCKET` →
+/// provider-specific content env → `"flow-like-content"` (same default as content).
+///
+/// This ensures single-bucket setups work: when only `CONTENT_BUCKET` is set,
+/// meta automatically falls back to it.
+fn meta_bucket_with_fallback(provider_meta_var: &str) -> String {
+    env::var("META_BUCKET")
+        .or_else(|_| env::var(provider_meta_var))
+        .or_else(|_| env::var("CONTENT_BUCKET"))
+        .unwrap_or_else(|_| "flow-like-content".to_string())
+}
+
+fn cdn_bucket_with_fallback(provider_cdn_var: &str) -> String {
+    env::var("CDN_BUCKET_NAME")
+        .or_else(|_| env::var(provider_cdn_var))
+        .or_else(|_| env::var("CONTENT_BUCKET"))
+        .unwrap_or_else(|_| "flow-like-content".to_string())
 }
 
 impl Config {
@@ -111,6 +162,8 @@ impl Config {
                 content_bucket: env::var("CONTENT_BUCKET")
                     .or_else(|_| env::var("AWS_CONTENT_BUCKET"))
                     .unwrap_or_else(|_| "flow-like-content".to_string()),
+                cdn_bucket: cdn_bucket_with_fallback("AWS_CDN_BUCKET"),
+                meta_bucket: meta_bucket_with_fallback("AWS_META_BUCKET"),
                 use_path_style: env::var("AWS_USE_PATH_STYLE")
                     .map(|v| v == "true" || v == "1")
                     .unwrap_or(false),
@@ -128,6 +181,8 @@ impl Config {
                     content_bucket: env::var("CONTENT_BUCKET")
                         .or_else(|_| env::var("R2_CONTENT_BUCKET"))
                         .unwrap_or_else(|_| "flow-like-content".to_string()),
+                    cdn_bucket: cdn_bucket_with_fallback("R2_CDN_BUCKET"),
+                    meta_bucket: meta_bucket_with_fallback("R2_META_BUCKET"),
                 }))
             }
 
@@ -140,6 +195,8 @@ impl Config {
                     content_container: env::var("CONTENT_BUCKET")
                         .or_else(|_| env::var("AZURE_CONTENT_CONTAINER"))
                         .unwrap_or_else(|_| "flow-like-content".to_string()),
+                    cdn_container: cdn_bucket_with_fallback("AZURE_CDN_CONTAINER"),
+                    meta_container: meta_bucket_with_fallback("AZURE_META_CONTAINER"),
                 }))
             }
 
@@ -152,6 +209,8 @@ impl Config {
                     content_bucket: env::var("CONTENT_BUCKET")
                         .or_else(|_| env::var("GCP_CONTENT_BUCKET"))
                         .unwrap_or_else(|_| "flow-like-content".to_string()),
+                    cdn_bucket: cdn_bucket_with_fallback("GCP_CDN_BUCKET"),
+                    meta_bucket: meta_bucket_with_fallback("GCP_META_BUCKET"),
                 }))
             }
 
@@ -168,6 +227,8 @@ impl Config {
                     .map_err(|_| ConfigError::MissingVar("S3_SECRET_ACCESS_KEY"))?,
                 content_bucket: env::var("CONTENT_BUCKET")
                     .unwrap_or_else(|_| "flow-like-content".to_string()),
+                cdn_bucket: cdn_bucket_with_fallback("S3_CDN_BUCKET"),
+                meta_bucket: meta_bucket_with_fallback("S3_META_BUCKET"),
                 use_path_style: env::var("S3_USE_PATH_STYLE")
                     .map(|v| v == "true" || v == "1")
                     .unwrap_or(true),

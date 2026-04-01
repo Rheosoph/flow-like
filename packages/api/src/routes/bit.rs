@@ -4,10 +4,10 @@ use axum::{
     Router,
     routing::{get, post},
 };
-use flow_like::bit::{Bit, BitTypes, Metadata};
+use flow_like::bit::{Bit, BitTypes, LlmModelEvaluation, Metadata};
 
 use crate::{
-    entity::{bit, meta::Model, sea_orm_active_enums::BitType},
+    entity::{bit, llm_model, meta::Model, sea_orm_active_enums::BitType},
     state::AppState,
 };
 
@@ -65,6 +65,21 @@ impl From<BitTypes> for BitType {
     }
 }
 
+pub(crate) fn llm_model_to_evaluation(model: llm_model::Model) -> LlmModelEvaluation {
+    LlmModelEvaluation {
+        slug: model.slug,
+        name: model.name,
+        release_date: model.release_date.map(|d| d.to_string()),
+        creator_name: model.creator_name,
+        creator_slug: model.creator_slug,
+        evaluations: model.evaluations,
+        pricing: model.pricing,
+        median_output_tokens_per_second: model.median_output_tokens_per_second,
+        median_time_to_first_token_seconds: model.median_time_to_first_token_seconds,
+        median_time_to_first_answer_token: model.median_time_to_first_answer_token,
+    }
+}
+
 impl From<bit::Model> for Bit {
     fn from(value: bit::Model) -> Self {
         let created_string = value.created_at.and_utc().to_rfc3339();
@@ -88,6 +103,8 @@ impl From<bit::Model> for Bit {
             repository: value.repository,
             size: value.size.map(|s| s as u64),
             version: value.version,
+            model_slug: value.model_slug,
+            model_evaluation: None,
         }
     }
 }
@@ -115,6 +132,7 @@ impl From<Bit> for bit::Model {
             repository: value.repository,
             size: value.size.map(|s| s as i64),
             version: value.version,
+            model_slug: value.model_slug,
         }
     }
 }
@@ -179,6 +197,7 @@ impl From<Metadata> for Model {
             bit_id: None,
             course_id: None,
             widget_id: None,
+            wasm_package_id: None,
             id: "".to_string(),
             lang: "".to_string(),
             organization_specific_values: metadata

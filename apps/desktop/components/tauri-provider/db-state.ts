@@ -13,6 +13,15 @@ function parseTableName(name: string): string {
 	return encodeURIComponent(name);
 }
 
+function scopeQuery(userScoped?: boolean): string {
+	return userScoped ? "scope=user" : "";
+}
+
+function appendScope(url: string, userScoped?: boolean): string {
+	if (!userScoped) return url;
+	return url.includes("?") ? `${url}&scope=user` : `${url}?scope=user`;
+}
+
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
 	async buildIndex(
@@ -21,13 +30,14 @@ export class DatabaseState implements IDatabaseState {
 		column: string,
 		indexType: IIndexType,
 		optimize?: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/index`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/index`, userScoped),
 				{
 					method: "POST",
 					body: JSON.stringify({
@@ -46,6 +56,7 @@ export class DatabaseState implements IDatabaseState {
 			column,
 			indexType,
 			_optimize: optimize,
+			userScoped: userScoped ?? false,
 		});
 	}
 
@@ -53,13 +64,14 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		items: any[],
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}`, userScoped),
 				{
 					method: "PUT",
 					body: JSON.stringify({
@@ -70,20 +82,21 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_add", { appId, tableName, items });
+		return await invoke("db_add", { appId, tableName, items, userScoped: userScoped ?? false });
 	}
 
 	async removeItems(
 		appId: string,
 		tableName: string,
 		query: string,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}`, userScoped),
 				{
 					method: "DELETE",
 					body: JSON.stringify({
@@ -94,7 +107,7 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_delete", { appId, tableName, query });
+		return await invoke("db_delete", { appId, tableName, query, userScoped: userScoped ?? false });
 	}
 
 	async listItems(
@@ -102,13 +115,14 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`, userScoped),
 				{
 					method: "GET",
 				},
@@ -116,7 +130,7 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_list", { appId, tableName, offset, limit });
+		return await invoke("db_list", { appId, tableName, offset, limit, userScoped: userScoped ?? false });
 	}
 
 	async queryItems(
@@ -125,13 +139,14 @@ export class DatabaseState implements IDatabaseState {
 		query: IQueryTablePayload,
 		offset?: number,
 		limit?: number,
+		userScoped?: boolean,
 	): Promise<any[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`, userScoped),
 				{
 					method: "POST",
 					body: JSON.stringify(query),
@@ -146,16 +161,17 @@ export class DatabaseState implements IDatabaseState {
 			payload: query,
 			offset,
 			limit,
+			userScoped: userScoped ?? false,
 		});
 	}
 
-	async getSchema(appId: string, tableName: string): Promise<any> {
+	async getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/schema`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/schema`, userScoped),
 				{
 					method: "GET",
 				},
@@ -166,16 +182,17 @@ export class DatabaseState implements IDatabaseState {
 		return await invoke<any>("db_schema", {
 			appId,
 			tableName,
+			userScoped: userScoped ?? false,
 		});
 	}
 
-	async getIndices(appId: string, tableName: string): Promise<IIndexConfig[]> {
+	async getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/indices`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/indices`, userScoped),
 				{
 					method: "GET",
 				},
@@ -183,20 +200,21 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_indices", { appId, tableName });
+		return await invoke("db_indices", { appId, tableName, userScoped: userScoped ?? false });
 	}
 
 	async dropIndex(
 		appId: string,
 		tableName: string,
 		indexName: string,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/indices/${encodeURIComponent(indexName)}`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`, userScoped),
 				{
 					method: "DELETE",
 				},
@@ -205,7 +223,7 @@ export class DatabaseState implements IDatabaseState {
 			return;
 		}
 
-		await invoke("db_drop_index", { appId, tableName, indexName });
+		await invoke("db_drop_index", { appId, tableName, indexName, userScoped: userScoped ?? false });
 	}
 
 	async listTables(appId: string): Promise<string[]> {
@@ -225,13 +243,13 @@ export class DatabaseState implements IDatabaseState {
 		return await invoke("db_table_names", { appId });
 	}
 
-	async countItems(appId: string, tableName: string): Promise<number> {
+	async listTablesUser(appId: string): Promise<string[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/count`,
+				`apps/${appId}/db/user`,
 				{
 					method: "GET",
 				},
@@ -239,20 +257,38 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_count", { appId, tableName });
+		return await invoke("db_table_names_user", { appId });
+	}
+
+	async countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/count`, userScoped),
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke("db_count", { appId, tableName, userScoped: userScoped ?? false });
 	}
 
 	async optimize(
 		appId: string,
 		tableName: string,
 		keepVersions?: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/optimize`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/optimize`, userScoped),
 				{
 					method: "POST",
 					body: JSON.stringify({ keepVersions: keepVersions ?? false }),
@@ -265,6 +301,7 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			keepVersions: keepVersions ?? false,
+			userScoped: userScoped ?? false,
 		});
 	}
 
@@ -273,13 +310,14 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		filter: string,
 		updates: Record<string, any>,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/update`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/update`, userScoped),
 				{
 					method: "POST",
 					body: JSON.stringify({ filter, updates }),
@@ -288,20 +326,21 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_update", { appId, tableName, filter, updates });
+		return await invoke("db_update", { appId, tableName, filter, updates, userScoped: userScoped ?? false });
 	}
 
 	async dropColumns(
 		appId: string,
 		tableName: string,
 		columns: string[],
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/columns`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
 				{
 					method: "DELETE",
 					body: JSON.stringify({ columns }),
@@ -310,20 +349,21 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_drop_columns", { appId, tableName, columns });
+		return await invoke("db_drop_columns", { appId, tableName, columns, userScoped: userScoped ?? false });
 	}
 
 	async addColumn(
 		appId: string,
 		tableName: string,
 		column: IAddColumnPayload,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/columns`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
 				{
 					method: "POST",
 					body: JSON.stringify(column),
@@ -332,7 +372,7 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_add_column", { appId, tableName, column });
+		return await invoke("db_add_column", { appId, tableName, column, userScoped: userScoped ?? false });
 	}
 
 	async alterColumn(
@@ -340,15 +380,16 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		column: string,
 		nullable: boolean,
+		userScoped?: boolean,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				`apps/${appId}/db/${parseTableName(tableName)}/columns/alter`,
+				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
 				{
-					method: "POST",
+					method: "PUT",
 					body: JSON.stringify({ column, nullable }),
 				},
 				this.backend.auth,
@@ -360,6 +401,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			column,
 			nullable,
+			userScoped: userScoped ?? false,
 		});
 	}
 }

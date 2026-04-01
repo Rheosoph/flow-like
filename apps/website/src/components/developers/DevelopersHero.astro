@@ -1,0 +1,247 @@
+---
+import { LuCode, LuWorkflow, LuMousePointerClick, LuTerminal, LuRocket } from "react-icons/lu";
+
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+---
+
+<section class="relative py-24 md:py-36 overflow-hidden">
+  <!-- Background effects -->
+  <div class="absolute inset-0 -z-10">
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(var(--primary-rgb,120,119,198),0.12),transparent)]"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] bg-primary/5 rounded-full blur-[140px] animate-pulse"></div>
+    <div class="absolute top-0 right-0 w-[400px] h-[400px] bg-gradient-to-br from-violet-500/10 to-transparent rounded-full blur-3xl animate-blob"></div>
+    <div class="absolute bottom-0 left-0 w-[300px] h-[300px] bg-gradient-to-tr from-cyan-500/10 to-transparent rounded-full blur-3xl animate-blob animation-delay-2000"></div>
+    <div class="absolute inset-0 bg-[linear-gradient(to_right,rgba(128,128,128,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(128,128,128,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"></div>
+  </div>
+
+  <div class="max-w-5xl mx-auto px-4 text-center">
+    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-primary/20 via-primary/10 to-primary/20 backdrop-blur-sm border border-primary/20 text-primary text-sm font-medium mb-8 shadow-[0_0_20px_rgba(var(--primary-rgb,120,119,198),0.3)] animate-float">
+      <span class="relative flex h-2 w-2">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+      </span>
+      {t("dev.hero.badge")}
+    </div>
+
+    <h1 class="text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-8">
+      <span class="bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/70">
+        {t("dev.hero.headline.prefix")}
+      </span>
+      {" "}
+      <span class="bg-clip-text text-transparent bg-gradient-to-r from-primary via-violet-500 to-cyan-500 animate-gradient-x">
+        {t("dev.hero.headline.highlight")}
+      </span>
+    </h1>
+
+    <p class="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto mb-16 leading-relaxed">
+      {t("dev.hero.description")}
+    </p>
+
+    <!-- Visual forking path diagram -->
+    <div class="relative max-w-4xl mx-auto">
+
+      <!-- SVG connection lines (desktop) -->
+      <svg class="hidden md:block absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 800 420" fill="none" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <defs>
+          <linearGradient id="line-left" x1="400" y1="0" x2="160" y2="200" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(139 92 246)" stop-opacity="0.6" />
+            <stop offset="100%" stop-color="rgb(139 92 246)" stop-opacity="0.15" />
+          </linearGradient>
+          <linearGradient id="line-right" x1="400" y1="0" x2="640" y2="200" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.6" />
+            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
+          </linearGradient>
+          <linearGradient id="line-merge-left" x1="160" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(139 92 246)" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="rgb(139 92 246)" stop-opacity="0.5" />
+          </linearGradient>
+          <linearGradient id="line-merge-right" x1="640" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.5" />
+          </linearGradient>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+            <feMerge>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <!-- Fork from top center to left card -->
+        <path d="M 400 30 C 400 100, 200 80, 200 170" stroke="url(#line-left)" stroke-width="2" stroke-dasharray="6 4" filter="url(#glow)" class="path-draw" />
+        <!-- Fork from top center to right card -->
+        <path d="M 400 30 C 400 100, 600 80, 600 170" stroke="url(#line-right)" stroke-width="2" stroke-dasharray="6 4" filter="url(#glow)" class="path-draw path-draw-delay" />
+        <!-- Merge from left card to bottom center -->
+        <path d="M 200 320 C 200 370, 400 350, 400 395" stroke="url(#line-merge-left)" stroke-width="2" stroke-dasharray="6 4" filter="url(#glow)" class="path-draw path-draw-delay-2" />
+        <!-- Merge from right card to bottom center -->
+        <path d="M 600 320 C 600 370, 400 350, 400 395" stroke="url(#line-merge-right)" stroke-width="2" stroke-dasharray="6 4" filter="url(#glow)" class="path-draw path-draw-delay-3" />
+
+        <!-- Animated dots traveling along paths -->
+        <circle r="3" fill="rgb(139 92 246)" opacity="0.8" filter="url(#glow)">
+          <animateMotion dur="3s" repeatCount="indefinite" path="M 400 30 C 400 100, 200 80, 200 170" />
+        </circle>
+        <circle r="3" fill="rgb(244 63 94)" opacity="0.8" filter="url(#glow)">
+          <animateMotion dur="3s" repeatCount="indefinite" path="M 400 30 C 400 100, 600 80, 600 170" begin="0.3s" />
+        </circle>
+      </svg>
+
+      <!-- Starting node -->
+      <div class="flex justify-center mb-8 md:mb-12 relative z-10">
+        <div class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-primary/40 bg-background/80 backdrop-blur-md shadow-[0_0_30px_rgba(var(--primary-rgb,120,119,198),0.2)]">
+          <span class="w-3 h-3 rounded-full bg-primary animate-pulse"></span>
+          <span class="text-sm font-semibold text-foreground">{t("dev.hero.headline.prefix")} — {t("dev.hero.headline.highlight")}</span>
+        </div>
+      </div>
+
+      <!-- Mobile: vertical connector -->
+      <div class="md:hidden flex justify-center mb-4">
+        <div class="w-px h-10 bg-gradient-to-b from-primary/40 to-primary/10"></div>
+      </div>
+
+      <!-- Two path cards -->
+      <div class="grid md:grid-cols-2 gap-6 md:gap-10 relative z-10">
+        <!-- Path 1: Custom Nodes -->
+        <a href="#custom-nodes-path" class="group relative">
+          <div class="absolute -inset-px rounded-3xl bg-gradient-to-b from-violet-500/30 to-violet-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-sm"></div>
+          <div class="relative flex flex-col items-center gap-5 p-8 md:p-10 rounded-3xl border border-violet-500/20 bg-card/50 backdrop-blur-md hover:border-violet-500/40 transition-all duration-500 group-hover:translate-y-[-2px] group-hover:shadow-[0_20px_60px_-15px_rgba(139,92,246,0.25)]">
+            <!-- Path number badge -->
+            <div class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-violet-600 text-white text-xs font-bold tracking-wider uppercase">
+              {t("dev.nodes.badge")}
+            </div>
+
+            <!-- Icon with animated ring -->
+            <div class="relative mt-2">
+              <div class="absolute inset-0 rounded-2xl bg-violet-500/20 animate-ping-slow"></div>
+              <div class="relative p-4 rounded-2xl bg-gradient-to-br from-violet-500/20 to-violet-500/5 border border-violet-500/20 group-hover:from-violet-500/30 group-hover:to-violet-500/10 transition-colors">
+                <LuCode className="w-8 h-8 text-violet-500" />
+              </div>
+            </div>
+
+            <!-- Content -->
+            <div class="text-center">
+              <h3 class="text-xl font-bold mb-2 text-foreground">{t("dev.hero.card.nodes.title")}</h3>
+              <p class="text-sm text-muted-foreground leading-relaxed">{t("dev.hero.card.nodes.description")}</p>
+            </div>
+
+            <!-- Mini feature pills -->
+            <div class="flex flex-wrap justify-center gap-2 mt-1">
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-violet-500/5 border border-violet-500/10 text-xs text-violet-600 dark:text-violet-400 font-medium">
+                <LuTerminal className="w-3 h-3" />
+                15+ Languages
+              </span>
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-violet-500/5 border border-violet-500/10 text-xs text-violet-600 dark:text-violet-400 font-medium">
+                WebAssembly
+              </span>
+            </div>
+
+            <!-- Arrow hint -->
+            <div class="text-violet-500/50 group-hover:text-violet-500 transition-colors text-xs font-medium tracking-wide uppercase mt-1">
+              ↓ Explore
+            </div>
+          </div>
+        </a>
+
+        <!-- Path 2: Visual Workflows -->
+        <a href="#workflow-path" class="group relative">
+          <div class="absolute -inset-px rounded-3xl bg-gradient-to-b from-rose-500/30 to-rose-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-sm"></div>
+          <div class="relative flex flex-col items-center gap-5 p-8 md:p-10 rounded-3xl border border-rose-500/20 bg-card/50 backdrop-blur-md hover:border-rose-500/40 transition-all duration-500 group-hover:translate-y-[-2px] group-hover:shadow-[0_20px_60px_-15px_rgba(244,63,94,0.25)]">
+            <!-- Path number badge -->
+            <div class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-rose-600 text-white text-xs font-bold tracking-wider uppercase">
+              {t("dev.workflow.badge")}
+            </div>
+
+            <!-- Icon with animated ring -->
+            <div class="relative mt-2">
+              <div class="absolute inset-0 rounded-2xl bg-rose-500/20 animate-ping-slow animation-delay-1000"></div>
+              <div class="relative p-4 rounded-2xl bg-gradient-to-br from-rose-500/20 to-rose-500/5 border border-rose-500/20 group-hover:from-rose-500/30 group-hover:to-rose-500/10 transition-colors">
+                <LuWorkflow className="w-8 h-8 text-rose-500" />
+              </div>
+            </div>
+
+            <!-- Content -->
+            <div class="text-center">
+              <h3 class="text-xl font-bold mb-2 text-foreground">{t("dev.hero.card.workflows.title")}</h3>
+              <p class="text-sm text-muted-foreground leading-relaxed">{t("dev.hero.card.workflows.description")}</p>
+            </div>
+
+            <!-- Mini feature pills -->
+            <div class="flex flex-wrap justify-center gap-2 mt-1">
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                <LuMousePointerClick className="w-3 h-3" />
+                Drag & Drop
+              </span>
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                Type-Safe
+              </span>
+            </div>
+
+            <!-- Arrow hint -->
+            <div class="text-rose-500/50 group-hover:text-rose-500 transition-colors text-xs font-medium tracking-wide uppercase mt-1">
+              ↓ Explore
+            </div>
+          </div>
+        </a>
+      </div>
+
+      <!-- Mobile: vertical connectors to merge point -->
+      <div class="md:hidden flex justify-center my-4">
+        <div class="w-px h-10 bg-gradient-to-b from-muted-foreground/20 to-primary/20"></div>
+      </div>
+
+      <!-- Converging endpoint -->
+      <div class="flex justify-center mt-8 md:mt-14 relative z-10">
+        <div class="inline-flex items-center gap-2.5 px-6 py-3 rounded-full border border-border/50 bg-background/80 backdrop-blur-md shadow-lg shadow-black/5">
+          <LuRocket className="w-4 h-4 text-primary" />
+          <span class="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-rose-500 to-violet-500">{t("dev.hero.converge")}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+  @keyframes blob {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25% { transform: translate(20px, -20px) scale(1.1); }
+    50% { transform: translate(-20px, 20px) scale(0.9); }
+    75% { transform: translate(20px, 20px) scale(1.05); }
+  }
+  @keyframes gradient-x {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+  @keyframes ping-slow {
+    0% { transform: scale(1); opacity: 0.4; }
+    50% { transform: scale(1.15); opacity: 0; }
+    100% { transform: scale(1); opacity: 0; }
+  }
+  @keyframes draw {
+    from { stroke-dashoffset: 500; }
+    to { stroke-dashoffset: 0; }
+  }
+  .animate-float { animation: float 6s ease-in-out infinite; }
+  .animate-blob { animation: blob 20s ease-in-out infinite; }
+  .animate-gradient-x {
+    background-size: 200% 200%;
+    animation: gradient-x 8s ease infinite;
+  }
+  .animate-ping-slow { animation: ping-slow 3s cubic-bezier(0, 0, 0.2, 1) infinite; }
+  .animation-delay-2000 { animation-delay: 2s; }
+  .animation-delay-1000 { animation-delay: 1s; }
+  .path-draw {
+    stroke-dashoffset: 500;
+    animation: draw 2s ease-out forwards;
+  }
+  .path-draw-delay { animation-delay: 0.3s; }
+  .path-draw-delay-2 { animation-delay: 1.2s; }
+  .path-draw-delay-3 { animation-delay: 1.5s; }
+</style>

@@ -37,11 +37,24 @@ import {
 import { cn } from "../../../lib/utils";
 import { ChartCodeBlock } from "./chart-code-block";
 
+const AdmonitionBlock = React.lazy(() => import("./admonition-block"));
+const SpoilerBlock = React.lazy(() => import("./spoiler-block"));
+const EmbedCodeBlock = React.lazy(() => import("./embed-code-block"));
+const MapCodeBlock = React.lazy(() => import("./map-code-block"));
+
 const CHART_LANGUAGES = ["nivo", "plotly"] as const;
 type ChartLanguage = (typeof CHART_LANGUAGES)[number];
 
 function isChartLanguage(lang: string | undefined): lang is ChartLanguage {
 	return CHART_LANGUAGES.includes(lang as ChartLanguage);
+}
+
+function isDirectiveLanguage(lang: string | undefined): boolean {
+	return typeof lang === "string" && lang.startsWith("directive-");
+}
+
+function isCustomBlockLanguage(lang: string | undefined): lang is string {
+	return lang === "embed" || lang === "map";
 }
 
 export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
@@ -50,6 +63,40 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 	const lang = element.lang;
 	const content = NodeApi.string(element);
 	const isChart = isChartLanguage(lang);
+
+	// Render directive blocks (admonition / spoiler) — read-only rendering
+	if (isDirectiveLanguage(lang)) {
+		const directiveType = lang!.replace("directive-", "");
+		const isSpoiler = directiveType === "spoiler";
+		return (
+			<PlateElement className="py-1" {...props}>
+				<React.Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+					{isSpoiler ? (
+						<SpoilerBlock content={content} />
+					) : (
+						<AdmonitionBlock type={directiveType} content={content} />
+					)}
+				</React.Suspense>
+				<div className="hidden">{props.children}</div>
+			</PlateElement>
+		);
+	}
+
+	// Render embed/map custom blocks
+	if (isCustomBlockLanguage(lang)) {
+		return (
+			<PlateElement className="py-1" {...props}>
+				<React.Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+					{lang === "embed" ? (
+						<EmbedCodeBlock content={content} />
+					) : (
+						<MapCodeBlock content={content} />
+					)}
+				</React.Suspense>
+				<div className="hidden">{props.children}</div>
+			</PlateElement>
+		);
+	}
 
 	// For chart blocks, show toggle between chart preview and code editor
 	if (isChart) {

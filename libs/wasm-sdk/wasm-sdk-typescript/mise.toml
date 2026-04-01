@@ -1,0 +1,27 @@
+[tools]
+node = "22"
+
+[tasks.wit-copy]
+description = "Copy canonical WIT from packages/wasm/wit/"
+run = "mkdir -p wit && cp ../../packages/wasm/wit/flow-like-node.wit wit/flow-like-node.wit"
+
+[tasks.wit-clean]
+description = "Remove local WIT copy"
+run = "rm -rf wit"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "npm install"
+
+[tasks.build]
+description = "Build the SDK package"
+depends = ["wit-copy"]
+run = "npm run build"
+
+[tasks.test]
+description = "Run tests"
+run = "vitest run"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = ["rm -rf dist/", "rm -rf wit"]

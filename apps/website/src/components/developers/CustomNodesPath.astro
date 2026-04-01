@@ -1,0 +1,191 @@
+---
+import {
+  LuCode,
+  LuArrowRight,
+  LuBookOpen,
+  LuFlaskConical,
+  LuPlug2,
+  LuPackage,
+  LuGithub,
+  LuTerminal,
+} from "react-icons/lu";
+
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+
+const languages = [
+  { name: "Rust", img: "/lang/rust.jpg", color: "from-orange-500/20 to-orange-600/10", border: "border-orange-500/30", template: "wasm-node-rust", sdkFull: true },
+  { name: "TypeScript", img: "/lang/typescript.jpg", color: "from-blue-500/20 to-blue-600/10", border: "border-blue-500/30", template: "wasm-node-typescript", sdkFull: true },
+  { name: "Go", img: "/lang/go.jpg", color: "from-cyan-500/20 to-cyan-600/10", border: "border-cyan-500/30", template: "wasm-node-go", sdkFull: true },
+  { name: "C++", img: "/lang/cpp.jpg", color: "from-blue-700/20 to-blue-800/10", border: "border-blue-700/30", template: "wasm-node-cpp", sdkFull: true },
+  { name: "C#", img: "/lang/csharp.jpg", color: "from-purple-600/20 to-purple-700/10", border: "border-purple-600/30", template: "wasm-node-csharp", sdkFull: true },
+  { name: "Kotlin", img: "/lang/kotlin.jpg", color: "from-violet-500/20 to-violet-600/10", border: "border-violet-500/30", template: "wasm-node-kotlin", sdkFull: true },
+  { name: "Python", img: "/lang/python.jpg", color: "from-yellow-500/20 to-yellow-600/10", border: "border-yellow-500/30", template: "wasm-node-python", sdkFull: true },
+  { name: "Swift", img: "/lang/swift.jpg", color: "from-orange-400/20 to-orange-500/10", border: "border-orange-400/30", template: "wasm-node-swift", sdkFull: true },
+  { name: "Java", img: "/lang/java.jpg", color: "from-red-500/20 to-red-600/10", border: "border-red-500/30", template: "wasm-node-java", sdkFull: true },
+  { name: "Zig", img: "/lang/zig.jpg", color: "from-amber-500/20 to-amber-600/10", border: "border-amber-500/30", template: "wasm-node-zig", sdkFull: true },
+  { name: "Nim", img: "/lang/nim.jpg", color: "from-yellow-600/20 to-yellow-700/10", border: "border-yellow-600/30", template: "wasm-node-nim", sdkFull: true },
+  { name: "Lua", img: "/lang/lua.jpg", color: "from-indigo-500/20 to-indigo-600/10", border: "border-indigo-500/30", template: "wasm-node-lua", sdkFull: true },
+  { name: "Grain", img: "/lang/grain.jpg", color: "from-rose-500/20 to-rose-600/10", border: "border-rose-500/30", template: "wasm-node-grain", sdkFull: true },
+  { name: "MoonBit", img: "/lang/moonbit.jpg", color: "from-slate-500/20 to-slate-600/10", border: "border-slate-500/30", template: "wasm-node-moonbit", sdkFull: true },
+  { name: "AssemblyScript", img: "/lang/assemblyscript.jpg", color: "from-blue-500/20 to-blue-600/10", border: "border-blue-500/30", template: "wasm-node-assemblyscript", sdkFull: true },
+];
+---
+
+<section id="custom-nodes-path" class="relative py-24 overflow-hidden scroll-mt-20">
+  <!-- Background glow -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0">
+    <div class="absolute -bottom-32 right-1/4 w-[600px] h-[600px] rounded-full blur-[140px] opacity-30 bg-violet-500/20"></div>
+    <div class="absolute top-20 left-0 w-[400px] h-[400px] rounded-full blur-[120px] opacity-20 bg-cyan-500/15"></div>
+  </div>
+
+  <div class="relative z-10 max-w-7xl mx-auto px-4 lg:px-8">
+    <!-- Section header -->
+    <div class="max-w-3xl mb-16">
+      <div class="inline-flex items-center gap-2.5 rounded-full border border-violet-500/30 bg-violet-500/10 backdrop-blur-xl px-5 py-2.5 text-sm font-semibold text-violet-600 dark:text-violet-400 mb-6 shadow-[0_0_30px_-8px_hsl(270_60%_60%/.4)]">
+        <LuCode className="w-4 h-4" />
+        <span>{t("dev.nodes.badge")}</span>
+      </div>
+
+      <h2 class="text-4xl font-extrabold sm:text-5xl bg-gradient-to-r from-foreground via-violet-500 to-violet-400 bg-clip-text text-transparent leading-tight mb-6">
+        {t("dev.nodes.headline")}
+      </h2>
+
+      <p class="text-lg text-muted-foreground leading-relaxed">
+        {t("dev.nodes.description")}
+      </p>
+    </div>
+
+    <!-- Language grid -->
+    <div class="mb-14">
+      <h3 class="text-xl font-bold mb-2">{t("dev.nodes.languages.title")}</h3>
+      <p class="text-sm text-muted-foreground mb-8">{t("dev.nodes.languages.description")}</p>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        {languages.map((lang) => (
+          <a
+            href={`https://github.com/TM9657/flow-like/tree/dev/templates/${lang.template}`}
+            target="_blank"
+            class:list={[
+              "group relative flex flex-col items-center gap-3 p-5 rounded-2xl border backdrop-blur transition-all duration-300 hover:scale-[1.03] hover:shadow-lg",
+              `bg-gradient-to-b ${lang.color} ${lang.border}`,
+              "hover:shadow-current/10",
+            ]}
+          >
+            <img
+              src={lang.img}
+              alt={`${lang.name} logo`}
+              class="w-10 h-10 rounded-lg object-cover"
+              loading="lazy"
+              decoding="async"
+            />
+            <span class="text-sm font-semibold">{lang.name}</span>
+            <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              {t("dev.nodes.languages.sdk")}
+            </span>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <!-- SDK capabilities -->
+    <div class="rounded-2xl border border-border/40 bg-card/20 backdrop-blur p-8 mb-12">
+      <h3 class="text-xl font-bold mb-2">{t("dev.nodes.sdk.title")}</h3>
+      <p class="text-sm text-muted-foreground mb-6">{t("dev.nodes.sdk.description")}</p>
+
+      <div class="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        {[
+          { label: t("dev.nodes.sdk.logging"), desc: t("dev.nodes.sdk.logging.desc") },
+          { label: t("dev.nodes.sdk.pins"), desc: t("dev.nodes.sdk.pins.desc") },
+          { label: t("dev.nodes.sdk.variables"), desc: t("dev.nodes.sdk.variables.desc") },
+          { label: t("dev.nodes.sdk.cache"), desc: t("dev.nodes.sdk.cache.desc") },
+          { label: t("dev.nodes.sdk.metadata"), desc: t("dev.nodes.sdk.metadata.desc") },
+          { label: t("dev.nodes.sdk.streaming"), desc: t("dev.nodes.sdk.streaming.desc") },
+          { label: t("dev.nodes.sdk.storage"), desc: t("dev.nodes.sdk.storage.desc") },
+          { label: t("dev.nodes.sdk.ai"), desc: t("dev.nodes.sdk.ai.desc") },
+          { label: t("dev.nodes.sdk.http"), desc: t("dev.nodes.sdk.http.desc") },
+          { label: t("dev.nodes.sdk.auth"), desc: t("dev.nodes.sdk.auth.desc") },
+        ].map((cap) => (
+          <div class="flex flex-col gap-1 p-3 rounded-xl bg-card/40 border border-border/30">
+            <span class="text-sm font-semibold">{cap.label}</span>
+            <span class="text-xs text-muted-foreground">{cap.desc}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <!-- Feature cards -->
+    <div class="grid sm:grid-cols-3 gap-6 mb-12">
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-violet-500/30 transition-colors">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-violet-500 to-violet-500/60 mb-4">
+          <LuPlug2 className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.nodes.feature.sandbox.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.nodes.feature.sandbox.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-violet-500/30 transition-colors">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-violet-500 to-violet-500/60 mb-4">
+          <LuFlaskConical className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.nodes.feature.test.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.nodes.feature.test.description")}
+        </p>
+      </div>
+
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur p-6 hover:border-violet-500/30 transition-colors">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-violet-500 to-violet-500/60 mb-4">
+          <LuPackage className="w-5 h-5 text-white" />
+        </div>
+        <h3 class="text-lg font-semibold mb-2">{t("dev.nodes.feature.publish.title")}</h3>
+        <p class="text-sm text-muted-foreground">
+          {t("dev.nodes.feature.publish.description")}
+        </p>
+      </div>
+    </div>
+
+    <!-- Quick start snippet -->
+    <div class="rounded-2xl border border-border/40 bg-card/20 backdrop-blur p-8 mb-10">
+      <div class="flex items-center gap-3 mb-4">
+        <LuTerminal className="w-5 h-5 text-muted-foreground" />
+        <h3 class="text-lg font-bold">{t("dev.nodes.quickstart.title")}</h3>
+      </div>
+      <p class="text-sm text-muted-foreground mb-4">
+        {t("dev.nodes.quickstart.description")}
+      </p>
+      <div class="font-mono text-sm bg-background/80 border border-border/40 rounded-xl p-5 overflow-x-auto">
+        <div class="text-muted-foreground">{t("dev.nodes.quickstart.step1")}</div>
+        <div class="text-muted-foreground">{t("dev.nodes.quickstart.step2")}</div>
+        <div class="text-muted-foreground">{t("dev.nodes.quickstart.step3")}</div>
+        <div class="text-muted-foreground">{t("dev.nodes.quickstart.step4")}</div>
+      </div>
+    </div>
+
+    <!-- CTAs -->
+    <div class="flex flex-wrap gap-4">
+      <a
+        href="https://docs.flow-like.com/contributing/nodes/rust-nodes/"
+        target="_blank"
+        class="inline-flex items-center gap-2 bg-violet-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-violet-600/90 transition-colors shadow-lg shadow-violet-600/20"
+      >
+        <LuBookOpen className="w-4 h-4" />
+        {t("dev.nodes.cta.guide")}
+        <LuArrowRight className="w-4 h-4" />
+      </a>
+      <a
+        href="https://github.com/TM9657/flow-like/tree/dev/templates"
+        target="_blank"
+        class="inline-flex items-center gap-2 border border-border/60 bg-card/60 backdrop-blur px-6 py-3 rounded-xl font-medium hover:bg-card/80 transition-colors"
+      >
+        <LuGithub className="w-4 h-4" />
+        {t("dev.nodes.cta.templates")}
+      </a>
+    </div>
+  </div>
+</section>

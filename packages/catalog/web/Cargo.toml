@@ -20,6 +20,8 @@ execute = [
     "dep:icalendar",
     "dep:serenity",
     "dep:teloxide",
+    "dep:tokio-tungstenite",
+    "dep:rumqttc",
 ]
 
 [dependencies]
@@ -29,7 +31,6 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -58,3 +59,12 @@ icalendar = { workspace = true, optional = true }
 # Discord/Telegram bot integrations - only included when execute feature is enabled
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"], optional = true }
 teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"], optional = true }
+
+# WebSocket support
+tokio-tungstenite = { workspace = true, optional = true }
+
+# MQTT support
+rumqttc = { workspace = true, optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "k8s-compiler"
+version = "0.1.0"
+edition = "2021"
+description = "Flow-Like Kubernetes WASM Compiler"
+
+[dependencies]
+flow-like-compiler.workspace = true
+flow-like-types.workspace = true
+
+mimalloc.workspace = true
+axum.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-opentelemetry.workspace = true
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

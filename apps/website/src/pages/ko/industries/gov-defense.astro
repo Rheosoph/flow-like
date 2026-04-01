@@ -1,0 +1,9 @@
+---
+import IndustryPage from "../../../components/industries/IndustryPage.astro";
+import { tGovDefense } from "../../../i18n/locales/pages/industry-gov-defense";
+
+const lang = "ko";
+const t = (key: string) => tGovDefense(lang, key);
+---
+
+<IndustryPage lang={lang} t={t} accent="red" accentHex="#dc2626" slug="gov-defense" />

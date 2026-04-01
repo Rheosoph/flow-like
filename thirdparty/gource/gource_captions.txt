@@ -1,0 +1,11 @@
+# Gource captions file
+# Format: timestamp|Caption Text
+
+# Release events
+1747820288|🎉 Release: Alpha v0.0.0 - First Alpha Release!
+1754507941|✨ Release: Alpha v0.0.1
+1755468550|📦 Release: Alpha v0.0.2
+1756059994|🔥 Release: Alpha v0.0.3
+1757326712|💎 Release: Alpha v0.0.4
+1761721539|🌟 Release: Alpha v0.0.5
+1762362789|🚀 Release: Alpha v0.0.6

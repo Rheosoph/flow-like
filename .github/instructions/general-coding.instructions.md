@@ -3,6 +3,9 @@ applyTo: "**"
 ---
 # Project general coding standards
 
+## GIT OPERATIONS
+- `git diff` is fine. NEVER stash, reset, or run any other destructive/state-mutating git command without explicit confirmation — the user is actively working in the same codebase.
+
 ## Comments and Verbosity
 - Do not comment code that is self-explanatory.
 - Avoid verbose comments; use concise, clear language.

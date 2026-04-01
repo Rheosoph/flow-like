@@ -1,0 +1,59 @@
+[package]
+name = "flow-like-catalog-automation"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+# Execution feature - enables heavy dependencies for node execution
+execute = [
+    "flow-like-catalog-core/execute",
+    "dep:thirtyfour",
+    "dep:enigo",
+    "dep:rdev",
+    "dep:xcap",
+    "dep:rustautogui",
+    "dep:rig-core",
+    "dep:jsonschema",
+    "dep:arboard",
+]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like.workspace = true
+flow-like-types.workspace = true
+flow-like-model-provider.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog-macros.workspace = true
+ahash.workspace = true
+tracing.workspace = true
+schemars.workspace = true
+futures.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
+uuid.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+
+# LLM integration for self-healing automation
+rig-core = { workspace = true, optional = true }
+jsonschema = { workspace = true, optional = true }
+
+# Image encoding
+image = { workspace = true }
+
+# Desktop-only deps — not available on iOS / Android
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+thirtyfour = { version = "0.36.1", optional = true }
+enigo = { version = "0.6.1", optional = true }
+rdev = { workspace = true, optional = true }
+xcap = { version = "0.8.1", optional = true }
+rustautogui = { version = "2.5", optional = true, features = ["dev"] }
+arboard = { version = "3.5", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

@@ -1,0 +1,184 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const paths = [
+  {
+    title: t("v3.cta.individual"),
+    desc: t("v3.cta.individual.desc"),
+    action: t("v3.cta.individual.action"),
+    href: "/download",
+    variant: "primary" as const,
+  },
+  {
+    title: t("v3.cta.team"),
+    desc: t("v3.cta.team.desc"),
+    action: t("v3.cta.team.action"),
+    href: "https://app.flow-like.com",
+    variant: "outline" as const,
+  },
+  {
+    title: t("v3.cta.enterprise"),
+    desc: t("v3.cta.enterprise.desc"),
+    action: t("v3.cta.enterprise.action"),
+    href: "/24-hour-solution",
+    variant: "outline" as const,
+  },
+  {
+    title: t("v3.cta.developer"),
+    desc: t("v3.cta.developer.desc"),
+    action: t("v3.cta.developer.action"),
+    href: "https://github.com/TM9657/flow-like",
+    variant: "outline" as const,
+  },
+];
+---
+
+<section class="ctav3-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="ctav3-orb ctav3-orb--blue"></div>
+    <div class="ctav3-orb ctav3-orb--green"></div>
+  </div>
+
+  <div class="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="ctav3-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-block rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary mb-6">
+        {t("v3.cta.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight mb-6">
+        {t("v3.cta.headline")}
+      </h2>
+      <p class="text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v3.cta.description")}
+      </p>
+    </div>
+
+    <!-- Persona paths -->
+    <div class="ctav3-reveal space-y-3">
+      {paths.map((path) => (
+        <div class="group flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-6 rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm px-5 py-4 transition-colors hover:border-border/60 hover:bg-background/80">
+          <div class="flex items-center gap-3 shrink-0 sm:w-40">
+            <span class="text-sm font-semibold text-foreground">{path.title}</span>
+          </div>
+
+          <p class="flex-1 text-sm text-muted-foreground">{path.desc}</p>
+
+          <a
+            href={path.href}
+            class:list={[
+              "shrink-0 rounded-lg px-5 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary/30 focus:ring-offset-2 focus:ring-offset-background",
+              path.variant === "primary"
+                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                : "border border-border/60 text-foreground hover:bg-muted/50",
+            ]}
+          >
+            {path.action}
+          </a>
+        </div>
+      ))}
+    </div>
+
+    <!-- 24-Hour Solution banner -->
+    <div class="ctav3-reveal mt-14 md:mt-20">
+      <div class="ctav3-banner relative overflow-hidden rounded-2xl border border-amber-500/20 px-6 py-10 sm:px-10 sm:py-12 text-center">
+        <div class="pointer-events-none absolute inset-0 -z-10 ctav3-banner-bg"></div>
+
+        <h3 class="text-2xl sm:text-3xl font-bold tracking-tight text-foreground mb-4">
+          {t("v3.cta.24h.headline")}
+        </h3>
+        <p class="mx-auto max-w-2xl text-sm sm:text-base text-muted-foreground leading-relaxed mb-8">
+          {t("v3.cta.24h.desc")}
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a
+            href="/24-hour-solution"
+            class="rounded-lg bg-amber-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:ring-offset-2 focus:ring-offset-background"
+          >
+            {t("v3.cta.24h.action")}
+          </a>
+          <span class="text-sm font-medium text-muted-foreground">
+            {t("v3.cta.24h.price")}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .ctav3-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.4;
+  }
+  .ctav3-orb--blue {
+    width: 500px;
+    height: 500px;
+    top: -120px;
+    left: -120px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.08), transparent 70%);
+  }
+  .ctav3-orb--green {
+    width: 400px;
+    height: 400px;
+    bottom: -60px;
+    right: -80px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.06), transparent 70%);
+  }
+
+  .ctav3-banner-bg {
+    background: linear-gradient(135deg, hsl(38 90% 55% / 0.06), hsl(25 90% 50% / 0.08));
+  }
+
+  .ctav3-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .ctav3-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ctav3-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+  }
+</style>
+
+<script>
+  function initCtaV3Reveal() {
+    const els = document.querySelectorAll(".ctav3-section .ctav3-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+  initCtaV3Reveal();
+</script>

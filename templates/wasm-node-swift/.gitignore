@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+.DS_Store
+gen/
+build/
+node.wasm
+wasi_snapshot_preview1.reactor.wasm
+Sources/WitBindings/include/flow_like_node.h
+Sources/WitBindings/flow_like_node.c

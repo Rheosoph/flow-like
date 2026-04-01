@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { RuntimeVariablesPrompt } from "../components/flow/runtime-variables-prompt";
+import { WasmSandboxWarningDialog } from "../components/flow/wasm-sandbox-warning-dialog";
 import type { IIntercomEvent, ILogMetadata, IRunPayload } from "../lib";
 import type { IBoard, IVariable } from "../lib/schema/flow/board";
 import { IExecutionMode } from "../lib/schema/flow/board";
@@ -32,6 +33,41 @@ interface PendingExecution {
 	eventIdStr?: string;
 	resolve: (result: ILogMetadata | undefined) => void;
 	reject: (error: Error) => void;
+}
+
+// ---- WASM consent helpers (localStorage-backed) ----
+
+function wasmConsentKey(
+	scope: "board" | "event" | "package",
+	id: string,
+): string {
+	return `wasm-consent-${scope}-${id}`;
+}
+
+function hasWasmConsent(
+	scope: "board" | "event" | "package",
+	id: string,
+): boolean {
+	try {
+		return localStorage.getItem(wasmConsentKey(scope, id)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function saveWasmConsent(
+	scope: "board" | "event" | "package",
+	id: string,
+): void {
+	try {
+		localStorage.setItem(wasmConsentKey(scope, id), "1");
+	} catch {
+		// Ignore storage errors
+	}
+}
+
+function allPackagesTrusted(packageIds: string[]): boolean {
+	return packageIds.every((id) => hasWasmConsent("package", id));
 }
 
 interface ExecutionServiceContextValue {
@@ -143,6 +179,18 @@ export function ExecutionServiceProvider({
 		Map<string, RuntimeVariableValue>
 	>(new Map());
 
+	// WASM consent dialog state
+	const [wasmDialogOpen, setWasmDialogOpen] = useState(false);
+	const [wasmPackageIds, setWasmPackageIds] = useState<string[]>([]);
+	const [wasmPackagePermissions, setWasmPackagePermissions] = useState<
+		Record<string, string[]>
+	>({});
+	const [wasmConsentResolve, setWasmConsentResolve] = useState<
+		((granted: boolean) => void) | null
+	>(null);
+	const [pendingWasmBoardId, setPendingWasmBoardId] = useState<string>("");
+	const [pendingWasmEventId, setPendingWasmEventId] = useState<string>("");
+
 	const convertToRuntimeVariablesMap = useCallback(
 		async (
 			appId: string,
@@ -222,6 +270,67 @@ export function ExecutionServiceProvider({
 		[],
 	);
 
+	/**
+	 * Shows the WASM sandbox warning if the board has WASM nodes and consent hasn't been saved.
+	 * Returns true if execution should proceed, false if cancelled.
+	 */
+	const checkWasmConsent = useCallback(
+		(
+			packageIds: string[],
+			boardId: string,
+			eventId: string,
+			permissions?: Record<string, string[]>,
+		): Promise<boolean> => {
+			if (
+				packageIds.length === 0 ||
+				hasWasmConsent("board", boardId) ||
+				(eventId && hasWasmConsent("event", eventId)) ||
+				allPackagesTrusted(packageIds)
+			) {
+				return Promise.resolve(true);
+			}
+
+			return new Promise((resolve) => {
+				setWasmPackageIds(packageIds);
+				setWasmPackagePermissions(permissions ?? {});
+				setPendingWasmBoardId(boardId);
+				setPendingWasmEventId(eventId);
+				setWasmConsentResolve(() => resolve);
+				setWasmDialogOpen(true);
+			});
+		},
+		[],
+	);
+
+	const handleWasmConfirm = useCallback(
+		(rememberFor: "none" | "board" | "event" | "package") => {
+			if (rememberFor === "package") {
+				for (const id of wasmPackageIds) {
+					saveWasmConsent("package", id);
+				}
+			} else if (rememberFor === "board" && pendingWasmBoardId) {
+				saveWasmConsent("board", pendingWasmBoardId);
+			} else if (rememberFor === "event" && pendingWasmEventId) {
+				saveWasmConsent("event", pendingWasmEventId);
+			}
+			setWasmDialogOpen(false);
+			wasmConsentResolve?.(true);
+			setWasmConsentResolve(null);
+		},
+		[
+			wasmConsentResolve,
+			pendingWasmBoardId,
+			pendingWasmEventId,
+			wasmPackageIds,
+		],
+	);
+
+	const handleWasmCancel = useCallback(() => {
+		setWasmDialogOpen(false);
+		wasmConsentResolve?.(false);
+		setWasmConsentResolve(null);
+	}, [wasmConsentResolve]);
+
 	const checkAndExecute = useCallback(
 		async (
 			appId: string,
@@ -233,6 +342,33 @@ export function ExecutionServiceProvider({
 			skipConsentCheck: boolean | undefined,
 			isRemote: boolean,
 		): Promise<ILogMetadata | undefined> => {
+			// Run WASM consent check first (independent of runtime vars).
+			// Fetch prerun once and reuse the result for runtime vars later.
+			let prerunResult: Awaited<
+				ReturnType<NonNullable<typeof backend.boardState.prerunBoard>>
+			> | null = null;
+
+			if (backend.boardState.prerunBoard) {
+				try {
+					prerunResult = await backend.boardState.prerunBoard(appId, boardId);
+
+					if (
+						prerunResult.has_wasm_nodes &&
+						prerunResult.wasm_package_ids?.length
+					) {
+						const granted = await checkWasmConsent(
+							prerunResult.wasm_package_ids,
+							boardId,
+							"",
+							prerunResult.wasm_package_permissions,
+						);
+						if (!granted) return undefined;
+					}
+				} catch {
+					// Prerun failed — continue without it; WASM guard in Rust is the final safety net
+				}
+			}
+
 			// If no runtime vars context, execute directly
 			if (!runtimeVarsContext) {
 				if (isRemote && backend.boardState.executeBoardRemote) {
@@ -260,78 +396,71 @@ export function ExecutionServiceProvider({
 			let varsNeedingValues: IVariable[];
 			let effectiveIsRemote = isRemote;
 
-			if (backend.boardState.prerunBoard) {
-				try {
-					const prerunResult = await backend.boardState.prerunBoard(
-						appId,
-						boardId,
+			if (prerunResult) {
+				// Force remote when board's execution_mode is Remote
+				if (
+					prerunResult.execution_mode === IExecutionMode.Remote &&
+					backend.boardState.executeBoardRemote
+				) {
+					effectiveIsRemote = true;
+				}
+
+				if (effectiveIsRemote) {
+					varsNeedingValues = convertPrerunToVariables(
+						prerunResult.runtime_variables,
+						effectiveIsRemote,
 					);
-
-					// Force remote when board's execution_mode is Remote
-					if (
-						prerunResult.execution_mode === IExecutionMode.Remote &&
-						backend.boardState.executeBoardRemote
-					) {
-						effectiveIsRemote = true;
-					}
-
-					if (effectiveIsRemote) {
-						varsNeedingValues = convertPrerunToVariables(
-							prerunResult.runtime_variables,
-							effectiveIsRemote,
-						);
-					} else {
-						// Local execution - use local board for full variable info (includes secrets)
-						try {
-							const board = await backend.boardState.getBoard(appId, boardId);
-							varsNeedingValues = getVariablesNeedingPrompt(
-								board,
-								effectiveIsRemote,
-							);
-						} catch {
-							varsNeedingValues = convertPrerunToVariables(
-								prerunResult.runtime_variables,
-								effectiveIsRemote,
-							);
-						}
-					}
-				} catch {
-					// Prerun failed, try to fall back to local board
+				} else {
+					// Local execution - use local board for full variable info (includes secrets)
 					try {
 						const board = await backend.boardState.getBoard(appId, boardId);
-						const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-						if (
-							executionMode === IExecutionMode.Remote &&
-							backend.boardState.executeBoardRemote
-						) {
-							effectiveIsRemote = true;
-						}
 						varsNeedingValues = getVariablesNeedingPrompt(
 							board,
 							effectiveIsRemote,
 						);
 					} catch {
-						// Board not found either, execute anyway
-						if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
-							return backend.boardState.executeBoardRemote(
-								appId,
-								boardId,
-								payload,
-								streamState,
-								eventId,
-								cb,
-							);
-						}
-						return backend.boardState.executeBoard(
+						varsNeedingValues = convertPrerunToVariables(
+							prerunResult.runtime_variables,
+							effectiveIsRemote,
+						);
+					}
+				}
+			} else if (backend.boardState.prerunBoard) {
+				// prerunBoard exists but the earlier call failed — fall back to local board
+				try {
+					const board = await backend.boardState.getBoard(appId, boardId);
+					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
+					if (
+						executionMode === IExecutionMode.Remote &&
+						backend.boardState.executeBoardRemote
+					) {
+						effectiveIsRemote = true;
+					}
+					varsNeedingValues = getVariablesNeedingPrompt(
+						board,
+						effectiveIsRemote,
+					);
+				} catch {
+					// Board not found either, execute anyway
+					if (effectiveIsRemote && backend.boardState.executeBoardRemote) {
+						return backend.boardState.executeBoardRemote(
 							appId,
 							boardId,
 							payload,
 							streamState,
 							eventId,
 							cb,
-							skipConsentCheck,
 						);
 					}
+					return backend.boardState.executeBoard(
+						appId,
+						boardId,
+						payload,
+						streamState,
+						eventId,
+						cb,
+						skipConsentCheck,
+					);
 				}
 			} else {
 				// prerunBoard not available - use getBoard
@@ -462,6 +591,7 @@ export function ExecutionServiceProvider({
 			convertToRuntimeVariablesMap,
 			getVariablesNeedingPrompt,
 			convertPrerunToVariables,
+			checkWasmConsent,
 		],
 	);
 
@@ -475,6 +605,36 @@ export function ExecutionServiceProvider({
 			cb: ((event: IIntercomEvent[]) => void) | undefined,
 			skipConsentCheck: boolean | undefined,
 		): Promise<ILogMetadata | undefined> => {
+			// Run WASM consent check first (independent of runtime vars).
+			// Fetch prerun once and reuse the result for runtime vars later.
+			let prerunResult: Awaited<
+				ReturnType<NonNullable<typeof backend.eventState.prerunEvent>>
+			> | null = null;
+
+			if (backend.eventState.prerunEvent) {
+				try {
+					prerunResult = await backend.eventState.prerunEvent(
+						appId,
+						eventIdStr,
+					);
+
+					if (
+						prerunResult.has_wasm_nodes &&
+						prerunResult.wasm_package_ids?.length
+					) {
+						const granted = await checkWasmConsent(
+							prerunResult.wasm_package_ids,
+							prerunResult.board_id,
+							eventIdStr,
+							prerunResult.wasm_package_permissions,
+						);
+						if (!granted) return undefined;
+					}
+				} catch {
+					// Prerun failed — continue without it; WASM guard in Rust is the final safety net
+				}
+			}
+
 			// If no runtime vars context, execute directly
 			if (!runtimeVarsContext) {
 				return backend.eventState.executeEvent(
@@ -488,68 +648,60 @@ export function ExecutionServiceProvider({
 				);
 			}
 
-			// Try prerunEvent first if available, otherwise fall back to fetching event + board
+			// Try prerunEvent result if available, otherwise fall back to fetching event + board
 			let varsNeedingValues: IVariable[];
 			let boardId: string;
-			// Determine if execution is remote (server-side) - if so, don't prompt for secrets
-			// If the backend always executes remotely (e.g. web app), secrets are always server-side
 			const backendAlwaysRemote = backend.eventState.alwaysRemote === true;
 			let isRemote = backendAlwaysRemote;
 
-			if (backend.eventState.prerunEvent) {
+			if (prerunResult) {
+				boardId = prerunResult.board_id;
+				isRemote =
+					backendAlwaysRemote ||
+					!prerunResult.can_execute_locally ||
+					prerunResult.execution_mode === IExecutionMode.Remote;
+
+				varsNeedingValues = convertPrerunToVariables(
+					prerunResult.runtime_variables,
+					isRemote,
+				);
+
+				if (!isRemote) {
+					try {
+						const board = await backend.boardState.getBoard(appId, boardId);
+						varsNeedingValues = getVariablesNeedingPrompt(board, false);
+					} catch {
+						// Fall back to prerun variables if board fetch fails
+					}
+				}
+			} else if (backend.eventState.prerunEvent) {
+				// prerunEvent exists but the earlier call failed — fall back to event + board
 				try {
-					const prerunResult = await backend.eventState.prerunEvent(
+					const event = await backend.eventState.getEvent(appId, eventIdStr);
+					boardId = event.board_id;
+					const version = event.board_version as
+						| [number, number, number]
+						| undefined;
+					const board = await backend.boardState.getBoard(
+						appId,
+						event.board_id,
+						version ?? undefined,
+					);
+					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
+					isRemote =
+						backendAlwaysRemote || executionMode === IExecutionMode.Remote;
+					varsNeedingValues = getVariablesNeedingPrompt(board, isRemote);
+				} catch {
+					// Event or board not found, execute anyway
+					return backend.eventState.executeEvent(
 						appId,
 						eventIdStr,
+						payload,
+						streamState,
+						onEventId,
+						cb,
+						skipConsentCheck,
 					);
-					boardId = prerunResult.board_id;
-					// Remote if backend is always remote, user can't execute locally, or board is Remote mode
-					isRemote =
-						backendAlwaysRemote ||
-						!prerunResult.can_execute_locally ||
-						prerunResult.execution_mode === IExecutionMode.Remote;
-					varsNeedingValues = convertPrerunToVariables(
-						prerunResult.runtime_variables,
-						isRemote,
-					);
-
-					if (!isRemote) {
-						try {
-							const board = await backend.boardState.getBoard(appId, boardId);
-							varsNeedingValues = getVariablesNeedingPrompt(board, false);
-						} catch {
-							// Fall back to prerun variables if board fetch fails
-						}
-					}
-				} catch {
-					// Prerun failed, fall back to fetching event + board
-					try {
-						const event = await backend.eventState.getEvent(appId, eventIdStr);
-						boardId = event.board_id;
-						const version = event.board_version as
-							| [number, number, number]
-							| undefined;
-						const board = await backend.boardState.getBoard(
-							appId,
-							event.board_id,
-							version ?? undefined,
-						);
-						const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
-						isRemote =
-							backendAlwaysRemote || executionMode === IExecutionMode.Remote;
-						varsNeedingValues = getVariablesNeedingPrompt(board, isRemote);
-					} catch {
-						// Event or board not found, execute anyway
-						return backend.eventState.executeEvent(
-							appId,
-							eventIdStr,
-							payload,
-							streamState,
-							onEventId,
-							cb,
-							skipConsentCheck,
-						);
-					}
 				}
 			} else {
 				// prerunEvent not available, use traditional approach
@@ -673,6 +825,7 @@ export function ExecutionServiceProvider({
 			convertToRuntimeVariablesMap,
 			getVariablesNeedingPrompt,
 			convertPrerunToVariables,
+			checkWasmConsent,
 		],
 	);
 
@@ -951,6 +1104,13 @@ export function ExecutionServiceProvider({
 				existingValues={existingRuntimeVars}
 				onSave={handleSave}
 				onCancel={handleCancel}
+			/>
+			<WasmSandboxWarningDialog
+				open={wasmDialogOpen}
+				packageIds={wasmPackageIds}
+				packagePermissions={wasmPackagePermissions}
+				onConfirm={handleWasmConfirm}
+				onCancel={handleWasmCancel}
 			/>
 		</ExecutionServiceContext.Provider>
 	);

@@ -12,6 +12,9 @@
 		"build:examples": "asc assembly/examples.ts --target release -o build/examples.wasm",
 		"test": "node tests/test.js"
 	},
+	"dependencies": {
+		"@flow-like/wasm-sdk-assemblyscript": "^0.1.0"
+	},
 	"devDependencies": {
 		"assemblyscript": "^0.28.9"
 	},

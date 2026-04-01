@@ -33,14 +33,20 @@ pub struct WasmModule {
 impl WasmModule {
     /// Compile a module from bytes
     pub async fn from_bytes(engine: &WasmEngine, bytes: &[u8], hash: String) -> WasmResult<Self> {
-        // Compile the module
         let module = Module::new(engine.engine(), bytes)
             .map_err(|e| WasmError::compilation(format!("Failed to compile WASM module: {}", e)))?;
 
-        // Check for required exports
+        Self::build(module, hash)
+    }
+
+    /// Wrap an already-deserialized (AOT-cached) module
+    pub fn from_precompiled(module: Module, hash: String) -> WasmResult<Self> {
+        Self::build(module, hash)
+    }
+
+    fn build(module: Module, hash: String) -> WasmResult<Self> {
         Self::validate_exports(&module)?;
 
-        // Check for optional exports
         let has_alloc = module.get_export(exports::ALLOC).is_some();
         let has_dealloc = module.get_export(exports::DEALLOC).is_some();
         let has_on_drop = module.get_export(exports::ON_DROP).is_some();

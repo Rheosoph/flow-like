@@ -1,0 +1,53 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSmall
+
+      - name: Test
+        run: zig build test
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node
+          path: |
+            zig-out/bin/node.wasm
+            flow-like.toml
+            README.md
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-node
+          path: release-files
+
+      - name: Create tarball
+        run: tar czf flow-like-node-zig-${{ github.ref_name }}.tar.gz -C release-files .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: flow-like-node-zig-${{ github.ref_name }}.tar.gz

@@ -31,8 +31,17 @@ If you already have Rust installed, make sure you have the latest stable version
 rustup update stable
 ```
 
+## Install mise
+We use [mise](https://mise.jdx.dev) as our task runner and tool version manager. It replaces the old `bun run` / `npm run` scripts and ensures everyone has the same toolchain versions.
+
+Install mise by following the [official installation guide](https://mise.jdx.dev/getting-started.html), then from the repository root:
+```bash
+mise trust && mise install
+```
+This installs all required toolchains (Rust, Bun, Node.js, Python, uv) at the versions pinned in `mise.toml`.
+
 ## Install Bun
-For all build scripts and to bundle the frontend, we are using [Bun](https://bun.sh/). Please install Bun by following the [official Bun installation guide](https://bun.com/docs/installation).
+For bundling the frontend we use [Bun](https://bun.sh/). If you ran `mise install` above, Bun is already available. Otherwise, install it manually via the [official Bun installation guide](https://bun.com/docs/installation).
 
 Alternatively, you can also install **Bun** via **npm**. To do so, first install [Node.js](https://nodejs.org/en/download/) and then run:
 ```bash
@@ -56,21 +65,21 @@ bun install
 ## Build and Run in Dev Mode
 To build and run the Flow-Like desktop application in development mode run:
 ```bash
-bun run dev:desktop:<os>:<arch>
+mise run dev:desktop:<os>:<arch>
 ```
 
 Please replace `<os>` and `<arch>` with your respective operating system and architecture, available options are:
 ```bash
 # Example for macOS on Apple Silicon
-bun run dev:desktop:mac:arm
+mise run dev:desktop:mac:arm
 # Example for macOS on Intel/AMD (x64)
-bun run dev:desktop:mac:intel
+mise run dev:desktop:mac:intel
 # Example for Windows on Intel/AMD (x64)
-bun run dev:desktop:win:x64
+mise run dev:desktop:win:x64
 # Example for Windows on ARM
-bun run dev:desktop:win:arm
+mise run dev:desktop:win:arm
 # Example for Linux on Intel/AMD (x64)
-bun run dev:desktop:linux:x64
+mise run dev:desktop:linux:x64
 ```
 
 Running in dev mode builds the backend without the Rust `cargo build` `--release` flag. Frontend assets are bundled on each change, so you can see your changes live in the app.
@@ -78,13 +87,14 @@ Running in dev mode builds the backend without the Rust `cargo build` `--release
 ## Productive Builds
 To create a productive build of the Flow-Like desktop application, run the following command (no need to specify OS and architecture here):
 ```bash
-bun run build:desktop
+mise run build:desktop
 ```
 
 The build binary will be located at `./target/release/flow-like-desktop`. Bundled app installers can be found in `./target/release/bundle`.
 
 ## Further Build Scripts
-You can find all available build scripts in the [package.json](https://github.com/TM9657/flow-like/blob/main/package.json) file of the repository root.
+You can find all available tasks in the [`mise.toml`](https://github.com/TM9657/flow-like/blob/main/mise.toml) file at the repository root.
+Run `mise tasks` to list them all, or `mise run <task>` to execute one.
 
 ## Known Issues
 

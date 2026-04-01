@@ -18,6 +18,7 @@ import {
 	WandIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { RefObject } from "react";
 import { Button } from "../../../components/ui/button";
 import {
 	DropdownMenu,
@@ -57,7 +58,8 @@ import {
 	removeVariableCommand,
 	upsertVariableCommand,
 } from "../../../lib";
-import type { IBoard, IVariable } from "../../../lib/schema/flow/board";
+import type { IBoard, ILayer, IVariable } from "../../../lib/schema/flow/board";
+import { ILayerType } from "../../../lib/schema/flow/board";
 import { IVariableType } from "../../../lib/schema/flow/node";
 import { IValueType } from "../../../lib/schema/flow/pin";
 import { convertJsonToUint8Array } from "../../../lib/uint8";
@@ -65,15 +67,35 @@ import { cn } from "../../../lib/utils";
 import { typeToColor } from "../utils";
 import { NewVariableDialog } from "./new-variable-dialog";
 import { VariablesMenuEdit } from "./variables-menu-edit";
+import {
+	FunctionsList,
+	useCreateFunction,
+} from "../functions/functions-menu";
 
 export function VariablesMenu({
 	board,
 	executeCommand,
+	currentLayerId,
+	pushLayer,
+	boardRef,
 }: Readonly<{
 	board: IBoard;
 	executeCommand: (command: IGenericCommand, append: boolean) => Promise<any>;
+	currentLayerId?: string;
+	pushLayer?: (layer: ILayer) => Promise<void>;
+	boardRef?: RefObject<IBoard | undefined>;
 }>) {
 	const [showNewVariableDialog, setShowNewVariableDialog] = useState(false);
+	const [showNewLocalVariableDialog, setShowNewLocalVariableDialog] =
+		useState(false);
+	const createFunction = useCreateFunction(executeCommand);
+
+	const currentFunctionLayer = useMemo(() => {
+		if (!currentLayerId) return null;
+		const layer = board.layers[currentLayerId];
+		if (!layer || layer.type !== ILayerType.Function) return null;
+		return layer;
+	}, [currentLayerId, board.layers]);
 
 	const upsertVariable = useCallback(
 		async (variable: IVariable) => {
@@ -86,6 +108,30 @@ export function VariablesMenu({
 			await executeCommand(command, false);
 		},
 		[board],
+	);
+
+	const upsertLocalVariable = useCallback(
+		async (variable: IVariable) => {
+			if (!currentFunctionLayer) return;
+			const command = upsertVariableCommand({
+				variable,
+				layer_id: currentFunctionLayer.id,
+			});
+			await executeCommand(command, false);
+		},
+		[currentFunctionLayer, executeCommand],
+	);
+
+	const removeLocalVariable = useCallback(
+		async (variable: IVariable) => {
+			if (!currentFunctionLayer) return;
+			const command = removeVariableCommand({
+				variable,
+				layer_id: currentFunctionLayer.id,
+			});
+			await executeCommand(command, false);
+		},
+		[currentFunctionLayer, executeCommand],
 	);
 
 	const removeVariable = useCallback(
@@ -102,6 +148,11 @@ export function VariablesMenu({
 		() => buildCategoryTree(Object.values(board.variables)),
 		[board.variables],
 	);
+
+	const localTree = useMemo(() => {
+		if (!currentFunctionLayer) return null;
+		return buildCategoryTree(Object.values(currentFunctionLayer.variables));
+	}, [currentFunctionLayer]);
 
 	// Listen for cross-folder drops dispatched by FlowWrapper
 	useEffect(() => {
@@ -128,16 +179,23 @@ export function VariablesMenu({
 
 	return (
 		<div className="flex flex-col h-full overflow-hidden">
-			<div className="flex flex-row items-center gap-4 p-4 pb-2 shrink-0">
-				<h2>Variables</h2>
-				<Button
-					className="gap-2"
-					onClick={() => setShowNewVariableDialog(true)}
-				>
-					<CirclePlusIcon />
-					New
-				</Button>
-			</div>
+			<div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+				{!currentFunctionLayer && (
+					<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
+						<h3 className="text-sm font-semibold text-muted-foreground">
+							Variables
+						</h3>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="gap-1 h-6"
+							onClick={() => setShowNewVariableDialog(true)}
+						>
+							<CirclePlusIcon className="w-3 h-3" />
+							New
+						</Button>
+					</div>
+				)}
 
 			<NewVariableDialog
 				open={showNewVariableDialog}
@@ -145,19 +203,106 @@ export function VariablesMenu({
 				onCreateVariable={upsertVariable}
 			/>
 
-			<div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
-				<CategoryTree
-					root={tree}
-					refs={board.refs}
-					onVariableChange={(variable) => {
-						if (!variable.editable) return;
-						upsertVariable(variable);
-					}}
-					onVariableDeleted={(variable) => {
-						if (!variable.editable) return;
-						removeVariable(variable);
-					}}
+			{currentFunctionLayer && (
+				<NewVariableDialog
+					open={showNewLocalVariableDialog}
+					onOpenChange={setShowNewLocalVariableDialog}
+					onCreateVariable={upsertLocalVariable}
 				/>
+			)}
+
+				{currentFunctionLayer && localTree && (
+					<>
+						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
+							<h3 className="text-xs font-semibold text-muted-foreground">
+								Local — {currentFunctionLayer.name}
+							</h3>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="gap-1 h-6"
+								onClick={() => setShowNewLocalVariableDialog(true)}
+							>
+								<CirclePlusIcon className="w-3 h-3" />
+								New
+							</Button>
+						</div>
+						<CategoryTree
+							root={localTree}
+							refs={board.refs}
+							onVariableChange={(variable) => {
+								if (!variable.editable) return;
+								upsertLocalVariable(variable);
+							}}
+							onVariableDeleted={(variable) => {
+								if (!variable.editable) return;
+								removeLocalVariable(variable);
+							}}
+						/>
+						<Separator className="my-3" />
+					</>
+				)}
+				{!currentFunctionLayer && (
+					<CategoryTree
+						root={tree}
+						refs={board.refs}
+						onVariableChange={(variable) => {
+							if (!variable.editable) return;
+							upsertVariable(variable);
+						}}
+						onVariableDeleted={(variable) => {
+							if (!variable.editable) return;
+							removeVariable(variable);
+						}}
+					/>
+				)}
+				{currentFunctionLayer && (
+					<>
+						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
+							<h3 className="text-xs font-semibold text-muted-foreground">
+								Global
+							</h3>
+						</div>
+						<CategoryTree
+							root={tree}
+							refs={board.refs}
+							onVariableChange={(variable) => {
+								if (!variable.editable) return;
+								upsertVariable(variable);
+							}}
+							onVariableDeleted={(variable) => {
+								if (!variable.editable) return;
+								removeVariable(variable);
+							}}
+						/>
+					</>
+				)}
+
+				{pushLayer && (
+					<>
+						<Separator className="my-3" />
+						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
+							<h3 className="text-sm font-semibold text-muted-foreground">
+								Functions
+							</h3>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="gap-1 h-6"
+								onClick={createFunction}
+							>
+								<CirclePlusIcon className="w-3 h-3" />
+								New
+							</Button>
+						</div>
+						<FunctionsList
+							board={board}
+							executeCommand={executeCommand}
+							pushLayer={pushLayer}
+							boardRef={boardRef}
+						/>
+					</>
+				)}
 			</div>
 		</div>
 	);
