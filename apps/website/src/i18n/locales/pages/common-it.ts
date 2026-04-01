@@ -46,9 +46,6 @@ export const itCommon = {
 	"footer.privacy": "Informativa sulla privacy",
 	"footer.legal": "Note legali",
 	"footer.dataDeletion": "Cancellazione dei dati",
-	"footer.security": "Sicurezza",
-	"footer.dpa": "ATD",
-	"footer.subprocessors": "Sub-responsabili",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",
@@ -190,7 +187,7 @@ export const itCommon = {
 		"Sì! Flow-Like è completamente auto-ospitabile. Puoi eseguirlo sulla tua infrastruttura, on-premise o in ambienti air-gapped. L'app desktop funziona completamente offline.",
 	"pricing.faq.q3": "C'è un prezzo per utente?",
 	"pricing.faq.a3":
-		"No. Crediamo che l'automazione debba essere accessibile a tutta la tua organizzazione. Tutti i piani supportano utenti illimitati. Paghi solo in base all'utilizzo (funzionalità cloud), non per numero di dipendenti.",
+		"La maggior parte dei piani utilizza un prezzo per postazione. Il nostro piano Enterprise include utenti ed esecuzioni illimitati — paghi solo in base all'utilizzo (funzionalità cloud), non per numero di dipendenti.",
 	"pricing.faq.q4": "Cosa è incluso nell'accesso ai modelli IA?",
 	"pricing.faq.a4":
 		"L'accesso ai modelli IA copre funzionalità come FlowPilot (il nostro assistente IA), suggerimenti intelligenti per i workflow e automazione in linguaggio naturale attraverso i nostri modelli ospitati.",
@@ -215,4 +212,15 @@ export const itCommon = {
 	"pricing.ctaSection.enterprise": "Contatta vendite enterprise",
 	"pricing.ctaSection.startingAt":
 		"A partire da €1.999 · Proprietà completa del codice · Distribuisci ovunque",
+
+	// Navigation – page links
+	"header.integrations": "Integrazioni",
+	"header.security": "Sicurezza",
+	"footer.link.integrations": "Integrazioni",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Sicurezza",
+
+	"pricing.faq.moreQuestions": "Hai ancora domande?",
+	"pricing.faq.contactUs": "Siamo qui per aiutarti",
+	"pricing.faq.contactButton": "Contattaci",
 };

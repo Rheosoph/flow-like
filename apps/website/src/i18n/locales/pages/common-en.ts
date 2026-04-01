@@ -48,9 +48,6 @@ export const enCommon = {
 	"footer.privacy": "Privacy Policy",
 	"footer.legal": "Legal Notice",
 	"footer.dataDeletion": "Data Deletion",
-	"footer.security": "Security",
-	"footer.dpa": "DPA",
-	"footer.subprocessors": "Sub-processors",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",
@@ -192,7 +189,7 @@ export const enCommon = {
 		"Yes! Flow-Like is fully self-hostable. You can run it on your own infrastructure, on-premise, or in air-gapped environments. The desktop app works entirely offline — no cloud connection required for local execution.",
 	"pricing.faq.q3": "Is there per-seat or per-user pricing?",
 	"pricing.faq.a3":
-		"No. We believe automation should be accessible to your entire organization. All plans support unlimited users. You only pay based on usage (cloud features), not headcount.",
+		"Most plans use per-seat pricing. Our Enterprise plan includes unlimited users and executions — you only pay based on usage (cloud features), not headcount.",
 	"pricing.faq.q4": "What's included in AI model access?",
 	"pricing.faq.a4":
 		"AI model access covers features like FlowPilot (our AI assistant), intelligent workflow suggestions, and natural language automation through our hosted models.",
@@ -220,4 +217,11 @@ export const enCommon = {
 	"pricing.ctaSection.enterprise": "Contact Enterprise Sales",
 	"pricing.ctaSection.startingAt":
 		"Starting at €1,999 · Full source code ownership · Deploy anywhere",
+
+	// Navigation – page links
+	"header.integrations": "Integrations",
+	"header.security": "Security",
+	"footer.link.integrations": "Integrations",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Security",
 };

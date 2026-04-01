@@ -46,9 +46,6 @@ export const nlCommon = {
 	"footer.privacy": "Privacybeleid",
 	"footer.legal": "Juridische kennisgeving",
 	"footer.dataDeletion": "Gegevens verwijderen",
-	"footer.security": "Beveiliging",
-	"footer.dpa": "Verwerkersovereenkomst",
-	"footer.subprocessors": "Sub-verwerkers",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",
@@ -190,7 +187,7 @@ export const nlCommon = {
 		"Ja! Flow-Like is volledig zelf te hosten. Je kunt het draaien op je eigen infrastructuur, on-premise of in air-gapped omgevingen. De desktop-app werkt volledig offline.",
 	"pricing.faq.q3": "Is er prijsstelling per gebruiker?",
 	"pricing.faq.a3":
-		"Nee. We geloven dat automatisering toegankelijk moet zijn voor je hele organisatie. Alle plannen ondersteunen onbeperkte gebruikers. Je betaalt alleen op basis van gebruik (cloudfuncties), niet per aantal werknemers.",
+		"De meeste plannen gebruiken prijsstelling per seat. Ons Enterprise-plan omvat onbeperkte gebruikers en uitvoeringen — je betaalt alleen op basis van gebruik (cloudfuncties), niet per aantal werknemers.",
 	"pricing.faq.q4": "Wat is inbegrepen bij AI-modeltoegang?",
 	"pricing.faq.a4":
 		"AI-modeltoegang omvat functies zoals FlowPilot (onze AI-assistent), intelligente workflow-suggesties en automatisering in natuurlijke taal via onze gehoste modellen.",
@@ -215,4 +212,15 @@ export const nlCommon = {
 	"pricing.ctaSection.enterprise": "Neem contact op met enterprise sales",
 	"pricing.ctaSection.startingAt":
 		"Vanaf €1.999 · Volledig eigendom van broncode · Deploy overal",
+
+	// Navigation – page links
+	"header.integrations": "Integraties",
+	"header.security": "Beveiliging",
+	"footer.link.integrations": "Integraties",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Beveiliging",
+
+	"pricing.faq.moreQuestions": "Nog vragen?",
+	"pricing.faq.contactUs": "We helpen je graag",
+	"pricing.faq.contactButton": "Neem contact op",
 };

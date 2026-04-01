@@ -6,53 +6,44 @@ import { Header } from "../../components/header";
 import AmbientGlow from "../../components/ambient-glow.astro";
 import SoftSeam from "../../components/soft-seam.astro";
 
-import DesignWorkflowsVisually from "../../sections/design-workflows-visually.astro";
-import ZeroToProd from "../../sections/zero-to-prod.astro";
-import Portability from "../../sections/portability.astro";
-import Performance from "../../sections/performance.astro";
-import Extensibility from "../../sections/extensibility.astro";
-import Theming from "../../sections/theming.astro";
-import ProcessCombination from "../../sections/process-combination.astro";
-import Storage from "../../sections/storage.astro";
-import Reading from "../../sections/reading.astro";
-import FlowPilot from "../../sections/flowpilot.astro";
-import Integrations from "../../sections/integrations.astro";
-import UseCases from "../../sections/use-cases.astro";
-import TwentyFourHourBanner from "../../sections/24-hour-solution-banner.astro";
-import EnterpriseStack from "../../sections/enterprise-stack.astro";
-import BiPreview from "../../sections/bi-preview.astro";
-import ProblemSolution from "../../sections/problem-solution.astro";
-import TargetAudience from "../../sections/target-audience.astro";
-import CtaAutomate from "../../sections/cta-automate.astro";
-import FAQ from "../../sections/faq.astro";
-import Newsletter from "../../sections/newsletter.astro";
+import HeroV3 from "../../sections/hero-v3.astro";
+import SolutionEngineering from "../../sections/solution-engineering.astro";
+import ShowcaseV3 from "../../sections/showcase-v3.astro";
+import ProofBeltV3 from "../../sections/proof-belt-v3.astro";
+import BentoV3 from "../../sections/bento-v3.astro";
+import TeamsV3 from "../../sections/teams-v3.astro";
+import ProtoV3 from "../../sections/proto-v3.astro";
+import HowV3 from "../../sections/how-v3.astro";
+import TrustV3 from "../../sections/trust-v3.astro";
+import TestimonialsV3 from "../../sections/testimonials-v3.astro";
+import DevV3 from "../../sections/dev-v3.astro";
+import DeployV3 from "../../sections/deploy-v3.astro";
+import BlogV3 from "../../sections/blog-v3.astro";
+import NewsletterV3 from "../../sections/newsletter-v3.astro";
+import FaqV3 from "../../sections/faq-v3.astro";
+import CtaV3 from "../../sections/cta-v3.astro";
 import { BlogFooter } from "../../components/blog-footer";
-
-import Hero from "../../sections/hero.astro";
 import { translations, languages } from "../../i18n";
 
 const lang = "zh";
-const t = translations[lang];
+const t = translations[lang] as Record<string, string>;
+const en = translations.en as Record<string, string>;
 
 // --- SEO constants ---
 const site = "https://flow-like.com";
-const title = t["meta.title"];
-const description = t["meta.description"];
-const keywords = [
-  "企业自动化","工作流自动化","本地部署自动化","可审计工作流",
-  "可视化编程","类型化工作流","Rust","合规","治理","安全自动化"
-].join(", ");
+const title = t["v3.meta.title"] ?? en["v3.meta.title"] ?? t["v2.meta.title"];
+const description = t["v3.meta.description"] ?? en["v3.meta.description"] ?? t["v2.meta.description"];
+const keywords = t["v3.meta.keywords"] ?? en["v3.meta.keywords"] ?? t["v2.meta.keywords"];
 const appName = "Flow-Like";
 const orgName = "TM9657 GmbH";
 const canonicalUrl = `${site}/zh`;
 const ogImage = `${site}/og.png`;
-const ogImageAlt = "Flow-Like — 全面掌控的企业自动化";
+const ogImageAlt = t["v3.meta.ogAlt"] ?? en["v3.meta.ogAlt"] ?? t["v2.meta.ogAlt"];
 const twitterCard = "summary_large_image";
 
 const github = "https://github.com/TM9657/flow-like";
 const docs = "https://docs.flow-like.com";
 const download = "https://github.com/TM9657/flow-like/releases";
-const enterpriseContact = "mailto:enterprise@flow-like.com?subject=Risk%20Review%20请求";
 
 // --- JSON-LD blocks ---
 const ldOrganization = {
@@ -178,37 +169,55 @@ const alternateLinks = [
   </head>
 
   <body class="bg-background text-foreground antialiased selection:bg-primary/30">
-    <main id="content" class="w-full max-w-[100vw] overflow-x-clip">
+    <main id="content" class="w-full max-w-full overflow-x-clip">
       <AmbientGlow />
       <Header client:load/>
-      <Hero lang={lang} />
+      <HeroV3 lang={lang} />
 
-      <EnterpriseStack lang={lang} />
-      <BiPreview lang={lang} />
-      <CtaAutomate lang={lang} />
-      <ProblemSolution lang={lang} />
-      <UseCases lang={lang} />
-      <DesignWorkflowsVisually lang={lang} />
-      <TargetAudience lang={lang} />
-      <TwentyFourHourBanner lang={lang} />
-      <Portability lang={lang} />
       <SoftSeam />
-      <Performance lang={lang} />
-      <FlowPilot lang={lang} />
-      <Extensibility lang={lang} />
-      <ZeroToProd lang={lang} />
-      <Integrations lang={lang} />
+      <SolutionEngineering lang={lang} />
+
       <SoftSeam />
-      <Theming lang={lang} />
+      <ShowcaseV3 lang={lang} />
+
+      <ProofBeltV3 lang={lang} />
+
       <SoftSeam />
-      <ProcessCombination lang={lang} />
+      <BentoV3 lang={lang} />
+
       <SoftSeam />
-      <Storage lang={lang} />
-      <Reading lang={lang} />
-      <Newsletter lang={lang} />
-      <FAQ lang={lang} />
+      <TeamsV3 lang={lang} />
+
+      <SoftSeam />
+      <ProtoV3 lang={lang} />
+
+      <SoftSeam />
+      <HowV3 lang={lang} />
+
+      <SoftSeam />
+      <TrustV3 lang={lang} />
+
+      <SoftSeam />
+      <TestimonialsV3 lang={lang} />
+
+      <SoftSeam />
+      <DevV3 lang={lang} />
+
+      <SoftSeam />
+      <DeployV3 lang={lang} />
+
+      <SoftSeam />
+      <BlogV3 lang={lang} />
+
+      <NewsletterV3 lang={lang} />
+
+      <SoftSeam />
+      <FaqV3 lang={lang} />
+
+      <SoftSeam />
+      <CtaV3 lang={lang} />
     </main>
 
-    <BlogFooter />
+    <BlogFooter client:load />
   </body>
 </html>

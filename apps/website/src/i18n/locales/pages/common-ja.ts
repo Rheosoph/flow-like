@@ -46,9 +46,6 @@ export const jaCommon = {
 	"footer.privacy": "プライバシーポリシー",
 	"footer.legal": "法的通知",
 	"footer.dataDeletion": "データ削除",
-	"footer.security": "セキュリティ",
-	"footer.dpa": "データ処理契約",
-	"footer.subprocessors": "復処理者",
 
 	// BI Preview Section
 	"bi.preview.badge": "ビジネスインテリジェンス",
@@ -187,7 +184,7 @@ export const jaCommon = {
 		"はい！Flow-Likeは完全にセルフホスト可能です。自社インフラ、オンプレミス、またはエアギャップ環境で実行できます。デスクトップアプリは完全にオフラインで動作します。",
 	"pricing.faq.q3": "ユーザーごとの課金はありますか？",
 	"pricing.faq.a3":
-		"いいえ。自動化は組織全体がアクセスできるべきだと考えています。全てのプランで無制限のユーザーをサポート。使用量（クラウド機能）に基づいて支払い、従業員数ではありません。",
+		"ほとんどのプランはシートごとの課金です。Enterpriseプランでは無制限のユーザーと実行回数をサポートし、使用量（クラウド機能）に基づいてのみ支払います。",
 	"pricing.faq.q4": "AIモデルアクセスには何が含まれますか？",
 	"pricing.faq.a4":
 		"AIモデルアクセスには、FlowPilot（AIアシスタント）、インテリジェントなワークフロー提案、ホストされたモデルを通じた自然言語自動化などの機能が含まれます。",
@@ -213,4 +210,15 @@ export const jaCommon = {
 	"pricing.ctaSection.enterprise": "エンタープライズ営業に問い合わせ",
 	"pricing.ctaSection.startingAt":
 		"€1,999から · 完全なソースコード所有権 · どこでもデプロイ",
+
+	// Navigation – page links
+	"header.integrations": "インテグレーション",
+	"header.security": "セキュリティ",
+	"footer.link.integrations": "インテグレーション",
+	"footer.link.whitelabel": "ホワイトラベル",
+	"footer.link.security": "セキュリティ",
+
+	"pricing.faq.moreQuestions": "まだご質問がありますか？",
+	"pricing.faq.contactUs": "お気軽にお問い合わせください",
+	"pricing.faq.contactButton": "お問い合わせ",
 };

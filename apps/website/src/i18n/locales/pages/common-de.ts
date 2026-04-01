@@ -48,9 +48,6 @@ export const deCommon = {
 	"footer.privacy": "Datenschutz",
 	"footer.legal": "Impressum",
 	"footer.dataDeletion": "Datenlöschung",
-	"footer.security": "Sicherheit",
-	"footer.dpa": "AVV",
-	"footer.subprocessors": "Unterauftrags&shy;verarbeiter",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",
@@ -192,7 +189,7 @@ export const deCommon = {
 		"Ja! Flow-Like ist vollständig selbst hostbar. Sie können es auf Ihrer eigenen Infrastruktur, On-Premise oder in Air-Gapped-Umgebungen betreiben. Die Desktop-App funktioniert komplett offline — keine Cloud-Verbindung für lokale Ausführung erforderlich.",
 	"pricing.faq.q3": "Gibt es eine Lizenzierung pro Benutzer?",
 	"pricing.faq.a3":
-		"Nein. Wir glauben, dass Automatisierung für Ihre gesamte Organisation zugänglich sein sollte. Alle Pläne unterstützen unbegrenzte Benutzer. Sie zahlen nur basierend auf der Nutzung (Cloud-Funktionen), nicht nach Anzahl der Mitarbeiter.",
+		"Die meisten Pläne verwenden eine Lizenzierung pro Benutzer. Unser Enterprise-Plan umfasst unbegrenzte Benutzer und Ausführungen — Sie zahlen nur basierend auf der Nutzung (Cloud-Funktionen), nicht nach Anzahl der Mitarbeiter.",
 	"pricing.faq.q4": "Was ist im KI-Modell-Zugang enthalten?",
 	"pricing.faq.a4":
 		"Der KI-Modell-Zugang umfasst Funktionen wie FlowPilot (unser KI-Assistent), intelligente Workflow-Vorschläge und natürlichsprachliche Automatisierung durch unsere gehosteten Modelle.",
@@ -219,4 +216,15 @@ export const deCommon = {
 	"pricing.ctaSection.enterprise": "Enterprise-Vertrieb kontaktieren",
 	"pricing.ctaSection.startingAt":
 		"Ab €1.999 · Vollständiges Quellcode-Eigentum · Überall einsetzbar",
+
+	// Navigation – page links
+	"header.integrations": "Integrationen",
+	"header.security": "Sicherheit",
+	"footer.link.integrations": "Integrationen",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Sicherheit",
+
+	"pricing.faq.moreQuestions": "Noch Fragen?",
+	"pricing.faq.contactUs": "Wir helfen gerne",
+	"pricing.faq.contactButton": "Kontakt",
 };

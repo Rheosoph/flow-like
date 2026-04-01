@@ -46,9 +46,6 @@ export const svCommon = {
 	"footer.privacy": "Integritetspolicy",
 	"footer.legal": "Juridiskt meddelande",
 	"footer.dataDeletion": "Radering av data",
-	"footer.security": "Säkerhet",
-	"footer.dpa": "Personuppgiftsbiträdesavtal",
-	"footer.subprocessors": "Underbiträden",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",
@@ -190,7 +187,7 @@ export const svCommon = {
 		"Ja! Flow-Like är fullt självhostad. Du kan köra det på din egen infrastruktur, on-premise eller i air-gapped-miljöer. Skrivbordsappen fungerar helt offline.",
 	"pricing.faq.q3": "Finns det prissättning per användare?",
 	"pricing.faq.a3":
-		"Nej. Vi tror att automatisering ska vara tillgänglig för hela din organisation. Alla planer stöder obegränsade användare. Du betalar endast baserat på användning (molnfunktioner), inte per antal anställda.",
+		"De flesta planer använder prissättning per plats. Vårt Enterprise-plan inkluderar obegränsade användare och körningar — du betalar endast baserat på användning (molnfunktioner), inte per antal anställda.",
 	"pricing.faq.q4": "Vad ingår i AI-modellåtkomst?",
 	"pricing.faq.a4":
 		"AI-modellåtkomst omfattar funktioner som FlowPilot (vår AI-assistent), intelligenta workflow-förslag och automatisering på naturligt språk via våra värdmodeller.",
@@ -216,4 +213,15 @@ export const svCommon = {
 	"pricing.ctaSection.enterprise": "Kontakta enterprise-försäljning",
 	"pricing.ctaSection.startingAt":
 		"Från €1 999 · Fullständigt ägande av källkod · Distribuera var som helst",
+
+	// Navigation – page links
+	"header.integrations": "Integrationer",
+	"header.security": "Säkerhet",
+	"footer.link.integrations": "Integrationer",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "Säkerhet",
+
+	"pricing.faq.moreQuestions": "Har du fortfarande frågor?",
+	"pricing.faq.contactUs": "Vi hjälper gärna",
+	"pricing.faq.contactButton": "Kontakta oss",
 };

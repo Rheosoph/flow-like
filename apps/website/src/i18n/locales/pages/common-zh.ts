@@ -45,9 +45,6 @@ export const zhCommon = {
 	"footer.privacy": "隐私政策",
 	"footer.legal": "法律声明",
 	"footer.dataDeletion": "数据删除",
-	"footer.security": "安全",
-	"footer.dpa": "数据处理协议",
-	"footer.subprocessors": "子处理者",
 
 	// BI Preview Section
 	"bi.preview.badge": "商业智能",
@@ -180,7 +177,7 @@ export const zhCommon = {
 		"是的！Flow-Like 完全可自托管。您可以在自己的基础设施上运行，支持本地部署或离线环境。桌面应用完全离线运行 — 本地执行无需云端连接。",
 	"pricing.faq.q3": "有按用户收费吗？",
 	"pricing.faq.a3":
-		"没有。我们相信自动化应该对整个组织开放。所有计划支持无限用户。您只需按使用量（云端功能）付费，而非按员工数量。",
+		"大多数计划按席位收费。我们的企业版计划包含无限用户和执行次数 — 您只需按使用量（云端功能）付费，而非按员工数量。",
 	"pricing.faq.q4": "AI模型访问包含什么？",
 	"pricing.faq.a4":
 		"AI模型访问涵盖 FlowPilot（我们的AI助手）、智能工作流建议和通过托管模型的自然语言自动化等功能。",
@@ -204,4 +201,15 @@ export const zhCommon = {
 	"pricing.ctaSection.24h": "24小时解决方案",
 	"pricing.ctaSection.enterprise": "联系企业销售",
 	"pricing.ctaSection.startingAt": "起价 €1,999 · 完整源代码所有权 · 随处部署",
+
+	// Navigation – page links
+	"header.integrations": "集成",
+	"header.security": "安全",
+	"footer.link.integrations": "集成",
+	"footer.link.whitelabel": "White Label",
+	"footer.link.security": "安全",
+
+	"pricing.faq.moreQuestions": "还有问题？",
+	"pricing.faq.contactUs": "我们随时为您提供帮助",
+	"pricing.faq.contactButton": "联系我们",
 };

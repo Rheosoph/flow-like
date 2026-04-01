@@ -94,6 +94,11 @@ function getLocalizedPath(currentLang: Lang, targetLang: Lang) {
 	return `/${targetLang}${path === "/" ? "" : path}`;
 }
 
+function localizeHref(lang: Lang, href: string): string {
+	if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:")) return href;
+	return `/${lang}${href}`;
+}
+
 interface DropdownItem {
 	label: string;
 	href: string;
@@ -121,13 +126,41 @@ function useHoverMenu(delay = 80) {
 	return { open, setOpen, handleMouseEnter, handleMouseLeave };
 }
 
+function useGitHubStars() {
+	const [stars, setStars] = useState<number | null>(null);
+	useEffect(() => {
+		const CACHE_KEY = "gh_stars";
+		const CACHE_TTL = 3600000;
+		try {
+			const cached = sessionStorage.getItem(CACHE_KEY);
+			if (cached) {
+				const { count, ts } = JSON.parse(cached);
+				if (Date.now() - ts < CACHE_TTL) { setStars(count); return; }
+			}
+		} catch {}
+		fetch("https://api.github.com/repos/TM9657/flow-like", {
+			headers: { Accept: "application/vnd.github.v3+json" },
+		})
+			.then(r => r.ok ? r.json() : Promise.reject())
+			.then(data => {
+				const count = data?.stargazers_count;
+				if (typeof count === "number" && count > 0) {
+					setStars(count);
+					try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ count, ts: Date.now() })); } catch {}
+				}
+			})
+			.catch(() => {});
+	}, []);
+	return stars;
+}
+
 function DropdownLink({ item, onClose }: { item: DropdownItem; onClose: () => void }) {
 	return (
 		<a
 			href={item.href}
 			target={item.external ? "_blank" : undefined}
 			rel={item.external ? "noreferrer" : undefined}
-			className={`group flex items-start gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+			className={`group flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
 				item.highlight
 					? "text-primary hover:bg-primary/10"
 					: "text-foreground/80 hover:bg-muted/60 hover:text-foreground"
@@ -135,7 +168,7 @@ function DropdownLink({ item, onClose }: { item: DropdownItem; onClose: () => vo
 			onClick={onClose}
 		>
 			{item.icon && (
-				<div className={`mt-0.5 p-1.5 rounded-md shrink-0 transition-colors duration-200 ${
+				<div className={`p-1.5 rounded-md shrink-0 transition-colors duration-200 ${
 					item.highlight ? "bg-primary/10 text-primary" : "bg-muted/60 text-foreground/60 group-hover:bg-muted group-hover:text-foreground"
 				}`}>
 					<item.icon className="w-3.5 h-3.5" />
@@ -274,11 +307,13 @@ function MobileMenu({
 	onClose,
 	t,
 	currentLang,
+	stars,
 }: {
 	open: boolean;
 	onClose: () => void;
 	t: (key: string) => string;
 	currentLang: Lang;
+	stars: number | null;
 }) {
 	const [mounted, setMounted] = useState(false);
 	const [langOpen, setLangOpen] = useState(false);
@@ -480,6 +515,12 @@ function MobileMenu({
 							>
 								<BsGithub className="w-4 h-4" />
 								<span className="text-sm">GitHub</span>
+								{stars !== null && (
+									<span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[11px] font-semibold tabular-nums text-amber-500/80">
+										<svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+										{stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
+									</span>
+								)}
 							</a>
 							<a
 								href="https://discord.com/invite/KTWMrS2/"
@@ -604,6 +645,7 @@ export function Header() {
 	const { t, lang } = useTranslation();
 	const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 	const [scrolled, setScrolled] = useState(false);
+	const stars = useGitHubStars();
 
 	useEffect(() => {
 		const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -709,9 +751,24 @@ export function Header() {
 			external: true,
 		},
 		{
+			label: t("header.integrations"),
+			href: localizeHref(lang, "/integrations"),
+			icon: LuGlobe,
+		},
+		{
+			label: t("header.security"),
+			href: localizeHref(lang, "/security"),
+			icon: LuShieldCheck,
+		},
+		{
 			label: t("header.blog"),
 			href: "/blog/",
 			icon: LuFileText,
+		},
+		{
+			label: "Compare",
+			href: "/compare",
+			icon: LuScale,
 		},
 	];
 
@@ -720,7 +777,7 @@ export function Header() {
 			<header
 				className={`w-full fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
 					scrolled
-						? "h-14 bg-background/80 backdrop-blur-lg border-b border-border/50 shadow-sm"
+						? "h-14 bg-background/60 backdrop-blur-xl border-b border-border/20"
 						: "h-16 bg-transparent"
 				}`}
 			>
@@ -747,22 +804,13 @@ export function Header() {
 						>
 							Pricing
 						</a>
-						<a
-							href="/compare"
-							className="px-3 py-2 text-sm font-medium text-foreground/70 hover:text-foreground transition-colors duration-300"
-						>
-							<span className="flex items-center gap-1.5">
-								<LuScale className="w-3.5 h-3.5" />
-								Compare
-							</span>
-						</a>
 						<div className="flex items-center border-l border-border/40 ml-1 pl-1 gap-0.5">
 							<a
 								href="https://github.com/TM9657/flow-like"
 								target="_blank"
 								rel="noreferrer"
 								aria-label="GitHub"
-								className="p-2 rounded-lg text-foreground/60 hover:text-foreground hover:bg-muted/50 transition-all duration-300"
+								className="p-2 rounded-lg text-foreground/60 hover:text-foreground hover:bg-muted/50 transition-all duration-300 flex items-center gap-1.5"
 							>
 								<BsGithub className="w-4 h-4" />
 							</a>
@@ -825,6 +873,7 @@ export function Header() {
 				onClose={() => setMobileMenuOpen(false)}
 				t={t}
 				currentLang={lang}
+				stars={stars}
 			/>
 		</>
 	);
