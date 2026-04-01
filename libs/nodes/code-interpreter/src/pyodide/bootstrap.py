@@ -120,6 +120,7 @@ class Workspace:
         try:
             os.remove(pending_path)
         except OSError:
+            # Best-effort cleanup: it's safe to ignore errors if the pending file is already gone or cannot be removed.
             pass
         return None
 

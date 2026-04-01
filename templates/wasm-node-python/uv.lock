@@ -268,7 +268,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "flow-like-wasm-sdk", editable = "../../libs/wasm-sdk/wasm-sdk-python" }]
+requires-dist = [{ name = "flow-like-wasm-sdk", specifier = ">=0.1.1" }]
 
 [package.metadata.requires-dev]
 build = [{ name = "componentize-py", specifier = ">=0.16" }]
@@ -281,20 +281,11 @@ dev = [
 
 [[package]]
 name = "flow-like-wasm-sdk"
-version = "0.1.0"
-source = { editable = "../../libs/wasm-sdk/wasm-sdk-python" }
-
-[package.metadata]
-requires-dist = [
-    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.3.0" },
-    { name = "pydantic", marker = "extra == 'schema'", specifier = ">=2.0" },
-]
-provides-extras = ["schema", "langchain"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-cov", specifier = ">=4.0" },
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/0f/59c7176aefbf525b31a3c9cf2ccfd4bb5f5a7e88cea0610ddfb760dcc3aa/flow_like_wasm_sdk-0.1.1.tar.gz", hash = "sha256:3027fecf260ee364e109a5369bf383d172e4d4342305b1c3c123df3423d6e0fc", size = 104191, upload-time = "2026-03-31T07:33:15.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/7f/0254ace324f32c652430bfed042e45c2eccb245ee9c8aa7ae0a196c89d6b/flow_like_wasm_sdk-0.1.1-py3-none-any.whl", hash = "sha256:03f5150f68d440e6d9284e2e0631aa3c9c7c26faa8532a69d7c72d79814a1aea", size = 27338, upload-time = "2026-03-31T07:33:14.484Z" },
 ]
 
 [[package]]

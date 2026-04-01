@@ -65,24 +65,28 @@ function parseEmbedContent(raw: string): EmbedConfig {
 	return config;
 }
 
+function matchesDomain(hostname: string, domain: string): boolean {
+	return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
 function detectEmbedType(url: string): EmbedType {
 	try {
-		const hostname = new URL(url).hostname.replace("www.", "");
+		const hostname = new URL(url).hostname.toLowerCase();
 		if (
-			hostname.includes("youtube.com") ||
-			hostname.includes("youtu.be") ||
-			hostname.includes("youtube-nocookie.com")
+			matchesDomain(hostname, "youtube.com") ||
+			matchesDomain(hostname, "youtu.be") ||
+			matchesDomain(hostname, "youtube-nocookie.com")
 		)
 			return "youtube";
-		if (hostname.includes("vimeo.com")) return "vimeo";
-		if (hostname.includes("twitter.com") || hostname.includes("x.com"))
+		if (matchesDomain(hostname, "vimeo.com")) return "vimeo";
+		if (matchesDomain(hostname, "twitter.com") || matchesDomain(hostname, "x.com"))
 			return "twitter";
-		if (hostname.includes("reddit.com")) return "reddit";
-		if (hostname.includes("github.com")) return "github";
-		if (hostname.includes("stackoverflow.com")) return "stackoverflow";
-		if (hostname.includes("news.ycombinator.com")) return "hackernews";
-		if (hostname.includes("linkedin.com")) return "linkedin";
-		if (hostname.includes("open.spotify.com")) return "spotify";
+		if (matchesDomain(hostname, "reddit.com")) return "reddit";
+		if (matchesDomain(hostname, "github.com")) return "github";
+		if (matchesDomain(hostname, "stackoverflow.com")) return "stackoverflow";
+		if (hostname === "news.ycombinator.com") return "hackernews";
+		if (matchesDomain(hostname, "linkedin.com")) return "linkedin";
+		if (matchesDomain(hostname, "spotify.com")) return "spotify";
 	} catch {
 		// Invalid URL
 	}
@@ -92,7 +96,7 @@ function detectEmbedType(url: string): EmbedType {
 function extractYouTubeId(url: string): string | null {
 	try {
 		const u = new URL(url);
-		if (u.hostname.includes("youtu.be")) return u.pathname.slice(1).split("/")[0];
+		if (u.hostname.toLowerCase() === "youtu.be") return u.pathname.slice(1).split("/")[0] || null;
 		return u.searchParams.get("v");
 	} catch {
 		return null;
@@ -148,9 +152,10 @@ function buildGitHubOgImage(url: string): string | null {
 		const parts = new URL(url).pathname.split("/").filter(Boolean);
 		if (parts.length < 2) return null;
 		const [owner, repo, ...rest] = parts;
-		if (rest[0] === "issues" && rest[1]) return `https://opengraph.githubassets.com/1/${owner}/${repo}/issues/${rest[1]}`;
-		if (rest[0] === "pull" && rest[1]) return `https://opengraph.githubassets.com/1/${owner}/${repo}/pull/${rest[1]}`;
-		return `https://opengraph.githubassets.com/1/${owner}/${repo}`;
+		const base = `https://opengraph.githubassets.com/1/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+		if (rest[0] === "issues" && rest[1]) return `${base}/issues/${encodeURIComponent(rest[1])}`;
+		if (rest[0] === "pull" && rest[1]) return `${base}/pull/${encodeURIComponent(rest[1])}`;
+		return base;
 	} catch {
 		return null;
 	}
@@ -903,7 +908,7 @@ function getDomainDisplayName(url: string): string {
 
 function getFaviconUrl(url: string): string {
 	try {
-		return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=32`;
+		return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(new URL(url).hostname)}&sz=32`;
 	} catch {
 		return "";
 	}

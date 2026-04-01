@@ -11,7 +11,9 @@ transitive imports succeed.
 def _try_import(name):
     try:
         __import__(name)
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
+        # Missing modules are expected in this environment; failures are ignored
+        # so that build-time bundling can proceed best-effort.
         pass
 
 # ── Stdlib: internal fallback modules (must come first) ─────────────────────

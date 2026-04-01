@@ -1,6 +1,7 @@
 """Tests for the six main template nodes (Rust-equivalent)."""
 
 import json
+from urllib.parse import urlparse
 
 from conftest import make_context
 from node import (
@@ -265,8 +266,9 @@ class WeatherMockHost(MockHostBridge):
         return '{"role": "assistant", "content": "No more responses"}'
 
     def http_request(self, method: int, url: str, headers: str, body: bytes | None) -> str | None:
+        hostname = urlparse(url).hostname or ""
         for pattern, response in self._http_responses.items():
-            if pattern in url:
+            if hostname == pattern:
                 return json.dumps({"status": 200, "headers": {}, "body": response})
         return json.dumps({"status": 200, "headers": {}, "body": "{}"})
 
@@ -432,7 +434,7 @@ class TestGetWeatherTool:
 
         class EmptyGeoCtx:
             def http_get(self, url: str, headers=None):
-                if "geocoding" in url:
+                if urlparse(url).hostname == "geocoding-api.open-meteo.com":
                     return {"status": 200, "body": json.dumps({"results": []})}
                 return None
 
@@ -457,9 +459,10 @@ class TestGetWeatherTool:
 
         class FullCtx:
             def http_get(self, url: str, headers=None):
-                if "geocoding" in url:
+                hostname = urlparse(url).hostname or ""
+                if hostname == "geocoding-api.open-meteo.com":
                     return {"status": 200, "body": geo_body}
-                if "api.open-meteo.com" in url:
+                if hostname == "api.open-meteo.com":
                     return {"status": 200, "body": wx_body}
                 return None
 

@@ -46,6 +46,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { post } from "../../../lib/api";
+import { toSnakeCaseKeys } from "../../../lib/snake-case";
 
 interface PublishFormData {
 	id: string;
@@ -74,27 +75,6 @@ interface PublishFormData {
 }
 
 type PublishStep = "manifest" | "permissions" | "review";
-
-function camelToSnakeCase(key: string): string {
-	return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
-}
-
-function toSnakeCaseKeys(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		return value.map(toSnakeCaseKeys);
-	}
-
-	if (value && typeof value === "object") {
-		return Object.fromEntries(
-			Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
-				camelToSnakeCase(key),
-				toSnakeCaseKeys(nested),
-			]),
-		);
-	}
-
-	return value;
-}
 
 function bumpPatch(version: string): string {
 	const parts = version.split(".");

@@ -74,7 +74,12 @@ function PackageItem({
 		<div
 			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
 			onClick={() => onSelect?.(pkg.id)}
-			onKeyDown={(e) => e.key === "Enter" && onSelect?.(pkg.id)}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onSelect?.(pkg.id);
+				}
+			}}
 			role="button"
 			tabIndex={0}
 		>

@@ -133,7 +133,9 @@ export default function Page() {
 					</div>
 				)}
 
-				<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
+				{typeof id === "string" && id.trim().length > 0 && (
+					<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
+				)}
 
 				<StoreRecommendations />
 			</div>

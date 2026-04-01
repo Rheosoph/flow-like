@@ -15,7 +15,7 @@ export default function Page() {
 		(location: string) =>
 			invoke<string>("storage_to_fullpath", {
 				appId: id,
-				prefix: location.split("/").slice(3).join("/"),
+				prefix: location,
 			}),
 		[id],
 	);

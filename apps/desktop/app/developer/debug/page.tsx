@@ -119,13 +119,19 @@ function resolveRef(
 	return current as JsonSchema | undefined;
 }
 
-function resolveSchema(schema: JsonSchema, root: JsonSchema): JsonSchema {
+function resolveSchema(
+	schema: JsonSchema,
+	root: JsonSchema,
+	seen = new Set<string>(),
+): JsonSchema {
 	if (schema.$ref) {
+		if (seen.has(schema.$ref)) return schema;
+		const nextSeen = new Set(seen).add(schema.$ref);
 		const resolved = resolveRef(schema.$ref, root);
-		if (resolved) return resolveSchema(resolved, root);
+		if (resolved) return resolveSchema(resolved, root, nextSeen);
 	}
 	if (schema.allOf?.length === 1) {
-		return resolveSchema(schema.allOf[0], root);
+		return resolveSchema(schema.allOf[0], root, seen);
 	}
 	return schema;
 }
@@ -133,7 +139,9 @@ function resolveSchema(schema: JsonSchema, root: JsonSchema): JsonSchema {
 function createDefaultFromSchema(
 	schema: JsonSchema,
 	root: JsonSchema,
+	depth = 0,
 ): unknown {
+	if (depth > 32) return null;
 	const resolved = resolveSchema(schema, root);
 	if (resolved.default !== undefined) return resolved.default;
 
@@ -153,7 +161,7 @@ function createDefaultFromSchema(
 			if (!resolved.properties) return {};
 			const obj: Record<string, unknown> = {};
 			for (const [key, propSchema] of Object.entries(resolved.properties)) {
-				obj[key] = createDefaultFromSchema(propSchema, root);
+				obj[key] = createDefaultFromSchema(propSchema, root, depth + 1);
 			}
 			return obj;
 		}

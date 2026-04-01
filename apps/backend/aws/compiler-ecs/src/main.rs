@@ -64,7 +64,7 @@ async fn main() -> std::process::ExitCode {
         Ok(v) if !v.is_empty() => {
             tracing::info!(
                 len = v.len(),
-                preview = %if v.len() > 200 { &v[..200] } else { &v },
+                preview = %v.char_indices().nth(200).map(|(i, _)| &v[..i]).unwrap_or(&v),
                 "COMPILATION_JOB received"
             );
             v
@@ -93,7 +93,7 @@ async fn main() -> std::process::ExitCode {
             tracing::error!(
                 error = %e,
                 raw_len = job_json.len(),
-                raw_preview = %if job_json.len() > 500 { &job_json[..500] } else { &job_json },
+                raw_preview = %job_json.char_indices().nth(500).map(|(i, _)| &job_json[..i]).unwrap_or(&job_json),
                 "Failed to resolve COMPILATION_JOB"
             );
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -167,9 +167,13 @@ async fn resolve_compilation_jobs(json: &str) -> Result<Vec<CompilationJob>, Str
         match job_ref {
             CompilationJobRef::Remote { remote_url } => {
                 tracing::info!(url = %remote_url, "Fetching remote compilation job");
-                let response = reqwest::get(&remote_url)
-                    .await
-                    .map_err(|e| format!("Failed to fetch remote job: {e}"))?;
+                let response = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    reqwest::get(&remote_url),
+                )
+                .await
+                .map_err(|_| "Remote job fetch timed out".to_string())?
+                .map_err(|e| format!("Failed to fetch remote job: {e}"))?;
                 if !response.status().is_success() {
                     return Err(format!("HTTP {} from job URL", response.status()));
                 }

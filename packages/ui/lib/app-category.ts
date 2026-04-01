@@ -3,7 +3,7 @@ export function formatAppCategory(category?: string | null): string {
 
 	const normalizedCategory = category
 		.replace(/_/g, " ")
-		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+		.replace(/[A-Z](?=[A-Z][a-z])/g, "$& ")
 		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
 		.replace(/\s+/g, " ")
 		.trim();

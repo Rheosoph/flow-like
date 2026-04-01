@@ -178,8 +178,8 @@ def extract_definition(module_path: Path) -> str:
         defs = get_all_definitions()
         if defs:
             return json.dumps([d.to_dict() for d in defs], indent=2)
-    except ImportError:
-        pass
+    except ImportError as exc:
+        print(f"Warning: could not import flow_like_wasm_sdk ({exc}); falling back to generic error", file=sys.stderr)
     raise RuntimeError(f"Module {module_path} must define WasmNode subclasses")
 
 

@@ -60,6 +60,7 @@ def extract_definition(module_path: Path) -> str:
         if defs:
             return json.dumps([d.to_dict() for d in defs], indent=2)
     except ImportError:
+        # flow_like_wasm_sdk is optional; fall through to the legacy get_definition/get_definitions path below
         pass
 
     # Legacy function-based fallback

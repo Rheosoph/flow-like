@@ -247,6 +247,7 @@ class TestDescriptorOverride:
             def run(self, ctx) -> ExecutionResult:
                 return ctx.success()
 
+        _ = OverrideNode
         for nd in get_all_definitions():
             if nd.name == "test_override_value_type":
                 for p in nd.pins:
