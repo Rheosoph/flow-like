@@ -45,9 +45,9 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
         ProviderConfig::AwsParameterStore(config) => {
             #[cfg(feature = "aws")]
             {
-                return Ok(Arc::new(
+                Ok(Arc::new(
                     AwsParameterStoreProvider::new(config.clone()).await?,
-                ));
+                ))
             }
             #[cfg(not(feature = "aws"))]
             {
@@ -60,9 +60,9 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
         ProviderConfig::AwsSecretsManager(config) => {
             #[cfg(feature = "aws")]
             {
-                return Ok(Arc::new(
+                Ok(Arc::new(
                     AwsSecretsManagerProvider::new(config.clone()).await?,
-                ));
+                ))
             }
             #[cfg(not(feature = "aws"))]
             {

@@ -91,15 +91,15 @@ static KID: OnceLock<String> = OnceLock::new();
 /// Initialize the backend JWT keys from pre-resolved secret values.
 /// Must be called once during State construction. Subsequent calls are no-ops.
 pub fn init(private_key_b64: Option<&str>, public_key_b64: Option<&str>, kid: Option<String>) {
-    if let Some(b64) = private_key_b64 {
-        if let Ok(pem) = STANDARD.decode(b64) {
-            let _ = PRIVATE_KEY_PEM.set(pem);
-        }
+    if let Some(b64) = private_key_b64
+        && let Ok(pem) = STANDARD.decode(b64)
+    {
+        let _ = PRIVATE_KEY_PEM.set(pem);
     }
-    if let Some(b64) = public_key_b64 {
-        if let Ok(pem) = STANDARD.decode(b64) {
-            let _ = PUBLIC_KEY_PEM.set(pem);
-        }
+    if let Some(b64) = public_key_b64
+        && let Ok(pem) = STANDARD.decode(b64)
+    {
+        let _ = PUBLIC_KEY_PEM.set(pem);
     }
     let _ = KID.set(kid.unwrap_or_else(|| "backend-es256-v1".to_string()));
 }

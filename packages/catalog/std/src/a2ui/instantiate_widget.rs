@@ -151,10 +151,10 @@ fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
             .unwrap_or(VariableType::String);
 
         let pin = node.add_input_pin(&pin_name, &label, &format!("Bound: {path}"), var_type);
-        if let Some(entry) = data_entry {
-            if let Some(d) = flow_like_types::json::to_vec(&entry.value).ok() {
-                pin.default_value = Some(d);
-            }
+        if let Some(entry) = data_entry
+            && let Ok(d) = flow_like_types::json::to_vec(&entry.value)
+        {
+            pin.default_value = Some(d);
         }
     }
 
@@ -417,10 +417,10 @@ impl NodeLogic for InstantiateWidget {
         for path in &bound_paths {
             let safe_key = path.replace('/', "_");
             let pin_name = format!("{DYNAMIC_PIN_PREFIX}path_{safe_key}");
-            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await {
-                if !val.is_null() {
-                    data_values.insert(path.clone(), val);
-                }
+            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await
+                && !val.is_null()
+            {
+                data_values.insert(path.clone(), val);
             }
         }
 
@@ -428,10 +428,10 @@ impl NodeLogic for InstantiateWidget {
         let mut exposed_prop_values = flow_like_types::json::Map::new();
         for prop in &widget.exposed_props {
             let pin_name = format!("{DYNAMIC_PIN_PREFIX}prop_{}", prop.id);
-            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await {
-                if !val.is_null() {
-                    exposed_prop_values.insert(prop.id.clone(), val);
-                }
+            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await
+                && !val.is_null()
+            {
+                exposed_prop_values.insert(prop.id.clone(), val);
             }
         }
 
@@ -439,10 +439,10 @@ impl NodeLogic for InstantiateWidget {
         let mut customization_values = flow_like_types::json::Map::new();
         for opt in &widget.customization_options {
             let pin_name = format!("{DYNAMIC_PIN_PREFIX}cust_{}", opt.id);
-            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await {
-                if !val.is_null() {
-                    customization_values.insert(opt.id.clone(), val);
-                }
+            if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await
+                && !val.is_null()
+            {
+                customization_values.insert(opt.id.clone(), val);
             }
         }
 
@@ -484,10 +484,10 @@ impl NodeLogic for InstantiateWidget {
                 return id.to_string();
             }
             let prefix = format!("{}-", widget_id);
-            if let Some(stripped) = id.strip_prefix(&prefix) {
-                if component_ids.contains(&stripped) {
-                    return stripped.to_string();
-                }
+            if let Some(stripped) = id.strip_prefix(&prefix)
+                && component_ids.contains(&stripped)
+            {
+                return stripped.to_string();
             }
             id.to_string()
         };
@@ -521,28 +521,22 @@ impl NodeLogic for InstantiateWidget {
                 if let Some(comp) = inline_components
                     .iter_mut()
                     .find(|c| c.get("id").and_then(|id| id.as_str()) == Some(target_id.as_str()))
+                    && let Some(comp_data) = comp.get_mut("component")
                 {
-                    if let Some(comp_data) = comp.get_mut("component") {
-                        set_nested_property(
-                            comp_data,
-                            &prop.property_path,
-                            value_to_bound_value(val),
-                        );
-                    }
+                    set_nested_property(comp_data, &prop.property_path, value_to_bound_value(val));
                 }
             }
         }
 
         // Apply customization values to the root component
         for opt in &widget.customization_options {
-            if let Some(val) = customization_values.get(&opt.id) {
-                if let Some(comp) = inline_components.iter_mut().find(|c| {
+            if let Some(val) = customization_values.get(&opt.id)
+                && let Some(comp) = inline_components.iter_mut().find(|c| {
                     c.get("id").and_then(|id| id.as_str()) == Some(effective_root_id.as_str())
-                }) {
-                    if let Some(comp_data) = comp.get_mut("component") {
-                        set_nested_property(comp_data, &opt.id, val.clone());
-                    }
-                }
+                })
+                && let Some(comp_data) = comp.get_mut("component")
+            {
+                set_nested_property(comp_data, &opt.id, val.clone());
             }
         }
 

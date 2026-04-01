@@ -12,10 +12,7 @@ use flow_like_types::{Value, create_id, json};
 use futures::{StreamExt, TryStreamExt};
 use tauri::AppHandle;
 
-use crate::{
-    functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriSettingsState},
-};
+use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
 
 async fn current_user_sub(_app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
     Ok("local".to_string())

@@ -194,7 +194,7 @@ pub async fn register_push_target(
         active.installation_id = Set(provider_registration.installation_id.clone());
         active.channel_id = Set(body.channel_id.clone());
         active.device_name = Set(body.device_name.clone());
-        active.metadata = Set(body.metadata.clone().map(Into::into));
+        active.metadata = Set(body.metadata.clone());
         active.push_enabled = Set(true);
         active.invalidated_at = Set(None);
         active.invalidation_reason = Set(None);
@@ -215,7 +215,7 @@ pub async fn register_push_target(
             installation_id: Set(provider_registration.installation_id),
             channel_id: Set(body.channel_id.clone()),
             device_name: Set(body.device_name.clone()),
-            metadata: Set(body.metadata.clone().map(Into::into)),
+            metadata: Set(body.metadata.clone()),
             push_enabled: Set(true),
             last_registered_at: Set(now),
             last_seen_at: Set(now),

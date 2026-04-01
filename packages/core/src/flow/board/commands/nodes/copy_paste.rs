@@ -282,14 +282,11 @@ impl Command for CopyPasteCommand {
                     // Translate function_layer_id when pasting CallFunction nodes
                     if pin.name == "function_layer_id"
                         && let Some(ref_bytes) = pin.default_value.as_ref()
+                        && let Ok(layer_ref) = from_slice::<String>(ref_bytes)
+                        && let Some(new_layer_id) = layer_translation.get(&layer_ref)
+                        && let Ok(bytes) = flow_like_types::json::to_vec(new_layer_id)
                     {
-                        if let Ok(layer_ref) = from_slice::<String>(ref_bytes) {
-                            if let Some(new_layer_id) = layer_translation.get(&layer_ref) {
-                                if let Ok(bytes) = flow_like_types::json::to_vec(new_layer_id) {
-                                    pin.default_value = Some(bytes);
-                                }
-                            }
-                        }
+                        pin.default_value = Some(bytes);
                     }
 
                     // Only override schema/options from the blueprint if the blueprint

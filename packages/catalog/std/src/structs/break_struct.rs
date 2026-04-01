@@ -326,12 +326,12 @@ impl NodeLogic for BreakStructNode {
             if node.pins.iter().any(|(_, p)| p.name == pin_id) {
                 if var_type == VariableType::Struct {
                     let standalone = build_standalone_schema(prop_schema, &schema);
-                    if let Ok(sub_schema_str) = flow_like_types::json::to_string(&standalone) {
-                        if let Some(existing_pin) = node.get_pin_mut_by_name(&pin_id) {
-                            existing_pin.schema = Some(sub_schema_str);
-                            existing_pin
-                                .set_options(PinOptions::new().set_enforce_schema(false).build());
-                        }
+                    if let Ok(sub_schema_str) = flow_like_types::json::to_string(&standalone)
+                        && let Some(existing_pin) = node.get_pin_mut_by_name(&pin_id)
+                    {
+                        existing_pin.schema = Some(sub_schema_str);
+                        existing_pin
+                            .set_options(PinOptions::new().set_enforce_schema(false).build());
                     }
                 }
                 index += 1;

@@ -236,10 +236,10 @@ fn max_id(xml: &str) -> u32 {
     let mut max = 0u32;
     for cap in xml.match_indices("id=\"") {
         let rest = &xml[cap.0 + 4..];
-        if let Some(end) = rest.find('"') {
-            if let Ok(n) = rest[..end].parse::<u32>() {
-                max = max.max(n);
-            }
+        if let Some(end) = rest.find('"')
+            && let Ok(n) = rest[..end].parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max

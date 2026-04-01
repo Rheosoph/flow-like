@@ -147,13 +147,13 @@ fn replace_in_object(object: &mut Object, placeholder: &str, replacement: &str) 
     let mut count = 0i64;
     match *object {
         Object::String(ref mut bytes, _) => {
-            if let Ok(text) = std::str::from_utf8(bytes) {
-                if text.contains(placeholder) {
-                    let new_text = text.replace(placeholder, replacement);
-                    let occurrences = text.matches(placeholder).count() as i64;
-                    *bytes = new_text.into_bytes();
-                    count += occurrences;
-                }
+            if let Ok(text) = std::str::from_utf8(bytes)
+                && text.contains(placeholder)
+            {
+                let new_text = text.replace(placeholder, replacement);
+                let occurrences = text.matches(placeholder).count() as i64;
+                *bytes = new_text.into_bytes();
+                count += occurrences;
             }
         }
         Object::Array(ref mut arr) => {
@@ -170,13 +170,13 @@ fn replace_in_object(object: &mut Object, placeholder: &str, replacement: &str) 
             for (_key, value) in stream.dict.iter_mut() {
                 count += replace_in_object(value, placeholder, replacement);
             }
-            if let Ok(text) = std::str::from_utf8(&stream.content) {
-                if text.contains(placeholder) {
-                    let new_text = text.replace(placeholder, replacement);
-                    let occurrences = text.matches(placeholder).count() as i64;
-                    stream.content = new_text.into_bytes();
-                    count += occurrences;
-                }
+            if let Ok(text) = std::str::from_utf8(&stream.content)
+                && text.contains(placeholder)
+            {
+                let new_text = text.replace(placeholder, replacement);
+                let occurrences = text.matches(placeholder).count() as i64;
+                stream.content = new_text.into_bytes();
+                count += occurrences;
             }
         }
         _ => {}

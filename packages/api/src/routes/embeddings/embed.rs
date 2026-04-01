@@ -457,10 +457,7 @@ async fn call_internal(
         .await
         .map(|s| s.expose_secret().to_string())
         .map_err(|_| {
-            ApiError::internal(format!(
-                "Secret '{}' not found",
-                INTERNAL_EMBEDDING_SECRET
-            ))
+            ApiError::internal(format!("Secret '{}' not found", INTERNAL_EMBEDDING_SECRET))
         })?;
 
     // Apply prefix based on embed_type

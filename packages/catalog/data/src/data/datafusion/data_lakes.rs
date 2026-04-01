@@ -490,12 +490,10 @@ impl NodeLogic for DeltaTableInfoNode {
                 let schema = snapshot.schema();
                 let fields: Vec<DeltaSchemaField> = schema
                     .fields()
-                    .map(|f| {
-                        DeltaSchemaField {
-                            name: f.name().to_string(),
-                            field_type: format!("{:?}", f.data_type()),
-                            nullable: f.is_nullable(),
-                        }
+                    .map(|f| DeltaSchemaField {
+                        name: f.name().to_string(),
+                        field_type: format!("{:?}", f.data_type()),
+                        nullable: f.is_nullable(),
                     })
                     .collect();
                 DeltaSchemaInfo { fields }
@@ -507,11 +505,9 @@ impl NodeLogic for DeltaTableInfoNode {
                 .history(Some(history_limit as usize))
                 .await
                 .map(|h| {
-                    h.map(|entry| {
-                        DeltaHistoryEntry {
-                            timestamp: entry.timestamp.map(|ts| ts.to_string()),
-                            operation: entry.operation,
-                        }
+                    h.map(|entry| DeltaHistoryEntry {
+                        timestamp: entry.timestamp.map(|ts| ts.to_string()),
+                        operation: entry.operation,
                     })
                     .collect()
                 })

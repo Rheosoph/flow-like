@@ -30,28 +30,28 @@ use crate::state::{AppState, CachedAuth};
 pub struct ClientIp(pub Option<String>);
 
 fn extract_client_ip(request: &Request) -> Option<String> {
-    if let Some(forwarded) = request.headers().get("x-forwarded-for") {
-        if let Ok(val) = forwarded.to_str() {
-            // X-Forwarded-For can contain multiple IPs; the first is the original client
-            return val.split(',').next().map(|ip| ip.trim().to_string());
-        }
+    if let Some(forwarded) = request.headers().get("x-forwarded-for")
+        && let Ok(val) = forwarded.to_str()
+    {
+        // X-Forwarded-For can contain multiple IPs; the first is the original client
+        return val.split(',').next().map(|ip| ip.trim().to_string());
     }
-    if let Some(real_ip) = request.headers().get("x-real-ip") {
-        if let Ok(val) = real_ip.to_str() {
-            return Some(val.trim().to_string());
-        }
+    if let Some(real_ip) = request.headers().get("x-real-ip")
+        && let Ok(val) = real_ip.to_str()
+    {
+        return Some(val.trim().to_string());
     }
     None
 }
 
 fn pat_id_from_token(pat_str: &str) -> Result<String> {
     if !pat_str.starts_with("pat_") {
-        return Err(anyhow!("Not a PAT")).into();
+        return Err(anyhow!("Not a PAT"));
     }
     let pat_parts = &pat_str[4..];
     let parts: Vec<&str> = pat_parts.split('.').collect();
     if parts.len() != 2 {
-        return Err(anyhow!("Invalid PAT format")).into();
+        return Err(anyhow!("Invalid PAT format"));
     }
     Ok(parts[0].to_string())
 }

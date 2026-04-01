@@ -4,14 +4,12 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QuerySelect,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
-    ensure_in_project, ensure_permission,
+    ensure_permission,
     entity::{
         app_package, membership, meta, sea_orm_active_enums::WasmPackageVisibility, wasm_package,
     },

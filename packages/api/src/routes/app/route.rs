@@ -6,7 +6,7 @@ pub mod upsert_route;
 
 use axum::{
     Router,
-    routing::{delete, get, post, put},
+    routing::{get, put},
 };
 
 use crate::state::AppState;

@@ -2,10 +2,7 @@ pub mod get_comments;
 pub mod remove_comment;
 pub mod upsert_comment;
 
-use axum::{
-    Router,
-    routing::{get, put},
-};
+use axum::{Router, routing::get};
 
 use crate::state::AppState;
 

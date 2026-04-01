@@ -411,32 +411,33 @@ pub async fn get_meta(
     let prefix = FlowPath::from("media")
         .child("packages")
         .child(package_id.as_str());
-    if let Ok(master_creds) = state.master_credentials().await {
-        if let Ok(store) = master_creds.to_store(false).await {
-            if let Some(icon) = &resp.icon {
-                if !icon.starts_with("http://") && !icon.starts_with("https://") {
-                    let path = prefix.child(format!("{icon}.webp"));
-                    if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
-                        resp.icon = Some(url.to_string());
-                    }
-                }
+    if let Ok(master_creds) = state.master_credentials().await
+        && let Ok(store) = master_creds.to_store(false).await
+    {
+        if let Some(icon) = &resp.icon
+            && !icon.starts_with("http://")
+            && !icon.starts_with("https://")
+        {
+            let path = prefix.child(format!("{icon}.webp"));
+            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                resp.icon = Some(url.to_string());
             }
-            if let Some(thumb) = &resp.thumbnail {
-                if !thumb.starts_with("http://") && !thumb.starts_with("https://") {
-                    let path = prefix.child(format!("{thumb}.webp"));
-                    if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
-                        resp.thumbnail = Some(url.to_string());
-                    }
-                }
+        }
+        if let Some(thumb) = &resp.thumbnail
+            && !thumb.starts_with("http://")
+            && !thumb.starts_with("https://")
+        {
+            let path = prefix.child(format!("{thumb}.webp"));
+            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                resp.thumbnail = Some(url.to_string());
             }
-            if let Some(media) = &mut resp.preview_media {
-                for item in media.iter_mut() {
-                    if !item.starts_with("http://") && !item.starts_with("https://") {
-                        let path = prefix.child(format!("{item}.webp"));
-                        if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await
-                        {
-                            *item = url.to_string();
-                        }
+        }
+        if let Some(media) = &mut resp.preview_media {
+            for item in media.iter_mut() {
+                if !item.starts_with("http://") && !item.starts_with("https://") {
+                    let path = prefix.child(format!("{item}.webp"));
+                    if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                        *item = url.to_string();
                     }
                 }
             }

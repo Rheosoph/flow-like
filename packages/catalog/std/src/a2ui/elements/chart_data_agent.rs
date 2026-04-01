@@ -10,9 +10,9 @@ use flow_like::{
 };
 use flow_like_types::{async_trait, json::json};
 
-use flow_like_catalog_data::data::datafusion::session::DataFusionSession;
 #[cfg(feature = "execute")]
 use flow_like_catalog_data::data::datafusion::query::batches_to_rows;
+use flow_like_catalog_data::data::datafusion::session::DataFusionSession;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::history::{History, HistoryMessage, Role};
 #[cfg(feature = "execute")]
@@ -93,7 +93,11 @@ Respond with ONLY a JSON object (no markdown fences):
 fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
-    if end >= start { Some(&text[start..=end]) } else { None }
+    if end >= start {
+        Some(&text[start..=end])
+    } else {
+        None
+    }
 }
 
 #[crate::register_node]
@@ -129,7 +133,12 @@ impl NodeLogic for ChartDataAgent {
                 .build(),
         );
 
-        node.add_input_pin("exec_in", "Generate", "Trigger data generation", VariableType::Execution);
+        node.add_input_pin(
+            "exec_in",
+            "Generate",
+            "Trigger data generation",
+            VariableType::Execution,
+        );
 
         node.add_input_pin("model", "Model", "LLM model (Bit)", VariableType::Struct)
             .set_schema::<Bit>()
@@ -180,7 +189,12 @@ impl NodeLogic for ChartDataAgent {
         .set_schema::<NivoChartProps>()
         .set_options(PinOptions::new().set_enforce_schema(false).build());
 
-        node.add_output_pin("exec_out", "Done", "Fires when generation is complete", VariableType::Execution);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Fires when generation is complete",
+            VariableType::Execution,
+        );
 
         node.add_output_pin(
             "data",
@@ -292,7 +306,9 @@ impl NodeLogic for ChartDataAgent {
 
         context.set_pin_value("data", json!(rows)).await?;
         context.set_pin_value("sql", json!(sql)).await?;
-        context.set_pin_value("explanation", json!(explanation)).await?;
+        context
+            .set_pin_value("explanation", json!(explanation))
+            .await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

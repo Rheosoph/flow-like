@@ -4,8 +4,8 @@ use crate::{
     manifest::PackageManifest,
     registry::{
         CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
-        LocalRegistryState, PackageSource, PackageSummary, PackageVersion, PublishRequest,
-        PublishResponse, RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
+        LocalRegistryState, PackageSource, PackageVersion, PublishRequest, PublishResponse,
+        RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
     },
 };
 use anyhow::{anyhow, Result};

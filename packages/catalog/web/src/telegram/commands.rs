@@ -1211,7 +1211,7 @@ impl NodeLogic for SetChatMenuButtonNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
-#[cfg(feature = "execute")]
+        #[cfg(feature = "execute")]
         use teloxide::types::{MenuButton, WebAppInfo};
 
         let menu_button = match menu_type.as_str() {
@@ -1352,7 +1352,7 @@ impl NodeLogic for GetChatMenuButtonNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
-#[cfg(feature = "execute")]
+        #[cfg(feature = "execute")]
         use teloxide::types::MenuButton;
 
         let mut request = cached_bot.bot.get_chat_menu_button();
@@ -1593,7 +1593,7 @@ impl NodeLogic for SetMyDefaultAdminRightsNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
-#[cfg(feature = "execute")]
+        #[cfg(feature = "execute")]
         use teloxide::types::ChatAdministratorRights;
 
         let rights = ChatAdministratorRights {

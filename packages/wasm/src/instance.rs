@@ -346,7 +346,7 @@ impl WasmInstance {
             let current_size = self.memory.data_size(&self.store) as u64;
             if end > current_size {
                 let page_size: u64 = 65536;
-                let needed_pages = (end.saturating_sub(current_size) + page_size - 1) / page_size;
+                let needed_pages = end.saturating_sub(current_size).div_ceil(page_size);
                 self.memory
                     .grow(&mut self.store, needed_pages)
                     .map_err(|e| {

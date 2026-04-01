@@ -178,11 +178,11 @@ pub async fn get_analytics_overview(
             .filter_map(|d| d.avg_feedback_rating)
             .sum();
         let mut count = rated_days.len();
-        if let Some(ref t) = today_stat {
-            if let Some(r) = t.avg_rating {
-                sum += r;
-                count += 1;
-            }
+        if let Some(ref t) = today_stat
+            && let Some(r) = t.avg_rating
+        {
+            sum += r;
+            count += 1;
         }
         if count == 0 {
             None
@@ -198,11 +198,11 @@ pub async fn get_analytics_overview(
     let avg_latency_ms = {
         let mut sum: f64 = latency_days.iter().filter_map(|d| d.avg_latency_ms).sum();
         let mut count = latency_days.len();
-        if let Some(ref t) = today_stat {
-            if let Some(l) = t.avg_latency {
-                sum += l;
-                count += 1;
-            }
+        if let Some(ref t) = today_stat
+            && let Some(l) = t.avg_latency
+        {
+            sum += l;
+            count += 1;
         }
         if count == 0 {
             None
@@ -330,10 +330,10 @@ pub async fn get_analytics_stats(
     };
 
     // Append today's live data if the requested range includes today
-    if end_date >= today {
-        if let Some(live) = compute_today_live(&state, &app_id).await? {
-            daily_stats.push(live.to_daily_stat());
-        }
+    if end_date >= today
+        && let Some(live) = compute_today_live(&state, &app_id).await?
+    {
+        daily_stats.push(live.to_daily_stat());
     }
 
     let total_executions: i64 = daily_stats.iter().map(|d| d.executions).sum();

@@ -179,10 +179,10 @@ fn sync_oauth_metadata(placed_node: &mut Node, catalog_node: &Node) {
 /// Called regardless of version sync because WASM modules may update their
 /// declared permissions independently of node schema version bumps.
 fn sync_wasm_permissions(placed_node: &mut Node, catalog_node: &Node) {
-    if let Some(catalog_wasm) = &catalog_node.wasm {
-        if let Some(placed_wasm) = &mut placed_node.wasm {
-            placed_wasm.permissions = catalog_wasm.permissions.clone();
-        }
+    if let Some(catalog_wasm) = &catalog_node.wasm
+        && let Some(placed_wasm) = &mut placed_node.wasm
+    {
+        placed_wasm.permissions = catalog_wasm.permissions.clone();
     }
 }
 

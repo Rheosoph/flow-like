@@ -258,14 +258,14 @@ impl CompletionModel {
 
         for message in &non_system {
             if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
-                if let Some(ref last) = last_role {
-                    if last == role {
-                        let placeholder_role = if role == "user" { "assistant" } else { "user" };
-                        normalized_messages.push(json!({
-                            "role": placeholder_role,
-                            "content": "[Placeholder message for proper alternation]",
-                        }));
-                    }
+                if let Some(ref last) = last_role
+                    && last == role
+                {
+                    let placeholder_role = if role == "user" { "assistant" } else { "user" };
+                    normalized_messages.push(json!({
+                        "role": placeholder_role,
+                        "content": "[Placeholder message for proper alternation]",
+                    }));
                 }
                 normalized_messages.push(message.clone());
                 last_role = Some(role.to_string());

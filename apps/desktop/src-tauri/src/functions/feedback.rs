@@ -3,7 +3,7 @@ use crate::state::TauriSettingsState;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct OfflineFeedback {

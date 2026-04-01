@@ -91,10 +91,10 @@ fn parse_og_tags(html: &str) -> OgMetadata {
                 .map(|v| v == prop_lower)
                 .unwrap_or(false);
 
-            if has_property || has_name {
-                if let Some(content) = get_attr_value(tag_lower, tag_orig, "content") {
-                    return Some(html_decode(content));
-                }
+            if (has_property || has_name)
+                && let Some(content) = get_attr_value(tag_lower, tag_orig, "content")
+            {
+                return Some(html_decode(content));
             }
         }
         None
@@ -129,23 +129,22 @@ fn parse_og_tags(html: &str) -> OgMetadata {
             let tag_orig = &html[abs_start..abs_end];
 
             let rel = get_attr_value(tag_lower, tag_lower, "rel").unwrap_or("");
-            if rel == "icon" || rel == "shortcut icon" {
-                if let Some(href) = get_attr_value(tag_lower, tag_orig, "href") {
-                    if !href.is_empty() {
-                        if href.starts_with("http") {
-                            return Some(href.to_string());
-                        }
-                        return Some(format!(
-                            "{}{}",
-                            base_url.trim_end_matches('/'),
-                            if href.starts_with('/') {
-                                href.to_string()
-                            } else {
-                                format!("/{}", href)
-                            }
-                        ));
-                    }
+            if (rel == "icon" || rel == "shortcut icon")
+                && let Some(href) = get_attr_value(tag_lower, tag_orig, "href")
+                && !href.is_empty()
+            {
+                if href.starts_with("http") {
+                    return Some(href.to_string());
                 }
+                return Some(format!(
+                    "{}{}",
+                    base_url.trim_end_matches('/'),
+                    if href.starts_with('/') {
+                        href.to_string()
+                    } else {
+                        format!("/{}", href)
+                    }
+                ));
             }
             search_from = abs_end;
         }
@@ -199,7 +198,7 @@ pub async fn fetch_og_metadata(
     Query(params): Query<OgQuery>,
 ) -> Result<Json<OgMetadata>, ApiError> {
     let url = params.url.trim().to_string();
-    tracing::Span::current().record("url", &url.as_str());
+    tracing::Span::current().record("url", url.as_str());
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(ApiError::bad_request(

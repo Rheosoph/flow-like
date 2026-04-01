@@ -152,7 +152,7 @@ pub async fn prerun_board(
                     let entry = wasm_perms.entry(wasm.package_id.clone()).or_default();
                     for perm in &wasm.permissions {
                         if !entry.contains(perm) {
-                            entry.push(perm.clone());
+                            entry.push(*perm);
                         }
                     }
                 }

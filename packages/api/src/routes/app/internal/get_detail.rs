@@ -105,15 +105,14 @@ pub async fn get_detail(
     let mut app: App = app_model.clone().into();
 
     // Load scoped data for members
-    if is_member {
-        if let Ok(sub) = user.sub() {
-            if let Ok(scoped_app) = state.master_app(&sub, &app_id, &state).await {
-                app.bits = scoped_app.bits;
-                app.boards = scoped_app.boards;
-                app.templates = scoped_app.templates;
-                app.events = scoped_app.events;
-            }
-        }
+    if is_member
+        && let Ok(sub) = user.sub()
+        && let Ok(scoped_app) = state.master_app(&sub, &app_id, &state).await
+    {
+        app.bits = scoped_app.bits;
+        app.boards = scoped_app.boards;
+        app.templates = scoped_app.templates;
+        app.events = scoped_app.events;
     }
 
     // Load metadata

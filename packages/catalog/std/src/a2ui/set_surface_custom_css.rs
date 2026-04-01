@@ -71,7 +71,7 @@ impl NodeLogic for SetSurfaceCustomCss {
             .stream_a2ui_set_canvas_settings(
                 &surface_id,
                 CanvasSettings {
-                    custom_css: custom_css,
+                    custom_css,
                     ..Default::default()
                 },
             )

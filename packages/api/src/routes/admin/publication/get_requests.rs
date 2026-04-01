@@ -259,26 +259,28 @@ pub async fn get_requests(
         let prefix = flow_like_storage::Path::from("media")
             .child("apps")
             .child(r.app_id.clone());
-        if let Some(ref icon) = app_icon {
-            if !icon.starts_with("http://") && !icon.starts_with("https://") {
-                let icon_path = prefix.child(format!("{icon}.webp"));
-                if let Ok(url) = store
-                    .sign("GET", &icon_path, std::time::Duration::from_secs(60 * 60))
-                    .await
-                {
-                    app_icon = Some(url.to_string());
-                }
+        if let Some(ref icon) = app_icon
+            && !icon.starts_with("http://")
+            && !icon.starts_with("https://")
+        {
+            let icon_path = prefix.child(format!("{icon}.webp"));
+            if let Ok(url) = store
+                .sign("GET", &icon_path, std::time::Duration::from_secs(60 * 60))
+                .await
+            {
+                app_icon = Some(url.to_string());
             }
         }
-        if let Some(ref thumb) = app_thumbnail {
-            if !thumb.starts_with("http://") && !thumb.starts_with("https://") {
-                let thumb_path = prefix.child(format!("{thumb}.webp"));
-                if let Ok(url) = store
-                    .sign("GET", &thumb_path, std::time::Duration::from_secs(60 * 60))
-                    .await
-                {
-                    app_thumbnail = Some(url.to_string());
-                }
+        if let Some(ref thumb) = app_thumbnail
+            && !thumb.starts_with("http://")
+            && !thumb.starts_with("https://")
+        {
+            let thumb_path = prefix.child(format!("{thumb}.webp"));
+            if let Ok(url) = store
+                .sign("GET", &thumb_path, std::time::Duration::from_secs(60 * 60))
+                .await
+            {
+                app_thumbnail = Some(url.to_string());
             }
         }
 

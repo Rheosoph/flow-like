@@ -88,10 +88,8 @@ pub async fn evaluate_pin_value(
         // dependency chain over shared pin values. Shared pins may carry stale
         // data from previous invocations due to dual-write. Only fall back to
         // shared pin at leaf pins (no deps) where it's the sole value source.
-        if !has_overrides {
-            if let Some(value) = current_pin.get_raw_value().await {
-                return Ok(value);
-            }
+        if !has_overrides && let Some(value) = current_pin.get_raw_value().await {
+            return Ok(value);
         }
 
         if let Some(dep_pin) = has_deps {
@@ -100,10 +98,8 @@ pub async fn evaluate_pin_value(
         }
 
         // Leaf pin — no dependency chain to follow. Use shared pin or default.
-        if has_overrides {
-            if let Some(value) = current_pin.get_raw_value().await {
-                return Ok(value);
-            }
+        if has_overrides && let Some(value) = current_pin.get_raw_value().await {
+            return Ok(value);
         }
 
         if let Some(default_value) = &current_pin.default_value {

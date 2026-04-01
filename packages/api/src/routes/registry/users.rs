@@ -225,10 +225,10 @@ pub async fn accept_invitation(
         return Err(ApiError::bad_request("Invitation is no longer pending"));
     }
 
-    if let Some(expires_at) = invitation.expires_at {
-        if chrono::Utc::now().naive_utc() > expires_at {
-            return Err(ApiError::bad_request("Invitation has expired"));
-        }
+    if let Some(expires_at) = invitation.expires_at
+        && chrono::Utc::now().naive_utc() > expires_at
+    {
+        return Err(ApiError::bad_request("Invitation has expired"));
     }
 
     let now = chrono::Utc::now().naive_utc();

@@ -143,15 +143,13 @@ impl State {
 
         // Initialize backend JWT keys from the secret store
         {
-           let backend_key = secrets
+            let backend_key = secrets
                 .get_secret_string(&SecretRef::new("BACKEND_KEY"))
                 .await;
             if let Err(ref e) = backend_key {
                 tracing::error!("Failed to fetch BACKEND_KEY from secret store: {e}");
             }
-            let backend_key = backend_key
-                .ok()
-                .map(|s| s.expose_secret().to_string());
+            let backend_key = backend_key.ok().map(|s| s.expose_secret().to_string());
             tracing::info!(
                 "BACKEND_KEY resolved: {}",
                 if backend_key.is_some() { "yes" } else { "no" }
@@ -225,7 +223,7 @@ impl State {
             let exposed = stripe_key.expose_secret();
             let preview: String = exposed.chars().take(8).collect();
             tracing::info!("Stripe client initialized (key starts with: {preview}…)");
-            let stripe_client = stripe::Client::new(exposed.clone());
+            let stripe_client = stripe::Client::new(exposed);
             Some(stripe_client)
         } else {
             None

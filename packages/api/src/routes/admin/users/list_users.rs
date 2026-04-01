@@ -96,18 +96,18 @@ pub async fn list_users(
 
     let mut select = user::Entity::find();
 
-    if let Some(q) = &query.query {
-        if !q.is_empty() {
-            let pattern = format!("%{}%", q);
-            select = select.filter(
-                user::Column::Email
-                    .like(&pattern)
-                    .or(user::Column::Username.like(&pattern))
-                    .or(user::Column::PreferredUsername.like(&pattern))
-                    .or(user::Column::Name.like(&pattern))
-                    .or(user::Column::Id.like(&pattern)),
-            );
-        }
+    if let Some(q) = &query.query
+        && !q.is_empty()
+    {
+        let pattern = format!("%{}%", q);
+        select = select.filter(
+            user::Column::Email
+                .like(&pattern)
+                .or(user::Column::Username.like(&pattern))
+                .or(user::Column::PreferredUsername.like(&pattern))
+                .or(user::Column::Name.like(&pattern))
+                .or(user::Column::Id.like(&pattern)),
+        );
     }
 
     if let Some(status) = &query.status {

@@ -103,22 +103,22 @@ impl NodeLogic for PdfRotatePagesNode {
             if !target_indices.contains(&idx) {
                 continue;
             }
-            if let Ok(page) = doc.get_object_mut(page_id) {
-                if let Object::Dictionary(dict) = page {
-                    let current = dict
-                        .get(b"Rotate")
-                        .ok()
-                        .and_then(|o| {
-                            if let Object::Integer(n) = o {
-                                Some(*n)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-                    let new_rotation = (current + rotation) % 360;
-                    dict.set("Rotate", Object::Integer(new_rotation));
-                }
+            if let Ok(page) = doc.get_object_mut(page_id)
+                && let Object::Dictionary(dict) = page
+            {
+                let current = dict
+                    .get(b"Rotate")
+                    .ok()
+                    .and_then(|o| {
+                        if let Object::Integer(n) = o {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let new_rotation = (current + rotation) % 360;
+                dict.set("Rotate", Object::Integer(new_rotation));
             }
         }
 

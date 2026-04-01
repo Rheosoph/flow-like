@@ -243,12 +243,11 @@ pub async fn developer_remove_project(
 
     if let Some(project) = removed_project {
         let project_path = PathBuf::from(&project.path);
-        if let Ok(wasm_path) = find_wasm_file(&project_path) {
-            if let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path) {
-                if let Ok(client) = TauriRegistryState::get_client(&app_handle).await {
-                    let _ = client.unregister_local_package(&manifest.id).await;
-                }
-            }
+        if let Ok(wasm_path) = find_wasm_file(&project_path)
+            && let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path)
+            && let Ok(client) = TauriRegistryState::get_client(&app_handle).await
+        {
+            let _ = client.unregister_local_package(&manifest.id).await;
         }
     }
 
@@ -1108,10 +1107,10 @@ async fn register_developer_package(
     wasm_path: &Path,
     manifest: PackageManifest,
 ) {
-    if let Ok(client) = TauriRegistryState::get_client(app_handle).await {
-        if let Err(e) = client.register_local_package(wasm_path, manifest).await {
-            tracing::debug!("Failed to register developer package in registry: {}", e);
-        }
+    if let Ok(client) = TauriRegistryState::get_client(app_handle).await
+        && let Err(e) = client.register_local_package(wasm_path, manifest).await
+    {
+        tracing::debug!("Failed to register developer package in registry: {}", e);
     }
 }
 
@@ -1140,10 +1139,10 @@ pub async fn register_all_developer_packages(app_handle: &AppHandle) {
 
     for project in &store.projects {
         let project_path = PathBuf::from(&project.path);
-        if let Ok(wasm_path) = find_wasm_file(&project_path) {
-            if let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path) {
-                register_developer_package(app_handle, &wasm_path, manifest).await;
-            }
+        if let Ok(wasm_path) = find_wasm_file(&project_path)
+            && let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path)
+        {
+            register_developer_package(app_handle, &wasm_path, manifest).await;
         }
     }
 

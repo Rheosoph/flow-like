@@ -286,10 +286,10 @@ fn collect_xobject_refs(
         Err(_) => return Ok(refs),
     };
 
-    if let Ok(entry) = xobj_dict.get(target_name) {
-        if let Ok(id) = entry.as_reference() {
-            refs.push(id);
-        }
+    if let Ok(entry) = xobj_dict.get(target_name)
+        && let Ok(id) = entry.as_reference()
+    {
+        refs.push(id);
     }
 
     Ok(refs)

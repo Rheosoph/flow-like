@@ -14,8 +14,7 @@ use tauri::{AppHandle, Manager};
 use teloxide::prelude::*;
 use teloxide::respond;
 use teloxide::types::{
-    CallbackQuery, ChatId, InputFile, MediaKind, MediaText, MessageKind, ParseMode,
-    ReplyParameters,
+    CallbackQuery, ChatId, InputFile, MediaKind, MediaText, MessageKind, ParseMode, ReplyParameters,
 };
 
 use crate::utils::UiEmitTarget;

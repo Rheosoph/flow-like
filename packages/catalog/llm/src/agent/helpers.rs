@@ -372,8 +372,7 @@ async fn manage_context_budget(
 #[cfg(feature = "execute")]
 fn sanitize_tool_description(value: &str) -> String {
     value
-        .replace('"', "'")
-        .replace('`', "'")
+        .replace(['"', '`'], "'")
         .chars()
         .map(|ch| {
             if ch.is_control() && ch != '\n' && ch != '\t' {
@@ -589,9 +588,7 @@ pub async fn generate_tool_from_function(
             }
         }
 
-        let props = schema_value
-            .get("properties")
-            .and_then(|p| p.as_object())?;
+        let props = schema_value.get("properties").and_then(|p| p.as_object())?;
 
         let mut nested_props: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();
         for (prop_name, prop_schema) in props {
@@ -1478,16 +1475,16 @@ pub async fn execute_agent_streaming(
                 ),
                 LogLevel::Debug,
             );
-            if agent.memory.is_some() {
-                if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
-                    context.log_message(
-                        &format!(
-                            "Failed to store evicted messages to memory (non-fatal): {}",
-                            e
-                        ),
-                        LogLevel::Warn,
-                    );
-                }
+            if agent.memory.is_some()
+                && let Err(e) = store_evicted_to_memory(context, agent, &evicted).await
+            {
+                context.log_message(
+                    &format!(
+                        "Failed to store evicted messages to memory (non-fatal): {}",
+                        e
+                    ),
+                    LogLevel::Warn,
+                );
             }
         }
     }
@@ -1994,16 +1991,16 @@ pub async fn execute_agent_streaming(
                     ),
                     LogLevel::Debug,
                 );
-                if agent.memory.is_some() {
-                    if let Err(e) = store_evicted_to_memory(context, agent, &evicted).await {
-                        context.log_message(
-                            &format!(
-                                "Failed to store evicted messages to memory (non-fatal): {}",
-                                e
-                            ),
-                            LogLevel::Warn,
-                        );
-                    }
+                if agent.memory.is_some()
+                    && let Err(e) = store_evicted_to_memory(context, agent, &evicted).await
+                {
+                    context.log_message(
+                        &format!(
+                            "Failed to store evicted messages to memory (non-fatal): {}",
+                            e
+                        ),
+                        LogLevel::Warn,
+                    );
                 }
             }
         }
@@ -2455,19 +2452,19 @@ async fn store_evicted_to_memory(
         match msg {
             rig::message::Message::User { content } => {
                 for c in content.iter() {
-                    if let rig::message::UserContent::Text(t) = c {
-                        if !t.text.is_empty() {
-                            text_parts.push(format!("[user] {}", t.text));
-                        }
+                    if let rig::message::UserContent::Text(t) = c
+                        && !t.text.is_empty()
+                    {
+                        text_parts.push(format!("[user] {}", t.text));
                     }
                 }
             }
             rig::message::Message::Assistant { content, .. } => {
                 for c in content.iter() {
-                    if let AssistantContent::Text(t) = c {
-                        if !t.text.is_empty() {
-                            text_parts.push(format!("[assistant] {}", t.text));
-                        }
+                    if let AssistantContent::Text(t) = c
+                        && !t.text.is_empty()
+                    {
+                        text_parts.push(format!("[assistant] {}", t.text));
                     }
                 }
             }

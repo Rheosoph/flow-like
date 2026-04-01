@@ -1,7 +1,7 @@
 use flow_like_types::{FromProto, ToProto};
 
 use crate::flow::{
-    node::{FnRefs, Node, NodePermission, NodeScores, NodeWasm},
+    node::{FnRefs, Node, NodeScores, NodeWasm},
     pin::Pin,
 };
 

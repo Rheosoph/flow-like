@@ -839,10 +839,7 @@ impl InternalNode {
             .await
             .map_err(|err| {
                 let err_string = format!("Failed to get error handling nodes: {}", err);
-                context.log_message(
-                    &err_string,
-                    LogLevel::Error,
-                );
+                context.log_message(&err_string, LogLevel::Error);
                 InternalNodeError::ExecutionFailed(error.to_string())
             })?;
 

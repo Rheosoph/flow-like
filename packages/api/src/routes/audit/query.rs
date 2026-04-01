@@ -9,7 +9,6 @@ use crate::{
     audit::service::{AuditEntryOutput, AuditFilter, AuditService},
     error::ApiError,
     middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
     state::AppState,
 };
 
@@ -44,7 +43,7 @@ pub async fn query_audit_entries(
     Extension(user): Extension<AppUser>,
     Query(params): Query<AuditQueryParams>,
 ) -> Result<Json<Vec<AuditEntryOutput>>, ApiError> {
-    let sub = user.sub()?;
+    let _sub = user.sub()?;
 
     // If querying a specific chain, verify the user has access
     if let Some(ref chain_id) = params.chain_id {
@@ -67,7 +66,7 @@ pub async fn query_audit_entries(
 
     let entries = AuditService::query(&state.db, filter)
         .await
-        .map_err(|e| ApiError::internal_error(e))?;
+        .map_err(ApiError::internal_error)?;
 
     let output: Vec<AuditEntryOutput> = entries.into_iter().map(Into::into).collect();
     Ok(Json(output))

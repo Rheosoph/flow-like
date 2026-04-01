@@ -15,7 +15,7 @@
 //! - **KubernetesJob**: Spawn a dedicated K8s Job per compilation
 
 use crate::compilation::jwt::{self, CompilerJwtParams};
-use crate::routes::registry::server::{TargetSpec, all_known_targets, compilation_targets};
+use crate::routes::registry::server::all_known_targets;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
@@ -48,10 +48,10 @@ pub enum CompilationBackend {
 impl CompilationBackend {
     pub fn from_env() -> Self {
         // Explicit configuration always wins
-        if let Ok(val) = std::env::var("COMPILATION_BACKEND") {
-            if !val.is_empty() {
-                return Self::from_env_var("COMPILATION_BACKEND");
-            }
+        if let Ok(val) = std::env::var("COMPILATION_BACKEND")
+            && !val.is_empty()
+        {
+            return Self::from_env_var("COMPILATION_BACKEND");
         }
 
         // Auto-detect on Lambda: prefer SQS (queue) over LambdaInvoke (direct)

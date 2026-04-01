@@ -41,17 +41,14 @@ pub enum TelegramBroadcastEvent {
 #[cfg(feature = "execute")]
 fn tg_broadcasters() -> &'static RwLock<HashMap<String, broadcast::Sender<TelegramBroadcastEvent>>>
 {
-    static INSTANCE: OnceLock<
-        RwLock<HashMap<String, broadcast::Sender<TelegramBroadcastEvent>>>,
-    > = OnceLock::new();
+    static INSTANCE: OnceLock<RwLock<HashMap<String, broadcast::Sender<TelegramBroadcastEvent>>>> =
+        OnceLock::new();
     INSTANCE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Subscribe to Telegram updates for a specific bot (keyed by token).
 #[cfg(feature = "execute")]
-pub async fn subscribe_tg_updates(
-    bot_token: &str,
-) -> broadcast::Receiver<TelegramBroadcastEvent> {
+pub async fn subscribe_tg_updates(bot_token: &str) -> broadcast::Receiver<TelegramBroadcastEvent> {
     {
         let read = tg_broadcasters().read().await;
         if let Some(sender) = read.get(bot_token) {

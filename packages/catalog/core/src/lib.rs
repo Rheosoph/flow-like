@@ -79,5 +79,3 @@ impl NodeConstructor {
         (self.constructor)()
     }
 }
-
-

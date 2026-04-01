@@ -73,19 +73,17 @@ impl SecretProvider for AwsParameterStoreProvider {
                 request = request.next_token(token);
             }
 
-            let output = request.send().await.map_err(|error| {
-                SecretError::provider_failure(self.kind(), error.to_string())
-            })?;
+            let output = request
+                .send()
+                .await
+                .map_err(|error| SecretError::provider_failure(self.kind(), error.to_string()))?;
 
             if let Some(parameters) = output.parameters {
                 for param in parameters {
                     let Some(name) = param.name else { continue };
                     let Some(value) = param.value else { continue };
                     // Strip the prefix path to get the bare key
-                    let bare_key = name
-                        .strip_prefix(&path)
-                        .unwrap_or(&name)
-                        .to_string();
+                    let bare_key = name.strip_prefix(&path).unwrap_or(&name).to_string();
                     results.push((bare_key, SecretValue::from_string(value)));
                 }
             }
@@ -173,11 +171,11 @@ fn map_ssm_error(
     kind: SecretProviderKind,
     error: &aws_sdk_ssm::error::SdkError<aws_sdk_ssm::operation::get_parameter::GetParameterError>,
 ) -> SecretError {
-    if let Some(service_error) = error.as_service_error() {
-        if service_error.is_parameter_not_found() || service_error.is_parameter_version_not_found()
-        {
-            return SecretError::SecretNotFound(kind);
-        }
+    if let Some(service_error) = error.as_service_error()
+        && (service_error.is_parameter_not_found()
+            || service_error.is_parameter_version_not_found())
+    {
+        return SecretError::SecretNotFound(kind);
     }
 
     SecretError::provider_failure(kind, error.to_string())
@@ -189,10 +187,10 @@ fn map_secrets_manager_error(
         aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError,
     >,
 ) -> SecretError {
-    if let Some(service_error) = error.as_service_error() {
-        if service_error.is_resource_not_found_exception() {
-            return SecretError::SecretNotFound(kind);
-        }
+    if let Some(service_error) = error.as_service_error()
+        && service_error.is_resource_not_found_exception()
+    {
+        return SecretError::SecretNotFound(kind);
     }
 
     SecretError::provider_failure(kind, error.to_string())

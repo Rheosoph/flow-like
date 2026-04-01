@@ -54,7 +54,7 @@ pub async fn verify_chain(
         params.to,
     )
     .await
-    .map_err(|e| ApiError::internal_error(e))?;
+    .map_err(ApiError::internal_error)?;
 
     Ok(Json(result))
 }

@@ -492,10 +492,10 @@ impl ExecutionContext {
 
     pub async fn get_variable(&self, variable_id: &str) -> flow_like_types::Result<Variable> {
         // Check local (function-scoped) variables first
-        if let Some(local) = &self.local_variables {
-            if let Some(variable) = local.lock().await.get(variable_id).cloned() {
-                return Ok(variable);
-            }
+        if let Some(local) = &self.local_variables
+            && let Some(variable) = local.lock().await.get(variable_id).cloned()
+        {
+            return Ok(variable);
         }
 
         if let Some(variable) = self.variables.lock().await.get(variable_id).cloned() {
@@ -624,13 +624,13 @@ impl ExecutionContext {
         value: Value,
     ) -> flow_like_types::Result<()> {
         // Check local variables first
-        if let Some(local) = &self.local_variables {
-            if let Some(var) = local.lock().await.get(variable_id) {
-                let value_ref = var.value.clone();
-                let mut guard = value_ref.lock().await;
-                *guard = value;
-                return Ok(());
-            }
+        if let Some(local) = &self.local_variables
+            && let Some(var) = local.lock().await.get(variable_id)
+        {
+            let value_ref = var.value.clone();
+            let mut guard = value_ref.lock().await;
+            *guard = value;
+            return Ok(());
         }
 
         let value_ref = self
@@ -881,12 +881,12 @@ impl ExecutionContext {
         // Propagate pin overrides back so function contexts accumulate
         // all pin values written during the exec chain, ensuring parallel
         // invocations each read their own isolated output values.
-        if let Some(child_overrides) = context.context_pin_overrides.take() {
-            if !child_overrides.is_empty() {
-                self.context_pin_overrides
-                    .get_or_insert_with(BTreeMap::new)
-                    .extend(child_overrides);
-            }
+        if let Some(child_overrides) = context.context_pin_overrides.take()
+            && !child_overrides.is_empty()
+        {
+            self.context_pin_overrides
+                .get_or_insert_with(BTreeMap::new)
+                .extend(child_overrides);
         }
     }
 

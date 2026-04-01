@@ -176,42 +176,40 @@ impl NodeLogic for WidgetActionEvent {
                 // Load the app's widgets to get available actions
                 if let Some(app_state) = &board.app_state {
                     let app_id = board.board_dir.filename().unwrap_or_default().to_string();
-                    if !app_id.is_empty() {
-                        if let Ok(app) = App::load(app_id, app_state.clone()).await {
-                            let widgets = app.get_widgets().await.unwrap_or_default();
-                            if let Some(widget) = widgets.iter().find(|w| w.name == widget_name) {
-                                let action_ids: Vec<String> =
-                                    widget.actions.iter().map(|a| a.id.clone()).collect();
+                    if !app_id.is_empty()
+                        && let Ok(app) = App::load(app_id, app_state.clone()).await
+                    {
+                        let widgets = app.get_widgets().await.unwrap_or_default();
+                        if let Some(widget) = widgets.iter().find(|w| w.name == widget_name) {
+                            let action_ids: Vec<String> =
+                                widget.actions.iter().map(|a| a.id.clone()).collect();
 
-                                if let Some(pin) = node.get_pin_mut_by_name("action_id") {
-                                    pin.set_options(
-                                        PinOptions::new()
-                                            .set_valid_values(action_ids.clone())
-                                            .build(),
-                                    );
-                                }
-
-                                // Validate current action_id against available actions
-                                let action_id = node
-                                    .get_pin_by_name("action_id")
-                                    .and_then(|p| p.default_value.as_ref())
-                                    .and_then(|v| {
-                                        flow_like_types::json::from_slice::<String>(v).ok()
-                                    })
-                                    .unwrap_or_default();
-
-                                if !action_id.is_empty()
-                                    && !action_ids.is_empty()
-                                    && !action_ids.contains(&action_id)
-                                {
-                                    node.error = Some(format!(
-                                        "Action '{}' is not defined on widget '{}'",
-                                        action_id, widget_name
-                                    ));
-                                }
-
-                                return;
+                            if let Some(pin) = node.get_pin_mut_by_name("action_id") {
+                                pin.set_options(
+                                    PinOptions::new()
+                                        .set_valid_values(action_ids.clone())
+                                        .build(),
+                                );
                             }
+
+                            // Validate current action_id against available actions
+                            let action_id = node
+                                .get_pin_by_name("action_id")
+                                .and_then(|p| p.default_value.as_ref())
+                                .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok())
+                                .unwrap_or_default();
+
+                            if !action_id.is_empty()
+                                && !action_ids.is_empty()
+                                && !action_ids.contains(&action_id)
+                            {
+                                node.error = Some(format!(
+                                    "Action '{}' is not defined on widget '{}'",
+                                    action_id, widget_name
+                                ));
+                            }
+
+                            return;
                         }
                     }
                 }

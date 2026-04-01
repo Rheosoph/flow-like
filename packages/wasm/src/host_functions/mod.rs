@@ -66,14 +66,18 @@ impl StorageContext {
         if key.starts_with("dirs__upload_") || key.starts_with("dirs__storage_") {
             let store = self.stores.app_storage_store.clone();
             if store.is_none() {
-                tracing::warn!("[wasm] resolve_foreign_store: app_storage_store is None for {store_ref}");
+                tracing::warn!(
+                    "[wasm] resolve_foreign_store: app_storage_store is None for {store_ref}"
+                );
             }
             return store;
         }
         if key.starts_with("dirs__cache_") {
             let store = self.stores.temporary_store.clone();
             if store.is_none() {
-                tracing::warn!("[wasm] resolve_foreign_store: temporary_store is None for {store_ref}");
+                tracing::warn!(
+                    "[wasm] resolve_foreign_store: temporary_store is None for {store_ref}"
+                );
             }
             return store;
         }

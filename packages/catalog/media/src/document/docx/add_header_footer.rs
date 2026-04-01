@@ -191,13 +191,12 @@ impl NodeLogic for DocxAddHeaderFooterNode {
             ));
         }
 
-        if !sect_refs.is_empty() {
-            if let Some(pos) = doc_xml.find("<w:sectPr") {
-                if let Some(close) = doc_xml[pos..].find('>') {
-                    let insert_pos = pos + close + 1;
-                    doc_xml.insert_str(insert_pos, &sect_refs);
-                }
-            }
+        if !sect_refs.is_empty()
+            && let Some(pos) = doc_xml.find("<w:sectPr")
+            && let Some(close) = doc_xml[pos..].find('>')
+        {
+            let insert_pos = pos + close + 1;
+            doc_xml.insert_str(insert_pos, &sect_refs);
         }
 
         files.insert(rels_key, rels_xml.into_bytes());

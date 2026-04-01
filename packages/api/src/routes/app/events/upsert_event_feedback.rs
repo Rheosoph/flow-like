@@ -98,9 +98,7 @@ pub async fn upsert_event_feedback(
 
         feedback.update(&txn).await?;
         txn.commit().await?;
-        return Ok(Json(FeedbackResponse {
-            feedback_id,
-        }));
+        return Ok(Json(FeedbackResponse { feedback_id }));
     }
 
     let feedback = feedback::Model {

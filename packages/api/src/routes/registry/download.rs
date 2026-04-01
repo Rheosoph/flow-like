@@ -85,12 +85,11 @@ pub async fn download(
         .ok()
         .and_then(|metas| MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model));
 
-    if let Some(meta) = &mut metadata {
-        if let Ok(master_creds) = state.master_credentials().await {
-            if let Ok(store) = master_creds.to_store(false).await {
-                meta.presign_media(&package_id, &store).await;
-            }
-        }
+    if let Some(meta) = &mut metadata
+        && let Ok(master_creds) = state.master_credentials().await
+        && let Ok(store) = master_creds.to_store(false).await
+    {
+        meta.presign_media(&package_id, &store).await;
     }
 
     // If the client specified a target platform, try to provide a presigned cwasm URL + checksum

@@ -104,12 +104,11 @@ impl NodeLogic for PptxAddSlideNode {
 fn next_slide_number(files: &std::collections::HashMap<String, Vec<u8>>) -> u32 {
     let mut max = 0u32;
     for key in files.keys() {
-        if let Some(rest) = key.strip_prefix("ppt/slides/slide") {
-            if let Some(num_str) = rest.strip_suffix(".xml") {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    max = max.max(n);
-                }
-            }
+        if let Some(rest) = key.strip_prefix("ppt/slides/slide")
+            && let Some(num_str) = rest.strip_suffix(".xml")
+            && let Ok(n) = num_str.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max + 1
@@ -128,16 +127,17 @@ fn count_slides(files: &std::collections::HashMap<String, Vec<u8>>) -> i64 {
 #[cfg(feature = "execute")]
 fn find_slide_layout_target(files: &std::collections::HashMap<String, Vec<u8>>) -> String {
     for key in files.keys() {
-        if key.starts_with("ppt/slides/_rels/slide") && key.ends_with(".xml.rels") {
-            if let Some(data) = files.get(key) {
-                let content = String::from_utf8_lossy(data);
-                if let Some(pos) = content.find("slideLayout") {
-                    if let Some(start) = content[..pos].rfind("Target=\"") {
-                        let target_start = start + 8;
-                        if let Some(end) = content[target_start..].find('"') {
-                            return content[target_start..target_start + end].to_string();
-                        }
-                    }
+        if key.starts_with("ppt/slides/_rels/slide")
+            && key.ends_with(".xml.rels")
+            && let Some(data) = files.get(key)
+        {
+            let content = String::from_utf8_lossy(data);
+            if let Some(pos) = content.find("slideLayout")
+                && let Some(start) = content[..pos].rfind("Target=\"")
+            {
+                let target_start = start + 8;
+                if let Some(end) = content[target_start..].find('"') {
+                    return content[target_start..target_start + end].to_string();
                 }
             }
         }
@@ -218,10 +218,10 @@ fn next_rid(rels_data: &Option<Vec<u8>>) -> String {
         let content = String::from_utf8_lossy(data);
         for cap in content.match_indices("rId") {
             let rest = &content[cap.0 + 3..];
-            if let Some(end) = rest.find('"') {
-                if let Ok(n) = rest[..end].parse::<u32>() {
-                    max = max.max(n);
-                }
+            if let Some(end) = rest.find('"')
+                && let Ok(n) = rest[..end].parse::<u32>()
+            {
+                max = max.max(n);
             }
         }
     }
@@ -242,12 +242,11 @@ fn next_sld_id(pres_content: &str) -> u32 {
     };
     for cap in section.match_indices("id=\"") {
         let rest = &section[cap.0 + 4..];
-        if let Some(end) = rest.find('"') {
-            if let Ok(n) = rest[..end].parse::<u32>() {
-                if n >= 256 {
-                    max = max.max(n);
-                }
-            }
+        if let Some(end) = rest.find('"')
+            && let Ok(n) = rest[..end].parse::<u32>()
+            && n >= 256
+        {
+            max = max.max(n);
         }
     }
     max + 1

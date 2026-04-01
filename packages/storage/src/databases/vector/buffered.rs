@@ -151,11 +151,11 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         let mut skipped = 0;
 
         // Tier 1: batch-insert schema-compatible records
-        if !compatible.is_empty() {
-            if let Err(_) = inner.insert(compatible.clone()).await {
-                // Tier 2: divide & conquer on the "compatible" batch
-                skipped += Self::insert_divide_and_conquer(inner, compatible).await;
-            }
+        if !compatible.is_empty()
+            && let Err(_) = inner.insert(compatible.clone()).await
+        {
+            // Tier 2: divide & conquer on the "compatible" batch
+            skipped += Self::insert_divide_and_conquer(inner, compatible).await;
         }
 
         // Outliers go straight to divide & conquer (may form sub-groups)
@@ -180,11 +180,10 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         let (compatible, outliers) = Self::partition_by_schema(inner, items).await;
         let mut skipped = 0;
 
-        if !compatible.is_empty() {
-            if let Err(_) = inner.upsert(compatible.clone(), id_field.clone()).await {
-                skipped +=
-                    Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await;
-            }
+        if !compatible.is_empty()
+            && let Err(_) = inner.upsert(compatible.clone(), id_field.clone()).await
+        {
+            skipped += Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await;
         }
 
         if !outliers.is_empty() {

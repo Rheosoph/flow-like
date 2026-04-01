@@ -74,17 +74,18 @@ async fn main() -> Result<(), Error> {
         .map(|s| flow_like_secrets::ExposeSecret::expose_secret(&*s).to_string());
 
     let mut cdn_builder = AmazonS3Builder::new().with_bucket_name(cdn_bucket_name);
-    if let Some(ep) = &cdn_endpoint {
-        if !ep.is_empty() {
-            cdn_builder = cdn_builder.with_endpoint(ep);
-        }
+    if let Some(ep) = &cdn_endpoint
+        && !ep.is_empty()
+    {
+        cdn_builder = cdn_builder.with_endpoint(ep);
     }
-    if let (Some(ak), Some(sk)) = (&cdn_access_key, &cdn_secret_key) {
-        if !ak.is_empty() && !sk.is_empty() {
-            cdn_builder = cdn_builder
-                .with_access_key_id(ak)
-                .with_secret_access_key(sk);
-        }
+    if let (Some(ak), Some(sk)) = (&cdn_access_key, &cdn_secret_key)
+        && !ak.is_empty()
+        && !sk.is_empty()
+    {
+        cdn_builder = cdn_builder
+            .with_access_key_id(ak)
+            .with_secret_access_key(sk);
     }
     let cdn_bucket =
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_builder.build().unwrap()));

@@ -1176,12 +1176,11 @@ impl InternalRun {
             .await;
 
         // Merge all collected traces in one lock acquisition
-        if !new_stack.1.is_empty() {
-            if let Ok(mut run_locked) =
+        if !new_stack.1.is_empty()
+            && let Ok(mut run_locked) =
                 lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await
-            {
-                run_locked.traces.extend(new_stack.1);
-            }
+        {
+            run_locked.traces.extend(new_stack.1);
         }
 
         self.stack = Arc::new(new_stack.0);
@@ -1228,12 +1227,11 @@ impl InternalRun {
                 new_stack.push(node);
             }
             // Merge traces in one lock acquisition
-            if !traces.is_empty() {
-                if let Ok(mut run_locked) =
+            if !traces.is_empty()
+                && let Ok(mut run_locked) =
                     lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await
-                {
-                    run_locked.traces.extend(traces);
-                }
+            {
+                run_locked.traces.extend(traces);
             }
         }
 

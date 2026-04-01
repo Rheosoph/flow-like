@@ -152,35 +152,35 @@ impl NodeLogic for PdfAddImageStampNode {
                 "Im0" => Object::Reference(img_id),
             };
 
-            if let Ok(page) = doc.get_object_mut(*page_id) {
-                if let Object::Dictionary(dict) = page {
-                    if let Ok(Object::Dictionary(resources)) = dict.get_mut(b"Resources") {
-                        resources.set("XObject", Object::Dictionary(xobj_dict));
-                    } else {
-                        let resources = dictionary! {
-                            "XObject" => Object::Dictionary(xobj_dict),
-                        };
-                        dict.set("Resources", Object::Dictionary(resources));
-                    }
+            if let Ok(page) = doc.get_object_mut(*page_id)
+                && let Object::Dictionary(dict) = page
+            {
+                if let Ok(Object::Dictionary(resources)) = dict.get_mut(b"Resources") {
+                    resources.set("XObject", Object::Dictionary(xobj_dict));
+                } else {
+                    let resources = dictionary! {
+                        "XObject" => Object::Dictionary(xobj_dict),
+                    };
+                    dict.set("Resources", Object::Dictionary(resources));
+                }
 
-                    let existing_contents = dict.get(b"Contents").ok().cloned();
-                    match existing_contents {
-                        Some(Object::Array(mut arr)) => {
-                            arr.push(Object::Reference(stream_id));
-                            dict.set("Contents", Object::Array(arr));
-                        }
-                        Some(Object::Reference(existing_ref)) => {
-                            dict.set(
-                                "Contents",
-                                Object::Array(vec![
-                                    Object::Reference(existing_ref),
-                                    Object::Reference(stream_id),
-                                ]),
-                            );
-                        }
-                        _ => {
-                            dict.set("Contents", Object::Reference(stream_id));
-                        }
+                let existing_contents = dict.get(b"Contents").ok().cloned();
+                match existing_contents {
+                    Some(Object::Array(mut arr)) => {
+                        arr.push(Object::Reference(stream_id));
+                        dict.set("Contents", Object::Array(arr));
+                    }
+                    Some(Object::Reference(existing_ref)) => {
+                        dict.set(
+                            "Contents",
+                            Object::Array(vec![
+                                Object::Reference(existing_ref),
+                                Object::Reference(stream_id),
+                            ]),
+                        );
+                    }
+                    _ => {
+                        dict.set("Contents", Object::Reference(stream_id));
                     }
                 }
             }

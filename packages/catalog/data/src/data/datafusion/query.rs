@@ -288,7 +288,10 @@ fn array_value_to_json(
         }
         DataType::Timestamp(unit, _) => match unit {
             TimeUnit::Second => {
-                let arr = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .unwrap();
                 timestamp_to_json(arr.value(idx), *unit)
             }
             TimeUnit::Millisecond => {
@@ -312,7 +315,7 @@ fn array_value_to_json(
                     .unwrap();
                 timestamp_to_json(arr.value(idx), *unit)
             }
-        }
+        },
         _ => {
             use flow_like_storage::arrow::util::display::{ArrayFormatter, FormatOptions};
             let options = FormatOptions::default();
@@ -339,18 +342,20 @@ fn decimal_string_to_json(raw: String) -> Value {
     }
 
     let significant_digits = raw.bytes().filter(|byte| byte.is_ascii_digit()).count();
-    if significant_digits <= 15 {
-        if let Ok(value) = raw.parse::<f64>() {
-            if let Some(number) = flow_like_types::json::Number::from_f64(value) {
-                return Value::Number(number);
-            }
-        }
+    if significant_digits <= 15
+        && let Ok(value) = raw.parse::<f64>()
+        && let Some(number) = flow_like_types::json::Number::from_f64(value)
+    {
+        return Value::Number(number);
     }
 
     Value::String(raw)
 }
 
-fn timestamp_to_json(value: i64, unit: flow_like_storage::datafusion::arrow::datatypes::TimeUnit) -> Value {
+fn timestamp_to_json(
+    value: i64,
+    unit: flow_like_storage::datafusion::arrow::datatypes::TimeUnit,
+) -> Value {
     use flow_like_storage::datafusion::arrow::datatypes::TimeUnit;
 
     let (seconds, nanoseconds, format) = match unit {

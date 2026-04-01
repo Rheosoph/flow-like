@@ -459,17 +459,13 @@ impl SupportedSinks {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MemberLeavePolicy {
     /// Remove packages added by the departing member from the app
     Remove,
     /// Mark packages as stale — frozen version, no updates, cannot be placed on new boards
+    #[default]
     Stale,
-}
-
-impl Default for MemberLeavePolicy {
-    fn default() -> Self {
-        Self::Stale
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

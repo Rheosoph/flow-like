@@ -5,7 +5,6 @@ use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibili
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
-use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::state::AppState;
 use axum::Extension;
 use axum::Json;

@@ -55,10 +55,10 @@ fn extract_from_fenced_json(response: &str) -> Option<ExtractedSurface> {
         let json_start = search_from + start + 4;
         if let Some(end) = response[json_start..].find("```") {
             let json_str = response[json_start..json_start + end].trim();
-            if json_str.starts_with('{') || json_str.starts_with('[') {
-                if let Some(surface) = parse_surface_json(json_str) {
-                    return Some(surface);
-                }
+            if (json_str.starts_with('{') || json_str.starts_with('['))
+                && let Some(surface) = parse_surface_json(json_str)
+            {
+                return Some(surface);
             }
         }
         search_from = json_start;
@@ -119,35 +119,35 @@ fn extract_from_raw_json(response: &str) -> Option<ExtractedSurface> {
 /// - `{"rootComponentId": "…", "canvasSettings": {…}, "components": […]}`
 /// - Direct array of components `[…]`
 fn parse_surface_json(json_str: &str) -> Option<ExtractedSurface> {
-    if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(json_str) {
-        if let Some(components_val) = wrapper.get("components") {
-            match serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone()) {
-                Ok(components) if !components.is_empty() => {
-                    let root_component_id = wrapper
-                        .get("rootComponentId")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let canvas_settings = wrapper.get("canvasSettings").cloned();
-                    return Some(ExtractedSurface {
-                        components,
-                        root_component_id,
-                        canvas_settings,
-                    });
-                }
-                _ => {}
+    if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(json_str)
+        && let Some(components_val) = wrapper.get("components")
+    {
+        match serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone()) {
+            Ok(components) if !components.is_empty() => {
+                let root_component_id = wrapper
+                    .get("rootComponentId")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let canvas_settings = wrapper.get("canvasSettings").cloned();
+                return Some(ExtractedSurface {
+                    components,
+                    root_component_id,
+                    canvas_settings,
+                });
             }
+            _ => {}
         }
     }
 
     // Try as direct array
-    if let Ok(components) = serde_json::from_str::<Vec<SurfaceComponent>>(json_str) {
-        if !components.is_empty() {
-            return Some(ExtractedSurface {
-                components,
-                root_component_id: None,
-                canvas_settings: None,
-            });
-        }
+    if let Ok(components) = serde_json::from_str::<Vec<SurfaceComponent>>(json_str)
+        && !components.is_empty()
+    {
+        return Some(ExtractedSurface {
+            components,
+            root_component_id: None,
+            canvas_settings: None,
+        });
     }
 
     None

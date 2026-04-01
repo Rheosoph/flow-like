@@ -50,10 +50,10 @@ fn get_max_rid(rels_xml: &str) -> u32 {
         .unwrap()
         .captures_iter(rels_xml)
     {
-        if let Ok(n) = caps[1].parse::<u32>() {
-            if n > max {
-                max = n;
-            }
+        if let Ok(n) = caps[1].parse::<u32>()
+            && n > max
+        {
+            max = n;
         }
     }
     max
@@ -66,10 +66,10 @@ fn get_max_sld_id(pres_xml: &str) -> u32 {
         .unwrap()
         .captures_iter(pres_xml)
     {
-        if let Ok(n) = caps[1].parse::<u32>() {
-            if n > max {
-                max = n;
-            }
+        if let Ok(n) = caps[1].parse::<u32>()
+            && n > max
+        {
+            max = n;
         }
     }
     max
@@ -210,12 +210,10 @@ impl NodeLogic for PptxMergeNode {
                 if let Some(rels_data) = add_files.get(&src_rels_key) {
                     base_files.insert(new_rels_key, rels_data.clone());
                 } else {
-                    let default_rels = format!(
-                        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                    let default_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-</Relationships>"#
-                    );
+</Relationships>"#.to_string();
                     base_files.insert(
                         format!("ppt/slides/_rels/slide{}.xml.rels", base_max_num),
                         default_rels.into_bytes(),

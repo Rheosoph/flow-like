@@ -286,13 +286,12 @@ pub fn markdown_to_runs(markdown: &str, _format: OpenXmlFormat) -> Vec<Formatted
                 };
 
                 // For image alt text, update the last Image run
-                if let Some(last) = runs.last_mut() {
-                    if let BlockType::Image { .. } = &last.block_type {
-                        if last.text.is_empty() {
-                            last.text = text.to_string();
-                            continue;
-                        }
-                    }
+                if let Some(last) = runs.last_mut()
+                    && let BlockType::Image { .. } = &last.block_type
+                    && last.text.is_empty()
+                {
+                    last.text = text.to_string();
+                    continue;
                 }
 
                 runs.push(FormattedRun {
@@ -880,19 +879,17 @@ pub fn replace_image_in_archive(
             let base_dir = xml_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
             let full_img_path = if img_path.starts_with('/') {
                 img_path[1..].to_string()
+            } else if base_dir.is_empty() {
+                img_path.clone()
             } else {
-                if base_dir.is_empty() {
-                    img_path.clone()
-                } else {
-                    format!("{}/{}", base_dir, img_path)
-                }
+                format!("{}/{}", base_dir, img_path)
             };
 
             // Normalize path (resolve ../)
             let full_img_path = normalize_path(&full_img_path);
 
-            if files.contains_key(&full_img_path) {
-                files.insert(full_img_path, new_image_bytes.to_vec());
+            if let std::collections::hash_map::Entry::Occupied(mut e) = files.entry(full_img_path) {
+                e.insert(new_image_bytes.to_vec());
                 replaced = true;
             }
         }

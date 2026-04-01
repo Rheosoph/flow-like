@@ -189,13 +189,13 @@ impl NodeLogic for PdfGetMetadataNode {
         let mut subject = String::new();
         let mut keywords = String::new();
 
-        if let Ok(Object::Reference(info_ref)) = doc.trailer.get(b"Info") {
-            if let Ok(Object::Dictionary(info)) = doc.get_object(*info_ref) {
-                title = get_string_field(info, b"Title");
-                author = get_string_field(info, b"Author");
-                subject = get_string_field(info, b"Subject");
-                keywords = get_string_field(info, b"Keywords");
-            }
+        if let Ok(Object::Reference(info_ref)) = doc.trailer.get(b"Info")
+            && let Ok(Object::Dictionary(info)) = doc.get_object(*info_ref)
+        {
+            title = get_string_field(info, b"Title");
+            author = get_string_field(info, b"Author");
+            subject = get_string_field(info, b"Subject");
+            keywords = get_string_field(info, b"Keywords");
         }
 
         let page_count = doc.page_iter().count() as i64;

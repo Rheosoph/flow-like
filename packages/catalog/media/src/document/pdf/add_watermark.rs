@@ -152,48 +152,44 @@ impl NodeLogic for PdfAddWatermarkNode {
             let watermark_stream = Stream::new(dictionary! {}, content_str.into_bytes());
             let stream_id = doc.add_object(Object::Stream(watermark_stream));
 
-            if let Ok(page) = doc.get_object_mut(*page_id) {
-                if let Object::Dictionary(dict) = page {
-                    if let Ok(existing_resources) = dict.get(b"Resources") {
-                        if let Object::Dictionary(res_dict) = existing_resources {
-                            let mut merged = res_dict.clone();
-                            merged.set(
-                                "ExtGState",
-                                dictionary! { "GS0" => Object::Reference(gs_id) },
-                            );
-                            if !merged.has(b"Font") {
-                                merged.set(
-                                    "Font",
-                                    dictionary! { "F1" => Object::Reference(font_id) },
-                                );
-                            } else if let Ok(Object::Dictionary(font_res)) = merged.get_mut(b"Font")
-                            {
-                                font_res.set("F1", Object::Reference(font_id));
-                            }
-                            dict.set("Resources", Object::Dictionary(merged));
+            if let Ok(page) = doc.get_object_mut(*page_id)
+                && let Object::Dictionary(dict) = page
+            {
+                if let Ok(existing_resources) = dict.get(b"Resources") {
+                    if let Object::Dictionary(res_dict) = existing_resources {
+                        let mut merged = res_dict.clone();
+                        merged.set(
+                            "ExtGState",
+                            dictionary! { "GS0" => Object::Reference(gs_id) },
+                        );
+                        if !merged.has(b"Font") {
+                            merged.set("Font", dictionary! { "F1" => Object::Reference(font_id) });
+                        } else if let Ok(Object::Dictionary(font_res)) = merged.get_mut(b"Font") {
+                            font_res.set("F1", Object::Reference(font_id));
                         }
-                    } else {
-                        dict.set("Resources", Object::Dictionary(resources_dict));
+                        dict.set("Resources", Object::Dictionary(merged));
                     }
+                } else {
+                    dict.set("Resources", Object::Dictionary(resources_dict));
+                }
 
-                    let existing_contents = dict.get(b"Contents").ok().cloned();
-                    match existing_contents {
-                        Some(Object::Array(mut arr)) => {
-                            arr.push(Object::Reference(stream_id));
-                            dict.set("Contents", Object::Array(arr));
-                        }
-                        Some(Object::Reference(existing_ref)) => {
-                            dict.set(
-                                "Contents",
-                                Object::Array(vec![
-                                    Object::Reference(existing_ref),
-                                    Object::Reference(stream_id),
-                                ]),
-                            );
-                        }
-                        _ => {
-                            dict.set("Contents", Object::Reference(stream_id));
-                        }
+                let existing_contents = dict.get(b"Contents").ok().cloned();
+                match existing_contents {
+                    Some(Object::Array(mut arr)) => {
+                        arr.push(Object::Reference(stream_id));
+                        dict.set("Contents", Object::Array(arr));
+                    }
+                    Some(Object::Reference(existing_ref)) => {
+                        dict.set(
+                            "Contents",
+                            Object::Array(vec![
+                                Object::Reference(existing_ref),
+                                Object::Reference(stream_id),
+                            ]),
+                        );
+                    }
+                    _ => {
+                        dict.set("Contents", Object::Reference(stream_id));
                     }
                 }
             }
@@ -215,16 +211,14 @@ impl NodeLogic for PdfAddWatermarkNode {
 
 #[cfg(feature = "execute")]
 fn get_page_size(doc: &Document, page_id: lopdf::ObjectId) -> (f64, f64) {
-    if let Ok(page) = doc.get_object(page_id) {
-        if let Object::Dictionary(dict) = page {
-            if let Ok(Object::Array(media_box)) = dict.get(b"MediaBox") {
-                if media_box.len() == 4 {
-                    let w = obj_to_f64(&media_box[2]).unwrap_or(612.0);
-                    let h = obj_to_f64(&media_box[3]).unwrap_or(792.0);
-                    return (w, h);
-                }
-            }
-        }
+    if let Ok(page) = doc.get_object(page_id)
+        && let Object::Dictionary(dict) = page
+        && let Ok(Object::Array(media_box)) = dict.get(b"MediaBox")
+        && media_box.len() == 4
+    {
+        let w = obj_to_f64(&media_box[2]).unwrap_or(612.0);
+        let h = obj_to_f64(&media_box[3]).unwrap_or(792.0);
+        return (w, h);
     }
     (612.0, 792.0)
 }

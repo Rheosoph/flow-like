@@ -67,17 +67,12 @@ pub fn pt_to_emu(pt: f32) -> i32 {
     (pt as f64 * 12700.0) as i32
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum PageSize {
+    #[default]
     A4,
     Letter,
     Legal,
-}
-
-impl Default for PageSize {
-    fn default() -> Self {
-        Self::A4
-    }
 }
 
 impl PageSize {
@@ -98,30 +93,20 @@ impl PageSize {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum Orientation {
+    #[default]
     Portrait,
     Landscape,
 }
 
-impl Default for Orientation {
-    fn default() -> Self {
-        Self::Portrait
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum TextAlignment {
+    #[default]
     Left,
     Center,
     Right,
     Justify,
-}
-
-impl Default for TextAlignment {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 impl TextAlignment {
@@ -144,8 +129,9 @@ impl TextAlignment {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum ParagraphStyle {
+    #[default]
     Normal,
     Heading1,
     Heading2,
@@ -158,12 +144,6 @@ pub enum ParagraphStyle {
     Quote,
     ListBullet,
     ListNumber,
-}
-
-impl Default for ParagraphStyle {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl ParagraphStyle {
@@ -197,20 +177,15 @@ impl ParagraphStyle {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum ShapeType {
+    #[default]
     Rectangle,
     RoundedRectangle,
     Ellipse,
     Triangle,
     Arrow,
     Line,
-}
-
-impl Default for ShapeType {
-    fn default() -> Self {
-        Self::Rectangle
-    }
 }
 
 impl ShapeType {
@@ -226,8 +201,9 @@ impl ShapeType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum PageNumberPosition {
+    #[default]
     BottomCenter,
     BottomRight,
     BottomLeft,
@@ -235,15 +211,10 @@ pub enum PageNumberPosition {
     TopRight,
 }
 
-impl Default for PageNumberPosition {
-    fn default() -> Self {
-        Self::BottomCenter
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub enum Rotation {
     #[serde(rename = "0")]
+    #[default]
     None,
     #[serde(rename = "90")]
     Clockwise90,
@@ -251,12 +222,6 @@ pub enum Rotation {
     Rotate180,
     #[serde(rename = "270")]
     Clockwise270,
-}
-
-impl Default for Rotation {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl Rotation {

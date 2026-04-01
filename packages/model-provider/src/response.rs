@@ -513,10 +513,10 @@ impl LLMUsageStats {
 
     pub fn set_duration_ms(&mut self, duration_ms: u64) {
         self.duration_ms = Some(duration_ms);
-        if let Some(last) = self.calls.last_mut() {
-            if last.duration_ms.is_none() {
-                last.duration_ms = Some(duration_ms);
-            }
+        if let Some(last) = self.calls.last_mut()
+            && last.duration_ms.is_none()
+        {
+            last.duration_ms = Some(duration_ms);
         }
     }
 

@@ -3,7 +3,8 @@ use std::fs;
 fn main() {
     println!("cargo:rerun-if-changed=../../Cargo.toml");
 
-    let workspace_toml = fs::read_to_string("../../Cargo.toml").expect("failed to read workspace Cargo.toml");
+    let workspace_toml =
+        fs::read_to_string("../../Cargo.toml").expect("failed to read workspace Cargo.toml");
 
     // Find: wasmtime = { version = "XX", ... }
     let version = workspace_toml

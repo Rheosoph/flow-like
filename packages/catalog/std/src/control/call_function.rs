@@ -325,10 +325,10 @@ impl NodeLogic for CallFunctionNode {
                     let Some(node_arc) = fn_context.nodes.get(&node_id).cloned() else {
                         continue;
                     };
-                    if let Some(overrides) = &fn_context.context_pin_overrides {
-                        if overrides.contains_key(dep_pin_id.as_str()) {
-                            continue;
-                        }
+                    if let Some(overrides) = &fn_context.context_pin_overrides
+                        && overrides.contains_key(dep_pin_id.as_str())
+                    {
+                        continue;
                     }
                     let mut sub = fn_context.create_sub_context(&node_arc).await;
                     sub.delegated = true;

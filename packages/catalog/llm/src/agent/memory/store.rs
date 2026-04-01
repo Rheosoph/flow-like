@@ -7,10 +7,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{
-    async_trait, bail,
-    json::{self, json},
-};
+use flow_like_types::{async_trait, bail, json::json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[crate::register_node]

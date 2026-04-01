@@ -167,13 +167,11 @@ async fn resolve_compilation_jobs(json: &str) -> Result<Vec<CompilationJob>, Str
         match job_ref {
             CompilationJobRef::Remote { remote_url } => {
                 tracing::info!(url = %remote_url, "Fetching remote compilation job");
-                let response = tokio::time::timeout(
-                    Duration::from_secs(30),
-                    reqwest::get(&remote_url),
-                )
-                .await
-                .map_err(|_| "Remote job fetch timed out".to_string())?
-                .map_err(|e| format!("Failed to fetch remote job: {e}"))?;
+                let response =
+                    tokio::time::timeout(Duration::from_secs(30), reqwest::get(&remote_url))
+                        .await
+                        .map_err(|_| "Remote job fetch timed out".to_string())?
+                        .map_err(|e| format!("Failed to fetch remote job: {e}"))?;
                 if !response.status().is_success() {
                     return Err(format!("HTTP {} from job URL", response.status()));
                 }

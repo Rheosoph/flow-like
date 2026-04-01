@@ -11,17 +11,12 @@ use flow_like_types::{
     json::{self, Deserialize, Serialize, json},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Default)]
 pub enum RecallStrategy {
     RecentFirst,
     Relevance,
+    #[default]
     Hybrid,
-}
-
-impl Default for RecallStrategy {
-    fn default() -> Self {
-        Self::Hybrid
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

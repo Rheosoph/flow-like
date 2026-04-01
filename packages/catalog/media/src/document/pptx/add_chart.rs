@@ -290,12 +290,11 @@ fn build_chart_xml(
 fn next_chart_number(files: &std::collections::HashMap<String, Vec<u8>>) -> u32 {
     let mut max = 0u32;
     for key in files.keys() {
-        if let Some(rest) = key.strip_prefix("ppt/charts/chart") {
-            if let Some(num_str) = rest.strip_suffix(".xml") {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    max = max.max(n);
-                }
-            }
+        if let Some(rest) = key.strip_prefix("ppt/charts/chart")
+            && let Some(num_str) = rest.strip_suffix(".xml")
+            && let Ok(n) = num_str.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max + 1
@@ -308,10 +307,10 @@ fn next_rel_id(files: &std::collections::HashMap<String, Vec<u8>>, rels_path: &s
         let content = String::from_utf8_lossy(data);
         for cap in content.match_indices("rId") {
             let rest = &content[cap.0 + 3..];
-            if let Some(end) = rest.find('"') {
-                if let Ok(n) = rest[..end].parse::<u32>() {
-                    max = max.max(n);
-                }
+            if let Some(end) = rest.find('"')
+                && let Ok(n) = rest[..end].parse::<u32>()
+            {
+                max = max.max(n);
             }
         }
     }
@@ -371,10 +370,10 @@ fn max_id(xml: &str) -> u32 {
     let mut max = 0u32;
     for cap in xml.match_indices("id=\"") {
         let rest = &xml[cap.0 + 4..];
-        if let Some(end) = rest.find('"') {
-            if let Ok(n) = rest[..end].parse::<u32>() {
-                max = max.max(n);
-            }
+        if let Some(end) = rest.find('"')
+            && let Ok(n) = rest[..end].parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     max

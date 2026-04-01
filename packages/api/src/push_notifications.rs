@@ -981,10 +981,10 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
     let cache = google_token_cache();
     {
         let guard = cache.read().await;
-        if let Some(cached) = guard.as_ref() {
-            if Instant::now() < cached.expires_at {
-                return Ok(cached.token.clone());
-            }
+        if let Some(cached) = guard.as_ref()
+            && Instant::now() < cached.expires_at
+        {
+            return Ok(cached.token.clone());
         }
     }
 

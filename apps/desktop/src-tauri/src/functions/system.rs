@@ -308,9 +308,9 @@ pub fn open_file_with_app(file_path: String, app_path: String) -> Result<(), Tau
         if run_status("open", &["-a", &app_path, &file_path]) {
             return Ok(());
         }
-        return Err(TauriFunctionError::new(
+        Err(TauriFunctionError::new(
             "Failed to open file with selected app",
-        ));
+        ))
     }
 
     #[cfg(target_os = "windows")]

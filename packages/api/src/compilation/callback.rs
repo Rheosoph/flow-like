@@ -159,28 +159,26 @@ pub async fn handle_compilation_callback(
     })?;
 
     // Promote version data to parent package for private auto-approved packages
-    if auto_approve {
-        if let Some(pkg) = &package {
-            let now = chrono::Utc::now().naive_utc();
-            let mut pkg_update = wasm_package::ActiveModel {
-                id: Set(pkg.id.clone()),
-                version: Set(result.version.clone()),
-                wasm_path: Set(version_record.wasm_path.clone()),
-                wasm_hash: Set(version_record.wasm_hash.clone()),
-                wasm_size: Set(version_record.wasm_size),
-                updated_at: Set(now),
-                ..Default::default()
-            };
-            if let Some(ref nodes) = nodes {
-                pkg_update.nodes = Set(nodes.clone());
-            }
-            if let Err(e) = pkg_update.update(db.as_ref()).await {
-                tracing::warn!(
-                    package_id = %result.package_id,
-                    error = %e,
-                    "Failed to promote version to parent package"
-                );
-            }
+    if auto_approve && let Some(pkg) = &package {
+        let now = chrono::Utc::now().naive_utc();
+        let mut pkg_update = wasm_package::ActiveModel {
+            id: Set(pkg.id.clone()),
+            version: Set(result.version.clone()),
+            wasm_path: Set(version_record.wasm_path.clone()),
+            wasm_hash: Set(version_record.wasm_hash.clone()),
+            wasm_size: Set(version_record.wasm_size),
+            updated_at: Set(now),
+            ..Default::default()
+        };
+        if let Some(ref nodes) = nodes {
+            pkg_update.nodes = Set(nodes.clone());
+        }
+        if let Err(e) = pkg_update.update(db.as_ref()).await {
+            tracing::warn!(
+                package_id = %result.package_id,
+                error = %e,
+                "Failed to promote version to parent package"
+            );
         }
     }
 

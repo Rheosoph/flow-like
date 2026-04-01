@@ -1211,32 +1211,33 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
                     continue;
                 }
                 // Check if value should be BoundValue but is a bare primitive
-                if value.is_string() || value.is_number() || value.is_boolean() {
-                    if known_set.contains(&k) && k != "type" {
-                        errors.push(format!(
+                if (value.is_string() || value.is_number() || value.is_boolean())
+                    && known_set.contains(&k)
+                    && k != "type"
+                {
+                    errors.push(format!(
                             "{}: prop '{}' uses a bare value. Wrap it as BoundValue: string→{{\"literalString\": \"{}\"}}, number→{{\"literalNumber\": {}}}, bool→{{\"literalBool\": {}}}",
                             id, k,
                             value.as_str().unwrap_or("..."),
                             value.as_f64().map(|n| n.to_string()).unwrap_or_else(|| "...".to_string()),
                             value.as_bool().map(|b| b.to_string()).unwrap_or_else(|| "...".to_string()),
                         ));
-                    }
                 }
             }
         }
 
         // Validate children references
-        if let Some(children) = component.get("children") {
-            if let Some(explicit_list) = children.get("explicitList").and_then(|v| v.as_array()) {
-                for child_ref in explicit_list {
-                    if let Some(child_id) = child_ref.as_str() {
-                        if !all_ids.contains(child_id) {
-                            errors.push(format!(
-                                "{}: children references '{}' which doesn't exist in the components array",
-                                id, child_id
-                            ));
-                        }
-                    }
+        if let Some(children) = component.get("children")
+            && let Some(explicit_list) = children.get("explicitList").and_then(|v| v.as_array())
+        {
+            for child_ref in explicit_list {
+                if let Some(child_id) = child_ref.as_str()
+                    && !all_ids.contains(child_id)
+                {
+                    errors.push(format!(
+                        "{}: children references '{}' which doesn't exist in the components array",
+                        id, child_id
+                    ));
                 }
             }
         }

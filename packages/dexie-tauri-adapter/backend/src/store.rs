@@ -40,12 +40,11 @@ impl BlobStore {
 
     pub fn load_ref_counts_sync(&self, base_dir: &std::path::Path) {
         let path = base_dir.join(REFCOUNTS_FILE);
-        if path.exists() {
-            if let Ok(data) = std::fs::read(&path) {
-                if let Ok(counts) = serde_json::from_slice::<HashMap<String, u64>>(&data) {
-                    *self.ref_counts.blocking_write() = counts;
-                }
-            }
+        if path.exists()
+            && let Ok(data) = std::fs::read(&path)
+            && let Ok(counts) = serde_json::from_slice::<HashMap<String, u64>>(&data)
+        {
+            *self.ref_counts.blocking_write() = counts;
         }
     }
 
