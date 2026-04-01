@@ -185,6 +185,15 @@ export function BlogFooter() {
 						<FooterLink href="/data-deletion">
 							{t("footer.dataDeletion")}
 						</FooterLink>
+						<FooterLink href="/security">
+							{t("footer.security")}
+						</FooterLink>
+						<FooterLink href="/dpa">
+							{t("footer.dpa")}
+						</FooterLink>
+						<FooterLink href="/subprocessors">
+							{t("footer.subprocessors")}
+						</FooterLink>
 					</FooterSection>
 				</div>
 

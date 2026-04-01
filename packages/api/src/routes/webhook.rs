@@ -5,13 +5,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use stripe::{Event, EventObject, EventType, Webhook};
-
-fn get_stripe_webhook_secret() -> Option<String> {
-    std::env::var("STRIPE_WEBHOOK_SECRET").ok()
-}
 
 #[tracing::instrument(name = "POST /webhook/stripe", skip(state, headers, payload))]
 pub async fn stripe_webhook(
@@ -24,8 +21,11 @@ pub async fn stripe_webhook(
         .as_ref()
         .ok_or(anyhow!("Stripe not configured"))?;
 
-    let webhook_secret =
-        get_stripe_webhook_secret().ok_or(anyhow!("Webhook secret not configured"))?;
+    let webhook_secret = state
+        .secrets
+        .get_secret_string(&SecretRef::new("STRIPE_WEBHOOK_SECRET"))
+        .await
+        .map_err(|_| anyhow!("Webhook secret not configured"))?;
 
     let signature = headers
         .get("stripe-signature")
@@ -35,7 +35,7 @@ pub async fn stripe_webhook(
     let payload_str =
         std::str::from_utf8(&payload).map_err(|_| anyhow!("Invalid UTF-8 in payload"))?;
 
-    let event = Webhook::construct_event(payload_str, signature, &webhook_secret)
+    let event = Webhook::construct_event(payload_str, signature, webhook_secret.expose_secret())
         .map_err(|e| anyhow!("Failed to verify webhook signature: {}", e))?;
 
     let event_id = event.id.to_string();
@@ -150,6 +150,11 @@ async fn handle_checkout_completed(
         return handle_app_purchase_completed(state, session, client_ref).await;
     }
 
+    // Check if this is a WASM package purchase (format: "wasm_purchase:{user_id}:{package_id}")
+    if client_ref.starts_with("wasm_purchase:") {
+        return handle_wasm_purchase_completed(state, session, client_ref).await;
+    }
+
     // Otherwise, handle as solution request
     let submission_id = client_ref;
 
@@ -198,9 +203,10 @@ async fn handle_app_purchase_completed(
     client_ref: &str,
 ) -> Result<(), ApiError> {
     use crate::entity::{
-        app, app_purchase, membership, meta, notification,
+        app, app_purchase, membership, meta,
         sea_orm_active_enums::{NotificationType, PurchaseStatus},
     };
+    use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
 
     let session_id = session.id.to_string();
 
@@ -348,28 +354,26 @@ async fn handle_app_purchase_completed(
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
     let app_link_url = format!("{}/use?id={}", frontend_url, app_id);
 
-    // Create notification for the user
-    let notification_id = flow_like_types::create_id();
-    let notification_model = notification::ActiveModel {
-        id: Set(notification_id.clone()),
-        user_id: Set(user_id.to_string()),
-        app_id: Set(Some(app_id.to_string())),
-        title: Set(format!("Purchase Complete: {}", app_name)),
-        description: Set(Some(format!(
-            "You now have access to {}. Click to start using the app.",
-            app_name
-        ))),
-        icon: Set(Some("shopping-bag".to_string())),
-        link: Set(Some(app_link_url)),
-        r#type: Set(NotificationType::System),
-        read: Set(false),
-        source_run_id: Set(None),
-        source_node_id: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        read_at: Set(None),
-    };
-
-    notification_model.insert(&state.db).await?;
+    // Create notification and dispatch push
+    let notification_id = dispatch_notification(
+        state,
+        DispatchNotificationInput {
+            user_id: user_id.to_string(),
+            app_id: Some(app_id.to_string()),
+            title: format!("Purchase Complete: {}", app_name),
+            description: Some(format!(
+                "You now have access to {}. Click to start using the app.",
+                app_name
+            )),
+            icon: Some("shopping-bag".to_string()),
+            link: Some(app_link_url),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
+    .await?;
 
     tracing::info!(
         notification_id = %notification_id,
@@ -377,6 +381,202 @@ async fn handle_app_purchase_completed(
         app_id = %app_id,
         "Created purchase notification"
     );
+
+    Ok(())
+}
+
+/// Handle WASM package purchase completion — create purchase record and grant access
+async fn handle_wasm_purchase_completed(
+    state: &AppState,
+    session: &stripe::CheckoutSession,
+    client_ref: &str,
+) -> Result<(), ApiError> {
+    use crate::entity::{
+        sea_orm_active_enums::{NotificationType, PurchaseStatus},
+        user, wasm_package, wasm_package_purchase, wasm_package_user,
+    };
+    use crate::mail::{EmailMessage, templates::purchase_confirmation};
+    use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
+
+    let session_id = session.id.to_string();
+
+    // Parse "wasm_purchase:{user_id}:{package_id}"
+    let parts: Vec<&str> = client_ref.split(':').collect();
+    if parts.len() != 3 {
+        tracing::error!(client_ref = %client_ref, "Invalid wasm_purchase client_reference_id");
+        return Err(anyhow!("Invalid client_reference_id format").into());
+    }
+
+    let user_id = parts[1];
+    let package_id = parts[2];
+
+    tracing::info!(
+        session_id = %session_id,
+        user_id = %user_id,
+        package_id = %package_id,
+        "Processing WASM package purchase completion"
+    );
+
+    // Idempotency: check existing purchase
+    let existing_purchase = wasm_package_purchase::Entity::find()
+        .filter(wasm_package_purchase::Column::StripeSessionId.eq(&session_id))
+        .one(&state.db)
+        .await?;
+
+    if existing_purchase.is_some() {
+        tracing::info!(session_id = %session_id, "WASM purchase already recorded (idempotent)");
+        return Ok(());
+    }
+
+    // Idempotency: check existing access
+    let existing_access = wasm_package_user::Entity::find()
+        .filter(wasm_package_user::Column::PackageId.eq(package_id))
+        .filter(wasm_package_user::Column::UserId.eq(user_id))
+        .one(&state.db)
+        .await?;
+
+    if existing_access.is_some() {
+        tracing::info!(
+            user_id = %user_id,
+            package_id = %package_id,
+            "User already has access (idempotent)"
+        );
+        return Ok(());
+    }
+
+    let amount_total = session.amount_total.unwrap_or(0);
+    let amount_subtotal = session.amount_subtotal.unwrap_or(amount_total);
+    let discount_amount = amount_subtotal - amount_total;
+    let currency = session
+        .currency
+        .map(|c| c.to_string().to_uppercase())
+        .unwrap_or_else(|| "EUR".to_string());
+
+    let now = chrono::Utc::now().naive_utc();
+    let purchase_id = flow_like_types::create_id();
+
+    wasm_package_purchase::ActiveModel {
+        id: Set(purchase_id.clone()),
+        user_id: Set(user_id.to_string()),
+        package_id: Set(package_id.to_string()),
+        price_paid: Set(amount_total),
+        original_price: Set(amount_subtotal),
+        discount_amount: Set(discount_amount.max(0)),
+        currency: Set(currency.clone()),
+        stripe_session_id: Set(session_id.clone()),
+        stripe_payment_intent_id: Set(session
+            .payment_intent
+            .as_ref()
+            .map(|pi| pi.id().to_string())),
+        status: Set(PurchaseStatus::Completed),
+        completed_at: Set(Some(now)),
+        refunded_at: Set(None),
+        refund_reason: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&state.db)
+    .await?;
+
+    tracing::info!(
+        purchase_id = %purchase_id,
+        user_id = %user_id,
+        package_id = %package_id,
+        amount = %amount_total,
+        "Created WASM purchase record"
+    );
+
+    // Grant User-level access
+    let access_id = flow_like_types::create_id();
+    wasm_package_user::ActiveModel {
+        id: Set(access_id.clone()),
+        user_id: Set(user_id.to_string()),
+        package_id: Set(package_id.to_string()),
+        permission: Set(
+            crate::permission::wasm_package_permission::WasmPackagePermission::User.bits(),
+        ),
+        granted_by: Set(Some(format!("purchase:{}", session_id))),
+        granted_at: Set(now),
+    }
+    .insert(&state.db)
+    .await?;
+
+    // Invalidate permission cache
+    state.invalidate_wasm_permission(user_id, package_id);
+
+    tracing::info!(
+        access_id = %access_id,
+        user_id = %user_id,
+        package_id = %package_id,
+        "Granted WASM package access from purchase"
+    );
+
+    // Send notification and dispatch push
+    let frontend_url =
+        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
+    let link = format!("{}/nodes?id={}", frontend_url, package_id);
+
+    let _notification_id = dispatch_notification(
+        state,
+        DispatchNotificationInput {
+            user_id: user_id.to_string(),
+            app_id: None,
+            title: "WASM Package Purchase Complete".to_string(),
+            description: Some("You now have access to the purchased WASM package.".to_string()),
+            icon: Some("package".to_string()),
+            link: Some(link.clone()),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
+    .await?;
+
+    // Send purchase confirmation email
+    if let Some(mail_client) = &state.mail_client {
+        let buyer_email = user::Entity::find_by_id(user_id)
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|u| u.email);
+
+        let pkg_name = wasm_package::Entity::find_by_id(package_id)
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.name)
+            .unwrap_or_else(|| package_id.to_string());
+
+        if let Some(email_addr) = buyer_email {
+            let price_display = format!("{:.2}", amount_total as f64 / 100.0);
+            let receipt_url = session
+                .payment_intent
+                .as_ref()
+                .map(|pi| format!("https://dashboard.stripe.com/payments/{}", pi.id()));
+
+            let (html, text) = purchase_confirmation(
+                &pkg_name,
+                &link,
+                &price_display,
+                &currency,
+                receipt_url.as_deref(),
+            );
+
+            let email = EmailMessage {
+                to: email_addr,
+                subject: format!("Purchase Confirmed — {}", pkg_name),
+                body_html: Some(html),
+                body_text: Some(text),
+            };
+
+            if let Err(e) = mail_client.send(email).await {
+                tracing::warn!(error = %e, "Failed to send purchase confirmation email");
+            }
+        }
+    }
 
     Ok(())
 }

@@ -3,6 +3,7 @@
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Slider } from "../../ui/slider";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -19,8 +20,8 @@ export function A2UISlider({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<SliderComponent>) {
+	const onAction = useOnAction();
 	const value = useResolved<number>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const min = useResolved<number>(component.min) ?? 0;

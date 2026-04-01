@@ -59,7 +59,7 @@ impl NodeLogic for GetRowByIndexNode {
         // Outputs
         node.add_output_pin("row", "Row", "Row as struct", VariableType::Struct);
         node.add_output_pin(
-            "row_index",
+            "actual_row_index",
             "Row Index",
             "Echo of requested index",
             VariableType::Integer,
@@ -95,7 +95,7 @@ impl NodeLogic for GetRowByIndexNode {
 
         context.set_pin_value("row", json!(obj)).await?;
         context
-            .set_pin_value("row_index", json!(row_index_in))
+            .set_pin_value("actual_row_index", json!(row_index_in))
             .await?;
         Ok(())
     }

@@ -8,15 +8,21 @@ repository = "https://github.com/TM9657/flow-like"
 
 [dependencies]
 # WASM Runtime
-wasmtime = { version = "40", features = ["async", "cranelift", "parallel-compilation", "gc"] }
-wasmtime-wasi = "40"
-wasmtime-wasi-http = "40"
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 
 # Flow-Like dependencies
-flow-like-types = { path = "../types" }
-flow-like-storage = { path = "../storage" }
-flow-like = { path = "../core" }
-flow-like-model-provider = { path = "../model-provider" }
+flow-like-types.workspace = true
+flow-like-storage.workspace = true
+flow-like.workspace = true
+flow-like-model-provider.workspace = true
+flow-like-catalog-core.workspace = true
+flow-like-catalog-llm.workspace = true
+
+# Schema generation
+schemars.workspace = true
+once_cell = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -42,7 +48,7 @@ dashmap.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # WebSocket Client
-tokio-tungstenite = { workspace = true }
+tokio-tungstenite.workspace = true
 
 # Directories
 dirs-next = "2"
@@ -75,4 +81,6 @@ component-model = ["wasmtime/component-model"]
 # Enable model/embedding support for WASM host functions
 model = ["flow-like/model"]
 # Enable OpenAPI schema generation
-openapi = ["utoipa"]
+openapi = ["utoipa", "flow-like/openapi"]
+# Enable all cranelift backends for cross-compilation
+all-arch = ["wasmtime/all-arch"]

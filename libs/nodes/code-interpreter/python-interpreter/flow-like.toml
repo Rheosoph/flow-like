@@ -1,0 +1,31 @@
+description = "Sandboxed Python execution via WASM Component Model. Two nodes: inline eval and project-based execution with dynamic PyPI package installation."
+id = "com.flow-like.code-interpreter"
+keywords = [
+    "python",
+    "interpreter",
+    "sandbox",
+    "eval",
+    "code",
+]
+license = "MIT"
+manifest_version = 1
+name = "Code Interpreter"
+repository = "https://github.com/TM9657/flow-like"
+version = "0.1.0"
+wasm_path = "build/interpreter.wasm"
+
+[[authors]]
+name = "Flow-Like"
+
+[permissions]
+memory = "intensive"
+streaming = true
+timeout = "extended"
+variables = true
+
+[permissions.filesystem]
+node_storage = true
+user_storage = true
+
+[permissions.network]
+http_enabled = true

@@ -76,6 +76,14 @@ spec:
               value: {{ .Values.executor.maxRetries | quote }}
             - name: RUST_LOG
               value: "info"
+            {{- if .Values.compiler.enabled }}
+            - name: COMPILATION_BACKEND
+              value: "http"
+            - name: COMPILER_URL
+              value: {{ printf "http://%s-compiler:%d" (include "flow-like.fullname" .) (int .Values.compiler.service.port) }}
+            - name: API_BASE_URL
+              value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) }}
+            {{- end }}
             {{- with .Values.api.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

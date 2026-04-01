@@ -5,7 +5,15 @@ use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
 use flow_like_types::image::{DynamicImage, ImageBuffer, Rgba};
 #[cfg(feature = "execute")]
-use hayro::{Pdf, Pixmap};
+use hayro::hayro_syntax::Pdf;
+#[cfg(feature = "execute")]
+use hayro::vello_cpu::Pixmap;
+#[cfg(feature = "execute")]
+use hayro::vello_cpu::color::AlphaColor;
+#[cfg(feature = "execute")]
+use hayro::vello_cpu::color::Srgb;
+#[cfg(feature = "execute")]
+use hayro::vello_cpu::color::palette::css::TRANSPARENT;
 #[cfg(feature = "execute")]
 use std::sync::Arc;
 
@@ -28,8 +36,11 @@ pub(super) async fn load_pdf_from_flowpath(
 pub(super) fn pixmap_to_dynamic_image(pixmap: Pixmap) -> flow_like_types::Result<DynamicImage> {
     let width = pixmap.width() as u32;
     let height = pixmap.height() as u32;
-    let mut data = pixmap.take_u8();
-    unpremultiply_rgba(&mut data);
+    let data: Vec<u8> = pixmap
+        .take_unpremultiplied()
+        .into_iter()
+        .flat_map(|p| [p.r, p.g, p.b, p.a])
+        .collect();
 
     let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_vec(width, height, data)
         .ok_or_else(|| {
@@ -37,29 +48,6 @@ pub(super) fn pixmap_to_dynamic_image(pixmap: Pixmap) -> flow_like_types::Result
         })?;
 
     Ok(DynamicImage::ImageRgba8(buffer))
-}
-
-#[cfg(feature = "execute")]
-fn unpremultiply_rgba(pixels: &mut [u8]) {
-    for chunk in pixels.chunks_exact_mut(4) {
-        let alpha = chunk[3] as u32;
-
-        if alpha == 0 {
-            chunk[0] = 0;
-            chunk[1] = 0;
-            chunk[2] = 0;
-            continue;
-        }
-
-        if alpha == 255 {
-            continue;
-        }
-
-        for channel in &mut chunk[..3] {
-            let value = (*channel as u32 * 255 + (alpha / 2)) / alpha;
-            *channel = value.min(255) as u8;
-        }
-    }
 }
 
 #[cfg(feature = "execute")]
@@ -91,4 +79,15 @@ pub(super) fn resolve_page_index(
     }
 
     Ok(index)
+}
+
+#[cfg(feature = "execute")]
+pub(super) fn resolve_bg_color(name: &str) -> AlphaColor<Srgb> {
+    match name {
+        "Black" => AlphaColor::new([0.0, 0.0, 0.0, 1.0]),
+        "White" => AlphaColor::new([1.0, 1.0, 1.0, 1.0]),
+        "Red" => AlphaColor::new([1.0, 0.0, 0.0, 1.0]),
+        "Green" => AlphaColor::new([0.0, 0.5, 0.0, 1.0]),
+        _ => TRANSPARENT,
+    }
 }

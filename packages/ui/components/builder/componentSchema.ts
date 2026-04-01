@@ -230,12 +230,16 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	},
 	iframe: {
 		type: { type: "string", required: true },
-		src: { type: "boundValue", required: true },
+		src: { type: "boundValue" },
+		srcdoc: { type: "boundValue" },
 		width: { type: "boundValue" },
 		height: { type: "boundValue" },
 		title: { type: "boundValue" },
 		loading: { type: "boundValue" },
 		border: { type: "boundValue" },
+		sandbox: { type: "boundValue" },
+		allow: { type: "boundValue" },
+		referrerPolicy: { type: "boundValue" },
 	},
 	plotlyChart: {
 		type: { type: "string", required: true },

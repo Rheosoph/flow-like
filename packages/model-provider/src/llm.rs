@@ -32,9 +32,11 @@ pub mod groq;
 pub mod huggingface;
 pub mod hyperbolic;
 pub mod llamacpp;
+pub mod lmstudio;
 pub mod mira;
 pub mod mistral;
 pub mod moonshot;
+pub mod mozilla;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
@@ -116,6 +118,10 @@ pub trait ModelLogic: Send + Sync {
 
     #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
+        let mut history = history.clone();
+        self.transform_history(&mut history);
+        history.normalize_for_alternation();
+
         let model_name = self
             .default_model()
             .await
@@ -125,12 +131,21 @@ pub trait ModelLogic: Send + Sync {
         let completion_model = constructor.inner.completion_model(&model_name);
         let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
 
+        // Extract and remove system prompt so it becomes preamble instead of
+        // being converted to a User message (which would break role alternation
+        // for models that require strict user/assistant/user/assistant ordering).
+        let system_prompt = history.take_system_prompt();
+
         let (prompt, chat_history) = history
             .extract_prompt_and_history()
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
 
         let mut builder =
             CompletionModel::completion_request(&completion_handle, prompt).messages(chat_history);
+
+        if let Some(preamble) = system_prompt {
+            builder = builder.preamble(preamble);
+        }
 
         if let Some(temp) = history.temperature {
             builder = builder.temperature(temp as f64);

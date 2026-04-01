@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteInvoke, useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
+import { formatAppCategory } from "../../lib/app-category";
 import type { IApp } from "../../lib/schema/app/app";
 import {
 	IAppCategory,
@@ -35,30 +36,6 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
-const CATEGORY_LABELS: Record<IAppCategory, string> = {
-	[IAppCategory.Anime]: "Anime",
-	[IAppCategory.Business]: "Business",
-	[IAppCategory.Communication]: "Communication",
-	[IAppCategory.Education]: "Education",
-	[IAppCategory.Entertainment]: "Entertainment",
-	[IAppCategory.Finance]: "Finance",
-	[IAppCategory.FoodAndDrink]: "Food & Drink",
-	[IAppCategory.Games]: "Games",
-	[IAppCategory.Health]: "Health",
-	[IAppCategory.Lifestyle]: "Lifestyle",
-	[IAppCategory.Music]: "Music",
-	[IAppCategory.News]: "News",
-	[IAppCategory.Other]: "Other",
-	[IAppCategory.Photography]: "Photography",
-	[IAppCategory.Productivity]: "Productivity",
-	[IAppCategory.Shopping]: "Shopping",
-	[IAppCategory.Social]: "Social",
-	[IAppCategory.Sports]: "Sports",
-	[IAppCategory.Travel]: "Travel",
-	[IAppCategory.Utilities]: "Utilities",
-	[IAppCategory.Weather]: "Weather",
-};
 
 const FEATURED_CATEGORIES = [
 	IAppCategory.Productivity,
@@ -154,6 +131,12 @@ export function ExploreAppsPage() {
 		[router, userAppIds],
 	);
 
+	const appHref = useCallback(
+		(appId: string) =>
+			userAppIds.has(appId) ? `/use?id=${appId}` : `/store?id=${appId}`,
+		[userAppIds],
+	);
+
 	const hasActiveFilters =
 		!!debouncedQuery || !!selectedCategory || sortKey !== "popular";
 
@@ -175,10 +158,7 @@ export function ExploreAppsPage() {
 		const groups = new Map<string, [IApp, IMetadata | undefined][]>();
 		for (const entry of combinedApps) {
 			const [app] = entry;
-			const cat = app.primary_category ?? "Other";
-			const label =
-				CATEGORY_LABELS[cat as IAppCategory] ??
-				cat.replace(/([A-Z])/g, " $1").trim();
+			const label = formatAppCategory(app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(entry);
 			groups.set(label, existing);
@@ -285,7 +265,7 @@ export function ExploreAppsPage() {
 				{showCategories && (
 					<div className="flex flex-wrap gap-1.5 animate-in fade-in-0 slide-in-from-top-2 duration-200">
 						{FEATURED_CATEGORIES.map((category) => {
-							const label = CATEGORY_LABELS[category];
+							const label = formatAppCategory(category);
 							const color = CATEGORY_COLORS[label] ?? CATEGORY_COLORS.Other;
 							const isSelected = selectedCategory === category;
 
@@ -314,17 +294,16 @@ export function ExploreAppsPage() {
 							);
 						})}
 
-						{selectedCategory &&
-							!FEATURED_CATEGORIES.includes(selectedCategory) && (
-								<button
-									type="button"
-									className="rounded-full px-3 py-1 text-xs bg-foreground/10 text-foreground ring-1 ring-foreground/20 flex items-center gap-1.5"
-									onClick={() => setSelectedCategory(undefined)}
-								>
-									{CATEGORY_LABELS[selectedCategory]}
-									<X className="h-3 w-3" />
-								</button>
-							)}
+						{selectedCategory && (
+							<button
+								type="button"
+								className="rounded-full px-3 py-1 text-xs bg-foreground/10 text-foreground ring-1 ring-foreground/20 flex items-center gap-1.5"
+								onClick={() => setSelectedCategory(undefined)}
+							>
+								{formatAppCategory(selectedCategory)}
+								<X className="h-3 w-3" />
+							</button>
+						)}
 					</div>
 				)}
 			</div>
@@ -350,6 +329,7 @@ export function ExploreAppsPage() {
 								apps={items}
 								userAppIds={userAppIds}
 								onAppClick={handleAppClick}
+								appHref={appHref}
 								isMobile={isMobile}
 								categoryColor={CATEGORY_COLORS[label]}
 								defaultExpanded={idx === 0}
@@ -369,7 +349,7 @@ export function ExploreAppsPage() {
 							<p className="text-xs text-muted-foreground/60">
 								{combinedApps.length} result
 								{combinedApps.length !== 1 ? "s" : ""}
-								{selectedCategory && ` in ${CATEGORY_LABELS[selectedCategory]}`}
+								{selectedCategory && ` in ${formatAppCategory(selectedCategory)}`}
 							</p>
 						)}
 
@@ -377,6 +357,7 @@ export function ExploreAppsPage() {
 							apps={combinedApps}
 							userAppIds={userAppIds}
 							onAppClick={handleAppClick}
+							appHref={appHref}
 							isMobile={isMobile}
 						/>
 
@@ -398,6 +379,7 @@ function ExploreSection({
 	apps,
 	userAppIds,
 	onAppClick,
+	appHref,
 	isMobile,
 	categoryColor,
 	defaultExpanded = false,
@@ -406,6 +388,7 @@ function ExploreSection({
 	apps: [IApp, IMetadata | undefined][];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile: boolean;
 	categoryColor?: string;
 	defaultExpanded?: boolean;
@@ -535,11 +518,13 @@ function ExploreGrid({
 	apps,
 	userAppIds,
 	onAppClick,
+	appHref,
 	isMobile,
 }: Readonly<{
 	apps: [IApp, IMetadata | undefined][];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
+	appHref?: (id: string) => string;
 	isMobile: boolean;
 }>) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -556,6 +541,7 @@ function ExploreGrid({
 						metadata={metadata}
 						variant="small"
 						onClick={() => onAppClick(app.id)}
+						href={appHref?.(app.id)}
 						className="w-full rounded-none border-0 shadow-none bg-transparent"
 					/>
 				))}
@@ -579,6 +565,7 @@ function ExploreGrid({
 					metadata={metadata}
 					variant="extended"
 					onClick={() => onAppClick(app.id)}
+					href={appHref?.(app.id)}
 					className="w-full"
 				/>
 			))}

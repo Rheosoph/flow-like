@@ -604,11 +604,13 @@ impl NodeLogic for CopilotClientStopNode {
 
         context.log_message("Stopping Copilot client...", LogLevel::Info);
 
-        cached_client
-            .client
-            .stop()
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to stop Copilot client: {}", e))?;
+        let stop_errors = cached_client.client.stop().await;
+        for e in &stop_errors {
+            context.log_message(
+                &format!("Copilot client stop warning: {}", e),
+                LogLevel::Warn,
+            );
+        }
 
         context.cache.write().await.remove(&handle.cache_key);
 

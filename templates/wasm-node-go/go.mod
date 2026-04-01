@@ -1,5 +1,5 @@
 module github.com/example/flow-like-wasm-node
 
-go 1.22
+go 1.23.0
 
-require github.com/TM9657/flow-like/libs/wasm-sdk/wasm-sdk-go v0.1.0
+require go.bytecodealliance.org/cm v0.3.0

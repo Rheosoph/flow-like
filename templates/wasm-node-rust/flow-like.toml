@@ -1,27 +1,26 @@
-# Flow-Like Package Manifest
-# This file declares your package's metadata, permissions, and node entries.
-# The runtime uses this to determine capabilities and display information.
-
-manifest_version = 1
-
-# --- Package Identity ---
-id = "com.example.custom-node-rust"
-name = "Custom Node (Rust)"
-version = "0.1.0"
 description = "Template for creating Flow-Like WASM nodes in Rust"
+id = "com.example.custom-node-rust"
+keywords = [
+    "template",
+    "example",
+]
 license = "MIT"
+manifest_version = 1
+name = "Custom Node (Rust)"
 repository = "https://github.com/example/flow-like-nodes"
-keywords = ["template", "example"]
+version = "0.1.0"
 
 [[authors]]
 name = "Your Name"
 
-# --- Nodes ---
-# Each [[nodes]] entry describes a node this package provides.
-# For single-node packages, list just one. For multi-node, list all of them.
-
 [[nodes]]
+category = "Custom/WASM"
+description = "A template WASM node built with Rust"
 id = "my_custom_node"
 name = "My Custom Node"
-description = "A template WASM node built with Rust"
-category = "Custom/WASM"
+
+# Resource limits for the package sandbox (memory & timeout).
+# Permissions are declared per-node in Rust code via `node.add_permission(NodePermission::*)`.
+[permissions]
+memory = "standard"
+timeout = "standard"

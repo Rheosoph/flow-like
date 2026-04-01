@@ -5,6 +5,7 @@ use axum::{
 
 use crate::state::AppState;
 
+pub mod dashboard;
 pub mod discounts;
 pub mod overview;
 pub mod price;
@@ -35,4 +36,5 @@ pub fn routes() -> Router<AppState> {
             "/discounts/{discount_id}/toggle",
             post(discounts::toggle_discount),
         )
+        .route("/dashboard", get(dashboard::dashboard))
 }

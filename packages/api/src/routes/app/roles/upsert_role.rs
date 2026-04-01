@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::role, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::role, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -75,6 +75,15 @@ pub async fn upsert_role(
             tracing::warn!(error = %e, "Failed to invalidate permission cache after role update");
         }
 
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "role.update",
+            "Role",
+            role_id,
+            "Role updated"
+        );
         return Ok(Json(()));
     }
 
@@ -84,6 +93,7 @@ pub async fn upsert_role(
     }
 
     payload.id = create_id();
+    let new_role_id = payload.id.clone();
     payload.created_at = chrono::Utc::now().naive_utc();
     payload.updated_at = chrono::Utc::now().naive_utc();
     payload.app_id = Some(app_id.clone());
@@ -97,5 +107,14 @@ pub async fn upsert_role(
         tracing::warn!(error = %e, "Failed to invalidate permission cache after role creation");
     }
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "role.create",
+        "Role",
+        new_role_id,
+        "Role created"
+    );
     Ok(Json(()))
 }

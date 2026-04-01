@@ -40,6 +40,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "modelSlug", column_type = "Text", nullable)]
+    pub model_slug: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -48,6 +50,14 @@ pub enum Relation {
     BitCache,
     #[sea_orm(has_one = "super::bit_tree_cache::Entity")]
     BitTreeCache,
+    #[sea_orm(
+        belongs_to = "super::llm_model::Entity",
+        from = "Column::ModelSlug",
+        to = "super::llm_model::Column::Slug",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    LlmModel,
     #[sea_orm(has_many = "super::meta::Entity")]
     Meta,
     #[sea_orm(has_many = "super::swimlane_item::Entity")]
@@ -63,6 +73,12 @@ impl Related<super::bit_cache::Entity> for Entity {
 impl Related<super::bit_tree_cache::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::BitTreeCache.def()
+    }
+}
+
+impl Related<super::llm_model::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::LlmModel.def()
     }
 }
 

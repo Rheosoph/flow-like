@@ -53,6 +53,7 @@ pub enum A2UIComponentType {
     DateTimeInput(DateTimeInputProps),
     FileInput(FileInputProps),
     ImageInput(ImageInputProps),
+    VoiceInput(VoiceInputProps),
     Link(LinkProps),
     ImageLabeler(ImageLabelerProps),
     ImageHotspot(ImageHotspotProps),
@@ -630,6 +631,30 @@ pub struct ImageInputProps {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct VoiceInputProps {
+    pub value: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper_text: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_duration: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_stop: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub silence_threshold: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub silence_duration: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visualizer: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LinkProps {
     pub href: BoundValue,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1026,7 +1051,10 @@ pub struct GeoMapProps {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IframeProps {
-    pub src: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srcdoc: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]

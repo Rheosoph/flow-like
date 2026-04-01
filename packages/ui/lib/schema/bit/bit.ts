@@ -10,12 +10,28 @@ export interface IBit {
 	id: string;
 	license?: null | string;
 	meta: { [key: string]: IMetadata };
+	model_evaluation?: ILlmModelEvaluation | null;
+	model_slug?: null | string;
 	parameters: any;
 	repository?: null | string;
 	size?: number | null;
 	type: IBitTypes;
 	updated: string;
 	version?: null | string;
+	[property: string]: any;
+}
+
+export interface ILlmModelEvaluation {
+	creator_name: string;
+	creator_slug: string;
+	evaluations?: null | Record<string, number | null>;
+	median_output_tokens_per_second?: null | number;
+	median_time_to_first_answer_token?: null | number;
+	median_time_to_first_token_seconds?: null | number;
+	name: string;
+	pricing?: null | Record<string, number | null>;
+	release_date?: null | string;
+	slug: string;
 	[property: string]: any;
 }
 

@@ -3,21 +3,25 @@
 import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
+	ChevronRight,
 	Download,
+	KeyRound,
+	Lock,
 	Package,
 	Search,
 	Shield,
 	SlidersHorizontal,
+	Star,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import type {
 	PackageSummary,
-	SearchFilters,
 	SearchResults,
 } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
@@ -25,6 +29,7 @@ import {
 	type GenericFetcher,
 	StorePackageDetail,
 } from "../pages/store/store-package-detail";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Input } from "../ui/input";
 import type { CompileStatus } from "../ui/package-status-badge";
 import {
@@ -49,50 +54,114 @@ interface PackagesStorePageProps {
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }
 
-function PackageCard({ pkg }: { pkg: PackageSummary }) {
+export function PackageCard({ pkg }: { pkg: PackageSummary }) {
+	const { primaryHue, isDark } = useThemeInfo();
+	const gradient = useMemo(
+		() => hashToGradient(pkg.id, primaryHue, isDark),
+		[pkg.id, primaryHue, isDark],
+	);
+	const displayName = pkg.metadata?.name ?? pkg.name;
+	const displayDesc = pkg.metadata?.description ?? pkg.description;
+	const icon = pkg.metadata?.icon;
+	const thumbnail = pkg.metadata?.thumbnail;
+
 	return (
 		<Link
 			href={`/store/packages?id=${pkg.id}`}
-			className="group block rounded-2xl bg-card/60 border border-border/20 p-5 transition-all hover:bg-card/80 hover:border-border/40 hover:shadow-sm"
+			className="group relative flex flex-row rounded-lg border border-border/40 bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg"
 		>
-			<div className="flex items-start justify-between mb-2">
-				<div className="flex items-center gap-2">
-					<Package className="h-4 w-4 text-muted-foreground/50" />
-					<h3 className="text-sm font-semibold group-hover:text-primary transition-colors">
-						{pkg.name}
-					</h3>
+			{/* Left gradient accent */}
+			<div className="relative w-28 shrink-0 overflow-hidden">
+				{thumbnail ? (
+					<img src={thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" />
+				) : (
+					<div
+						className="absolute inset-0"
+						style={{
+							background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+							opacity: gradient.opacity,
+						}}
+					/>
+				)}
+				<div className="absolute inset-0 bg-linear-to-r from-transparent to-card/80" />
+				<div className="absolute inset-0 flex items-center justify-center">
+					<Avatar className="w-10 h-10 rounded-lg shadow-md border-2 border-background/20 bg-background/30 backdrop-blur-sm">
+						{icon ? (
+							<AvatarImage src={icon} alt={displayName} className="rounded-lg" />
+						) : null}
+						<AvatarFallback className="rounded-lg text-xs font-mono font-bold bg-background/20 text-white/80">
+							<Package className="h-5 w-5" />
+						</AvatarFallback>
+					</Avatar>
 				</div>
-				{pkg.verified && (
-					<span className="flex items-center gap-1 text-xs text-muted-foreground">
-						<Shield className="h-3 w-3" />
-						Verified
-					</span>
-				)}
 			</div>
-			<p className="text-xs text-muted-foreground line-clamp-2 mb-3">
-				{pkg.description}
-			</p>
-			<div className="flex flex-wrap gap-1.5 mb-3">
-				{pkg.keywords.slice(0, 3).map((kw) => (
-					<span
-						key={kw}
-						className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] capitalize"
-					>
-						{kw}
+
+			{/* Card body */}
+			<div className="flex-1 min-w-0 px-3.5 py-3 flex flex-col gap-1">
+				{/* Top row: name + badges */}
+				<div className="flex items-center gap-1.5 min-w-0">
+					<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
+						{displayName}
+					</h3>
+					<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
+						v{pkg.latestVersion}
 					</span>
-				))}
-				{pkg.keywords.length > 3 && (
-					<span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px]">
-						+{pkg.keywords.length - 3}
+					<div className="flex items-center gap-1 ml-auto shrink-0">
+						{pkg.verified && (
+							<span className="inline-flex items-center rounded bg-background/80 border border-border/40 p-1">
+								<Shield className="h-3 w-3 text-blue-500" />
+							</span>
+						)}
+						{pkg.visibility !== "public" && (
+							<span className="inline-flex items-center gap-0.5 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
+								{pkg.visibility === "private" ? (
+									<><Lock className="h-2.5 w-2.5" /> private</>
+								) : (
+									<><KeyRound className="h-2.5 w-2.5" /> gated</>
+								)}
+							</span>
+						)}
+					</div>
+				</div>
+
+				{/* Description */}
+				<p className="text-xs text-muted-foreground/80 line-clamp-2 leading-relaxed">
+					{displayDesc}
+				</p>
+
+				{/* Footer meta row */}
+				<div className="flex items-center gap-2 mt-auto pt-1.5 border-t border-border/20 text-[10px] text-muted-foreground/60 font-mono">
+					<span className="flex items-center gap-1">
+						<Download className="h-3 w-3" />
+						{pkg.downloadCount.toLocaleString()}
 					</span>
-				)}
-			</div>
-			<div className="flex items-center gap-4 text-xs text-muted-foreground/60">
-				<span className="flex items-center gap-1">
-					<Download className="h-3 w-3" />
-					{pkg.downloadCount.toLocaleString()}
-				</span>
-				<span>v{pkg.latestVersion}</span>
+					{(pkg.ratingCount ?? 0) > 0 && (
+						<span className="flex items-center gap-0.5 border-l border-border/30 pl-2">
+							<Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+							{(pkg.avgRating ?? 0).toFixed(1)}
+						</span>
+					)}
+					{pkg.price > 0 && (
+						<span className="font-semibold text-primary">
+							€{(pkg.price / 100).toFixed(2)}
+						</span>
+					)}
+					{pkg.keywords.length > 0 && (
+						<span className="inline-flex items-center gap-1 border-l border-border/30 pl-2">
+							{pkg.keywords.slice(0, 2).map((kw) => (
+								<span
+									key={kw}
+									className="rounded bg-muted/30 px-1.5 py-0.5"
+								>
+									{kw}
+								</span>
+							))}
+							{pkg.keywords.length > 2 && (
+								<span>+{pkg.keywords.length - 2}</span>
+							)}
+						</span>
+					)}
+				</div>
 			</div>
 		</Link>
 	);
@@ -100,23 +169,25 @@ function PackageCard({ pkg }: { pkg: PackageSummary }) {
 
 function PackageCardSkeleton() {
 	return (
-		<div className="rounded-2xl bg-card/60 border border-border/20 p-5 space-y-3">
-			<div className="flex items-start justify-between">
-				<Skeleton className="h-4 w-32 rounded-full" />
-				<Skeleton className="h-4 w-14 rounded-full" />
+		<div className="flex flex-row rounded-lg border border-border/40 bg-card/60 overflow-hidden">
+			<Skeleton className="w-28 shrink-0 rounded-none" />
+			<div className="flex-1 px-3.5 py-3 space-y-2">
+				<div className="flex items-center gap-2">
+					<Skeleton className="h-4 w-28 rounded" />
+					<Skeleton className="h-3 w-10 rounded" />
+				</div>
+				<Skeleton className="h-3 w-full rounded" />
+				<Skeleton className="h-3 w-3/4 rounded" />
+				<div className="flex gap-2 pt-1.5 border-t border-border/20">
+					<Skeleton className="h-3.5 w-10 rounded" />
+					<Skeleton className="h-3.5 w-16 rounded" />
+				</div>
 			</div>
-			<Skeleton className="h-8 w-full rounded-lg" />
-			<div className="flex gap-1.5">
-				<Skeleton className="h-4 w-12 rounded-full" />
-				<Skeleton className="h-4 w-16 rounded-full" />
-				<Skeleton className="h-4 w-10 rounded-full" />
-			</div>
-			<Skeleton className="h-3 w-24 rounded-full" />
 		</div>
 	);
 }
 
-function PackageDetailWrapper({
+export function PackageDetailWrapper({
 	fetcher,
 	auth,
 	getPackageStatus,
@@ -128,6 +199,19 @@ function PackageDetailWrapper({
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const packageId = searchParams.get("id") ?? "";
+	const purchaseStatus = searchParams.get("purchase");
+
+	useEffect(() => {
+		if (!purchaseStatus) return;
+		if (purchaseStatus === "success") {
+			toast.success("Purchase successful! You now have access to this package.", { duration: 5000 });
+		} else if (purchaseStatus === "canceled") {
+			toast.info("Purchase was canceled. You can try again anytime.");
+		}
+		const url = new URL(window.location.href);
+		url.searchParams.delete("purchase");
+		router.replace(url.pathname + url.search, { scroll: false });
+	}, [purchaseStatus, router]);
 
 	const handleBack = useCallback(() => router.back(), [router]);
 	const compileStatus = getPackageStatus?.(packageId);
@@ -146,6 +230,7 @@ function PackageDetailWrapper({
 			onUninstallError={(error) =>
 				toast.error(`Failed to uninstall package: ${error.message}`)
 			}
+			onDeleteSuccess={handleBack}
 			fetcher={fetcher}
 			auth={auth}
 			compileStatus={compileStatus}
@@ -153,7 +238,105 @@ function PackageDetailWrapper({
 	);
 }
 
-function PackageListContent({
+function categoryLabel(cat: string): string {
+	return cat
+		.split("_")
+		.map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+		.join(" ");
+}
+
+function groupByCategory(packages: PackageSummary[]): Map<string, PackageSummary[]> {
+	const groups = new Map<string, PackageSummary[]>();
+	const seen = new Set<string>();
+
+	for (const pkg of packages) {
+		const category = pkg.primaryCategory ?? pkg.secondaryCategory ?? "OTHER";
+		const label = categoryLabel(category);
+		if (!groups.has(label)) groups.set(label, []);
+		if (!seen.has(pkg.id)) {
+			groups.get(label)!.push(pkg);
+			seen.add(pkg.id);
+		}
+	}
+	return groups;
+}
+
+function Swimlane({ title, packages }: { title: string; packages: PackageSummary[] }) {
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const [canScrollLeft, setCanScrollLeft] = useState(false);
+	const [canScrollRight, setCanScrollRight] = useState(false);
+
+	const checkScroll = useCallback(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		setCanScrollLeft(el.scrollLeft > 0);
+		setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+	}, []);
+
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		checkScroll();
+		el.addEventListener("scroll", checkScroll, { passive: true });
+		const ro = new ResizeObserver(checkScroll);
+		ro.observe(el);
+		return () => {
+			el.removeEventListener("scroll", checkScroll);
+			ro.disconnect();
+		};
+	}, [checkScroll]);
+
+	const scroll = (direction: "left" | "right") => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const amount = el.clientWidth * 0.8;
+		el.scrollBy({ left: direction === "left" ? -amount : amount, behavior: "smooth" });
+	};
+
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center gap-2">
+				<h3 className="text-sm font-semibold capitalize">{title}</h3>
+				<span className="text-[10px] text-muted-foreground/50 font-mono">
+					{packages.length}
+				</span>
+				<ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30" />
+			</div>
+			<div className="relative group/swimlane">
+				{canScrollLeft && (
+					<button
+						type="button"
+						onClick={() => scroll("left")}
+						className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-r from-background/80 to-transparent opacity-0 group-hover/swimlane:opacity-100 transition-opacity"
+					>
+						<ChevronRight className="h-4 w-4 rotate-180" />
+					</button>
+				)}
+				<div
+					ref={scrollRef}
+					className="flex gap-3 overflow-x-auto scrollbar-none pb-1"
+				>
+					{packages.map((pkg) => (
+						<div key={pkg.id} className="w-70 shrink-0">
+							<PackageCard pkg={pkg} />
+						</div>
+					))}
+				</div>
+				{canScrollRight && (
+					<button
+						type="button"
+						onClick={() => scroll("right")}
+						className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-l from-background/80 to-transparent opacity-0 group-hover/swimlane:opacity-100 transition-opacity"
+					>
+						<ChevronRight className="h-4 w-4" />
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+export function PackageListContent({
 	fetcher,
 	auth,
 }: { fetcher: GenericFetcher; auth: AuthContextProps }) {
@@ -171,20 +354,10 @@ function PackageListContent({
 	const limit = 12;
 
 	const debouncedQuery = useDebounce(searchQuery, 300);
-
-	const buildFilters = useCallback((): SearchFilters => {
-		return {
-			query: debouncedQuery || undefined,
-			sortBy,
-			sortDesc: true,
-			verifiedOnly,
-			offset,
-			limit,
-		};
-	}, [debouncedQuery, sortBy, verifiedOnly, offset, limit]);
+	const isAuthenticated = !!auth?.user?.access_token;
 
 	const searchResults = useQuery({
-		queryKey: ["registry-search", debouncedQuery, sortBy, verifiedOnly, offset],
+		queryKey: ["registry-search", debouncedQuery, sortBy, verifiedOnly, offset, isAuthenticated],
 		queryFn: async () => {
 			if (!profile.data) return null;
 			const params = new URLSearchParams();
@@ -194,6 +367,8 @@ function PackageListContent({
 			params.set("verified_only", String(verifiedOnly));
 			params.set("offset", String(offset));
 			params.set("limit", String(limit));
+			params.set("language", navigator.language?.split("-")[0] ?? "en");
+			params.set("include_own", "true");
 
 			return fetcher<SearchResults>(
 				profile.data.hub_profile,
@@ -207,18 +382,16 @@ function PackageListContent({
 
 	const totalPages = Math.ceil((searchResults.data?.totalCount ?? 0) / limit);
 	const currentPage = Math.floor(offset / limit) + 1;
+	const isSearching = !!debouncedQuery;
+
+	const swimlaneGroups = useMemo(() => {
+		if (isSearching || !searchResults.data?.packages.length) return null;
+		return groupByCategory(searchResults.data.packages);
+	}, [isSearching, searchResults.data?.packages]);
 
 	return (
-		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
-			<div className="mx-auto w-full max-w-7xl space-y-8">
-				<div className="space-y-2">
-					<h1 className="text-2xl font-semibold tracking-tight">Packages</h1>
-					<p className="text-sm text-muted-foreground">
-						Discover and install WASM node packages
-					</p>
-				</div>
-
-				<div className="flex flex-col sm:flex-row gap-4">
+		<div className="space-y-6 w-full">
+			<div className="flex flex-col sm:flex-row gap-4">
 					<div className="relative flex-1">
 						<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 						<Input
@@ -240,7 +413,7 @@ function PackageListContent({
 								setOffset(0);
 							}}
 						>
-							<SelectTrigger className="w-[150px]">
+							<SelectTrigger className="w-37.5">
 								<SlidersHorizontal className="mr-2 h-4 w-4" />
 								<SelectValue placeholder="Sort by" />
 							</SelectTrigger>
@@ -278,8 +451,8 @@ function PackageListContent({
 				)}
 
 				{searchResults.isLoading ? (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-						{Array.from({ length: 8 }).map((_, i) => (
+					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+						{Array.from({ length: 9 }).map((_, i) => (
 							<PackageCardSkeleton key={i} />
 						))}
 					</div>
@@ -291,8 +464,14 @@ function PackageListContent({
 							Try adjusting your search or filters
 						</p>
 					</div>
+				) : swimlaneGroups && swimlaneGroups.size > 1 ? (
+					<div className="space-y-6">
+						{Array.from(swimlaneGroups.entries()).map(([category, pkgs]) => (
+							<Swimlane key={category} title={category} packages={pkgs} />
+						))}
+					</div>
 				) : (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 						{searchResults.data?.packages.map((pkg) => (
 							<PackageCard key={pkg.id} pkg={pkg} />
 						))}
@@ -322,8 +501,7 @@ function PackageListContent({
 						</button>
 					</div>
 				)}
-			</div>
-		</main>
+		</div>
 	);
 }
 
@@ -347,7 +525,19 @@ function PageContent({
 		);
 	}
 
-	return <PackageListContent fetcher={fetcher} auth={auth} />;
+	return (
+		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
+			<div className="mx-auto w-full max-w-7xl space-y-8">
+				<div className="space-y-2">
+					<h1 className="text-2xl font-semibold tracking-tight">Packages</h1>
+					<p className="text-sm text-muted-foreground">
+						Discover and install WASM node packages
+					</p>
+				</div>
+				<PackageListContent fetcher={fetcher} auth={auth} />
+			</div>
+		</main>
+	);
 }
 
 export function PackagesStorePage({

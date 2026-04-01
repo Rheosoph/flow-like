@@ -96,6 +96,25 @@ impl FlowLikeStore {
         Ok(final_path)
     }
 
+    pub async fn construct_user_upload(
+        &self,
+        sub: &str,
+        app_id: &str,
+        prefix: &str,
+    ) -> Result<Path> {
+        let base_path = Path::from("users").child(sub).child("apps").child(app_id);
+
+        let final_path = prefix
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .fold(base_path, |acc, seg| {
+                let decoded = decode(seg).unwrap_or(std::borrow::Cow::Borrowed(seg));
+                acc.child(decoded.as_ref())
+            });
+
+        Ok(final_path)
+    }
+
     pub async fn sign(&self, method: &str, path: &Path, expires_after: Duration) -> Result<Url> {
         let method = match method.to_uppercase().as_str() {
             "GET" => reqwest::Method::GET,
@@ -164,6 +183,12 @@ impl FlowLikeStore {
         let finalized = hash.finalize();
         let finalized = finalized.to_hex().to_lowercase().to_string();
         Ok(finalized)
+    }
+
+    pub async fn put(&self, path: &Path, data: impl Into<object_store::PutPayload>) -> Result<()> {
+        let store = self.as_generic();
+        store.put(path, data.into()).await?;
+        Ok(())
     }
 
     pub async fn put_from_url(&self, url: &str) -> Result<(Path, usize)> {

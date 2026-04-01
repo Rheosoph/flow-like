@@ -1,5 +1,6 @@
 //! Delete a package
 
+use crate::audit;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
@@ -35,5 +36,13 @@ pub async fn delete_package(
 
     registry.delete_package(&package_id).await?;
 
+    audit!(
+        state,
+        user,
+        "admin.package.delete",
+        "WasmPackage",
+        package_id,
+        "Package deleted"
+    );
     Ok(Json(()))
 }

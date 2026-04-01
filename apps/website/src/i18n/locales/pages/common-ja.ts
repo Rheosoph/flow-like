@@ -46,6 +46,9 @@ export const jaCommon = {
 	"footer.privacy": "プライバシーポリシー",
 	"footer.legal": "法的通知",
 	"footer.dataDeletion": "データ削除",
+	"footer.security": "セキュリティ",
+	"footer.dpa": "データ処理契約",
+	"footer.subprocessors": "復処理者",
 
 	// BI Preview Section
 	"bi.preview.badge": "ビジネスインテリジェンス",

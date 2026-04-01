@@ -1,12 +1,23 @@
 "use client";
 
-import { Suspense, lazy, useMemo, useState } from "react";
+import {
+	type ComponentType,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { cn } from "../../../lib/utils";
 import { type ChartInput, parseChartData } from "./chart-data-parser";
 
-// Lazy load chart components to avoid bundle bloat
-const PlotlyChartPreview = lazy(() => import("./chart-plotly-preview"));
-const NivoChartPreview = lazy(() => import("./chart-nivo-preview"));
+type ChartPreviewComponent = ComponentType<{
+	input: ChartInput;
+	height?: number;
+}>;
+
+const CHART_COMPONENTS = {
+	nivo: () => import("./chart-nivo-preview"),
+	plotly: () => import("./chart-plotly-preview"),
+} as const;
 
 interface ChartCodeBlockProps {
 	/** Raw content from code block */
@@ -32,6 +43,27 @@ function ChartErrorFallback({ error }: { error: string }) {
 		</div>
 	);
 }
+
+function ChartModuleFallback({
+	error,
+	onRetry,
+}: {
+	error: string;
+	onRetry: () => void;
+}) {
+	return (
+		<div className="flex h-50 flex-col items-center justify-center gap-3 rounded-md bg-destructive/10 p-4">
+			<span className="text-center text-sm text-destructive">{error}</span>
+			<button
+				type="button"
+				onClick={onRetry}
+				className="rounded bg-background/80 px-3 py-1 text-xs text-foreground"
+			>
+				Retry chart load
+			</button>
+		</div>
+	);
+	}
 
 /**
  * ChartCodeBlock renders ```nivo``` or ```plotly``` code blocks as interactive charts.
@@ -61,6 +93,11 @@ export function ChartCodeBlock({
 	className,
 }: ChartCodeBlockProps) {
 	const [showSource, setShowSource] = useState(false);
+	const [ChartComponent, setChartComponent] =
+		useState<ChartPreviewComponent | null>(null);
+	const [moduleError, setModuleError] = useState<string | null>(null);
+	const [isModuleLoading, setIsModuleLoading] = useState(false);
+	const [retryKey, setRetryKey] = useState(0);
 
 	const chartInput = useMemo<ChartInput | null>(() => {
 		try {
@@ -69,6 +106,40 @@ export function ChartCodeBlock({
 			return null;
 		}
 	}, [content, language]);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		setIsModuleLoading(true);
+		setModuleError(null);
+		setChartComponent(null);
+
+		CHART_COMPONENTS[language]()
+			.then((mod) => {
+				if (cancelled) return;
+				const component = (mod.default ?? null) as ChartPreviewComponent | null;
+				if (!component) {
+					setModuleError("Chart preview module loaded without a default export.");
+					return;
+				}
+				setChartComponent(() => component);
+			})
+			.catch((error) => {
+				if (cancelled) return;
+				const message =
+					error instanceof Error ? error.message : "Failed to load chart preview.";
+				setModuleError(message);
+			})
+			.finally(() => {
+				if (!cancelled) {
+					setIsModuleLoading(false);
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [language, retryKey]);
 
 	if (!chartInput) {
 		return <ChartErrorFallback error="Failed to parse chart data" />;
@@ -100,13 +171,16 @@ export function ChartCodeBlock({
 			>
 				View Source
 			</button>
-			<Suspense fallback={<ChartLoadingFallback />}>
-				{language === "plotly" ? (
-					<PlotlyChartPreview input={chartInput} />
-				) : (
-					<NivoChartPreview input={chartInput} />
-				)}
-			</Suspense>
+			{isModuleLoading ? <ChartLoadingFallback /> : null}
+			{!isModuleLoading && moduleError ? (
+				<ChartModuleFallback
+					error={moduleError}
+					onRetry={() => setRetryKey((value) => value + 1)}
+				/>
+			) : null}
+			{!isModuleLoading && !moduleError && ChartComponent ? (
+				<ChartComponent input={chartInput} />
+			) : null}
 		</div>
 	);
 }

@@ -14,7 +14,9 @@ use flow_like::{
     },
 };
 use flow_like_model_provider::{
-    history::History, response::Response, response_chunk::ResponseChunk,
+    history::History,
+    response::{LLMUsageStats, Response},
+    response_chunk::ResponseChunk,
 };
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
@@ -60,7 +62,7 @@ impl SimpleAgentNode {
         let mut agent = Agent::new(model_bit.clone(), max_iterations);
 
         // Set model display name from bit metadata
-        if let Some(meta) = model_bit.meta.get("name") {
+        if let Some(meta) = model_bit.meta.get("en") {
             agent.model_display_name = Some(meta.name.clone());
         }
 
@@ -100,6 +102,10 @@ impl SimpleAgentNode {
             .set_pin_value("response", json::json!(result.response))
             .await?;
 
+        context
+            .set_pin_value("stats", json::json!(result.stats))
+            .await?;
+
         context.activate_exec_pin("exec_done").await?;
 
         Ok(())
@@ -117,6 +123,7 @@ impl NodeLogic for SimpleAgentNode {
         );
         node.add_icon("/flow/icons/for-each.svg");
         node.set_can_reference_fns(true);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -225,6 +232,15 @@ impl NodeLogic for SimpleAgentNode {
             VariableType::Struct,
         )
         .set_schema::<History>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.set_long_running(true);

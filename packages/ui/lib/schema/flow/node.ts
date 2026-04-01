@@ -1,3 +1,5 @@
+import type { INodePermission } from "./board";
+
 export interface INode {
 	category: string;
 	comment?: null | string;
@@ -28,7 +30,7 @@ export interface INode {
 
 export interface INodeWasm {
 	package_id: string;
-	permissions: string[];
+	permissions: INodePermission[];
 }
 
 export interface IPin {

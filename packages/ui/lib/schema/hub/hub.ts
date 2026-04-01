@@ -18,6 +18,7 @@ export interface IHub {
 	oauth_providers?: { [key: string]: IOAuthProviderConfig };
 	privacy_policy: string;
 	provider?: null | string;
+	push_notifications?: IPushNotificationsConfig;
 	region?: null | string;
 	terms_of_service: string;
 	signaling?: null | string[];
@@ -53,6 +54,44 @@ export interface ISupportedSinks {
 	telegram?: boolean;
 	/** Email/IMAP polling */
 	email?: boolean;
+	[property: string]: any;
+}
+
+export type PushNotificationProviderType =
+	| "fcm"
+	| "aws_sns"
+	| "azure_notification_hubs";
+
+export interface IFcmPushNotificationsConfig {
+	project_id: string;
+	service_account_json_env: string;
+	[property: string]: any;
+}
+
+export interface IAwsSnsPushNotificationsConfig {
+	android_platform_application_arn_env: string;
+	ios_platform_application_arn_env: string;
+	region_env?: string | null;
+	[property: string]: any;
+}
+
+export interface IAzureNotificationHubsPushNotificationsConfig {
+	namespace: string;
+	hub_name: string;
+	sas_key_name_env: string;
+	sas_key_value_env: string;
+	[property: string]: any;
+}
+
+export interface IPushNotificationsConfig {
+	enabled?: boolean;
+	allow_mobile?: boolean;
+	allow_desktop?: boolean;
+	provider?: PushNotificationProviderType | null;
+	channel_id?: string | null;
+	fcm?: IFcmPushNotificationsConfig | null;
+	aws_sns?: IAwsSnsPushNotificationsConfig | null;
+	azure_notification_hubs?: IAzureNotificationHubsPushNotificationsConfig | null;
 	[property: string]: any;
 }
 

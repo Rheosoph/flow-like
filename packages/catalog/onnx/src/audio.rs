@@ -7,6 +7,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
     ndarray::{Array1, Array2},
@@ -15,7 +16,6 @@ use flow_like_model_provider::ml::{
 use flow_like_types::{Result, anyhow, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Audio data for processing
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -147,7 +147,8 @@ impl NodeLogic for LoadAudioNode {
             VariableType::Execution,
         );
 
-        node.add_input_pin("path", "Path", "Path to audio file", VariableType::PathBuf);
+        node.add_input_pin("path", "Path", "Path to audio file", VariableType::Struct)
+            .set_schema::<FlowPath>();
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
 
@@ -177,10 +178,10 @@ impl NodeLogic for LoadAudioNode {
         {
             context.deactivate_exec_pin("exec_out").await?;
 
-            let path: PathBuf = context.evaluate_pin("path").await?;
+            let path: FlowPath = context.evaluate_pin("path").await?;
+            let bytes = path.get(context, false).await?;
 
-            // Read audio file using hound for WAV support
-            let reader = hound::WavReader::open(&path)
+            let reader = hound::WavReader::new(std::io::Cursor::new(bytes))
                 .map_err(|e| anyhow!("Failed to open audio file: {}", e))?;
 
             let spec = reader.spec();
@@ -477,8 +478,13 @@ impl NodeLogic for ResampleAudioNode {
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
 
-        node.add_output_pin("audio", "Audio", "Resampled audio", VariableType::Struct)
-            .set_schema::<AudioData>();
+        node.add_output_pin(
+            "audio_out",
+            "Audio Out",
+            "Resampled audio",
+            VariableType::Struct,
+        )
+        .set_schema::<AudioData>();
 
         node
     }
@@ -499,7 +505,7 @@ impl NodeLogic for ResampleAudioNode {
             }
             result = result.resample(target_rate as u32);
 
-            context.set_pin_value("audio", json!(result)).await?;
+            context.set_pin_value("audio_out", json!(result)).await?;
             context.activate_exec_pin("exec_out").await?;
             Ok(())
         }

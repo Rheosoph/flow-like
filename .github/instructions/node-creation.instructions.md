@@ -1,6 +1,9 @@
 ---
 applyTo: "packages/catalog/**/*.rs"
 ---
+
+VERY IMPORTANT: when checking nodes with cargo check probably you need the execute feature!
+
 # Node Creation Guidelines
 
 Apply the [general coding guidelines](./general-coding.instructions.md) to all code.
@@ -92,9 +95,59 @@ If you need more abstract memory, like a thread-handle or database connections y
 - Add a nice node and pin description, so the user understands what the node does.
 - Add scores to the node rating: privacy, security, performance, governance, reliability, cost. 0 - 10 (bad - good)
 
+## WASM Node Permissions
+WASM nodes must declare their required permissions per-node using the `NodePermission` enum. Permissions are enforced by the sandbox at runtime and displayed in the UI sideload warning dialog.
+
+Available permissions (from `NodePermission` enum):
+- `NetworkHttp` — outbound HTTP requests
+- `NetworkWebsocket` — WebSocket connections
+- `NetworkTcp` — TCP socket access
+- `NetworkUdp` — UDP socket access
+- `NetworkDns` — DNS lookups
+- `StorageRead` — read from node/user storage
+- `StorageWrite` — write to node/user storage
+- `Variables` — access flow variables
+- `Cache` — access execution cache
+- `Streaming` — stream responses to the client
+- `Models` — access LLM / model providers
+- `A2ui` — dynamic UI (Agent-to-UI)
+- `OAuth` — OAuth authentication
+- `Functions` — call other functions/sub-flows
+
+Only declare permissions the node actually uses. Nodes with no side effects need no permissions.
+
+### Rust SDK example
+```rust
+fn get_node(&self) -> NodeDefinition {
+    let mut node = NodeDefinition::new("my_node", "My Node", "Does something", "Custom");
+    // ... pins ...
+    node.add_permission(NodePermission::NetworkHttp);
+    node.add_permission(NodePermission::StorageRead);
+    node
+}
+```
+
+### Native catalog nodes
+Native (built-in) catalog nodes do not need permissions — they are trusted by default and have no WASM sandbox.
+
+## CRITICAL: Input and Output Pins Must Have Different Names
+When a value passes through a node (input → output), the input pin and output pin MUST have different `name` values (first argument). The friendly name (second argument) CAN be the same. Pin names are used by `context.evaluate_pin()` / `context.get_pin_by_name()` and `context.set_pin_value()` to identify which pin to read/write — if an input and output share the same name, get/set operations will collide.
+
+```rust
+// WRONG — both share the name "log"
+node.add_input_pin("log", "Log", "Log message", VariableType::String);
+node.add_output_pin("log", "Log", "Log message", VariableType::String);
+
+// CORRECT — different names, friendly names can match
+node.add_input_pin("input_log", "Log", "Log message input", VariableType::String);
+node.add_output_pin("output_log", "Log", "Log message output", VariableType::String);
+```
+
+Common prefixing conventions: `input_` / `output_`, or semantically distinct names like `source_text` / `result_text`.
+
 ## Tipps and Tricks
 - Log out warnings, errors etc.
-- Multiple Pins with the same name are allowed, they will offer the user to add more pins of this same type to the node.
+- Multiple Pins with the same name are allowed **within the same direction** (all inputs or all outputs) — they will offer the user to add more pins of this same type to the node.
 - Set the Options to offer the user enum drop downs, set a schema for struct pins, it is super helpful.
 - If you can, set default values.
 - You can abstract inputs using JsonSchemar Structs (and use their schema in the Pin Options) to created typed interactions.
@@ -103,6 +156,9 @@ If you need more abstract memory, like a thread-handle or database connections y
 ## Types to Use
 - for Images use: NodeImage
 - for Files use: FlowPath
+
+## Updating existing nodes interfaces
+If you update the input / output pins of an existing node, dont forget to push the version of the node too!
 
 ## Example Nodes
 <Example Pure Node>

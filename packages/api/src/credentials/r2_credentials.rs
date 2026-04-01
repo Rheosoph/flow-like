@@ -37,7 +37,7 @@ struct R2TempCredentials {
     session_token: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct R2RuntimeCredentials {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -50,6 +50,31 @@ pub struct R2RuntimeCredentials {
     pub expiration: Option<chrono::DateTime<chrono::Utc>>,
     pub content_path_prefix: Option<String>,
     pub user_content_path_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for R2RuntimeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("R2RuntimeCredentials")
+            .field(
+                "access_key_id",
+                &self.access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("meta_bucket", &self.meta_bucket)
+            .field("content_bucket", &self.content_bucket)
+            .field("logs_bucket", &self.logs_bucket)
+            .field("endpoint", &self.endpoint)
+            .field("account_id", &self.account_id)
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 impl R2RuntimeCredentials {
@@ -124,6 +149,10 @@ impl R2RuntimeCredentials {
             return Err(anyhow!("Sub or App ID cannot be empty"));
         }
 
+        // Validate sub and app_id to prevent path traversal
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
+
         let api_token = std::env::var("R2_API_TOKEN")
             .map_err(|_| anyhow!("R2_API_TOKEN environment variable not set"))?;
 
@@ -142,17 +171,14 @@ impl R2RuntimeCredentials {
         let (permission, prefixes) = match mode {
             CredentialsAccess::EditApp => ("object-read-write", vec![apps_prefix]),
             CredentialsAccess::ReadApp => ("object-read-only", vec![apps_prefix]),
+            CredentialsAccess::EditUser => ("object-read-write", vec![user_prefix]),
+            CredentialsAccess::ReadUser => ("object-read-only", vec![user_prefix]),
             CredentialsAccess::InvokeNone => (
                 "object-read-write",
-                vec![
-                    apps_prefix.clone(),
-                    user_prefix,
-                    log_prefix,
-                    temporary_user_prefix,
-                ],
+                vec![user_prefix, log_prefix, temporary_user_prefix],
             ),
             CredentialsAccess::InvokeRead => (
-                "object-read-write",
+                "object-read-only",
                 vec![
                     apps_prefix.clone(),
                     user_prefix,
@@ -287,8 +313,10 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
         self.into_shared_credentials().to_db(app_id).await
     }
 
-    async fn to_db_scoped(&self, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db_scoped(app_id).await
+    async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
+        self.into_shared_credentials()
+            .to_db_scoped(sub, app_id)
+            .await
     }
 
     #[tracing::instrument(

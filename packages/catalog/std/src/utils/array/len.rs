@@ -45,13 +45,9 @@ impl NodeLogic for ArrayLengthNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let array = context.evaluate_pin_to_ref("array").await?;
 
-        {
-            let array = array.as_ref().lock().await;
-
-            if let Some(array) = array.as_array() {
-                context.set_pin_value("length", json!(array.len())).await?;
-                return Ok(());
-            }
+        if let Some(array) = array.as_array() {
+            context.set_pin_value("length", json!(array.len())).await?;
+            return Ok(());
         }
 
         context.set_pin_value("length", json!(0)).await?;

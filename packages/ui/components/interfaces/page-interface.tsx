@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +33,7 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import type { IUseInterfaceProps } from "./interfaces";
+import { PageLoadingSkeleton } from "./page-loading-skeleton";
 
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
@@ -61,19 +62,112 @@ function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
 		id: pageId,
 		rootComponentId,
 		components: componentsRecord,
+		canvasSettings: page.canvasSettings,
 	};
 }
 
 function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 	const [surface, setSurface] = useState<Surface | null>(initialSurface);
+	const prevInitialSurfaceRef = useRef<Surface | null>(initialSurface);
 
-	// Update surface when initialSurface changes
-	useEffect(() => {
+	// Sync initialSurface → surface during render (no one-render lag)
+	if (initialSurface !== prevInitialSurfaceRef.current) {
+		prevInitialSurfaceRef.current = initialSurface;
 		setSurface(initialSurface);
-	}, [initialSurface]);
+	}
 
 	const handleServerMessage = useCallback(
 		(message: A2UIServerMessage) => {
+			if (message.type === "setCanvasSettings") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id) {
+						return prevSurface;
+					}
+
+					// Filter null/undefined values to avoid overwriting existing settings
+					// (Rust serializes Option::None as null)
+					const filtered = Object.fromEntries(
+						Object.entries(message.canvasSettings).filter(
+							([, v]) => v != null,
+						),
+					);
+
+					return {
+						...prevSurface,
+						canvasSettings: {
+							...prevSurface.canvasSettings,
+							...filtered,
+						},
+					};
+				});
+				return;
+			}
+
+			if (message.type === "surfaceUpdate") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = { ...prevSurface.components };
+					for (const comp of message.components) {
+						updatedComponents[comp.id] = comp;
+					}
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "createElement") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = {
+						...prevSurface.components,
+						[message.component.id]: message.component,
+					};
+					const parent = prevSurface.components[message.parentId];
+					if (parent) {
+						const parentComp = parent.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const childrenData = parentComp.children as
+							| { explicitList?: string[] }
+							| undefined;
+						const existingChildren = childrenData?.explicitList || [];
+						const newChildren = [...existingChildren];
+						if (
+							message.index !== undefined &&
+							message.index >= 0 &&
+							message.index <= newChildren.length
+						) {
+							newChildren.splice(message.index, 0, message.component.id);
+						} else {
+							newChildren.push(message.component.id);
+						}
+						updatedComponents[message.parentId] = {
+							...parent,
+							component: {
+								...parentComp,
+								children: { explicitList: newChildren },
+							} as SurfaceComponent["component"],
+						};
+					}
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "removeElement") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+					const updatedComponents = { ...prevSurface.components };
+					delete updatedComponents[message.elementId];
+					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
 			if (message.type !== "upsertElement") return;
 
 			setSurface((prevSurface) => {
@@ -89,7 +183,26 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 				if (surfaceId !== prevSurface.id) return prevSurface;
 
 				const component = prevSurface.components[componentId];
-				if (!component) return prevSurface;
+
+				// Create new component if it doesn't exist and value has createComponent type
+				if (!component) {
+					const updateValue = value as Record<string, unknown>;
+					if (updateValue?.type === "createComponent") {
+						const newComponent: SurfaceComponent = {
+							id: componentId,
+							component: updateValue.component as SurfaceComponent["component"],
+							style: updateValue.style as SurfaceComponent["style"],
+						};
+						return {
+							...prevSurface,
+							components: {
+								...prevSurface.components,
+								[componentId]: newComponent,
+							},
+						};
+					}
+					return prevSurface;
+				}
 
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;
@@ -267,7 +380,8 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						};
 						break;
 					}
-					case "setChartData": {
+					case "setChartData":
+					case "setNivoData": {
 						const data = updateValue.data;
 						const componentData = component.component as unknown as Record<
 							string,
@@ -277,13 +391,14 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								data,
+								data: { literalJson: JSON.stringify(data) },
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
 					}
-					case "setChartLayout": {
-						const layout = updateValue.layout;
+					case "setChartLayout":
+					case "setNivoConfig": {
+						const configOrLayout = updateValue.layout ?? updateValue.config;
 						const componentData = component.component as unknown as Record<
 							string,
 							unknown
@@ -292,7 +407,8 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								layout,
+								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -467,10 +583,10 @@ function PageInterfaceInner({
 	const router = useRouter();
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
-	const [page, setPage] = useState<IPage | null>(providedPage || null);
+	const [page, setPage] = useState<IPage | null>(null);
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
-	const [isLoading, setIsLoading] = useState(!providedPage);
+	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
@@ -779,9 +895,7 @@ function PageInterfaceInner({
 
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
-	useEffect(() => {
-		surfaceRef.current = surface;
-	}, [surface]);
+	surfaceRef.current = surface;
 
 	// Build elements from surface components for the workflow payload
 	// Uses ref to avoid dependency on surface changing
@@ -931,12 +1045,17 @@ function PageInterfaceInner({
 		return () => clearInterval(intervalId);
 	}, [page?.onIntervalEventId, page?.onIntervalSeconds, executePageEvent]);
 
+	// Strip canvasSettings from the surface for A2UIRenderer — this component
+	// already handles CSS injection and canvas styling at the outer level.
+	// Passing it again would cause double CSS scoping and inline-style conflicts.
+	const surfaceForRenderer = useMemo(() => {
+		if (!surface) return null;
+		if (!surface.canvasSettings) return surface;
+		return { ...surface, canvasSettings: undefined };
+	}, [surface]);
+
 	if (isLoading || isLoadEventRunning) {
-		return (
-			<div className="flex items-center justify-center h-full">
-				<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-			</div>
-		);
+		return <PageLoadingSkeleton />;
 	}
 
 	if (error) {
@@ -978,17 +1097,23 @@ function PageInterfaceInner({
 		);
 	}
 
+	const runtimeCanvasSettings = surface?.canvasSettings ?? page?.canvasSettings;
+
 	const canvasStyle: React.CSSProperties = {
-		backgroundColor: page?.canvasSettings?.backgroundColor,
-		padding: page?.canvasSettings?.padding,
-		backgroundImage: page?.canvasSettings?.backgroundImage
-			? `url(${page.canvasSettings.backgroundImage})`
+		backgroundColor: runtimeCanvasSettings?.backgroundColor,
+		padding: runtimeCanvasSettings?.padding,
+		backgroundImage: runtimeCanvasSettings?.backgroundImage
+			? `url(${runtimeCanvasSettings.backgroundImage})`
 			: undefined,
-		backgroundSize: "cover",
-		backgroundPosition: "center",
+		backgroundSize: runtimeCanvasSettings?.backgroundImage
+			? "cover"
+			: undefined,
+		backgroundPosition: runtimeCanvasSettings?.backgroundImage
+			? "center"
+			: undefined,
 	};
 
-	const customCss = page?.canvasSettings?.customCss;
+	const customCss = runtimeCanvasSettings?.customCss;
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
@@ -1006,11 +1131,11 @@ function PageInterfaceInner({
 			>
 				<DataProvider initialData={[]}>
 					<A2UIRenderer
-						surface={surface}
+						surface={surfaceForRenderer!}
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
-						boardId={routeEvent?.board_id}
+						boardId={page?.boardId || routeEvent?.board_id}
 						onA2UIMessage={handleA2UIMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}

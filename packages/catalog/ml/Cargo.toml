@@ -30,7 +30,6 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -56,3 +55,6 @@ linfa-trees = { version = "0.8.1", features = ["serde"], optional = true }
 fory = { version = "0.14.1", optional = true }
 fory-core = { version = "0.14.1", optional = true }
 rmp-serde = { version = "1.3", optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

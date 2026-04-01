@@ -1,6 +1,8 @@
 //! Discord user interaction - waiting for messages and sending interactive components
 
-use super::session::{DiscordSession, get_discord_client};
+use super::session::DiscordSession;
+#[cfg(feature = "execute")]
+use super::session::get_discord_client;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -10,6 +12,7 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use serenity::all::{
     ButtonStyle, ChannelId, CreateActionRow, CreateButton, CreateMessage, CreateSelectMenu,
     CreateSelectMenuKind, CreateSelectMenuOption, EditMessage,
@@ -162,6 +165,7 @@ impl NodeLogic for SendAndWaitNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let prompt: String = context.evaluate_pin("prompt").await?;
@@ -274,6 +278,13 @@ impl NodeLogic for SendAndWaitNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -368,6 +379,7 @@ impl NodeLogic for WaitForMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let from_user_id: Option<String> = context.evaluate_pin("from_user_id").await.ok();
@@ -476,6 +488,13 @@ impl NodeLogic for WaitForMessageNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -549,6 +568,7 @@ impl NodeLogic for SendButtonsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let content: String = context.evaluate_pin("content").await?;
@@ -601,6 +621,13 @@ impl NodeLogic for SendButtonsNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -699,6 +726,7 @@ impl NodeLogic for SendSelectMenuNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let content: String = context.evaluate_pin("content").await?;
@@ -756,6 +784,13 @@ impl NodeLogic for SendSelectMenuNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -815,6 +850,7 @@ impl NodeLogic for DisableComponentsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let message_id: String = context.evaluate_pin("message_id").await?;
@@ -835,5 +871,12 @@ impl NodeLogic for DisableComponentsNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

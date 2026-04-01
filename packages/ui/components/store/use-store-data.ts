@@ -41,6 +41,9 @@ export function useStoreData(
 		[appId: string, language?: string | undefined]
 	>(backend.appState.getAppMeta, backend.appState, [id!], !!id);
 
+	const appData = app.data ?? null;
+	const metaData = meta.data ?? null;
+
 	const isMember = useMemo(
 		() => !!(id && apps.data?.some(([a]) => a.id === id)),
 		[apps.data, id],
@@ -138,17 +141,16 @@ export function useStoreData(
 	}, [id, isPurchasing, backend.appState, apps, router]);
 
 	const onJoinOrRequest = useCallback(async () => {
-		const data = app.data;
-		if (!data || !id) return;
+		if (!appData || !id) return;
 		try {
-			if (data.price && data.price > 0) {
+			if (appData.price && appData.price > 0) {
 				await onBuy();
 				return;
 			}
 
-			if (data.visibility === IAppVisibility.PublicRequestAccess) {
+			if (appData.visibility === IAppVisibility.PublicRequestAccess) {
 				await backend.appState.requestJoinApp(
-					data.id,
+					appData.id,
 					"Interested in trying out your app!",
 				);
 				toast.success(
@@ -158,7 +160,7 @@ export function useStoreData(
 				return;
 			}
 
-			if (data.visibility !== IAppVisibility.Public) {
+			if (appData.visibility !== IAppVisibility.Public) {
 				toast.error(
 					"You don't have access to this app. Please request access from the author.",
 				);
@@ -166,29 +168,40 @@ export function useStoreData(
 			}
 
 			await backend.appState.requestJoinApp(
-				data.id,
+				appData.id,
 				"Interested in trying out your app!",
 			);
 			toast.success("Joined app! You can now access it.");
 			await apps.refetch?.();
-			await router.push(`/use?id=${data.id}`);
+			await router.push(`/use?id=${appData.id}`);
 		} catch (e) {
 			toast.error("Failed to request to join app. Please try again later.");
 		}
-	}, [app.data, id, backend.appState, apps, router, onBuy]);
+	}, [appData, id, backend.appState, apps, router, onBuy]);
 
-	const hasThumbnail = !!meta.data?.thumbnail;
-	const coverUrl = meta.data?.thumbnail || "/placeholder-thumbnail.webp";
-	const iconUrl = meta.data?.icon || "/app-logo.webp";
-	const appName = meta.data?.name || app.data?.id || "App";
-	const priceLabel = formatPrice(app.data?.price ?? null);
+	const hasThumbnail = !!metaData?.thumbnail;
+	const coverUrl = metaData?.thumbnail || "/placeholder-thumbnail.webp";
+	const iconUrl = metaData?.icon || "/app-logo.webp";
+	const appName = metaData?.name || appData?.id || "App";
+	const priceLabel = formatPrice(appData?.price ?? null);
+	const isLoading = app.isLoading || meta.isLoading;
+	const isError = app.isError || meta.isError;
+	const notFound = !isLoading && !isError && !appData;
+	const refetchAppData = useCallback(async () => {
+		await Promise.all([app.refetch?.(), meta.refetch?.(), apps.refetch?.()]);
+	}, [app, meta, apps]);
 
 	return {
 		apps,
 		app,
 		meta,
+		appData,
+		metaData,
 		isMember,
 		isPurchasing,
+		isLoading,
+		isError,
+		notFound,
 		hasThumbnail,
 		coverUrl,
 		iconUrl,
@@ -199,5 +212,6 @@ export function useStoreData(
 		onSettings,
 		onBuy,
 		onJoinOrRequest,
+		refetchAppData,
 	} as const;
 }

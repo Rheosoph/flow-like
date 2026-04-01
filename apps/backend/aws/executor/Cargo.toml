@@ -5,8 +5,8 @@ edition = "2024"
 description = "Flow-Like AWS Lambda Executor with Streaming Support"
 
 [dependencies]
-flow-like-catalog = { workspace = true, features = ["execute", "remote-ml", "remote"] }
-flow-like-executor = { workspace = true, features = ["all-execute"] }
+flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
+flow-like-executor = { workspace = true, features = ["all-server-execute"] }
 flow-like-types.workspace = true
 lambda_http.workspace = true
 mimalloc.workspace = true
@@ -19,7 +19,7 @@ sentry.workspace = true
 sentry-tracing.workspace = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

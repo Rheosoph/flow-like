@@ -47,7 +47,7 @@ export async function apiFetch<T>(
 	});
 
 	if (!response.ok) {
-		if (response.status === 401 && auth) {
+		if (response.status === 401 && auth?.isAuthenticated) {
 			auth.startSilentRenew();
 		}
 		const errorText = await response.text();

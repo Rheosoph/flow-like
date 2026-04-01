@@ -32,6 +32,7 @@ impl NodeLogic for SetAgentSystemPromptNode {
             "Sets the system prompt for an Agent to guide its behavior",
             "AI/Agents/Builder",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

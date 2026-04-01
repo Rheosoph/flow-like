@@ -1,3 +1,5 @@
+import type { INodePermission } from "../../board";
+
 export interface IUpsertLayer {
 	current_layer?: null | string;
 	layer: ILayer;
@@ -81,7 +83,7 @@ export interface INode {
 
 export interface INodeWasm {
 	package_id: string;
-	permissions: string[];
+	permissions: INodePermission[];
 }
 
 export interface IPin {

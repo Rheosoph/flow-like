@@ -10,7 +10,6 @@ import {
 	useMemo,
 	useRef,
 	useState,
-	useTransition,
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import type { IEventPayloadChat } from "../../../lib";
@@ -19,6 +18,7 @@ import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { VoiceMode } from "./VoiceMode";
 
 type ChatItem =
 	| { type: "message"; data: IMessage; timestamp: number }
@@ -89,17 +89,29 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
-		const [, startMessagesTransition] = useTransition();
+		const pendingMessageRef = useRef<IMessage | null>(null);
+		const rafIdRef = useRef<number | null>(null);
+		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+
+		// Cleanup RAF on unmount
+		useEffect(() => {
+			return () => {
+				if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+			};
+		}, []);
 
 		const chatItems = useMemo(() => {
-			return localMessages
+			const filtered = currentMessage
+				? localMessages.filter((msg) => msg.id !== currentMessage.id)
+				: localMessages;
+			return filtered
 				.map((msg) => ({
 					type: "message" as const,
 					data: msg,
 					timestamp: msg.timestamp,
 				}))
 				.sort((a, b) => a.timestamp - b.timestamp);
-		}, [localMessages]);
+		}, [localMessages, currentMessage]);
 
 		// Interactions are rendered separately after currentMessage to avoid ordering issues
 		const interactionItems = useMemo<ChatItem[]>(() => {
@@ -152,11 +164,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setSendingContent("");
 		}, [sessionId]);
 
-		// Sync external messages with local state
+		// Sync external messages with local state (no useTransition to avoid flash gap)
 		useEffect(() => {
-			startMessagesTransition(() => {
-				setLocalMessages(messages);
-			});
+			setLocalMessages(messages);
 
 			// Clear optimistic sending state when the user message appears in DB
 			if (isSendingRef.current) {
@@ -166,7 +176,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					setSendingContent("");
 				}
 			}
+		}, [messages]);
 
+		// Update active tools based on last user message and available tools
+		useEffect(() => {
 			const lastUserMessage = messages
 				.slice()
 				.reverse()
@@ -184,7 +197,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 
 			setDefaultActiveTools(config?.default_tools ?? []);
-		}, [messages, config?.tools]);
+		}, [messages, config?.tools, config?.default_tools]);
 
 		// Initial scroll to bottom when messages first load
 		useEffect(() => {
@@ -274,6 +287,14 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[onSendMessage, scrollToBottom],
 		);
 
+		const handleVoiceModeSend = useCallback(
+			async (audioFile: File) => {
+				setVoiceModeOpen(false);
+				await handleSendMessage("", undefined, undefined, audioFile);
+			},
+			[handleSendMessage],
+		);
+
 		// iOS keyboard/open focus handling to reduce layout jump and zoom
 		useEffect(() => {
 			const onFocusIn = (e: FocusEvent) => {
@@ -325,9 +346,24 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			ref,
 			() => ({
 				pushCurrentMessageUpdate: (message: IMessage) => {
-					setCurrentMessage(message);
+					// Throttle updates via requestAnimationFrame to avoid per-event re-renders
+					pendingMessageRef.current = message;
+					if (rafIdRef.current === null) {
+						rafIdRef.current = requestAnimationFrame(() => {
+							rafIdRef.current = null;
+							if (pendingMessageRef.current) {
+								setCurrentMessage(pendingMessageRef.current);
+							}
+						});
+					}
 				},
 				clearCurrentMessageUpdate: () => {
+					// Cancel pending RAF and clear immediately
+					if (rafIdRef.current !== null) {
+						cancelAnimationFrame(rafIdRef.current);
+						rafIdRef.current = null;
+					}
+					pendingMessageRef.current = null;
 					setCurrentMessage(null);
 				},
 				pushMessage: (message: IMessage) => {
@@ -397,17 +433,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									</div>
 								</div>
 							)}
-						{currentMessage &&
-							!localMessages.some((m) => m.id === currentMessage.id) && (
+						{currentMessage && (
 								<div
-									className="w-full max-w-screen-lg px-4 relative"
-									key={currentMessage.id}
+									className="w-full max-w-screen-lg px-4"
+									key={`msg-${currentMessage.id}`}
 								>
-									<PuffLoader
-										color={resolvedTheme === "dark" ? "white" : "black"}
-										className="mt-2 absolute left-0 top-0 translate-y-[2.5rem] translate-x-[-100%]"
-										size={30}
-									/>
 									<MessageComponent loading message={currentMessage} />
 								</div>
 							)}
@@ -453,10 +483,22 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={config?.allow_voice_input ?? true}
+								onVoiceModeToggle={
+									(config?.allow_voice_mode ?? true)
+										? () => setVoiceModeOpen(true)
+										: undefined
+								}
 							/>
 						)}
 					</div>
 				</div>
+
+				{/* Voice Mode Overlay */}
+				<VoiceMode
+					open={voiceModeOpen}
+					onClose={() => setVoiceModeOpen(false)}
+					onSend={handleVoiceModeSend}
+				/>
 			</main>
 		);
 	},

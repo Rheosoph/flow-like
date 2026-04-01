@@ -94,6 +94,7 @@ impl NodeLogic for TeachableMachineNode {
             "Class Predictions",
             VariableType::Struct,
         )
+        .set_schema::<ClassPrediction>()
         .set_value_type(ValueType::Array);
 
         node

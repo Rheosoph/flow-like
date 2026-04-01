@@ -65,7 +65,28 @@ export function FlowWrapper({
 			onDragEnd={(event) => {
 				if (!event.over) return;
 				const overId = String(event.over.id);
-				const variable = event.active.data.current as IVariable | undefined;
+				const data = event.active.data.current;
+				if (!data) return;
+
+				// Function layer dropped on the canvas -> place CallFunction node directly
+				if (data.type === "function-layer" && overId === "flow") {
+					const mouseEvent = event.activatorEvent as MouseEvent;
+					document.dispatchEvent(
+						new CustomEvent("flow-drop", {
+							detail: {
+								type: "function-layer",
+								layerId: data.layerId,
+								screenPosition: {
+									x: mouseEvent.screenX + event.delta.x,
+									y: mouseEvent.screenY + event.delta.y,
+								},
+							},
+						}),
+					);
+					return;
+				}
+
+				const variable = data as IVariable | undefined;
 				if (!variable) return;
 
 				// Dropped on the canvas -> ask user whether to Get/Set

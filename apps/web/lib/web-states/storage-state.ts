@@ -5,42 +5,16 @@ import { type WebBackendRef, apiDelete, apiPost, apiPut } from "./api-utils";
 export class WebStorageState implements IStorageState {
 	constructor(private readonly backend: WebBackendRef) {}
 
-	async listStorageItems(
-		appId: string,
-		prefix: string,
-	): Promise<IStorageItem[]> {
-		try {
-			return await apiPost<IStorageItem[]>(
-				`apps/${appId}/data/list`,
-				{ prefix },
-				this.backend.auth,
-			);
-		} catch {
-			return [];
-		}
+	private buildFilePath(prefix: string, file: File): string {
+		const path =
+			(file.webkitRelativePath ?? "") === ""
+				? file.name
+				: file.webkitRelativePath;
+		return prefix ? `${prefix}/${path}` : path;
 	}
 
-	async deleteStorageItems(appId: string, prefixes: string[]): Promise<void> {
-		await apiDelete(`apps/${appId}/data`, this.backend.auth, { prefixes });
-	}
-
-	async downloadStorageItems(
-		appId: string,
-		prefixes: string[],
-	): Promise<IStorageItemActionResult[]> {
-		try {
-			return await apiPost<IStorageItemActionResult[]>(
-				`apps/${appId}/data/download`,
-				{ prefixes },
-				this.backend.auth,
-			);
-		} catch {
-			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
-		}
-	}
-
-	async uploadStorageItems(
-		appId: string,
+	private async uploadWithEndpoint(
+		endpoint: string,
 		prefix: string,
 		files: File[],
 		onProgress?: (progress: number) => void,
@@ -48,28 +22,16 @@ export class WebStorageState implements IStorageState {
 		const totalFiles = files.length;
 		let completedFiles = 0;
 
-		const buildFilePath = (file: File): string => {
-			const path =
-				(file.webkitRelativePath ?? "") === ""
-					? file.name
-					: file.webkitRelativePath;
-			// Avoid leading slash when prefix is empty
-			return prefix ? `${prefix}/${path}` : path;
-		};
-
-		// Build file path lookup
 		const fileLookup = new Map(
-			files.map((file) => [buildFilePath(file), file]),
+			files.map((file) => [this.buildFilePath(prefix, file), file]),
 		);
 
-		// Get signed URLs for all files
 		const signedUrls = await apiPut<IStorageItemActionResult[]>(
-			`apps/${appId}/data`,
-			{ prefixes: files.map(buildFilePath) },
+			endpoint,
+			{ prefixes: files.map((file) => this.buildFilePath(prefix, file)) },
 			this.backend.auth,
 		);
 
-		// Upload each file to its signed URL
 		for (const urlInfo of signedUrls) {
 			const signedUrl = urlInfo.url;
 			if (urlInfo.error || !signedUrl) {
@@ -113,22 +75,17 @@ export class WebStorageState implements IStorageState {
 				});
 
 				xhr.addEventListener("error", () => {
-					// Network error - could be CORS, connection refused, etc.
 					reject(
 						new Error(`Upload failed: Network error (possible CORS issue)`),
 					);
 				});
 
 				xhr.open("PUT", signedUrl);
-
-				// Set Content-Type header - required for cloud storage providers
 				xhr.setRequestHeader(
 					"Content-Type",
 					file.type || "application/octet-stream",
 				);
 
-				// Azure Blob Storage requires x-ms-blob-type header
-				// This header is ignored by other providers (S3, GCS) so it's safe to always set
 				if (signedUrl.includes(".blob.core.windows.net")) {
 					xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 				}
@@ -138,6 +95,97 @@ export class WebStorageState implements IStorageState {
 		}
 
 		onProgress?.(100);
+	}
+
+	async listStorageItems(
+		appId: string,
+		prefix: string,
+	): Promise<IStorageItem[]> {
+		try {
+			return await apiPost<IStorageItem[]>(
+				`apps/${appId}/data/list`,
+				{ prefix },
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async listStorageItemsUser(
+		appId: string,
+		prefix: string,
+	): Promise<IStorageItem[]> {
+		try {
+			return await apiPost<IStorageItem[]>(
+				`apps/${appId}/data/user/list`,
+				{ prefix },
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async deleteStorageItems(appId: string, prefixes: string[]): Promise<void> {
+		await apiDelete(`apps/${appId}/data`, this.backend.auth, { prefixes });
+	}
+
+	async deleteStorageItemsUser(appId: string, prefixes: string[]): Promise<void> {
+		await apiDelete(`apps/${appId}/data/user`, this.backend.auth, { prefixes });
+	}
+
+	async downloadStorageItems(
+		appId: string,
+		prefixes: string[],
+	): Promise<IStorageItemActionResult[]> {
+		try {
+			return await apiPost<IStorageItemActionResult[]>(
+				`apps/${appId}/data/download`,
+				{ prefixes },
+				this.backend.auth,
+			);
+		} catch {
+			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
+		}
+	}
+
+	async downloadStorageItemsUser(
+		appId: string,
+		prefixes: string[],
+	): Promise<IStorageItemActionResult[]> {
+		try {
+			return await apiPost<IStorageItemActionResult[]>(
+				`apps/${appId}/data/user/download`,
+				{ prefixes },
+				this.backend.auth,
+			);
+		} catch {
+			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
+		}
+	}
+
+	async uploadStorageItems(
+		appId: string,
+		prefix: string,
+		files: File[],
+		onProgress?: (progress: number) => void,
+	): Promise<void> {
+		await this.uploadWithEndpoint(`apps/${appId}/data`, prefix, files, onProgress);
+	}
+
+	async uploadStorageItemsUser(
+		appId: string,
+		prefix: string,
+		files: File[],
+		onProgress?: (progress: number) => void,
+	): Promise<void> {
+		await this.uploadWithEndpoint(
+			`apps/${appId}/data/user`,
+			prefix,
+			files,
+			onProgress,
+		);
 	}
 
 	async writeStorageItems(items: IStorageItemActionResult[]): Promise<void> {

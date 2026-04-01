@@ -85,4 +85,7 @@ message App {
   // Route mappings: path -> event_id (e.g., "/" -> "event123")
   // The event determines what to display (page-target or board-target)
   map<string, string> route_mappings = 25;
+
+  // WASM packages required by this app: package_id -> version
+  map<string, string> packages = 26;
 }

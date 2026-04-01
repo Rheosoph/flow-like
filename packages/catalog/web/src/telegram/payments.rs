@@ -1,6 +1,8 @@
 //! Telegram payment operations
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -13,7 +15,9 @@ use flow_like_types::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
+#[cfg(feature = "execute")]
 use teloxide::types::{PreCheckoutQueryId, ShippingQueryId, TelegramTransactionId, UserId};
 
 /// Labeled price for invoices
@@ -274,6 +278,7 @@ impl NodeLogic for SendInvoiceNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let title: String = context.evaluate_pin("title").await?;
@@ -438,6 +443,13 @@ impl NodeLogic for SendInvoiceNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
+    }
 }
 
 // ============================================================================
@@ -556,6 +568,7 @@ impl NodeLogic for CreateInvoiceLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let title: String = context.evaluate_pin("title").await?;
@@ -610,6 +623,13 @@ impl NodeLogic for CreateInvoiceLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -698,6 +718,7 @@ impl NodeLogic for AnswerShippingQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let shipping_query_id: String = context.evaluate_pin("shipping_query_id").await?;
@@ -736,6 +757,13 @@ impl NodeLogic for AnswerShippingQueryNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -816,6 +844,7 @@ impl NodeLogic for AnswerPreCheckoutQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let pre_checkout_query_id: String = context.evaluate_pin("pre_checkout_query_id").await?;
@@ -846,6 +875,13 @@ impl NodeLogic for AnswerPreCheckoutQueryNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -935,6 +971,7 @@ impl NodeLogic for GetStarTransactionsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let offset: i64 = context.evaluate_pin::<i64>("offset").await.unwrap_or(0);
@@ -986,6 +1023,13 @@ impl NodeLogic for GetStarTransactionsNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1057,6 +1101,7 @@ impl NodeLogic for RefundStarPaymentNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let user_id: i64 = context.evaluate_pin("user_id").await?;
@@ -1081,5 +1126,12 @@ impl NodeLogic for RefundStarPaymentNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }

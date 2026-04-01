@@ -1,3 +1,5 @@
+import type { INodePermission } from "../../board";
+
 export interface IGeneric {
 	command_type: ICommandType;
 	comment?: IComment;
@@ -85,7 +87,7 @@ export interface INode {
 
 export interface INodeWasm {
 	package_id: string;
-	permissions: string[];
+	permissions: INodePermission[];
 }
 
 export interface IPin {

@@ -12,10 +12,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
-use tauri::{ipc::Channel, AppHandle};
+use tauri::{AppHandle, ipc::Channel};
 
-static STATISTICS_CACHE: LazyLock<DashMap<String, BoardStatistics>> =
-    LazyLock::new(DashMap::new);
+static STATISTICS_CACHE: LazyLock<DashMap<String, BoardStatistics>> = LazyLock::new(DashMap::new);
 
 fn statistics_store_path(user_dir: &Path, profile_id: &str) -> PathBuf {
     user_dir.join(format!("board-statistics-{profile_id}.json"))
@@ -615,8 +614,7 @@ fn analyze_board(
         }
         non_reroute_node_count += 1;
         node_usage.entry(node.name.clone()).or_insert_with(|| {
-            let (friendly, category) =
-                canonical(&node.name, &node.friendly_name, &node.category);
+            let (friendly, category) = canonical(&node.name, &node.friendly_name, &node.category);
             (node.name.clone(), friendly, category)
         });
 
@@ -851,9 +849,7 @@ pub async fn get_board_statistics(
 }
 
 pub fn get_cached_board_statistics(profile_id: &str) -> Option<BoardStatistics> {
-    STATISTICS_CACHE
-        .get(profile_id)
-        .map(|entry| entry.clone())
+    STATISTICS_CACHE.get(profile_id).map(|entry| entry.clone())
 }
 
 #[tauri::command(async)]

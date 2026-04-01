@@ -28,6 +28,35 @@ export interface IPlanStep {
 	endTime?: number;
 }
 
+export interface IModelCallEntry {
+	model: string;
+	usage: {
+		completion_tokens: number;
+		prompt_tokens: number;
+		total_tokens: number;
+		cost?: number | null;
+	};
+	duration_ms?: number | null;
+}
+
+export interface ILLMUsageStats {
+	usage: {
+		completion_tokens: number;
+		prompt_tokens: number;
+		total_tokens: number;
+		cost?: number | null;
+	};
+	model?: string | null;
+	duration_ms?: number | null;
+	iterations?: number | null;
+	calls?: IModelCallEntry[];
+}
+
+export interface IChatUsageStat {
+	step_name: string;
+	stats: ILLMUsageStats;
+}
+
 export interface IMessage {
 	id: string;
 	appId: string;
@@ -46,6 +75,7 @@ export interface IMessage {
 	timestamp: number;
 	plan_steps?: IPlanStep[];
 	current_step_id?: string;
+	usage_stats?: IChatUsageStat[];
 }
 
 export interface ISession {

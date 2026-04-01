@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     error::ApiError,
     mail::{EmailMessage, templates::solution_status_update},
     middleware::jwt::AppUser,
@@ -135,6 +136,14 @@ pub async fn update_solution(
         "Solution request updated by admin"
     );
 
+    audit!(
+        state,
+        user,
+        "admin.solution.update",
+        "solution",
+        solution_id,
+        format!("Solution updated: {}", status_to_string(&updated.status))
+    );
     Ok(Json(UpdateSolutionResponse {
         success: true,
         id: solution_id,

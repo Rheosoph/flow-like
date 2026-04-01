@@ -144,8 +144,10 @@ export function DataProvider({
 				}
 			}
 			if ("path" in boundValue) {
+				if (!boundValue.path) {
+					return boundValue.defaultValue ?? fallback;
+				}
 				const value = get(boundValue.path);
-				// Use embedded defaultValue first, then fallback parameter
 				const defaultValue = boundValue.defaultValue ?? fallback;
 				return value !== undefined ? value : defaultValue;
 			}
@@ -198,6 +200,9 @@ const defaultContextValue: DataContextValue = {
 			} catch {
 				return defaultValue;
 			}
+		}
+		if ("path" in boundValue) {
+			return boundValue.defaultValue ?? defaultValue;
 		}
 		return defaultValue;
 	},

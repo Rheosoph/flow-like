@@ -1,5 +1,9 @@
 //! Execution context wrapper for WASM nodes
 
+use crate::interop::{
+    Bit, CachedEmbeddingModel, ChatMessage, FlowPath, FtsSearchQuery, HybridSearchQuery,
+    NodeDBConnection, NodeImage, VectorSearchQuery,
+};
 use crate::types::{ExecutionInput, ExecutionResult, LogLevel};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -198,45 +202,62 @@ impl Context {
     }
 
     // ========================================================================
-    // Storage
+    // Storage (raw Value-based)
     // ========================================================================
 
-    /// Get a FlowPath for the board's storage directory
     pub fn storage_dir(&self, node_scoped: bool) -> Option<Value> {
         crate::host::storage_dir(node_scoped)
     }
 
-    /// Get a FlowPath for the upload directory
     pub fn upload_dir(&self) -> Option<Value> {
         crate::host::upload_dir()
     }
 
-    /// Get a FlowPath for the cache directory
     pub fn cache_dir(&self, node_scoped: bool, user_scoped: bool) -> Option<Value> {
         crate::host::cache_dir(node_scoped, user_scoped)
     }
 
-    /// Get a FlowPath for the user directory
     pub fn user_dir(&self, node_scoped: bool) -> Option<Value> {
         crate::host::user_dir(node_scoped)
     }
 
-    /// Read bytes from a FlowPath
     pub fn storage_read(&self, flow_path: &Value) -> Option<Vec<u8>> {
         let json = serde_json::to_string(flow_path).ok()?;
         crate::host::storage_read(&json)
     }
 
-    /// Write bytes to a FlowPath
     pub fn storage_write(&self, flow_path: &Value, data: &[u8]) -> bool {
         let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
         crate::host::storage_write(&json, data)
     }
 
-    /// List paths under a FlowPath prefix
     pub fn storage_list(&self, flow_path: &Value) -> Option<Vec<Value>> {
         let json = serde_json::to_string(flow_path).ok()?;
         crate::host::storage_list(&json)
+    }
+
+    // ========================================================================
+    // Storage (typed FlowPath)
+    // ========================================================================
+
+    pub fn storage_path(&self, node_scoped: bool) -> Option<FlowPath> {
+        let val = self.storage_dir(node_scoped)?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn upload_path(&self) -> Option<FlowPath> {
+        let val = self.upload_dir()?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn cache_path(&self, node_scoped: bool, user_scoped: bool) -> Option<FlowPath> {
+        let val = self.cache_dir(node_scoped, user_scoped)?;
+        serde_json::from_value(val).ok()
+    }
+
+    pub fn user_path(&self, node_scoped: bool) -> Option<FlowPath> {
+        let val = self.user_dir(node_scoped)?;
+        serde_json::from_value(val).ok()
     }
 
     // ========================================================================
@@ -246,6 +267,199 @@ impl Context {
     /// Embed texts using a model (pass model Bit as JSON)
     pub fn embed_text(&self, bit_json: &str, texts: &[String]) -> Option<Vec<Vec<f32>>> {
         crate::host::embed_text(bit_json, texts)
+    }
+
+    // ========================================================================
+    // Typed Storage (FlowPath)
+    // ========================================================================
+
+    pub fn storage_read_typed(&self, flow_path: &FlowPath) -> Option<Vec<u8>> {
+        let json = serde_json::to_string(flow_path).ok()?;
+        crate::host::storage_read(&json)
+    }
+
+    pub fn storage_write_typed(&self, flow_path: &FlowPath, data: &[u8]) -> bool {
+        let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
+        crate::host::storage_write(&json, data)
+    }
+
+    pub fn storage_list_typed(&self, flow_path: &FlowPath) -> Option<Vec<FlowPath>> {
+        let json = serde_json::to_string(flow_path).ok()?;
+        let items = crate::host::storage_list(&json)?;
+        items
+            .into_iter()
+            .map(|v| serde_json::from_value(v).ok())
+            .collect()
+    }
+
+    // ========================================================================
+    // Image
+    // ========================================================================
+
+    pub fn image_from_bytes(&self, data: &[u8], format: &str) -> Option<NodeImage> {
+        let ref_str = crate::host::image_from_bytes(data, format)?;
+        serde_json::from_str(&ref_str).ok()
+    }
+
+    pub fn image_to_bytes(&self, image: &NodeImage, format: &str) -> Option<Vec<u8>> {
+        let json = serde_json::to_string(image).ok()?;
+        crate::host::image_to_bytes(&json, format)
+    }
+
+    // ========================================================================
+    // LLM / VLM
+    // ========================================================================
+
+    pub fn llm_prompt(&self, bit: &Bit, messages: &[ChatMessage]) -> Option<String> {
+        let bit_json = serde_json::to_string(bit).ok()?;
+        let messages_json = serde_json::to_string(messages).ok()?;
+        crate::host::llm_prompt(&bit_json, &messages_json, false)
+    }
+
+    pub fn llm_prompt_stream(&self, bit: &Bit, messages: &[ChatMessage]) -> Option<String> {
+        let bit_json = serde_json::to_string(bit).ok()?;
+        let messages_json = serde_json::to_string(messages).ok()?;
+        crate::host::llm_prompt(&bit_json, &messages_json, true)
+    }
+
+    // ========================================================================
+    // Embedding
+    // ========================================================================
+
+    pub fn embed_text_query(
+        &self,
+        model: &CachedEmbeddingModel,
+        texts: &[String],
+    ) -> Option<Vec<Vec<f32>>> {
+        let model_json = serde_json::to_string(model).ok()?;
+        crate::host::embed_text_query(&model_json, texts)
+    }
+
+    pub fn embed_text_document(
+        &self,
+        model: &CachedEmbeddingModel,
+        texts: &[String],
+    ) -> Option<Vec<Vec<f32>>> {
+        let model_json = serde_json::to_string(model).ok()?;
+        crate::host::embed_text_document(&model_json, texts)
+    }
+
+    pub fn embed_image(
+        &self,
+        model: &CachedEmbeddingModel,
+        image: &NodeImage,
+    ) -> Option<Vec<f32>> {
+        let model_json = serde_json::to_string(model).ok()?;
+        let image_json = serde_json::to_string(image).ok()?;
+        crate::host::embed_image(&model_json, &image_json)
+    }
+
+    // ========================================================================
+    // Vector DB
+    // ========================================================================
+
+    pub fn db_vector_search(
+        &self,
+        conn: &NodeDBConnection,
+        query: &VectorSearchQuery,
+    ) -> Option<Vec<Value>> {
+        let conn_json = serde_json::to_string(conn).ok()?;
+        let query_json = serde_json::to_string(query).ok()?;
+        crate::host::db_vector_search(&conn_json, &query_json)
+    }
+
+    pub fn db_fts_search(
+        &self,
+        conn: &NodeDBConnection,
+        query: &FtsSearchQuery,
+    ) -> Option<Vec<Value>> {
+        let conn_json = serde_json::to_string(conn).ok()?;
+        let query_json = serde_json::to_string(query).ok()?;
+        crate::host::db_fts_search(&conn_json, &query_json)
+    }
+
+    pub fn db_hybrid_search(
+        &self,
+        conn: &NodeDBConnection,
+        query: &HybridSearchQuery,
+    ) -> Option<Vec<Value>> {
+        let conn_json = serde_json::to_string(conn).ok()?;
+        let query_json = serde_json::to_string(query).ok()?;
+        crate::host::db_hybrid_search(&conn_json, &query_json)
+    }
+
+    pub fn db_insert(&self, conn: &NodeDBConnection, items: &[Value]) -> bool {
+        let conn_json = serde_json::to_string(conn).ok().unwrap_or_default();
+        let payload_json = serde_json::to_string(items).ok().unwrap_or_default();
+        crate::host::db_insert(&conn_json, &payload_json)
+    }
+
+    pub fn db_upsert(&self, conn: &NodeDBConnection, items: &[Value], id_field: &str) -> bool {
+        let conn_json = serde_json::to_string(conn).ok().unwrap_or_default();
+        let payload = serde_json::json!({ "items": items, "id_field": id_field });
+        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+        crate::host::db_upsert(&conn_json, &payload_json)
+    }
+
+    pub fn db_delete(&self, conn: &NodeDBConnection, filter: &str) -> bool {
+        let conn_json = serde_json::to_string(conn).ok().unwrap_or_default();
+        let payload_json = serde_json::to_string(&serde_json::json!({ "filter": filter }))
+            .unwrap_or_default();
+        crate::host::db_delete(&conn_json, &payload_json)
+    }
+
+    pub fn db_list(
+        &self,
+        conn: &NodeDBConnection,
+        select: Option<&[String]>,
+        limit: Option<u64>,
+        offset: Option<u64>,
+    ) -> Option<Vec<Value>> {
+        let conn_json = serde_json::to_string(conn).ok()?;
+        let payload = serde_json::json!({
+            "select": select,
+            "limit": limit,
+            "offset": offset,
+        });
+        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+        crate::host::db_list(&conn_json, &payload_json)
+    }
+
+    pub fn db_count(&self, conn: &NodeDBConnection, filter: Option<&str>) -> Option<u64> {
+        let conn_json = serde_json::to_string(conn).ok()?;
+        let payload = serde_json::json!({ "filter": filter });
+        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+        crate::host::db_count(&conn_json, &payload_json)
+    }
+
+    // ========================================================================
+    // WebSocket
+    // ========================================================================
+
+    /// Open a WebSocket connection. Returns a session ID on success.
+    pub fn ws_connect(&self, url: &str, headers: &Value) -> Option<String> {
+        let headers_json = serde_json::to_string(headers).ok()?;
+        crate::host::ws_connect(url, &headers_json)
+    }
+
+    /// Send binary data over a WebSocket session.
+    pub fn ws_send(&self, session_id: &str, message: &[u8]) -> bool {
+        crate::host::ws_send(session_id, message, true)
+    }
+
+    /// Send text over a WebSocket session.
+    pub fn ws_send_text(&self, session_id: &str, text: &str) -> bool {
+        crate::host::ws_send_text(session_id, text)
+    }
+
+    /// Receive a message from a WebSocket session (with timeout in ms).
+    pub fn ws_receive(&self, session_id: &str, timeout_ms: u32) -> Option<String> {
+        crate::host::ws_receive(session_id, timeout_ms)
+    }
+
+    /// Close a WebSocket session.
+    pub fn ws_close(&self, session_id: &str) -> bool {
+        crate::host::ws_close(session_id)
     }
 
     /// Finalize and get the execution result

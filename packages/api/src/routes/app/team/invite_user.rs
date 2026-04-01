@@ -1,9 +1,13 @@
 use crate::{
-    ensure_permission,
-    entity::{app, invitation, membership, meta, sea_orm_active_enums::Visibility},
+    audit_branch, ensure_permission,
+    entity::{
+        app, invitation, membership, meta,
+        sea_orm_active_enums::{NotificationType, Visibility},
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
 use axum::{
@@ -159,7 +163,7 @@ pub async fn invite_user(
         updated_at: Set(chrono::Utc::now().naive_utc()),
         by_member_id: Set(member.id.clone()),
         message: Set(params.message),
-        user_id: Set(params.sub),
+        user_id: Set(params.sub.clone()),
         name: Set(meta
             .as_ref()
             .map_or("Unknown App".to_string(), |m| m.name.clone())),
@@ -169,5 +173,38 @@ pub async fn invite_user(
     invitation.insert(&txn).await?;
     txn.commit().await?;
 
+    let app_name = meta
+        .as_ref()
+        .map_or("an app".to_string(), |m| m.name.clone());
+
+    if let Err(error) = dispatch_notification(
+        &state,
+        DispatchNotificationInput {
+            user_id: params.sub.clone(),
+            app_id: Some(app_id.clone()),
+            title: format!("You've been invited to {}", app_name),
+            description: Some("Open your invitations to accept or decline.".to_string()),
+            icon: Some("mail".to_string()),
+            link: Some("/invites".to_string()),
+            image: None,
+            notification_type: NotificationType::System,
+            source_run_id: None,
+            source_node_id: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to dispatch invitation notification");
+    }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.invite",
+        "Invitation",
+        params.sub,
+        "User invited"
+    );
     Ok(Json(()))
 }

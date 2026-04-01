@@ -279,8 +279,26 @@ impl Command for CopyPasteCommand {
                         }
                     }
 
-                    pin.schema = blueprint_pin.schema.clone();
-                    pin.options = blueprint_pin.options.clone();
+                    // Translate function_layer_id when pasting CallFunction nodes
+                    if pin.name == "function_layer_id"
+                        && let Some(ref_bytes) = pin.default_value.as_ref()
+                        && let Ok(layer_ref) = from_slice::<String>(ref_bytes)
+                        && let Some(new_layer_id) = layer_translation.get(&layer_ref)
+                        && let Ok(bytes) = flow_like_types::json::to_vec(new_layer_id)
+                    {
+                        pin.default_value = Some(bytes);
+                    }
+
+                    // Only override schema/options from the blueprint if the blueprint
+                    // actually defines them. Dynamic schemas (set by on_update, not
+                    // in get_node()) must survive the paste cycle so that on_update
+                    // can find the schema on the first pass without clearing pins.
+                    if blueprint_pin.schema.is_some() {
+                        pin.schema = blueprint_pin.schema.clone();
+                    }
+                    if blueprint_pin.options.is_some() {
+                        pin.options = blueprint_pin.options.clone();
+                    }
 
                     if new_node.start.unwrap_or(false)
                         && pin.pin_type == PinType::Input

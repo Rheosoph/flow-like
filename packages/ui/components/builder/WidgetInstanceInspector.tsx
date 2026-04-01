@@ -457,10 +457,10 @@ function ActionBindingField({
 					<p className="text-xs text-muted-foreground">{action.description}</p>
 				)}
 
-				{action.contextFields.length > 0 && (
+				{action.contextSchema.length > 0 && (
 					<div className="text-xs">
 						<span className="text-muted-foreground">Context: </span>
-						{action.contextFields.map((f) => f.name).join(", ")}
+						{action.contextSchema.map((f) => f.name).join(", ")}
 					</div>
 				)}
 
@@ -527,16 +527,16 @@ function ActionBindingField({
 							</SelectContent>
 						</Select>
 
-						{workflowBinding?.flowId && action.contextFields.length > 0 && (
+						{workflowBinding?.flowId && action.contextSchema.length > 0 && (
 							<div className="space-y-2 mt-2">
 								<Label className="text-xs text-muted-foreground">
 									Input Mappings
 								</Label>
-								{action.contextFields.map((field) => (
+								{action.contextSchema.map((field) => (
 									<InputMappingField
 										key={field.name}
 										fieldName={field.name}
-										fieldType={field.dataType}
+										fieldType={field.fieldType}
 										value={workflowBinding.inputMappings[field.name]}
 										onChange={(v) => {
 											const newMappings = {

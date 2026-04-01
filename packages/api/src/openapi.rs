@@ -85,15 +85,19 @@ impl Modify for SecurityAddon {
         (name = "apps", description = "Application management"),
         (name = "boards", description = "Board/workflow management"),
         (name = "pages", description = "Page management"),
+        (name = "routes", description = "Route mapping management"),
         (name = "execution", description = "Workflow execution"),
         (name = "events", description = "Event management"),
         (name = "widgets", description = "Widget management"),
         (name = "templates", description = "Template management"),
         (name = "meta", description = "Metadata management"),
         (name = "roles", description = "Role management"),
+        (name = "packages", description = "App package management"),
         (name = "team", description = "Team management"),
+        (name = "analytics", description = "Analytics and usage metrics"),
         (name = "sales", description = "Sales and pricing"),
         (name = "api-keys", description = "API key management"),
+        (name = "comments", description = "App review comments"),
         (name = "notifications", description = "App notifications"),
         (name = "registry", description = "Package registry"),
         (name = "bit", description = "Bit (component) management"),
@@ -110,6 +114,8 @@ impl Modify for SecurityAddon {
         // Health routes
         crate::routes::health::health,
         crate::routes::health::db_health,
+        // OG metadata
+        crate::routes::og::fetch_og_metadata,
         // Auth routes
         crate::routes::auth::openid_config,
         crate::routes::auth::discovery,
@@ -130,6 +136,8 @@ impl Modify for SecurityAddon {
         crate::routes::user::notifications::mark_notification_read,
         crate::routes::user::notifications::mark_all_read,
         crate::routes::user::notifications::delete_notification,
+        crate::routes::user::push_targets::register_push_target,
+        crate::routes::user::push_targets::unregister_push_target,
         crate::routes::user::get_invites::get_invites,
         crate::routes::user::manage_invite::accept_invite,
         crate::routes::user::manage_invite::reject_invite,
@@ -151,6 +159,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::internal::upsert_app::upsert_app,
         crate::routes::app::internal::delete_app::delete_app,
         crate::routes::app::internal::change_visibility::change_visibility,
+        crate::routes::app::publication::get_publication::get_publication_requests,
+        crate::routes::app::publication::upsert_publication::request_publication,
         crate::routes::app::internal::get_nodes::get_nodes,
         // Board routes
         crate::routes::app::board::get_board::get_board,
@@ -174,6 +184,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::page::get_page_by_route::get_page_by_route,
         crate::routes::app::page::upsert_page::upsert_page,
         crate::routes::app::page::delete_page::delete_page,
+        // Route mapping routes
+        crate::routes::app::route::get_routes::get_routes,
+        crate::routes::app::route::get_route_by_path::get_route_by_path,
+        crate::routes::app::route::get_default_route::get_default_route,
+        crate::routes::app::route::upsert_route::create_route,
+        crate::routes::app::route::upsert_route::update_route,
+        crate::routes::app::route::delete_route::delete_route,
         // Widget routes
         crate::routes::app::widget::get_widgets::get_widgets,
         crate::routes::app::widget::get_widget::get_widget,
@@ -212,6 +229,10 @@ impl Modify for SecurityAddon {
         crate::routes::app::api::get_api_keys::get_api_keys,
         crate::routes::app::api::create_api_key::create_api_key,
         crate::routes::app::api::delete_api_key::delete_api_key,
+        // Analytics routes
+        crate::routes::app::analytics::overview::get_analytics_overview,
+        crate::routes::app::analytics::overview::get_analytics_stats,
+        crate::routes::app::analytics::feedback::list_feedback,
         // Sales routes
         crate::routes::app::sales::overview::get_sales_overview,
         crate::routes::app::sales::overview::get_sales_stats,
@@ -234,14 +255,23 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::invoke_event::invoke_event,
         crate::routes::app::events::invoke_event_async::invoke_event_async,
         crate::routes::app::events::upsert_event_feedback::upsert_event_feedback,
+        // Comment routes
+        crate::routes::app::comments::get_comments::get_comments,
+        crate::routes::app::comments::upsert_comment::upsert_comment,
+        crate::routes::app::comments::remove_comment::remove_comment,
         // Notifications routes
         crate::routes::app::notifications::create_notification,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
+        crate::routes::app::data::upload_files::upload_user_files,
         crate::routes::app::data::download_files::download_files,
+        crate::routes::app::data::download_files::download_user_files,
         crate::routes::app::data::list_files::list_files,
+        crate::routes::app::data::list_files::list_user_files,
         crate::routes::app::data::delete_files::delete_files,
+        crate::routes::app::data::delete_files::delete_user_files,
         crate::routes::app::data::presign_data_access::presign_data_access,
+        crate::routes::app::data::presign_data_access::presign_user_data_access,
         // Realtime board routes
         crate::routes::app::board::realtime::jwks,
         crate::routes::app::board::realtime::access,
@@ -264,6 +294,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_index::drop_index,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
+        // App package routes
+        crate::routes::app::packages::list_packages,
+        crate::routes::app::packages::add_package,
+        crate::routes::app::packages::remove_package,
+        crate::routes::app::packages::update_package,
+        crate::routes::app::packages::get_patch_info,
+        crate::routes::app::packages::check_updates,
         // Execution routes
         crate::routes::execution::progress::report_progress,
         crate::routes::execution::progress::push_events,
@@ -309,6 +346,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::packages::delete_package::delete_package,
         crate::routes::admin::packages::review_package::review_package,
         crate::routes::admin::packages::update_package::update_package,
+        crate::routes::registry::metadata::get_publication_reviews,
         crate::routes::admin::bit::delete_bit::delete_bit,
         crate::routes::admin::sinks::list_tokens::list_tokens,
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
@@ -340,6 +378,11 @@ impl Modify for SecurityAddon {
         // App notifications
         crate::routes::app::notifications::CreateNotificationParams,
         crate::routes::app::notifications::CreateNotificationResponse,
+        crate::routes::app::publication::get_publication::AppPublicationActor,
+        crate::routes::app::publication::get_publication::AppPublicationLogItem,
+        crate::routes::app::publication::get_publication::AppPublicationRequestItem,
+        crate::routes::app::publication::upsert_publication::RequestPublicationBody,
+        crate::routes::app::publication::upsert_publication::RequestPublicationResponse,
         // Widgets
         crate::routes::app::widget::get_widget::VersionQuery,
         crate::routes::app::widget::upsert_widget::WidgetUpsert,
@@ -361,6 +404,14 @@ impl Modify for SecurityAddon {
         crate::routes::app::api::ApiKeyInfo,
         crate::routes::app::api::ApiKeyInput,
         crate::routes::app::api::ApiKeyOut,
+        // Analytics
+        crate::routes::app::analytics::overview::AnalyticsStatsQuery,
+        crate::routes::app::analytics::overview::AnalyticsOverview,
+        crate::routes::app::analytics::overview::DailyAnalyticsStat,
+        crate::routes::app::analytics::overview::AnalyticsStats,
+        crate::routes::app::analytics::feedback::FeedbackQuery,
+        crate::routes::app::analytics::feedback::FeedbackItem,
+        crate::routes::app::analytics::feedback::PaginatedFeedback,
         // Sales
         crate::routes::app::sales::overview::StatsQuery,
         crate::routes::app::sales::overview::SalesOverview,
@@ -390,6 +441,18 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::invoke_event_async::InvokeEventAsyncResponse,
         crate::routes::app::events::upsert_event_feedback::FeedbackBody,
         crate::routes::app::events::upsert_event_feedback::FeedbackResponse,
+        // Comments
+        crate::routes::app::comments::upsert_comment::CommentBody,
+        crate::routes::app::comments::upsert_comment::CommentResponse,
+        crate::routes::app::comments::get_comments::CommentsQuery,
+        crate::routes::app::comments::get_comments::CommentItem,
+        crate::routes::app::comments::get_comments::CommentsResponse,
+        // App packages
+        crate::routes::app::packages::AddPackageRequest,
+        crate::routes::app::packages::UpdatePackageRequest,
+        crate::routes::app::packages::AppPackageResponse,
+        crate::routes::app::packages::PatchInfo,
+        crate::routes::app::packages::PackageUpdateInfo,
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         // Data

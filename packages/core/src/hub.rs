@@ -46,6 +46,69 @@ pub struct AlertingConfig {
     pub mail: String,
 }
 
+fn default_false() -> bool {
+    false
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PushNotificationProviderType {
+    Fcm,
+    AwsSns,
+    AzureNotificationHubs,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct FcmPushNotificationsConfig {
+    pub project_id: String,
+    pub service_account_json_env: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct AwsSnsPushNotificationsConfig {
+    pub android_platform_application_arn_env: String,
+    pub ios_platform_application_arn_env: String,
+    pub region_env: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize)]
+pub struct AzureNotificationHubsPushNotificationsConfig {
+    pub namespace: String,
+    pub hub_name: String,
+    pub sas_key_name_env: String,
+    pub sas_key_value_env: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
+pub struct PushNotificationsConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub allow_mobile: bool,
+    #[serde(default)]
+    pub allow_desktop: bool,
+    pub provider: Option<PushNotificationProviderType>,
+    pub channel_id: Option<String>,
+    pub fcm: Option<FcmPushNotificationsConfig>,
+    pub aws_sns: Option<AwsSnsPushNotificationsConfig>,
+    pub azure_notification_hubs: Option<AzureNotificationHubsPushNotificationsConfig>,
+}
+
+impl Default for PushNotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_mobile: true,
+            allow_desktop: false,
+            provider: None,
+            channel_id: None,
+            fcm: None,
+            aws_sns: None,
+            azure_notification_hubs: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
 pub struct UserTier {
     pub max_non_visible_projects: i32,
@@ -103,11 +166,53 @@ pub struct Hub {
     #[serde(default)]
     pub supported_sinks: Option<SupportedSinks>,
 
+    /// WASM registry configuration
+    #[serde(default)]
+    pub wasm_registry_config: WasmRegistryConfig,
+
+    /// Audit trail configuration
+    #[serde(default)]
+    pub audit: AuditConfig,
+
+    /// Push notification provider configuration
+    #[serde(default)]
+    pub push_notifications: PushNotificationsConfig,
+
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
 
     #[serde(skip)]
     http_client: Option<Arc<HTTPClient>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct AuditConfig {
+    /// Master switch — when false, no audit entries are recorded
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether to capture client IP addresses in audit entries (GDPR consideration)
+    #[serde(default)]
+    pub log_ip: bool,
+    /// Auto-null stored IPs after this many days. None = retain indefinitely.
+    pub ip_retention_days: Option<u32>,
+    /// If true, the server will refuse to start without signing keys configured
+    #[serde(default)]
+    pub require_signing: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            log_ip: false,
+            ip_retention_days: None,
+            require_signing: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize, PartialEq)]
@@ -352,6 +457,32 @@ impl SupportedSinks {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum MemberLeavePolicy {
+    /// Remove packages added by the departing member from the app
+    Remove,
+    /// Mark packages as stale — frozen version, no updates, cannot be placed on new boards
+    #[default]
+    Stale,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct WasmRegistryConfig {
+    /// What happens to app packages when the member who added them leaves the app
+    #[serde(default)]
+    pub on_member_leave: MemberLeavePolicy,
+}
+
+impl Default for WasmRegistryConfig {
+    fn default() -> Self {
+        Self {
+            on_member_leave: MemberLeavePolicy::Stale,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct Features {
     pub model_hosting: bool,
@@ -363,6 +494,12 @@ pub struct Features {
     pub premium: bool,
     #[serde(default)]
     pub wasm_registry: bool,
+    #[serde(default)]
+    pub wasm_server_compilation: bool,
+    #[serde(default)]
+    pub app_package_linking: bool,
+    #[serde(default)]
+    pub wasm_package_user_management: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

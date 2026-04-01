@@ -1,31 +1,60 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 
 const AUTH_CHANNEL = "flow-like-auth";
+const RETURN_URL_KEY = "flow-like-return-url";
+const CALLBACK_TIMEOUT_MS = 8000;
+
+function getReturnUrl(): string | null {
+	return (
+		localStorage.getItem(RETURN_URL_KEY) ||
+		sessionStorage.getItem(RETURN_URL_KEY)
+	);
+}
+
+function clearReturnUrl() {
+	localStorage.removeItem(RETURN_URL_KEY);
+	sessionStorage.removeItem(RETURN_URL_KEY);
+}
 
 export default function CallbackPage() {
 	const auth = useAuth();
 	const router = useRouter();
+	const [stuck, setStuck] = useState(false);
+	const redirectedRef = useRef(false);
 
+	// Redirect on successful authentication
 	useEffect(() => {
-		if (auth.isAuthenticated) {
-			// Broadcast auth success to other tabs
+		if (auth.isAuthenticated && !redirectedRef.current) {
+			redirectedRef.current = true;
+
 			try {
 				const channel = new BroadcastChannel(AUTH_CHANNEL);
 				channel.postMessage({ type: "AUTH_SUCCESS" });
 				channel.close();
 			} catch {
-				// BroadcastChannel not supported, fallback will be handled by storage event
+				// BroadcastChannel not supported
 			}
 
-			const returnUrl = sessionStorage.getItem("flow-like-return-url");
-			sessionStorage.removeItem("flow-like-return-url");
+			const returnUrl = getReturnUrl();
+			clearReturnUrl();
 			router.push(returnUrl || "/");
 		}
 	}, [auth.isAuthenticated, router]);
+
+	// Detect stuck state: not loading, not authenticated, no error
+	useEffect(() => {
+		if (auth.isLoading || auth.isAuthenticated || auth.error) return;
+
+		const timeout = setTimeout(() => {
+			setStuck(true);
+		}, CALLBACK_TIMEOUT_MS);
+
+		return () => clearTimeout(timeout);
+	}, [auth.isLoading, auth.isAuthenticated, auth.error]);
 
 	if (auth.isLoading) {
 		return (
@@ -38,21 +67,32 @@ export default function CallbackPage() {
 		);
 	}
 
-	if (auth.error) {
+	if (auth.error || stuck) {
 		return (
 			<div className="flex h-screen items-center justify-center">
-				<div className="text-center">
-					<div className="mb-4 text-lg text-red-500">Authentication Error</div>
-					<div className="text-sm text-muted-foreground">
-						{auth.error.message}
+				<div className="text-center space-y-4">
+					<div className="mb-4 text-lg text-red-500">
+						{auth.error ? "Authentication Error" : "Authentication timed out"}
 					</div>
-					<button
-						type="button"
-						onClick={() => router.push("/")}
-						className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded"
-					>
-						Return Home
-					</button>
+					<div className="text-sm text-muted-foreground">
+						{auth.error?.message || "The sign-in process did not complete. This can happen on mobile browsers."}
+					</div>
+					<div className="flex gap-3 justify-center">
+						<button
+							type="button"
+							onClick={() => auth.signinRedirect()}
+							className="px-4 py-2 bg-primary text-primary-foreground rounded"
+						>
+							Try Again
+						</button>
+						<button
+							type="button"
+							onClick={() => router.push("/")}
+							className="px-4 py-2 bg-secondary text-secondary-foreground rounded"
+						>
+							Return Home
+						</button>
+					</div>
 				</div>
 			</div>
 		);
@@ -62,6 +102,7 @@ export default function CallbackPage() {
 		<div className="flex h-screen items-center justify-center">
 			<div className="text-center">
 				<div className="mb-4 text-lg">Processing authentication...</div>
+				<div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />
 			</div>
 		</div>
 	);

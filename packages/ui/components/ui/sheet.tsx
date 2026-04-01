@@ -48,10 +48,31 @@ function SheetContent({
 	className,
 	children,
 	side = "right",
+	style,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
 	side?: "top" | "right" | "bottom" | "left";
 }) {
+	const safeAreaStyle: React.CSSProperties = {
+		...(side === "left" || side === "right"
+			? {
+					paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
+					paddingBottom:
+						"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
+				}
+			: side === "bottom"
+				? {
+						paddingBottom:
+							"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
+					}
+				: side === "top"
+					? {
+							paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
+						}
+					: {}),
+		...style,
+	};
+
 	return (
 		<SheetPortal>
 			<SheetOverlay />
@@ -69,6 +90,7 @@ function SheetContent({
 						"data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t border-border/50",
 					className,
 				)}
+				style={safeAreaStyle}
 				{...props}
 			>
 				{/* Subtle gradient accent */}

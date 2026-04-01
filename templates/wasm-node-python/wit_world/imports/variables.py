@@ -15,3 +15,7 @@ def get_var(name: str) -> Optional[str]:
     raise NotImplementedError
 def set_var(name: str, value: str) -> None:
     raise NotImplementedError
+def delete_var(name: str) -> None:
+    raise NotImplementedError
+def has_var(name: str) -> bool:
+    raise NotImplementedError

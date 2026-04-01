@@ -3,7 +3,7 @@
 //! Provides types and functionality for a node package registry system.
 //! Supports local development registries and remote shared registries.
 
-use crate::manifest::PackageManifest;
+use crate::manifest::{PackageManifest, PackageNodeEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -71,6 +71,9 @@ pub struct RegistryEntry {
     pub id: String,
     /// Package manifest (latest version)
     pub manifest: PackageManifest,
+    /// Nodes extracted from the WASM binary
+    #[serde(default)]
+    pub nodes: Vec<PackageNodeEntry>,
     /// All available versions
     pub versions: Vec<PackageVersion>,
     /// Package status
@@ -131,6 +134,7 @@ pub struct RegistryIndex {
 /// Lightweight package summary for index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct PackageSummary {
     pub id: String,
     pub name: String,
@@ -140,6 +144,14 @@ pub struct PackageSummary {
     pub status: PackageStatus,
     pub keywords: Vec<String>,
     pub verified: bool,
+    #[serde(default)]
+    pub price: i64,
+    #[serde(default)]
+    pub visibility: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_category: Option<String>,
 }
 
 /// Registry configuration
@@ -164,6 +176,9 @@ pub struct RegistryConfig {
     /// Allow unverified packages
     #[serde(default)]
     pub allow_unverified: bool,
+    /// Bearer token for authenticated API requests
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 fn default_cache_hours() -> u32 {
@@ -177,7 +192,7 @@ fn default_true() -> bool {
 impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
-            default_registry: "https://registry.flow-like.com".to_string(),
+            default_registry: "https://api.flow-like.com/api/v1/registry".to_string(),
             additional_registries: Vec::new(),
             local_paths: Vec::new(),
             cache_dir: dirs_next::cache_dir()
@@ -187,6 +202,7 @@ impl Default for RegistryConfig {
             cache_duration_hours: default_cache_hours(),
             auto_update_index: true,
             allow_unverified: false,
+            auth_token: None,
         }
     }
 }
@@ -213,6 +229,9 @@ pub struct SearchFilters {
     /// Include deprecated packages
     #[serde(default)]
     pub include_deprecated: bool,
+    /// Include disabled (soft-deleted) packages
+    #[serde(default)]
+    pub include_disabled: bool,
     /// Pagination offset
     #[serde(default)]
     pub offset: usize,
@@ -236,6 +255,7 @@ impl Default for SearchFilters {
             author: None,
             verified_only: false,
             include_deprecated: false,
+            include_disabled: false,
             offset: 0,
             limit: default_limit(),
             sort_by: SortField::default(),
@@ -263,6 +283,7 @@ pub enum SortField {
 /// Search results
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResults {
     pub packages: Vec<PackageSummary>,
     pub total_count: usize,
@@ -300,6 +321,23 @@ pub struct DownloadRequest {
     pub package_id: String,
     #[serde(default)]
     pub version: Option<String>,
+    /// Client platform key (e.g. "ios-aarch64-wt43") to receive precompiled artifacts
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_platform: Option<String>,
+}
+
+/// Resolved metadata summary for a single language (icon, thumbnail, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct MetaSummary {
+    pub lang: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,6 +352,15 @@ pub struct DownloadResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
     pub manifest: PackageManifest,
+    /// Resolved package metadata (icon, thumbnail, localized name/description)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
+    /// Presigned URL for precompiled `.cwasm` artifact (when target_platform was provided)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwasm_download_url: Option<String>,
+    /// Blake3 checksum of the `.cwasm` artifact (when target_platform was provided)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwasm_checksum: Option<String>,
 }
 
 /// Registry API error
@@ -338,15 +385,45 @@ pub struct LocalRegistryState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledVersion {
+    pub version: String,
+    pub wasm_path: PathBuf,
+    pub installed_at: chrono::DateTime<chrono::Utc>,
+    pub manifest: PackageManifest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPackage {
     pub id: String,
     pub version: String,
     pub source: PackageSource,
     pub installed_at: chrono::DateTime<chrono::Utc>,
-    /// Path to cached WASM file
     pub wasm_path: PathBuf,
-    /// Manifest snapshot at install time
     pub manifest: PackageManifest,
+    #[serde(default)]
+    pub versions: HashMap<String, InstalledVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MetaSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_hash: Option<String>,
+}
+
+impl InstalledPackage {
+    pub fn active_version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn get_version(&self, version: &str) -> Option<&InstalledVersion> {
+        self.versions.get(version)
+    }
+
+    pub fn has_version(&self, version: &str) -> bool {
+        self.versions.contains_key(version)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +491,7 @@ mod tests {
         let entry = RegistryEntry {
             id: "test.package".to_string(),
             manifest,
+            nodes: vec![],
             versions: vec![
                 PackageVersion {
                     version: "0.9.0".to_string(),
@@ -464,6 +542,7 @@ mod tests {
         let entry = RegistryEntry {
             id: "test.package".to_string(),
             manifest,
+            nodes: vec![],
             versions: vec![
                 PackageVersion {
                     version: "0.9.0".to_string(),
@@ -535,7 +614,10 @@ mod tests {
     #[test]
     fn test_registry_config_default() {
         let config = RegistryConfig::default();
-        assert_eq!(config.default_registry, "https://registry.flow-like.com");
+        assert_eq!(
+            config.default_registry,
+            "https://api.flow-like.com/api/v1/registry"
+        );
         assert!(config.additional_registries.is_empty());
         assert!(config.local_paths.is_empty());
         assert_eq!(config.cache_duration_hours, 24 * 7);
@@ -609,6 +691,10 @@ mod tests {
                 status: PackageStatus::Active,
                 keywords: vec!["test".to_string()],
                 verified: true,
+                price: 0,
+                visibility: "public".to_string(),
+                primary_category: None,
+                secondary_category: None,
             }],
             total_count: 1,
             offset: 0,

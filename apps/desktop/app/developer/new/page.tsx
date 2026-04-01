@@ -139,7 +139,7 @@ export default function NewProjectWizard() {
 				},
 			);
 			toast.success(`Project "${project.name}" created!`);
-			router.push("/developer");
+			router.push("/store/packages?tab=projects");
 		} catch (err) {
 			toast.error(`Failed to create project: ${err}`);
 			setStep("details");
@@ -161,7 +161,7 @@ export default function NewProjectWizard() {
 						onClick={() =>
 							step === "details"
 								? setStep("language")
-								: router.push("/developer")
+								: router.push("/store/packages?tab=projects")
 						}
 						className="h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 transition-colors"
 					>

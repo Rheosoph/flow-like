@@ -1,3 +1,8 @@
 name = "flow-like-website"
 compatibility_date = "2024-08-29"
 pages_build_output_dir="./dist"
+
+[vars]
+ENABLE_STORE_SEO = "true"
+REGISTRY_API_URL = "https://api.flow-like.com"
+# REGISTRY_PAT is set as a secret via: wrangler pages secret put REGISTRY_PAT

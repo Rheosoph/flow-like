@@ -21,7 +21,7 @@ use p256::{
     PublicKey as P256PublicKey, elliptic_curve::sec1::ToEncodedPoint, pkcs8::DecodePublicKey,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 // ============================================================================
 // Environment Variables
@@ -46,6 +46,8 @@ const ISSUER: &str = "flow-like";
 pub enum TokenType {
     /// Token for executors to call back to API (progress, events)
     Executor,
+    /// Token for compilation workers to call back to API (status)
+    Compiler,
     /// Token for users to poll execution status
     User,
     /// Token for realtime collaboration (y-webrtc)
@@ -59,6 +61,7 @@ impl TokenType {
     pub fn audience(&self) -> &'static str {
         match self {
             TokenType::Executor => "flow-like-executor",
+            TokenType::Compiler => "flow-like-compiler",
             TokenType::User => "flow-like-user",
             TokenType::Realtime => "y-webrtc",
             TokenType::InteractionResponder => "flow-like-interaction-responder",
@@ -69,6 +72,7 @@ impl TokenType {
     pub fn default_ttl_seconds(&self) -> i64 {
         match self {
             TokenType::Executor => 24 * 60 * 60,       // 24 hours
+            TokenType::Compiler => 24 * 60 * 60,       // 24 hours
             TokenType::User => 60 * 60,                // 1 hour
             TokenType::Realtime => 3 * 60 * 60,        // 3 hours
             TokenType::InteractionResponder => 5 * 60, // 5 minutes
@@ -77,27 +81,32 @@ impl TokenType {
 }
 
 // ============================================================================
-// Static Key Storage
+// Static Key Storage (initialized via init() from State::new)
 // ============================================================================
 
-/// Lazily loaded private key for signing JWTs
-static PRIVATE_KEY_PEM: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
-    std::env::var(BACKEND_KEY_ENV)
-        .ok()
-        .and_then(|b64| STANDARD.decode(&b64).ok())
-});
+static PRIVATE_KEY_PEM: OnceLock<Vec<u8>> = OnceLock::new();
+static PUBLIC_KEY_PEM: OnceLock<Vec<u8>> = OnceLock::new();
+static KID: OnceLock<String> = OnceLock::new();
 
-/// Lazily loaded public key for verifying JWTs
-static PUBLIC_KEY_PEM: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
-    std::env::var(BACKEND_PUB_ENV)
-        .ok()
-        .and_then(|b64| STANDARD.decode(&b64).ok())
-});
+/// Initialize the backend JWT keys from pre-resolved secret values.
+/// Must be called once during State construction. Subsequent calls are no-ops.
+pub fn init(private_key_b64: Option<&str>, public_key_b64: Option<&str>, kid: Option<String>) {
+    if let Some(b64) = private_key_b64
+        && let Ok(pem) = STANDARD.decode(b64)
+    {
+        let _ = PRIVATE_KEY_PEM.set(pem);
+    }
+    if let Some(b64) = public_key_b64
+        && let Ok(pem) = STANDARD.decode(b64)
+    {
+        let _ = PUBLIC_KEY_PEM.set(pem);
+    }
+    let _ = KID.set(kid.unwrap_or_else(|| "backend-es256-v1".to_string()));
+}
 
-/// Key identifier for JWKS
-static KID: LazyLock<String> = LazyLock::new(|| {
-    std::env::var(BACKEND_KID_ENV).unwrap_or_else(|_| "backend-es256-v1".to_string())
-});
+fn get_kid() -> &'static str {
+    KID.get().map(|s| s.as_str()).unwrap_or("backend-es256-v1")
+}
 
 // ============================================================================
 // Error Type
@@ -149,12 +158,7 @@ impl std::error::Error for BackendJwtError {}
 
 /// Check if backend JWT signing is available
 pub fn is_configured() -> bool {
-    PRIVATE_KEY_PEM.is_some() && PUBLIC_KEY_PEM.is_some()
-}
-
-/// Get the key identifier
-pub fn get_kid() -> String {
-    KID.clone()
+    PRIVATE_KEY_PEM.get().is_some() && PUBLIC_KEY_PEM.get().is_some()
 }
 
 // ============================================================================
@@ -166,11 +170,11 @@ pub fn get_kid() -> String {
 /// The claims must include a `typ` field with `TokenType` and standard JWT fields.
 pub fn sign<T: Serialize>(claims: &T) -> Result<String, BackendJwtError> {
     let private_key = PRIVATE_KEY_PEM
-        .as_ref()
+        .get()
         .ok_or(BackendJwtError::MissingPrivateKey)?;
 
     let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some(KID.clone());
+    header.kid = Some(get_kid().to_string());
 
     let encoding_key = EncodingKey::from_ec_pem(private_key)
         .map_err(|e| BackendJwtError::EncodingError(e.to_string()))?;
@@ -191,7 +195,7 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     expected_type: TokenType,
 ) -> Result<T, BackendJwtError> {
     let public_key = PUBLIC_KEY_PEM
-        .as_ref()
+        .get()
         .ok_or(BackendJwtError::MissingPublicKey)?;
 
     let decoding_key = DecodingKey::from_ec_pem(public_key)
@@ -210,7 +214,7 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
 /// Verify a JWT without checking audience (for introspection)
 pub fn verify_any<T: for<'de> Deserialize<'de>>(token: &str) -> Result<T, BackendJwtError> {
     let public_key = PUBLIC_KEY_PEM
-        .as_ref()
+        .get()
         .ok_or(BackendJwtError::MissingPublicKey)?;
 
     let decoding_key = DecodingKey::from_ec_pem(public_key)
@@ -252,7 +256,7 @@ pub struct Jwks {
 /// Get the JWKS containing the public key for JWT verification
 pub fn get_jwks() -> Result<Jwks, BackendJwtError> {
     let public_key_pem = PUBLIC_KEY_PEM
-        .as_ref()
+        .get()
         .ok_or(BackendJwtError::MissingPublicKey)?;
 
     let pem = String::from_utf8_lossy(public_key_pem);
@@ -273,7 +277,7 @@ pub fn get_jwks() -> Result<Jwks, BackendJwtError> {
         x: URL_SAFE_NO_PAD.encode(x),
         y: URL_SAFE_NO_PAD.encode(y),
         alg: "ES256".to_string(),
-        kid: KID.clone(),
+        kid: get_kid().to_string(),
         r#use: "sig".to_string(),
     };
 

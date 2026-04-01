@@ -34,6 +34,8 @@ import {
 	isEmbeddingBit,
 	supportsRemoteEmbeddingExecution,
 } from "./model-card";
+import type { IModelEvaluation } from "./model-benchmarks";
+import { ModelBenchmarks } from "./model-benchmarks";
 import { Progress } from "./progress";
 import {
 	Sheet,
@@ -43,7 +45,6 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "./sheet";
-import { Slider } from "./slider";
 
 export interface ModelDetailSheetProps {
 	bit: IBit | null;
@@ -139,16 +140,25 @@ export function ModelDetailSheet({
 		backend.userState,
 		[],
 	);
+	const detailedBit = useInvoke(
+		backend.bitState.getBit,
+		backend.bitState,
+		[bit?.id ?? "", bit?.hub],
+		!!bit && open,
+		[bit?.updated ?? ""],
+		60_000,
+	);
 	const userInfo = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const displayBit = detailedBit.data ?? bit;
 
 	const isVirtualBit = useMemo(
-		() => !bit?.download_link || (bitSize.data === 0 && bitSize.isSuccess),
-		[bit?.download_link, bitSize.data, bitSize.isSuccess],
+		() => !displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess),
+		[displayBit?.download_link, bitSize.data, bitSize.isSuccess],
 	);
 
 	const tierInfo = useMemo(() => {
-		if (!bit) return { isRestricted: false, requiredTier: null };
-		const params = bit.parameters as {
+		if (!displayBit) return { isRestricted: false, requiredTier: null };
+		const params = displayBit.parameters as {
 			provider?: { params?: { tier?: string } };
 		};
 		const modelTier = params?.provider?.params?.tier;
@@ -163,7 +173,7 @@ export function ModelDetailSheet({
 		const allowedModelTiers = userTierConfig.llm_tiers ?? [];
 		const isRestricted = !allowedModelTiers.includes(modelTier);
 		return { isRestricted, requiredTier: isRestricted ? modelTier : null };
-	}, [bit, hub?.tiers, userInfo.data?.tier]);
+	}, [displayBit, hub?.tiers, userInfo.data?.tier]);
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
@@ -188,15 +198,15 @@ export function ModelDetailSheet({
 
 	const refetchIsInstalled = isInstalled.refetch;
 	const handleDownload = useCallback(async () => {
-		if (!bit) return;
+		if (!displayBit) return;
 		if (isInstalled.data) {
-			await backend.bitState.deleteBit(bit);
+			await backend.bitState.deleteBit(displayBit);
 			await refetchIsInstalled();
 			return;
 		}
-		await downloadBit(bit);
+		await downloadBit(displayBit);
 	}, [
-		bit,
+		displayBit,
 		isInstalled.data,
 		backend.bitState,
 		downloadBit,
@@ -205,42 +215,44 @@ export function ModelDetailSheet({
 
 	const refetchCurrentProfile = currentProfile.refetch;
 	const handleToggleProfile = useCallback(async () => {
-		if (!bit) return;
+		if (!displayBit) return;
 		const profile = currentProfile.data;
 		if (!profile) return;
 		const bitIndex = profile.hub_profile.bits.findIndex(
-			(id) => id.split(":").pop() === bit.id,
+			(id) => id.split(":").pop() === displayBit.id,
 		);
 		if (bitIndex === -1) {
-			await downloadBit(bit);
-			await backend.bitState.addBit(bit, profile);
+			await downloadBit(displayBit);
+			await backend.bitState.addBit(displayBit, profile);
 		} else {
-			await backend.bitState.removeBit(bit, profile);
+			await backend.bitState.removeBit(displayBit, profile);
 		}
 		await refetchCurrentProfile();
 	}, [
-		bit,
+		displayBit,
 		currentProfile.data,
 		downloadBit,
 		backend.bitState,
 		refetchCurrentProfile,
 	]);
 
-	if (!bit || !bit.meta.en) return null;
+	if (!displayBit || !displayBit.meta.en) return null;
 
-	const meta = bit.meta.en;
+	const meta = displayBit.meta.en;
 	const isInProfile =
 		(currentProfile.data?.hub_profile.bits || []).findIndex(
-			(id) => id.split(":")[1] === bit.id,
+			(id) => id.split(":").pop() === displayBit.id,
 		) > -1;
 
-	const params = bit.parameters as ILlmParameters | IEmbeddingModelParameters;
+	const params = displayBit.parameters as
+		| ILlmParameters
+		| IEmbeddingModelParameters;
 	const classification = (params as ILlmParameters)?.model_classification;
 	const contextLength = (params as ILlmParameters)?.context_length;
 	const embeddingParams = params as IEmbeddingModelParameters;
 	const isHosted = bitSize.data === 0 || isVirtualBit;
-	const canRunRemotely = supportsRemoteEmbeddingExecution(bit);
-	const isEmbeddingModel = isEmbeddingBit(bit);
+	const canRunRemotely = supportsRemoteEmbeddingExecution(displayBit);
+	const isEmbeddingModel = isEmbeddingBit(displayBit);
 
 	return (
 		<Sheet open={open} onOpenChange={onOpenChange}>
@@ -250,7 +262,7 @@ export function ModelDetailSheet({
 						<Avatar className="h-12 w-12 border">
 							<AvatarImage src={meta.icon ?? "/app-logo.webp"} />
 							<AvatarFallback>
-								<ModelTypeIcon type={bit.type} className="h-5 w-5" />
+								<ModelTypeIcon type={displayBit.type} className="h-5 w-5" />
 							</AvatarFallback>
 						</Avatar>
 						<div className="flex-1 min-w-0">
@@ -261,7 +273,7 @@ export function ModelDetailSheet({
 								)}
 							</SheetTitle>
 							<SheetDescription>
-								<ModalityIcons type={bit.type} />
+								<ModalityIcons type={displayBit.type} />
 							</SheetDescription>
 						</div>
 					</div>
@@ -338,6 +350,13 @@ export function ModelDetailSheet({
 						<ModelCapabilities classification={classification} />
 					)}
 
+					{/* Benchmarks & Evaluation */}
+					{displayBit.model_evaluation && (
+						<ModelBenchmarks
+							evaluation={displayBit.model_evaluation as IModelEvaluation}
+						/>
+					)}
+
 					{/* Embedding Parameters */}
 					{embeddingParams?.vector_length && (
 						<div>
@@ -410,11 +429,13 @@ export function ModelDetailSheet({
 								</>
 							)}
 						</Button>
-						{bit.repository && (
+						{displayBit.repository && (
 							<Button
 								variant="ghost"
 								className="w-full"
-								onClick={() => window.open(bit.repository ?? "", "_blank")}
+								onClick={() =>
+									window.open(displayBit.repository ?? "", "_blank")
+								}
 							>
 								<ExternalLinkIcon className="h-4 w-4 mr-2" />
 								View Repository
@@ -427,39 +448,55 @@ export function ModelDetailSheet({
 	);
 }
 
+function capBarColor(pct: number): string {
+	if (pct >= 70) return "bg-emerald-500";
+	if (pct >= 40) return "bg-amber-500";
+	return "bg-red-500";
+}
+
+function capTextColor(pct: number): string {
+	if (pct >= 70) return "text-emerald-600 dark:text-emerald-400";
+	if (pct >= 40) return "text-amber-600 dark:text-amber-400";
+	return "text-red-600 dark:text-red-400";
+}
+
 function ModelCapabilities({
 	classification,
 }: Readonly<{ classification: IBitModelClassification }>) {
-	const capabilities = Object.entries(classification).filter(
-		([_, value]) => typeof value === "number",
-	) as [string, number][];
+	const capabilities = (
+		Object.entries(classification).filter(
+			([_, value]) => typeof value === "number" && value > 0,
+		) as [string, number][]
+	).sort((a, b) => b[1] - a[1]);
 
 	if (capabilities.length === 0) return null;
 
 	return (
 		<div>
 			<h4 className="text-sm font-medium mb-3">Capabilities</h4>
-			<div className="space-y-5">
+			<div className="grid grid-cols-2 gap-x-4 gap-y-3">
 				{capabilities.map(([key, value]) => {
-					const { icon, label, color } = getCapabilityIcon(key);
+					const { icon, label } = getCapabilityIcon(key);
+					const pct = Math.round(value * 100);
 					return (
 						<div key={key} className="space-y-1">
-							<div className="flex items-center justify-between text-sm">
-								<span className="flex items-center gap-1.5">
-									<span>{icon}</span>
-									<span className="text-muted-foreground">{label}</span>
+							<div className="flex items-center justify-between text-xs">
+								<span className="flex items-center gap-1 text-muted-foreground">
+									<span className="text-xs">{icon}</span>
+									<span>{label}</span>
 								</span>
-								<span className={`font-medium ${color}`}>
-									{Math.round(value * 100)}%
+								<span
+									className={`font-semibold tabular-nums ${capTextColor(pct)}`}
+								>
+									{pct}%
 								</span>
 							</div>
-							<Slider
-								value={[value * 100]}
-								max={100}
-								step={1}
-								disabled
-								className="pointer-events-none"
-							/>
+							<div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+								<div
+									className={`h-full rounded-full transition-all ${capBarColor(pct)}`}
+									style={{ width: `${pct}%` }}
+								/>
+							</div>
 						</div>
 					);
 				})}

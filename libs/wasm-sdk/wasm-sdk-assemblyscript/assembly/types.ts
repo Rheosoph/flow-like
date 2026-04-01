@@ -60,6 +60,14 @@ export class PinDefinition {
 	default_value: string | null = null;
 	value_type: string | null = null;
 	schema: string | null = null;
+	step: f64 = 0;
+	has_step: bool = false;
+	sensitive: bool = false;
+	has_sensitive: bool = false;
+	enforce_schema_flag: bool = false;
+	has_enforce_schema: bool = false;
+	enforce_generic_value_type: bool = false;
+	has_enforce_generic_value_type: bool = false;
 
 	static input(
 		name: string,
@@ -166,6 +174,30 @@ export class PinDefinition {
 		return this;
 	}
 
+	withStep(step: f64): PinDefinition {
+		this.step = step;
+		this.has_step = true;
+		return this;
+	}
+
+	withSensitive(sensitive: bool = true): PinDefinition {
+		this.sensitive = sensitive;
+		this.has_sensitive = true;
+		return this;
+	}
+
+	withEnforceSchema(enforce: bool = true): PinDefinition {
+		this.enforce_schema_flag = enforce;
+		this.has_enforce_schema = true;
+		return this;
+	}
+
+	withEnforceGenericValueType(enforce: bool = true): PinDefinition {
+		this.enforce_generic_value_type = enforce;
+		this.has_enforce_generic_value_type = true;
+		return this;
+	}
+
 	toJSON(): string {
 		let json = `{"name":${jsonString(this.name)},"friendly_name":${jsonString(this.friendly_name)},"description":${jsonString(this.description)},"pin_type":"${this.pin_type}","data_type":"${this.data_type}"`;
 		if (this.default_value !== null)
@@ -173,6 +205,10 @@ export class PinDefinition {
 		if (this.value_type !== null)
 			json += `,"value_type":${jsonString(this.value_type!)}`;
 		if (this.schema !== null) json += `,"schema":${jsonString(this.schema!)}`;
+		if (this.has_step) json += `,"step":${this.step.toString()}`;
+		if (this.has_sensitive) json += `,"sensitive":${this.sensitive ? "true" : "false"}`;
+		if (this.has_enforce_schema) json += `,"enforce_schema":${this.enforce_schema_flag ? "true" : "false"}`;
+		if (this.has_enforce_generic_value_type) json += `,"enforce_generic_value_type":${this.enforce_generic_value_type ? "true" : "false"}`;
 		json += "}";
 		return json;
 	}

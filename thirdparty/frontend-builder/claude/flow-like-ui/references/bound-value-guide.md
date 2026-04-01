@@ -284,3 +284,31 @@ You can use static values for labels and dynamic values for content:
   }
 }
 ```
+
+---
+
+## dataModel Section
+
+When using `path` bindings, always include a `dataModel` array at the top level to provide initial values:
+
+```json
+{
+  "rootComponentId": "...",
+  "components": [...],
+  "dataModel": [
+    { "path": "$.user.name", "value": "Jane Doe" },
+    { "path": "$.user.email", "value": "jane@example.com" },
+    { "path": "$.items", "value": [
+      { "id": 1, "name": "Item A" },
+      { "id": 2, "name": "Item B" }
+    ]},
+    { "path": "$.settings.darkMode", "value": true }
+  ]
+}
+```
+
+**Rules:**
+- Each entry has `path` (JSONPath starting with `$`) and `value` (any JSON value)
+- Paths correspond to the `path` values used in BoundValue bindings
+- Provide sensible defaults so the UI renders correctly on first load
+- Nested objects can be set as a single entry (`$.user` with an object value) or as individual paths (`$.user.name`, `$.user.email`)

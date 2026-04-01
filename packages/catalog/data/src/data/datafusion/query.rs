@@ -3,6 +3,7 @@ use crate::data::excel::CSVTable;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -31,6 +32,7 @@ impl NodeLogic for SqlQueryNode {
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -73,9 +75,10 @@ impl NodeLogic for SqlQueryNode {
         node.add_output_pin(
             "rows",
             "Rows",
-            "Query results as array of row objects (good for iteration)",
-            VariableType::Generic,
-        );
+            "Query results as array of row structs with Flow-Like-compatible values",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "row_count",
@@ -125,8 +128,6 @@ impl NodeLogic for SqlQueryNode {
 pub fn batches_to_rows(
     batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
 ) -> flow_like_types::Result<Vec<QueryRow>> {
-    use flow_like_storage::datafusion::arrow::array::*;
-
     if batches.is_empty() {
         return Ok(vec![]);
     }
@@ -188,7 +189,7 @@ fn array_value_to_json(
     idx: usize,
 ) -> flow_like_types::Result<flow_like_types::Value> {
     use flow_like_storage::datafusion::arrow::array::*;
-    use flow_like_storage::datafusion::arrow::datatypes::DataType;
+    use flow_like_storage::datafusion::arrow::datatypes::{DataType, TimeUnit};
     use flow_like_types::Value as JsonValue;
 
     if array.is_null(idx) {
@@ -255,6 +256,18 @@ fn array_value_to_json(
             let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
             JsonValue::String(arr.value(idx).to_string())
         }
+        DataType::Utf8View => {
+            let arr = array.as_any().downcast_ref::<StringViewArray>().unwrap();
+            JsonValue::String(arr.value(idx).to_string())
+        }
+        DataType::Decimal128(_, _) => {
+            let arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            decimal_string_to_json(arr.value_as_string(idx))
+        }
+        DataType::Decimal256(_, _) => {
+            let arr = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            decimal_string_to_json(arr.value_as_string(idx))
+        }
         DataType::Date32 => {
             let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
             let days = arr.value(idx);
@@ -273,28 +286,100 @@ fn array_value_to_json(
                 JsonValue::Null
             }
         }
-        DataType::Timestamp(_, _) => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .or_else(|| array.as_any().downcast_ref::<TimestampMicrosecondArray>());
-            if let Some(arr) = arr {
-                let micros = arr.value(idx);
-                let secs = micros / 1_000_000;
-                let nsecs = ((micros % 1_000_000) * 1000) as u32;
-                if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
-                    JsonValue::String(dt.format("%Y-%m-%dT%H:%M:%S%.6f").to_string())
-                } else {
-                    JsonValue::Null
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .unwrap();
+                timestamp_to_json(arr.value(idx), *unit)
+            }
+            TimeUnit::Millisecond => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .unwrap();
+                timestamp_to_json(arr.value(idx), *unit)
+            }
+            TimeUnit::Microsecond => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
+                timestamp_to_json(arr.value(idx), *unit)
+            }
+            TimeUnit::Nanosecond => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .unwrap();
+                timestamp_to_json(arr.value(idx), *unit)
+            }
+        },
+        _ => {
+            use flow_like_storage::arrow::util::display::{ArrayFormatter, FormatOptions};
+            let options = FormatOptions::default();
+            match ArrayFormatter::try_new(array, &options) {
+                Ok(formatter) => {
+                    let formatted = formatter.value(idx).to_string();
+                    decimal_string_to_json(formatted)
                 }
-            } else {
-                JsonValue::String(format!("{:?}", array))
+                Err(_) => JsonValue::Null,
             }
         }
-        _ => JsonValue::String(format!("{:?}", array.slice(idx, 1))),
     };
 
     Ok(value)
+}
+
+fn decimal_string_to_json(raw: String) -> Value {
+    if let Ok(value) = raw.parse::<i64>() {
+        return json!(value);
+    }
+
+    if let Ok(value) = raw.parse::<u64>() {
+        return json!(value);
+    }
+
+    let significant_digits = raw.bytes().filter(|byte| byte.is_ascii_digit()).count();
+    if significant_digits <= 15
+        && let Ok(value) = raw.parse::<f64>()
+        && let Some(number) = flow_like_types::json::Number::from_f64(value)
+    {
+        return Value::Number(number);
+    }
+
+    Value::String(raw)
+}
+
+fn timestamp_to_json(
+    value: i64,
+    unit: flow_like_storage::datafusion::arrow::datatypes::TimeUnit,
+) -> Value {
+    use flow_like_storage::datafusion::arrow::datatypes::TimeUnit;
+
+    let (seconds, nanoseconds, format) = match unit {
+        TimeUnit::Second => (value, 0, "%Y-%m-%dT%H:%M:%S"),
+        TimeUnit::Millisecond => (
+            value.div_euclid(1_000),
+            (value.rem_euclid(1_000) * 1_000_000) as u32,
+            "%Y-%m-%dT%H:%M:%S%.3f",
+        ),
+        TimeUnit::Microsecond => (
+            value.div_euclid(1_000_000),
+            (value.rem_euclid(1_000_000) * 1_000) as u32,
+            "%Y-%m-%dT%H:%M:%S%.6f",
+        ),
+        TimeUnit::Nanosecond => (
+            value.div_euclid(1_000_000_000),
+            value.rem_euclid(1_000_000_000) as u32,
+            "%Y-%m-%dT%H:%M:%S%.9f",
+        ),
+    };
+
+    chrono::DateTime::from_timestamp(seconds, nanoseconds)
+        .map(|dt| Value::String(dt.format(format).to_string()))
+        .unwrap_or(Value::Null)
 }
 
 #[cfg(test)]
@@ -460,12 +545,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_array_value_to_json_decimal128() {
+        let integer_array = Decimal128Array::from_iter_values([12])
+            .with_precision_and_scale(20, 0)
+            .unwrap();
+        let scaled_array = Decimal128Array::from_iter_values([575000])
+            .with_precision_and_scale(38, 4)
+            .unwrap();
+
+        assert_eq!(array_value_to_json(&integer_array, 0).unwrap(), json!(12));
+        assert_eq!(array_value_to_json(&scaled_array, 0).unwrap(), json!(57.5));
+    }
+
+    #[tokio::test]
     async fn test_sql_query_node_structure() {
         let node_logic = SqlQueryNode::new();
         let node = node_logic.get_node();
 
         assert_eq!(node.name, "df_sql_query");
         assert_eq!(node.friendly_name, "SQL Query");
+        assert_eq!(node.version, Some(1));
 
         let input_pins: Vec<_> = node
             .pins
@@ -477,6 +576,7 @@ mod tests {
             .values()
             .filter(|p| p.pin_type == flow_like::flow::pin::PinType::Output)
             .collect();
+        let rows_pin = output_pins.iter().find(|p| p.name == "rows").unwrap();
 
         assert!(input_pins.iter().any(|p| p.name == "exec_in"));
         assert!(input_pins.iter().any(|p| p.name == "session"));
@@ -485,5 +585,7 @@ mod tests {
         assert!(output_pins.iter().any(|p| p.name == "table"));
         assert!(output_pins.iter().any(|p| p.name == "rows"));
         assert!(output_pins.iter().any(|p| p.name == "row_count"));
+        assert_eq!(rows_pin.data_type, VariableType::Struct);
+        assert_eq!(rows_pin.value_type, ValueType::Array);
     }
 }

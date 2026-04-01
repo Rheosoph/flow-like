@@ -69,8 +69,8 @@ export function useLayerNavigation({
 	);
 
 	const pushLayer = useCallback(
-		(pushedLayer: ILayer) => {
-			void saveViewport();
+		async (pushedLayer: ILayer) => {
+			await saveViewport();
 
 			setCurrentLayer(pushedLayer.id);
 			setLayerPath((old) => {

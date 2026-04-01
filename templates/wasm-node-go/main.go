@@ -1,70 +1,66 @@
-// Flow-Like WASM Node Template (Go / TinyGo)
+// Flow-Like WASM Node Template (Go / TinyGo) — Component Model
+//
+// Uses WASI Preview 2 (Component Model) for full TCP/UDP/DNS support.
 //
 // Build:
+//   mise run build
 //
-//	tinygo build -o node.wasm -target wasm -no-debug ./
-//
-// The compiled .wasm file will be at: node.wasm
+// Or manually:
+//   wit-bindgen-go generate --world flow-like-node --out gen ./wit
+//   go mod tidy
+//   tinygo build -o node.wasm -target wasip2 -no-debug ./
 package main
 
 import (
 	"strconv"
 	"strings"
 
-	sdk "github.com/TM9657/flow-like/libs/wasm-sdk/wasm-sdk-go"
+	flowlikenode "github.com/example/flow-like-wasm-node/gen/flow-like/node/flow-like-node"
 )
 
-// get_node returns the node definition as a packed i64 (ptr<<32|len).
-//
-//export get_node
-func getNode() int64 {
-	def := sdk.NewNodeDefinition()
-	def.Name = "my_custom_node_go"
-	def.FriendlyName = "My Custom Node (Go)"
-	def.Description = "A template WASM node built with Go / TinyGo"
-	def.Category = "Custom/WASM"
-	def.AddPermission("streaming")
-
-	def.AddPin(sdk.InputPin("exec", "Execute", "Trigger execution", "Exec"))
-	def.AddPin(sdk.InputPin("input_text", "Input Text", "Text to process", "String").WithDefault(`""`))
-	def.AddPin(sdk.InputPin("multiplier", "Multiplier", "Number of times to repeat", "I64").WithDefault("1"))
-
-	def.AddPin(sdk.OutputPin("exec_out", "Done", "Execution complete", "Exec"))
-	def.AddPin(sdk.OutputPin("output_text", "Output Text", "Processed text", "String"))
-	def.AddPin(sdk.OutputPin("char_count", "Character Count", "Number of characters in output", "I64"))
-
-	return sdk.SerializeDefinition(def)
+func init() {
+	flowlikenode.Exports.GetNode = func() string {
+		return buildDefinition().ToJSON()
+	}
+	flowlikenode.Exports.GetNodes = func() string {
+		return "[" + buildDefinition().ToJSON() + "]"
+	}
+	flowlikenode.Exports.Run = func(input string) string {
+		ctx := NewContext()
+		return handleRun(ctx).ToJSON()
+	}
+	flowlikenode.Exports.GetABIVersion = func() uint32 {
+		return ABIVersion
+	}
 }
 
-// get_nodes returns all node definitions as a packed i64 (ptr<<32|len).
-//
-//export get_nodes
-func getNodes() int64 {
-	def := sdk.NewNodeDefinition()
-	def.Name = "my_custom_node_go"
-	def.FriendlyName = "My Custom Node (Go)"
-	def.Description = "A template WASM node built with Go / TinyGo"
-	def.Category = "Custom/WASM"
+func main() {}
+
+// ── Node Definition ─────────────────────────────────────────────────────
+
+func buildDefinition() NodeDefinition {
+	def := NewNodeDefinition(
+		"my_custom_node_go",
+		"My Custom Node (Go)",
+		"A template WASM node built with Go / TinyGo (Component Model)",
+		"Custom/WASM",
+	)
 	def.AddPermission("streaming")
 
-	def.AddPin(sdk.InputPin("exec", "Execute", "Trigger execution", "Exec"))
-	def.AddPin(sdk.InputPin("input_text", "Input Text", "Text to process", "String").WithDefault(`""`))
-	def.AddPin(sdk.InputPin("multiplier", "Multiplier", "Number of times to repeat", "I64").WithDefault("1"))
+	def.AddPin(InputExecPin("exec"))
+	def.AddPin(InputPin("input_text", "Input Text", "Text to process", "String").WithDefault(`""`))
+	def.AddPin(InputPin("multiplier", "Multiplier", "Number of times to repeat", "I64").WithDefault("1"))
 
-	def.AddPin(sdk.OutputPin("exec_out", "Done", "Execution complete", "Exec"))
-	def.AddPin(sdk.OutputPin("output_text", "Output Text", "Processed text", "String"))
-	def.AddPin(sdk.OutputPin("char_count", "Character Count", "Number of characters in output", "I64"))
+	def.AddPin(OutputExecPin("exec_out"))
+	def.AddPin(OutputPin("output_text", "Output Text", "Processed text", "String"))
+	def.AddPin(OutputPin("char_count", "Character Count", "Number of characters in output", "I64"))
 
-	return sdk.PackResult("[" + def.ToJSON() + "]")
+	return def
 }
 
-// run is the main execution function, called every time the node is triggered.
-//
-//export run
-func run(ptr uint32, length uint32) int64 {
-	input := sdk.ParseInput(ptr, length)
-	ctx := sdk.NewContext(input)
+// ── Run Handler ─────────────────────────────────────────────────────────
 
+func handleRun(ctx *Context) ExecutionResult {
 	inputText := ctx.GetString("input_text", "")
 	multiplier := ctx.GetI64("multiplier", 1)
 
@@ -79,10 +75,20 @@ func run(ptr uint32, length uint32) int64 {
 
 	ctx.StreamText("Generated " + strconv.Itoa(charCount) + " characters")
 
-	ctx.SetOutput("output_text", sdk.JSONString(outputText))
+	ctx.SetOutput("output_text", jsonQuote(outputText))
 	ctx.SetOutput("char_count", strconv.Itoa(charCount))
 
-	return sdk.SerializeResult(ctx.Success())
+	return ctx.Success()
 }
 
-func main() {}
+// ── Network Example (Component Model enables direct TCP/UDP/DNS) ────────
+//
+// With Component Model (wasip2), net.Dial works for raw TCP connections:
+//
+//   conn, err := net.Dial("tcp", "example.com:80")
+//   if err != nil { return }
+//   defer conn.Close()
+//   conn.Write([]byte("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n"))
+//   buf := make([]byte, 4096)
+//   n, _ := conn.Read(buf)
+//   response := string(buf[:n])

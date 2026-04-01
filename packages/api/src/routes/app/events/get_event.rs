@@ -78,7 +78,7 @@ pub async fn get_event(
     // For current version, use database lookup
     // For historical versions, fall back to bucket
     let event = if version_opt.is_none() {
-        get_event_from_db(&state.db, &event_id).await?
+        get_event_from_db(&state.db, &event_id, &app_id).await?
     } else {
         let app = state.master_app(&sub, &app_id, &state).await?;
         app.get_event(&event_id, version_opt).await?

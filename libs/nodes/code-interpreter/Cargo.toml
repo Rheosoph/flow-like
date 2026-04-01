@@ -1,0 +1,59 @@
+[package]
+name = "flow-like-catalog-code-interpreter"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+# Execution feature — enables the Wasmtime WASI runtime for actual Python execution.
+# Without this the package only exposes node definitions (no heavy deps).
+execute = [
+    "flow-like-catalog-core/execute",
+    "dep:flow-like-wasm",
+    "dep:wasmtime",
+    "dep:wasmtime-wasi",
+    "dep:tempfile",
+    "dep:anyhow",
+]
+# AOT-compile python.wasm into the binary at build time for zero cold-start.
+# Requires python.wasm to be available (via PYTHON_WASM_PATH env or standard paths).
+# Implies `execute` since there's no point bundling without runtime support.
+bundled-python = ["execute"]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like.workspace = true
+flow-like-types.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog-macros.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+async-trait.workspace = true
+dirs-next.workspace = true
+once_cell = "1.21.3"
+blake3.workspace = true
+futures.workspace = true
+
+# Heavy execution dependencies — only compiled with the `execute` feature.
+flow-like-wasm = { workspace = true, optional = true }
+# Workspace wasmtime versions — deduplicates with packages/wasm.
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+tempfile = { version = "3", optional = true }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+wat = "1"
+tempfile = "3"
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true
+# Only used when `bundled-python` feature is active (cfg-gated in build.rs).
+wasmtime = { workspace = true }
+dirs-next = "2"
+ureq = "3"
+blake3 = { workspace = true }

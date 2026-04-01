@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import type { IBackendState } from "../state/backend-state";
 import type { ILogMetadata } from "./schema";
 import type { IRunPayload } from "./schema";
@@ -12,6 +13,7 @@ interface IEventStream {
 	subscribers: Map<string, ISubscriber>;
 	accumulatedEvents: IIntercomEvent[];
 	lastSentIndex: Map<string, number>;
+	seenEventIds: Set<string>;
 	executionPromise?: Promise<any>;
 	isComplete: boolean;
 	path?: string;
@@ -101,6 +103,7 @@ export class ExecutionEngineProvider {
 				subscribers: new Map(),
 				accumulatedEvents: [],
 				lastSentIndex: new Map(),
+				seenEventIds: new Set(),
 				isComplete: false,
 			});
 		}
@@ -154,6 +157,7 @@ export class ExecutionEngineProvider {
 				subscribers: new Map(),
 				accumulatedEvents: [],
 				lastSentIndex: new Map(),
+				seenEventIds: new Set(),
 				isComplete: false,
 				path: options.path,
 				title: options.title,
@@ -166,6 +170,7 @@ export class ExecutionEngineProvider {
 				stream.isComplete = false;
 				stream.accumulatedEvents = [];
 				stream.lastSentIndex.clear();
+				stream.seenEventIds.clear();
 				stream.executionPromise = undefined; // Clear old promise to allow new execution
 				// We keep existing subscribers, but reset their sent index
 				for (const subscriberId of stream.subscribers.keys()) {
@@ -182,7 +187,11 @@ export class ExecutionEngineProvider {
 		this.notifyGlobalListeners();
 
 		if (stream.executionPromise) {
-			return stream.executionPromise;
+			// Stream is already executing — reject so callers know the send was dropped
+			throw Object.assign(
+				new Error("A stream is already active for this session"),
+				{ isActiveStreamError: true },
+			);
 		}
 
 		// Use the executeEventFn if set (handles runtime variables), otherwise fall back to direct call
@@ -203,9 +212,15 @@ export class ExecutionEngineProvider {
 				options.onExecutionStart?.(executionId);
 			},
 			(events: IIntercomEvent[]) => {
-				// Handle new events
-				if (events.length > 0) {
-					stream!.accumulatedEvents.push(...events);
+				// Deduplicate by event_id
+				const unique = events.filter((e) => {
+					if (stream!.seenEventIds.has(e.event_id)) return false;
+					stream!.seenEventIds.add(e.event_id);
+					return true;
+				});
+
+				if (unique.length > 0) {
+					stream!.accumulatedEvents.push(...unique);
 
 					// Publish to all subscribers
 					for (const [
@@ -226,7 +241,7 @@ export class ExecutionEngineProvider {
 
 					// Incremental save logic
 					if (options.onIncrementalSave) {
-						eventsSinceLastSave += events.length;
+						eventsSinceLastSave += unique.length;
 						if (eventsSinceLastSave >= saveInterval) {
 							eventsSinceLastSave = 0;
 							// Fire and forget - don't block event processing
@@ -270,6 +285,15 @@ export class ExecutionEngineProvider {
 			})
 			.catch(async (error) => {
 				console.error("Execution error:", error);
+				Sentry.captureException(error, {
+					tags: { component: "execution-engine", action: "execute_event" },
+					extra: {
+						streamId,
+						appId: options.appId,
+						eventId: options.eventId,
+						accumulatedEvents: stream!.accumulatedEvents.length,
+					},
+				});
 				stream!.isComplete = true;
 
 				// Still do final save on error to preserve partial state

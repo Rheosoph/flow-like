@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -42,5 +42,14 @@ pub async fn delete_board(
     app.delete_board(&board_id).await?;
     app.save().await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "board.delete",
+        "Board",
+        board_id,
+        "Board deleted"
+    );
     Ok(Json(()))
 }

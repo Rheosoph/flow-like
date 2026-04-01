@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{app, role},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -68,5 +68,14 @@ pub async fn make_role_default(
     app.updated_at = Set(chrono::Utc::now().naive_utc());
     app.update(&state.db).await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "role.default",
+        "Role",
+        role_id,
+        "Default role changed"
+    );
     Ok(Json(()))
 }

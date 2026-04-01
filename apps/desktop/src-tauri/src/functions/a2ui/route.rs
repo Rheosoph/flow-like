@@ -23,12 +23,38 @@ pub async fn get_app_routes(
         .map_err(|e| TauriFunctionError::new(&format!("Failed to load app: {}", e)))?;
 
     let mut routes = Vec::new();
+    let mut used_paths = std::collections::HashSet::new();
+    // Events without explicit routes that need auto-generated ones
+    let mut unrouted_events = Vec::new();
+
     for event_id in &app.events {
-        if let Ok(event) = app.get_event(event_id, None).await
-            && let Some(route) = &event.route
-        {
+        if let Ok(event) = app.get_event(event_id, None).await {
+            if !event.active {
+                continue;
+            }
+            if let Some(route) = &event.route {
+                used_paths.insert(route.clone());
+                routes.push(RouteMapping {
+                    path: route.clone(),
+                    event_id: event.id.clone(),
+                });
+            } else {
+                unrouted_events.push(event);
+            }
+        }
+    }
+
+    // Auto-generate routes for legacy events without explicit routes
+    for event in unrouted_events {
+        let path = if event.is_default || (!used_paths.contains("/") && routes.is_empty()) {
+            "/".to_string()
+        } else {
+            format!("/{}", event.id)
+        };
+
+        if used_paths.insert(path.clone()) {
             routes.push(RouteMapping {
-                path: route.clone(),
+                path,
                 event_id: event.id.clone(),
             });
         }
@@ -76,21 +102,41 @@ pub async fn get_default_app_route(
         .await
         .map_err(|e| TauriFunctionError::new(&format!("Failed to load app: {}", e)))?;
 
-    // First try to find event with is_default=true
+    let mut first_active: Option<RouteMapping> = None;
+
     for event_id in &app.events {
         if let Ok(event) = app.get_event(event_id, None).await
-            && event.is_default
-            && let Some(route) = &event.route
+            && event.active
         {
-            return Ok(Some(RouteMapping {
-                path: route.clone(),
-                event_id: event.id,
-            }));
+            // Explicit is_default flag
+            if event.is_default {
+                let path = event.route.clone().unwrap_or_else(|| "/".to_string());
+                return Ok(Some(RouteMapping {
+                    path,
+                    event_id: event.id,
+                }));
+            }
+
+            // Explicit route="/"
+            if event.route.as_deref() == Some("/") {
+                return Ok(Some(RouteMapping {
+                    path: "/".to_string(),
+                    event_id: event.id,
+                }));
+            }
+
+            // Track first active event as fallback for legacy apps
+            if first_active.is_none() {
+                first_active = Some(RouteMapping {
+                    path: "/".to_string(),
+                    event_id: event.id.clone(),
+                });
+            }
         }
     }
 
-    // Fall back to route="/"
-    get_app_route_by_path(handler, app_id, "/".to_string()).await
+    // Fallback: use first active event (legacy apps without routes)
+    Ok(first_active)
 }
 
 /// Set a route on an event

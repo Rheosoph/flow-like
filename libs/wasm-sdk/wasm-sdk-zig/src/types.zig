@@ -57,6 +57,26 @@ pub const PinDirection = enum {
 };
 
 // ---------------------------------------------------------------------------
+// ValueType — how the data is contained (scalar vs collection)
+// ---------------------------------------------------------------------------
+
+pub const ValueTypeKind = enum {
+    normal,
+    array,
+    hash_map,
+    hash_set,
+
+    pub fn jsonName(self: ValueTypeKind) []const u8 {
+        return switch (self) {
+            .normal => "Normal",
+            .array => "Array",
+            .hash_map => "HashMap",
+            .hash_set => "HashSet",
+        };
+    }
+};
+
+// ---------------------------------------------------------------------------
 // NodeScores
 // ---------------------------------------------------------------------------
 
@@ -98,6 +118,10 @@ pub const PinDefinition = struct {
     default_value: ?[]const u8 = null,
     value_type: ?[]const u8 = null,
     schema: ?[]const u8 = null,
+    step: ?f64 = null,
+    sensitive: ?bool = null,
+    enforce_schema: ?bool = null,
+    enforce_generic_value_type: ?bool = null,
 
     pub fn inputPin(name: []const u8, friendly_name: []const u8, description: []const u8, data_type: DataType) PinDefinition {
         return .{
@@ -139,6 +163,30 @@ pub const PinDefinition = struct {
         return pin;
     }
 
+    pub fn withStep(self: PinDefinition, step: f64) PinDefinition {
+        var pin = self;
+        pin.step = step;
+        return pin;
+    }
+
+    pub fn withSensitive(self: PinDefinition, sensitive: bool) PinDefinition {
+        var pin = self;
+        pin.sensitive = sensitive;
+        return pin;
+    }
+
+    pub fn withEnforceSchema(self: PinDefinition, enforce: bool) PinDefinition {
+        var pin = self;
+        pin.enforce_schema = enforce;
+        return pin;
+    }
+
+    pub fn withEnforceGenericValueType(self: PinDefinition, enforce: bool) PinDefinition {
+        var pin = self;
+        pin.enforce_generic_value_type = enforce;
+        return pin;
+    }
+
     pub fn writeJson(self: *const PinDefinition, writer: anytype) !void {
         try writer.writeAll("{\"name\":");
         try writeJsonString(writer, self.name);
@@ -162,6 +210,24 @@ pub const PinDefinition = struct {
         if (self.schema) |s| {
             try writer.writeAll(",\"schema\":");
             try writeJsonString(writer, s);
+        }
+        if (self.step) |st| {
+            try writer.writeAll(",\"step\":");
+            var buf: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{st}) catch "0";
+            try writer.writeAll(str);
+        }
+        if (self.sensitive) |sn| {
+            try writer.writeAll(",\"sensitive\":");
+            try writer.writeAll(if (sn) "true" else "false");
+        }
+        if (self.enforce_schema) |es| {
+            try writer.writeAll(",\"enforce_schema\":");
+            try writer.writeAll(if (es) "true" else "false");
+        }
+        if (self.enforce_generic_value_type) |eg| {
+            try writer.writeAll(",\"enforce_generic_value_type\":");
+            try writer.writeAll(if (eg) "true" else "false");
         }
         try writer.writeByte('}');
     }

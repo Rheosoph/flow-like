@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useId, useMemo } from "react";
+import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
 import { DataProvider } from "./DataContext";
@@ -42,10 +43,29 @@ export function A2UIRenderer({
 	openDialog,
 	closeDialog,
 }: A2UIRendererProps) {
+	const canvasId = useId();
 	const components = useMemo(
 		() => surface.components ?? {},
 		[surface.components],
 	);
+	const canvasSettings = surface.canvasSettings;
+	const canvasStyle = useMemo(
+		() => ({
+			backgroundColor: canvasSettings?.backgroundColor,
+			backgroundImage: canvasSettings?.backgroundImage
+				? `url(${canvasSettings.backgroundImage})`
+				: undefined,
+			backgroundSize: canvasSettings?.backgroundImage
+				? "cover"
+				: undefined,
+			backgroundPosition: canvasSettings?.backgroundImage
+				? "center"
+				: undefined,
+			padding: canvasSettings?.padding,
+		}),
+		[canvasSettings],
+	);
+	const customCss = canvasSettings?.customCss;
 
 	const handleAction = useCallback(
 		(message: A2UIClientMessage) => {
@@ -108,7 +128,21 @@ export function A2UIRenderer({
 					openDialog={openDialog}
 					closeDialog={closeDialog}
 				>
-					<div className={className}>
+					{customCss && (
+						<style
+							{...createSanitizedStyleProps(
+								safeScopedCss(
+									customCss,
+									`[data-surface-canvas-id="${canvasId}"]`,
+								),
+							)}
+						/>
+					)}
+					<div
+						className={className}
+						data-surface-canvas-id={canvasId}
+						style={canvasStyle}
+					>
 						{renderComponent(surface.rootComponentId)}
 					</div>
 				</ActionProvider>
@@ -156,6 +190,19 @@ export function useA2UIState() {
 					newSurfaces.set(message.surfaceId, {
 						...existing,
 						components: updatedComponents,
+					});
+				}
+			}
+
+			if (message.type === "setCanvasSettings") {
+				const existing = newSurfaces.get(message.surfaceId);
+				if (existing) {
+					newSurfaces.set(message.surfaceId, {
+						...existing,
+						canvasSettings: {
+							...existing.canvasSettings,
+							...message.canvasSettings,
+						},
 					});
 				}
 			}

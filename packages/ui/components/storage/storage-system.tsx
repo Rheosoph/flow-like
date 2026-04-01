@@ -41,16 +41,50 @@ import {
 import { StorageBreadcrumbs } from "./storage-breadcrumbs";
 import { FileOrFolder } from "./storage-file-or-folder";
 
+interface StorageOperationResult {
+	prefix: string;
+	url?: string;
+	error?: string;
+}
+
+interface StorageOperations {
+	listStorageItems: (appId: string, prefix: string) => Promise<IStorageItem[]>;
+	deleteStorageItems: (appId: string, prefixes: string[]) => Promise<void>;
+	downloadStorageItems: (
+		appId: string,
+		prefixes: string[],
+	) => Promise<StorageOperationResult[]>;
+	uploadStorageItems: (
+		appId: string,
+		prefix: string,
+		files: File[],
+		onProgress?: (progress: number) => void,
+	) => Promise<void>;
+	writeStorageItems?: (items: StorageOperationResult[]) => Promise<void>;
+}
+
 export function StorageSystem({
 	appId,
 	prefix,
 	updatePrefix,
 	fileToUrl,
+	title = "Storage",
+	storageScopeKey = "shared",
+	operations,
+	revealInExplorer,
+	openWithApp,
+	listAppsForFile,
 }: Readonly<{
 	appId: string;
 	prefix: string;
 	updatePrefix: (prefix: string) => void;
 	fileToUrl: (prefix: string) => Promise<string>;
+	title?: string;
+	storageScopeKey?: string;
+	operations?: StorageOperations;
+	revealInExplorer?: (location: string) => void;
+	openWithApp?: (location: string, appPath?: string) => void;
+	listAppsForFile?: (location: string) => Promise<import("./storage-file-or-folder").AppEntry[]>;
 }>) {
 	// Responsive helper: detect small screens (<= Tailwind 'sm')
 	const useIsSmallScreen = () => {
@@ -86,6 +120,36 @@ export function StorageSystem({
 	const fileReference = useRef<HTMLInputElement>(null);
 	const folderReference = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const storageApi = useMemo<StorageOperations>(
+		() => ({
+			listStorageItems: (targetAppId, targetPrefix) =>
+				operations?.listStorageItems(targetAppId, targetPrefix) ??
+				backend.storageState.listStorageItems(targetAppId, targetPrefix),
+			deleteStorageItems: (targetAppId, prefixes) =>
+				operations?.deleteStorageItems(targetAppId, prefixes) ??
+				backend.storageState.deleteStorageItems(targetAppId, prefixes),
+			downloadStorageItems: (targetAppId, prefixes) =>
+				operations?.downloadStorageItems(targetAppId, prefixes) ??
+				backend.storageState.downloadStorageItems(targetAppId, prefixes),
+			uploadStorageItems: (targetAppId, targetPrefix, files, onProgress) =>
+				operations?.uploadStorageItems(
+					targetAppId,
+					targetPrefix,
+					files,
+					onProgress,
+				) ??
+				backend.storageState.uploadStorageItems(
+					targetAppId,
+					targetPrefix,
+					files,
+					onProgress,
+				),
+			writeStorageItems:
+				operations?.writeStorageItems ??
+				backend.storageState.writeStorageItems?.bind(backend.storageState),
+		}),
+		[backend.storageState, operations],
+	);
 	const [preview, setPreview] = useState({
 		url: "",
 		file: "",
@@ -102,8 +166,8 @@ export function StorageSystem({
 		currentFile: "",
 	});
 	const files = useInvoke(
-		backend.storageState.listStorageItems,
-		backend.storageState,
+		storageApi.listStorageItems,
+		storageApi,
 		[appId, prefix],
 	);
 
@@ -112,7 +176,10 @@ export function StorageSystem({
 	const [newFolderName, setNewFolderName] = useState("");
 	const [virtualFoldersHere, setVirtualFoldersHere] = useState<string[]>([]);
 
-	const storeKey = useMemo(() => `vfolders:${appId}`, [appId]);
+	const storeKey = useMemo(
+		() => `vfolders:${storageScopeKey}:${appId}`,
+		[appId, storageScopeKey],
+	);
 	const normalizePrefix = useCallback(
 		(p: string) => p.replace(/^\/+|\/+$/g, ""),
 		[],
@@ -230,7 +297,7 @@ export function StorageSystem({
 			});
 
 			try {
-				await backend.storageState.uploadStorageItems(
+				await storageApi.uploadStorageItems(
 					appId,
 					prefix,
 					fileList,
@@ -262,7 +329,7 @@ export function StorageSystem({
 				toast.error("Failed to upload files");
 			}
 		},
-		[prefix, backend, files.refetch],
+		[prefix, storageApi, appId, files.refetch],
 	);
 
 	const loadFile = useCallback(
@@ -272,7 +339,7 @@ export function StorageSystem({
 				return;
 			}
 
-			const url = await backend.storageState.downloadStorageItems(appId, [
+			const url = await storageApi.downloadStorageItems(appId, [
 				file,
 			]);
 
@@ -288,7 +355,7 @@ export function StorageSystem({
 				file,
 			});
 		},
-		[appId, preview],
+		[appId, preview, storageApi],
 	);
 
 	const saveFile = useCallback(
@@ -303,7 +370,7 @@ export function StorageSystem({
 				const fileName = preview.file.split("/").pop() || "file";
 				const file = new File([blob], fileName, { type: "text/plain" });
 
-				await backend.storageState.uploadStorageItems(
+				await storageApi.uploadStorageItems(
 					appId,
 					prefix,
 					[file],
@@ -316,7 +383,7 @@ export function StorageSystem({
 				throw error;
 			}
 		},
-		[appId, prefix, preview.file, backend.storageState, files],
+		[appId, prefix, preview.file, storageApi, files],
 	);
 
 	const isFileEditable = useCallback((fileUrl: string) => {
@@ -330,7 +397,7 @@ export function StorageSystem({
 				return;
 			}
 
-			const signedUrl = await backend.storageState.downloadStorageItems(appId, [
+			const signedUrl = await storageApi.downloadStorageItems(appId, [
 				file,
 			]);
 
@@ -339,8 +406,8 @@ export function StorageSystem({
 				return;
 			}
 
-			if (backend.storageState.writeStorageItems) {
-				await backend.storageState.writeStorageItems(signedUrl);
+			if (storageApi.writeStorageItems) {
+				await storageApi.writeStorageItems(signedUrl);
 				return;
 			}
 
@@ -360,7 +427,7 @@ export function StorageSystem({
 			document.body.removeChild(a);
 			URL.revokeObjectURL(url);
 		},
-		[appId, preview],
+		[appId, preview, storageApi],
 	);
 
 	const filteredFiles = useMemo(
@@ -474,7 +541,7 @@ export function StorageSystem({
 			{/* Header Section */}
 			<div className="flex flex-col gap-4 px-4 pt-4 shrink-0">
 				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-					<h2 className="text-2xl font-semibold tracking-tight">Storage</h2>
+					<h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
 					<div className="flex items-center gap-2 flex-wrap justify-end">
 						<div className="hidden sm:flex items-center gap-2">
 							<div className="flex items-center gap-1 text-sm text-muted-foreground">
@@ -811,10 +878,13 @@ export function StorageSystem({
 															updatePrefix(`${prefix}/${new_prefix}`)
 														}
 														loadFile={(file) => loadFile(file)}
+														revealInExplorer={revealInExplorer}
+														openWithApp={openWithApp}
+														listAppsForFile={listAppsForFile}
 														deleteFile={async (file) => {
 															try {
 																const filePrefix = `${prefix}/${file}`;
-																await backend.storageState.deleteStorageItems(
+																await storageApi.deleteStorageItems(
 																	appId,
 																	[filePrefix],
 																);
@@ -828,7 +898,7 @@ export function StorageSystem({
 														}}
 														shareFile={async (file) => {
 															const downloadLinks =
-																await backend.storageState.downloadStorageItems(
+																await storageApi.downloadStorageItems(
 																	appId,
 																	[file],
 																);
@@ -918,10 +988,13 @@ export function StorageSystem({
 												updatePrefix(`${prefix}/${new_prefix}`);
 											}}
 											loadFile={loadFile}
+											revealInExplorer={revealInExplorer}
+											openWithApp={openWithApp}
+											listAppsForFile={listAppsForFile}
 											deleteFile={async (file) => {
 												try {
 													const filePrefix = `${prefix}/${file}`;
-													await backend.storageState.deleteStorageItems(appId, [
+														await storageApi.deleteStorageItems(appId, [
 														filePrefix,
 													]);
 													toast.success("Deleted successfully");
@@ -934,7 +1007,7 @@ export function StorageSystem({
 											}}
 											shareFile={async (file) => {
 												const downloadLinks =
-													await backend.storageState.downloadStorageItems(
+														await storageApi.downloadStorageItems(
 														appId,
 														[file],
 													);

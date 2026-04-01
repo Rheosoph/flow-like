@@ -24,6 +24,38 @@ use serde::{Deserialize, Deserializer};
 
 use crate::state::{AppState, CachedAuth};
 
+/// Client IP address extracted from the request for audit trail purposes.
+/// Checks X-Forwarded-For, X-Real-Ip, then falls back to the peer address.
+#[derive(Debug, Clone)]
+pub struct ClientIp(pub Option<String>);
+
+fn extract_client_ip(request: &Request) -> Option<String> {
+    if let Some(forwarded) = request.headers().get("x-forwarded-for")
+        && let Ok(val) = forwarded.to_str()
+    {
+        // X-Forwarded-For can contain multiple IPs; the first is the original client
+        return val.split(',').next().map(|ip| ip.trim().to_string());
+    }
+    if let Some(real_ip) = request.headers().get("x-real-ip")
+        && let Ok(val) = real_ip.to_str()
+    {
+        return Some(val.trim().to_string());
+    }
+    None
+}
+
+fn pat_id_from_token(pat_str: &str) -> Result<String> {
+    if !pat_str.starts_with("pat_") {
+        return Err(anyhow!("Not a PAT"));
+    }
+    let pat_parts = &pat_str[4..];
+    let parts: Vec<&str> = pat_parts.split('.').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("Invalid PAT format"));
+    }
+    Ok(parts[0].to_string())
+}
+
 fn deserialize_opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
 where
     D: Deserializer<'de>,
@@ -214,6 +246,31 @@ impl AppUser {
         }
     }
 
+    // Adds the exact method of access (OpenID, PAT, API Key) to the audit log for better traceability
+    pub async fn audit_id(&self) -> Result<String, AuthorizationError> {
+        let sub = self.executor_scoped_sub()?;
+        let method = match self {
+            AppUser::OpenID(_) => "openid",
+            AppUser::PAT(_) => "pat",
+            AppUser::APIKey(_) => "api_key",
+            AppUser::Executor(_) => "executor",
+            AppUser::Unauthorized => "unauthorized",
+        };
+        let method_id = match self {
+            AppUser::OpenID(_user) => None,
+            AppUser::PAT(user) => Some(pat_id_from_token(&user.pat)?),
+            AppUser::APIKey(api_key) => Some(api_key.key_id.clone()),
+            AppUser::Executor(executor) => Some(executor.run_id.clone()),
+            AppUser::Unauthorized => None,
+        };
+        Ok(format!(
+            "{}:{}:{}",
+            method,
+            sub,
+            method_id.unwrap_or_default()
+        ))
+    }
+
     pub async fn tracking_id(
         &self,
         state: &AppState,
@@ -356,8 +413,8 @@ impl AppUser {
                 .one(&state.db)
                 .await?
                 .ok_or_else(|| {
-                    tracing::error!("Role not found for user {} in app {}", sub, app_id);
-                    ApiError::from(anyhow!("Role not found for user {sub} in app {app_id}"))
+                    tracing::debug!("Role not found for user {} in app {}", sub, app_id);
+                    ApiError::FORBIDDEN
                 })?;
 
             let permissions = RolePermissions::from_bits(role_model.permissions)
@@ -416,6 +473,9 @@ pub async fn jwt_middleware(
     next: Next,
 ) -> Result<Response<Body>, AuthorizationError> {
     let mut request = request;
+
+    let client_ip = ClientIp(extract_client_ip(&request));
+    request.extensions_mut().insert(client_ip);
 
     // Try OpenID/JWT or Executor JWT auth
     if let Some(auth_header) = request.headers().get(AUTHORIZATION)
@@ -501,82 +561,91 @@ pub async fn jwt_middleware(
 
     // Try PAT auth
     if let Some(auth_header) = request.headers().get(AUTHORIZATION)
-        && let Ok(token) = auth_header.to_str()
-        && token.starts_with("pat_")
+        && let Ok(raw_token) = auth_header.to_str()
     {
-        let pat_str = token.trim();
-        let cache_key = hash_token(pat_str);
+        // Strip "Bearer " prefix if present so PATs sent as standard Bearer tokens are recognized
+        let token = if raw_token.starts_with("Bearer ") {
+            &raw_token[7..]
+        } else {
+            raw_token
+        };
+        let token = token.trim();
 
-        // Check cache first
-        if let Some(cached) = state.auth_cache.get(&cache_key) {
-            match cached {
-                CachedAuth::PAT { sub } => {
-                    let pat_user = AppUser::PAT(PATUser {
-                        pat: pat_str.to_string(),
-                        sub,
-                    });
-                    request.extensions_mut().insert::<AppUser>(pat_user);
-                    return Ok(next.run(request).await);
-                }
-                CachedAuth::Invalid => {
-                    // Token was previously validated as invalid/expired
-                    request
-                        .extensions_mut()
-                        .insert::<AppUser>(AppUser::Unauthorized);
-                    return Ok(next.run(request).await);
-                }
-                _ => {}
-            }
-        }
+        if token.starts_with("pat_") {
+            let pat_str = token;
+            let cache_key = hash_token(pat_str);
 
-        // Cache miss - validate PAT
-        if !pat_str.starts_with("pat_") {
-            return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
-        }
-        let pat_parts = &pat_str[4..];
-        let parts: Vec<&str> = pat_parts.split('.').collect();
-        if parts.len() != 2 {
-            return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
-        }
-        let pat_id = parts[0];
-        let pat_secret = parts[1];
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(pat_secret.as_bytes());
-        let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-
-        let db_pat = Pat::find()
-            .filter(
-                pat::Column::Id
-                    .eq(pat_id)
-                    .and(pat::Column::Key.eq(secret_hash)),
-            )
-            .one(&state.db)
-            .await?;
-
-        if let Some(pat) = db_pat {
-            if let Some(valid_until) = pat.valid_until {
-                let now = chrono::Utc::now().naive_utc();
-                if valid_until < now {
-                    state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                    return Err(AuthorizationError::from(anyhow!("PAT is expired")));
+            // Check cache first
+            if let Some(cached) = state.auth_cache.get(&cache_key) {
+                match cached {
+                    CachedAuth::PAT { sub } => {
+                        let pat_user = AppUser::PAT(PATUser {
+                            pat: pat_str.to_string(),
+                            sub,
+                        });
+                        request.extensions_mut().insert::<AppUser>(pat_user);
+                        return Ok(next.run(request).await);
+                    }
+                    CachedAuth::Invalid => {
+                        // Token was previously validated as invalid/expired
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(next.run(request).await);
+                    }
+                    _ => {}
                 }
             }
 
-            // Cache valid PAT
-            state.auth_cache.insert(
-                cache_key,
-                CachedAuth::PAT {
+            // Cache miss - validate PAT
+            if !pat_str.starts_with("pat_") {
+                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
+            }
+            let pat_parts = &pat_str[4..];
+            let parts: Vec<&str> = pat_parts.split('.').collect();
+            if parts.len() != 2 {
+                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
+            }
+            let pat_id = parts[0];
+            let pat_secret = parts[1];
+
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(pat_secret.as_bytes());
+            let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
+
+            let db_pat = Pat::find()
+                .filter(
+                    pat::Column::Id
+                        .eq(pat_id)
+                        .and(pat::Column::Key.eq(secret_hash)),
+                )
+                .one(&state.db)
+                .await?;
+
+            if let Some(pat) = db_pat {
+                if let Some(valid_until) = pat.valid_until {
+                    let now = chrono::Utc::now().naive_utc();
+                    if valid_until < now {
+                        state.auth_cache.insert(cache_key, CachedAuth::Invalid);
+                        return Err(AuthorizationError::from(anyhow!("PAT is expired")));
+                    }
+                }
+
+                // Cache valid PAT
+                state.auth_cache.insert(
+                    cache_key,
+                    CachedAuth::PAT {
+                        sub: pat.user_id.clone(),
+                    },
+                );
+
+                let pat_user = AppUser::PAT(PATUser {
+                    pat: pat_str.to_string(),
                     sub: pat.user_id.clone(),
-                },
-            );
-
-            let pat_user = AppUser::PAT(PATUser {
-                pat: pat_str.to_string(),
-                sub: pat.user_id.clone(),
-            });
-            request.extensions_mut().insert::<AppUser>(pat_user);
-            return Ok(next.run(request).await);
+                });
+                request.extensions_mut().insert::<AppUser>(pat_user);
+                return Ok(next.run(request).await);
+            }
         }
     }
 

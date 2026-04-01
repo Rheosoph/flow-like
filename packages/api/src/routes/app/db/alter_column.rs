@@ -1,10 +1,14 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use flow_like_storage::lancedb::table::ColumnAlteration;
@@ -43,12 +47,13 @@ pub async fn alter_column(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
+    Query(scope): Query<ScopeParams>,
     Json(payload): Json<AlterColumnPayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    validate_table_name(&table)?;
 
-    let credentials = state.master_credentials().await?;
-    let connection = credentials.to_db(&app_id).await?.execute().await?;
+    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let db = LanceDBVectorStore::from_connection(connection, table).await;
 
     let mut alteration = ColumnAlteration::new(payload.column.clone());

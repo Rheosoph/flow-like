@@ -298,6 +298,7 @@ const ProfileContent = ({
 													metadata={metadata}
 													className="w-full"
 													onClick={() => router.push(`/store?id=${app.id}`)}
+													href={`/store?id=${app.id}`}
 												/>
 											))}
 										</div>

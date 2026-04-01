@@ -2,12 +2,49 @@
 zig = "0.14"
 
 [tasks.setup]
-description = "Fetch latest SDK from GitHub (dev branch) and update build.zig.zon hash"
-run = "zig fetch --save https://github.com/TM9657/flow-like/archive/refs/heads/dev.tar.gz"
+description = "Install wasm-tools and wit-bindgen CLI"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v wasm-tools &>/dev/null; then
+    echo "Installing wasm-tools..."
+    cargo install wasm-tools
+fi
+
+if ! command -v wit-bindgen &>/dev/null; then
+    echo "Installing wit-bindgen..."
+    cargo install wit-bindgen-cli@0.53.1
+fi
+
+# Download WASI adapter if not present
+ADAPTER="wasi_snapshot_preview1.reactor.wasm"
+if [ ! -f "$ADAPTER" ]; then
+    echo "Downloading WASI preview1 adapter..."
+    curl -fsSL -o "$ADAPTER" \
+        "https://github.com/bytecodealliance/wasmtime/releases/download/v29.0.1/wasi_snapshot_preview1.reactor.wasm"
+fi
+"""
+
+[tasks.generate]
+description = "Generate C bindings from WIT"
+run = "wit-bindgen c --world flow-like-node --out-dir gen wit/flow-like-node.wit"
 
 [tasks.build]
-description = "Build the WASM node"
-run = "zig build -Doptimize=ReleaseSmall"
+description = "Build the WASM component"
+depends = ["generate"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+zig build -Doptimize=ReleaseSmall
+
+wasm-tools component new zig-out/bin/node.wasm \
+    --adapt wasi_snapshot_preview1=wasi_snapshot_preview1.reactor.wasm \
+    -o node.wasm
+
+echo "Component written to node.wasm"
+"""
 
 [tasks.test]
 description = "Run unit tests"
@@ -15,4 +52,4 @@ run = "zig build test"
 
 [tasks.clean]
 description = "Clean build artifacts"
-run = "rm -rf zig-out/ .zig-cache/"
+run = "rm -rf zig-out/ .zig-cache/ gen/ node.wasm"

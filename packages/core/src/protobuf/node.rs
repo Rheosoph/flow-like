@@ -55,7 +55,11 @@ impl ToProto<flow_like_types::proto::NodeWasm> for NodeWasm {
     fn to_proto(&self) -> flow_like_types::proto::NodeWasm {
         flow_like_types::proto::NodeWasm {
             package_id: self.package_id.clone(),
-            permissions: self.permissions.clone(),
+            permissions: self
+                .permissions
+                .iter()
+                .filter_map(|p| serde_json::to_value(p).ok()?.as_str().map(String::from))
+                .collect(),
         }
     }
 }
@@ -64,7 +68,11 @@ impl FromProto<flow_like_types::proto::NodeWasm> for NodeWasm {
     fn from_proto(proto: flow_like_types::proto::NodeWasm) -> Self {
         NodeWasm {
             package_id: proto.package_id,
-            permissions: proto.permissions,
+            permissions: proto
+                .permissions
+                .iter()
+                .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.clone())).ok())
+                .collect(),
         }
     }
 }

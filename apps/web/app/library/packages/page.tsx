@@ -8,6 +8,9 @@ import {
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
 import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
 	Badge,
 	Button,
 	Card,
@@ -49,13 +52,24 @@ function InstalledPackageCard({
 	isUpdating: boolean;
 	isUninstalling: boolean;
 }) {
+	const displayName = pkg.metadata?.name ?? pkg.manifest.name;
+	const displayDesc = pkg.metadata?.description ?? pkg.manifest.description;
+	const icon = pkg.metadata?.icon;
+
 	return (
 		<Card className="flex flex-col h-full">
 			<CardHeader className="pb-2">
 				<div className="flex items-start justify-between">
 					<div className="flex items-center gap-2">
-						<Package className="h-5 w-5 text-muted-foreground" />
-						<CardTitle className="text-base">{pkg.manifest.name}</CardTitle>
+						<Avatar className="h-5 w-5 rounded">
+							{icon ? (
+								<AvatarImage src={icon} alt={displayName} className="rounded" />
+							) : null}
+							<AvatarFallback className="rounded">
+								<Package className="h-3.5 w-3.5 text-muted-foreground" />
+							</AvatarFallback>
+						</Avatar>
+						<CardTitle className="text-base">{displayName}</CardTitle>
 					</div>
 					{updateAvailable && (
 						<Badge variant="secondary" className="gap-1">
@@ -65,7 +79,7 @@ function InstalledPackageCard({
 					)}
 				</div>
 				<CardDescription className="line-clamp-2 text-sm">
-					{pkg.manifest.description}
+					{displayDesc}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex-1 pb-2">

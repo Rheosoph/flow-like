@@ -133,16 +133,17 @@ impl NodeLogic for GetElement {
         });
 
         if let Some(id) = &element_id {
+            let short_name = id.rsplit('/').next().unwrap_or(id);
             let component_type = find_component_type_in_board(&board, id).await;
 
             if let Some(comp_type) = &component_type {
-                node.friendly_name = format!("Get {} ({})", id, comp_type);
+                node.friendly_name = format!("Get {} ({})", short_name, comp_type);
 
                 if let Some(element_pin) = node.get_pin_mut_by_name("element") {
                     set_component_schema_by_type(element_pin, comp_type);
                 }
             } else {
-                node.friendly_name = format!("Get {}", id);
+                node.friendly_name = format!("Get {}", short_name);
             }
         } else {
             node.friendly_name = "Get Element".to_string();

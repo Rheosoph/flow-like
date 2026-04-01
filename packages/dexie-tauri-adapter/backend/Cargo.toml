@@ -1,0 +1,29 @@
+[package]
+name = "tauri-plugin-flow-like-dexie-blob-offload"
+version = "0.1.0"
+description = "Tauri plugin that offloads large Dexie/IndexedDB values to the native filesystem using content-addressed blake3 hashing with HMAC-verified references."
+authors = ["TM9657 GmbH"]
+repository = "https://github.com/TM9657/flow-like/"
+edition = "2024"
+homepage = "https://flow-like.com"
+license = "MIT"
+readme = "README.md"
+links = "tauri-plugin-flow-like-dexie-blob-offload"
+keywords = ["tauri", "dexie", "indexeddb", "blob", "offload"]
+categories = ["database", "web-programming"]
+
+[dependencies]
+tauri = { version = "2.9.5", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1.8"
+rand = "0.9"
+tokio = { version = "1", features = ["fs"] }
+tracing = "0.1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.2", features = ["build"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["fs", "rt", "macros"] }
+tempfile = "3"

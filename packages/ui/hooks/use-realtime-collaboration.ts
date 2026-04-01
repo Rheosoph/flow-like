@@ -1,18 +1,28 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactFlowInstance } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import type { RemoteSelectionParticipant } from "../components/flow/flow-node";
 import { createRealtimeSession } from "../lib";
 import { normalizeSelectionNodes } from "../lib/flow-board-utils";
 import type { IBoard } from "../lib/schema/flow/board";
 
-interface PeerPresence {
+export interface PeerPresence {
 	clientId: number;
 	cursor?: { x: number; y: number };
 	/** The sub (subject) from the auth token - use this to resolve user info via API */
 	sub?: string;
 	layerPath: string;
 	selection: { nodes: string[] };
+	/** The node the user just clicked/focused — cleared after a short timeout */
+	activeNodeId?: string;
+	/** Timestamp of the last active node click for freshness detection */
+	activeNodeTs?: number;
 }
 
 interface UseRealtimeCollaborationProps {
@@ -24,7 +34,7 @@ interface UseRealtimeCollaborationProps {
 	/** The authenticated user's sub (subject) from the auth token */
 	sub?: string;
 	hub: any;
-	mousePosition: { x: number; y: number };
+	mousePositionRef: RefObject<{ x: number; y: number }>;
 	layerPath: string | undefined;
 	screenToFlowPosition: ReactFlowInstance["screenToFlowPosition"];
 	commandAwarenessRef: React.MutableRefObject<any>;
@@ -39,7 +49,7 @@ export function useRealtimeCollaboration({
 	backend,
 	sub,
 	hub,
-	mousePosition,
+	mousePositionRef,
 	layerPath,
 	screenToFlowPosition,
 	commandAwarenessRef,
@@ -59,13 +69,25 @@ export function useRealtimeCollaboration({
 		new Map(),
 	);
 
+	// Stable ref for board.refetch so the boardUpdate listener doesn't reinstall every render
+	const boardRefetchRef = useRef(board.refetch);
+	boardRefetchRef.current = board.refetch;
+
+	// Track the last seen boardUpdate value per peer to detect actual changes
+	const lastBoardUpdateRef = useRef<Map<number, number>>(new Map());
+
 	const hasBoardData = !!board.data;
 
-	// Stabilize signaling servers reference to prevent unnecessary effect re-runs
-	const signalingServers = useMemo(
-		() => hub.hub?.signaling ?? [],
-		[JSON.stringify(hub.hub?.signaling)],
+	// Use a ref for signaling servers so changes don't trigger session recreation.
+	// The session is created once with whatever servers are available (fallback kicks in
+	// inside createRealtimeSession when undefined). When the hub loads later with the
+	// same URL, no reconnect is needed.
+	const signalingServersRef = useRef<string[] | undefined>(
+		hub.hub?.signaling?.length ? hub.hub.signaling : undefined,
 	);
+	if (hub.hub?.signaling?.length) {
+		signalingServersRef.current = hub.hub.signaling;
+	}
 
 	// Track whether the session has been initialized for this board
 	const sessionInitializedRef = useRef<string | null>(null);
@@ -100,7 +122,7 @@ export function useRealtimeCollaboration({
 					access,
 					jwks,
 					sub,
-					signalingServers,
+					signalingServers: signalingServersRef.current,
 					onStatusChange: (status) => {
 						setConnectionStatus((prev) => {
 							if (prev !== status) {
@@ -124,7 +146,8 @@ export function useRealtimeCollaboration({
 				commandAwarenessRef.current = session.awareness;
 				sessionInitializedRef.current = sessionKey;
 				setAwareness(session.awareness);
-				setConnectionStatus("connected");
+				// Don't set "connected" here — let the WebrtcProvider's
+				// onStatusChange callback report the actual signaling state
 			} catch (e) {
 				console.warn("Realtime setup failed:", e);
 				setConnectionStatus("disconnected");
@@ -146,7 +169,7 @@ export function useRealtimeCollaboration({
 		};
 		// Only depend on board identity and essential data, not profile updates
 		// Profile updates are handled by a separate effect that updates awareness
-	}, [backend, appId, boardId, hasBoardData, version, signalingServers]);
+	}, [backend, appId, boardId, hasBoardData, version]);
 
 	// Update peer states
 	useEffect(() => {
@@ -159,12 +182,15 @@ export function useRealtimeCollaboration({
 			const states = awareness.getStates() as Map<number, any>;
 			const invalidPeers: Set<number> | undefined = (awareness as any)
 				?.__invalidPeers;
+			const now = Date.now();
 			const next: PeerPresence[] = [];
 			states.forEach((state, clientId) => {
 				const isSelf = clientId === awareness.clientID;
 				const isInvalid = invalidPeers?.has(clientId) ?? false;
 				if (isSelf || isInvalid) return;
 				const cursor = state?.cursor;
+				const activeNodeTs = state?.activeNodeTs as number | undefined;
+				const activeNodeFresh = activeNodeTs && now - activeNodeTs < 3000;
 				next.push({
 					clientId,
 					cursor: cursor ? { x: cursor.x, y: cursor.y } : undefined,
@@ -173,6 +199,10 @@ export function useRealtimeCollaboration({
 					selection: {
 						nodes: normalizeSelectionNodes(state?.selection?.nodes),
 					},
+					activeNodeId: activeNodeFresh
+						? (state?.activeNodeId as string | undefined)
+						: undefined,
+					activeNodeTs: activeNodeFresh ? activeNodeTs : undefined,
 				});
 			});
 			setPeerStates(next);
@@ -189,7 +219,7 @@ export function useRealtimeCollaboration({
 		};
 	}, [awareness]);
 
-	// Listen for peer board updates
+	// Listen for peer board updates — use refs to avoid reinstalling on every render
 	useEffect(() => {
 		if (!awareness) return;
 
@@ -203,8 +233,13 @@ export function useRealtimeCollaboration({
 			for (const clientId of changedPeers) {
 				if (clientId === awareness.clientID) continue;
 				const state = states.get(clientId);
-				if (state?.boardUpdate) {
-					void board.refetch();
+				const peerBoardUpdate = state?.boardUpdate as number | undefined;
+				if (
+					peerBoardUpdate &&
+					peerBoardUpdate !== lastBoardUpdateRef.current.get(clientId)
+				) {
+					lastBoardUpdateRef.current.set(clientId, peerBoardUpdate);
+					void boardRefetchRef.current();
 					break;
 				}
 			}
@@ -216,20 +251,24 @@ export function useRealtimeCollaboration({
 				awareness.off("update", handleBoardUpdate);
 			} catch {}
 		};
-	}, [awareness, board]);
+	}, [awareness]);
 
-	// Broadcast cursor position
+	// Broadcast cursor position via throttled interval (avoids 60fps rerenders)
 	useEffect(() => {
 		if (!awareness) return;
-		const flowPoint = screenToFlowPosition({
-			x: mousePosition.x,
-			y: mousePosition.y,
-		});
-		awareness.setLocalStateField("cursor", {
-			x: flowPoint.x,
-			y: flowPoint.y,
-		});
-	}, [mousePosition.x, mousePosition.y, awareness, screenToFlowPosition]);
+		const interval = setInterval(() => {
+			const pos = mousePositionRef.current;
+			const flowPoint = screenToFlowPosition({
+				x: pos.x,
+				y: pos.y,
+			});
+			awareness.setLocalStateField("cursor", {
+				x: flowPoint.x,
+				y: flowPoint.y,
+			});
+		}, 50);
+		return () => clearInterval(interval);
+	}, [awareness, screenToFlowPosition]);
 
 	// Broadcast layer path
 	useEffect(() => {
@@ -253,26 +292,33 @@ export function useRealtimeCollaboration({
 				const participant: RemoteSelectionParticipant = {
 					clientId: peer.clientId,
 					sub: peer.sub,
+					isActive: peer.activeNodeId === nodeId,
 				};
 				const existing = map.get(nodeId) ?? [];
 				map.set(nodeId, [...existing, participant]);
 			}
 		}
 
-		map.forEach((participants, key) => {
+		// Deduplicate participants by sub (same user with multiple sessions)
+		// and sort by sub for stable ordering
+		for (const [nodeId, participants] of map.entries()) {
+			const seen = new Map<string, RemoteSelectionParticipant>();
+			for (const p of participants) {
+				const key = p.sub ?? `client:${p.clientId}`;
+				const existing = seen.get(key);
+				if (!existing || (p.isActive && !existing.isActive)) {
+					seen.set(key, p);
+				}
+			}
 			map.set(
-				key,
-				participants
-					.slice()
-					.sort((a, b) =>
-						a.clientId === b.clientId
-							? (a.sub ?? "").localeCompare(b.sub ?? "")
-							: a.clientId - b.clientId,
-					),
+				nodeId,
+				[...seen.values()].sort((a, b) =>
+					(a.sub ?? "").localeCompare(b.sub ?? ""),
+				),
 			);
-		});
+		}
 
-		// Check if selections actually changed
+		// Check if selections actually changed (compare by sub, not clientId)
 		let hasChanges = false;
 		if (map.size !== remoteSelectionsRef.current.size) {
 			hasChanges = true;
@@ -286,7 +332,7 @@ export function useRealtimeCollaboration({
 				for (let i = 0; i < participants.length; i++) {
 					const p = participants[i];
 					const prevP = prev[i];
-					if (!prevP || p.clientId !== prevP.clientId || p.sub !== prevP.sub) {
+					if (!prevP || p.sub !== prevP.sub || p.isActive !== prevP.isActive) {
 						hasChanges = true;
 						break;
 					}
@@ -302,7 +348,8 @@ export function useRealtimeCollaboration({
 		setNodes((nds: any) => {
 			if (nds.length === 0) return nds;
 			const updated = nds.map((node: any) => {
-				if (node.type !== "node") return node;
+				if (node.type !== "node" && node.type !== "callFunctionNode")
+					return node;
 				const participants = map.get(node.id) ?? [];
 				const hasSelections = participants.length > 0;
 				const hadSelections =
@@ -326,10 +373,23 @@ export function useRealtimeCollaboration({
 		sessionRef.current?.reconnect();
 	}, []);
 
+	const broadcastActiveNode = useCallback(
+		(nodeId: string | undefined) => {
+			if (!awareness) return;
+			awareness.setLocalStateField("activeNodeId", nodeId);
+			awareness.setLocalStateField(
+				"activeNodeTs",
+				nodeId ? Date.now() : undefined,
+			);
+		},
+		[awareness],
+	);
+
 	return {
 		awareness,
 		connectionStatus,
 		peerStates,
 		reconnect,
+		broadcastActiveNode,
 	};
 }

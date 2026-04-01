@@ -186,8 +186,9 @@ impl NodeLogic for AutoClassifierNode {
                 let targets_col: String = context.evaluate_pin("targets").await?;
 
                 let records_data = {
-                    let database = database.load(context).await?.db.clone();
-                    let database = database.read().await;
+                    let cached_db = database.load(context).await?;
+                    cached_db.ensure_flushed().await?;
+                    let database = cached_db.db.read().await;
                     let schema = database.schema().await?;
                     let existing_cols: HashSet<String> =
                         schema.fields.iter().map(|f| f.name().clone()).collect();

@@ -1,6 +1,8 @@
 //! Discord message operations
 
-use super::session::{DiscordSession, get_discord_client};
+use super::session::DiscordSession;
+#[cfg(feature = "execute")]
+use super::session::get_discord_client;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -8,6 +10,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use serenity::builder::{CreateMessage, EditMessage};
 
 // ============================================================================
@@ -81,6 +84,7 @@ impl NodeLogic for SendMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -116,6 +120,13 @@ impl NodeLogic for SendMessageNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -182,6 +193,7 @@ impl NodeLogic for EditMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -209,6 +221,13 @@ impl NodeLogic for EditMessageNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -268,6 +287,7 @@ impl NodeLogic for DeleteMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -292,6 +312,13 @@ impl NodeLogic for DeleteMessageNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -344,6 +371,7 @@ impl NodeLogic for PinMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -365,6 +393,13 @@ impl NodeLogic for PinMessageNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -417,6 +452,7 @@ impl NodeLogic for UnpinMessageNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -438,5 +474,12 @@ impl NodeLogic for UnpinMessageNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

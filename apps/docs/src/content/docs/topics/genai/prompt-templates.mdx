@@ -1,0 +1,523 @@
+---
+title: Prompt Templates for Rendering
+description: Copy-paste ready prompt templates for Flow-Like's markdown renderer, including interactive Nivo and Plotly previews.
+sidebar:
+  order: 6
+---
+
+Flow-Like's markdown renderer can do more than plain text. In the markdown preview used by the internal debug page and markdown surfaces, fenced code blocks with the languages `nivo` and `plotly` are rendered as interactive charts instead of plain code.
+
+This page is for prompts that make an LLM return content that is immediately previewable inside Flow-Like.
+
+## What is actually supported here?
+
+For the markdown renderer, these are the relevant rendering modes:
+
+- Regular markdown content
+- Normal fenced code blocks with syntax highlighting
+- Interactive chart blocks using `nivo`
+- Interactive chart blocks using `plotly`
+
+If you want previewable chart output from an LLM, the model should return a fenced code block, not just a raw JSON array.
+
+## How chart code blocks work
+
+Flow-Like supports two input styles for both `nivo` and `plotly` code blocks:
+
+1. **CSV mode** with an optional config header above `---`
+2. **JSON mode** for full chart configuration
+
+CSV mode is the easiest option for prompting because it is concise and predictable.
+
+### Supported chart types
+
+**Nivo** currently supports:
+
+- `bar`
+- `line`
+- `pie`
+- `radar`
+- `heatmap`
+- `scatter`
+- `funnel`
+- `treemap`
+- `sunburst`
+- `calendar`
+- `sankey`
+- `chord`
+- `stream`
+- `waffle`
+- `bump`
+- `areaBump`
+- `radialBar`
+
+**Plotly** currently supports:
+
+- `bar`
+- `line`
+- `scatter`
+- `pie`
+- `area`
+- `histogram`
+- `heatmap`
+- `box`
+- `violin`
+
+If you omit `type` in CSV mode, Flow-Like tries to auto-detect a sensible default, but explicit `type` values are more reliable in prompts.
+
+## Best prompt rule
+
+Tell the model to return:
+
+- only the final markdown
+- exactly one fenced chart block
+- no prose before or after the block
+- no explanation unless you explicitly want it
+
+## Template: Nivo chart in CSV mode
+
+Use this when you want the model to return a Flow-Like-renderable `nivo` block with minimal formatting overhead.
+
+```text
+Return only a single fenced markdown code block with the language `nivo`.
+Do not include any explanation before or after the code block.
+
+Inside the block:
+1. Add a small config header using `key: value` lines.
+2. Add a line containing exactly `---`.
+3. Add CSV data.
+
+Requirements:
+- Use `type: bar` unless I specify another chart type.
+- The first CSV column is the category axis.
+- The remaining columns must be numeric series.
+- Keep labels short.
+
+Expected format:
+
+```nivo
+type: bar
+title: Quarterly revenue
+showLegend: true
+---
+quarter,revenue,profit
+Q1,120,30
+Q2,150,42
+Q3,170,55
+Q4,210,70
+```
+```
+
+### Example output
+
+````nivo
+type: bar
+title: Quarterly revenue
+showLegend: true
+---
+quarter,revenue,profit
+Q1,120,30
+Q2,150,42
+Q3,170,55
+Q4,210,70
+````
+
+### Good uses
+
+- category comparisons
+- grouped bar charts
+- quick dashboards from table-shaped data
+
+## Template: Nivo line chart in CSV mode
+
+Use this when the first column is time-like or ordered and you want a line chart.
+
+```text
+Return only one fenced code block with the language `nivo`.
+Do not wrap it in prose.
+
+Use this exact structure:
+
+```nivo
+type: line
+title: Monthly signups
+showLegend: true
+---
+month,organic,paid
+Jan,120,45
+Feb,140,52
+Mar,155,61
+Apr,172,66
+```
+
+Rules:
+- Keep the first column as the shared X axis.
+- Every remaining column must be numeric.
+- Do not output JSON.
+```
+
+### Example output
+
+````nivo
+type: line
+title: Monthly signups
+showLegend: true
+---
+month,organic,paid
+Jan,120,45
+Feb,140,52
+Mar,155,61
+Apr,172,66
+````
+
+## Template: Nivo JSON mode for advanced chart types
+
+Use this when you need chart types that are easier to express as JSON, such as `sankey`, `chord`, `sunburst`, `treemap`, or `calendar`.
+
+```text
+Return only one fenced markdown code block with the language `nivo`.
+Inside the code block, return valid JSON only.
+Do not include comments.
+Do not include explanation.
+
+The JSON must contain:
+- `chartType`
+- `data`
+- any extra props needed by that chart type
+
+Example shape:
+
+```nivo
+{
+  "chartType": "sankey",
+  "data": {
+    "nodes": [
+      { "id": "Visitors" },
+      { "id": "Trials" },
+      { "id": "Customers" }
+    ],
+    "links": [
+      { "source": "Visitors", "target": "Trials", "value": 320 },
+      { "source": "Trials", "target": "Customers", "value": 96 }
+    ]
+  }
+}
+```
+```
+
+### Example output
+
+````nivo
+{
+  "chartType": "sankey",
+  "data": {
+    "nodes": [
+      { "id": "Visitors" },
+      { "id": "Trials" },
+      { "id": "Customers" }
+    ],
+    "links": [
+      { "source": "Visitors", "target": "Trials", "value": 320 },
+      { "source": "Trials", "target": "Customers", "value": 96 }
+    ]
+  }
+}
+````
+
+## Template: Plotly chart in CSV mode
+
+Use this when you want the renderer to build a Plotly chart from compact CSV input.
+
+```text
+Return only a single fenced markdown code block with the language `plotly`.
+Do not include any explanation.
+
+Use this structure exactly:
+
+```plotly
+type: line
+title: Website traffic
+xLabel: Month
+yLabel: Visits
+showLegend: true
+---
+month,visits,signups
+Jan,1200,30
+Feb,1360,41
+Mar,1490,44
+Apr,1710,57
+```
+
+Rules:
+- The first column is the X axis.
+- Remaining columns are numeric series.
+- Use `type: bar`, `line`, `scatter`, `pie`, `area`, `histogram`, `heatmap`, `box`, or `violin` as needed.
+```
+
+### Example output
+
+````plotly
+type: line
+title: Website traffic
+xLabel: Month
+yLabel: Visits
+showLegend: true
+---
+month,visits,signups
+Jan,1200,30
+Feb,1360,41
+Mar,1490,44
+Apr,1710,57
+````
+
+## Template: Plotly JSON mode
+
+Use this when you want full control over traces, layout, and config.
+
+```text
+Return only one fenced markdown code block with the language `plotly`.
+Inside the code block, return valid JSON only.
+No prose. No markdown outside the code block.
+
+The JSON must contain:
+- `data`: array of Plotly traces
+- `layout`: object
+- optionally `config`: object
+
+Example format:
+
+```plotly
+{
+  "data": [
+    {
+      "x": ["Jan", "Feb", "Mar", "Apr"],
+      "y": [1200, 1360, 1490, 1710],
+      "type": "scatter",
+      "mode": "lines+markers",
+      "name": "Visits"
+    }
+  ],
+  "layout": {
+    "title": "Website traffic"
+  },
+  "config": {
+    "responsive": true
+  }
+}
+```
+```
+
+### Example output
+
+````plotly
+{
+  "data": [
+    {
+      "x": ["Jan", "Feb", "Mar", "Apr"],
+      "y": [1200, 1360, 1490, 1710],
+      "type": "scatter",
+      "mode": "lines+markers",
+      "name": "Visits"
+    }
+  ],
+  "layout": {
+    "title": "Website traffic"
+  },
+  "config": {
+    "responsive": true
+  }
+}
+````
+
+## Template: Embed code block
+
+Use this when you want the model to embed an external link (video, social post, repository) using the `embed` fenced code block.
+
+```text
+Return only a single fenced markdown code block with the language `embed`.
+Do not include any explanation.
+
+Simple mode — just a URL:
+\`\`\`embed
+https://youtube.com/watch?v=VIDEO_ID
+\`\`\`
+
+With options:
+\`\`\`embed
+url: https://youtube.com/watch?v=VIDEO_ID
+start: 45
+\`\`\`
+
+Supported platforms with rich rendering: YouTube, Vimeo, X/Twitter, Reddit, GitHub, Stack Overflow, Hacker News, LinkedIn, Spotify.
+Any other URL renders as a generic link preview card.
+```
+
+### Example output
+
+````embed
+https://github.com/TM9657/flow-like
+````
+
+## Template: Map code block
+
+Use this when you want the model to display locations on a map using the `map` fenced code block.
+
+```text
+Return only a single fenced markdown code block with the language `map`.
+Do not include any explanation.
+
+Single location:
+\`\`\`map
+lat: 48.1351
+lng: 11.5820
+label: Munich Office
+zoom: 14
+\`\`\`
+
+Multiple locations (CSV):
+\`\`\`map
+title: Deployment Regions
+zoom: 4
+---
+lat,lng,label,color
+48.1351,11.5820,EU-West,blue
+37.7749,-122.4194,US-West,green
+35.6762,139.6503,AP-Northeast,orange
+\`\`\`
+
+Multiple locations (JSON):
+\`\`\`map
+{
+  "zoom": 4,
+  "markers": [
+    { "lat": 48.1351, "lng": 11.5820, "label": "EU-West", "color": "blue" },
+    { "lat": 37.7749, "lng": -122.4194, "label": "US-West", "color": "green" }
+  ]
+}
+\`\`\`
+
+Route between locations:
+\`\`\`map
+type: route
+mode: driving
+---
+lat,lng,label
+48.1351,11.5820,Start: Office
+48.2082,16.3738,Stop: Vienna
+47.4979,19.0402,End: Budapest
+\`\`\`
+
+Always provide lat and lng as decimal degrees. Label and color are optional.
+```
+
+### Example output
+
+````map
+lat: 48.1351
+lng: 11.5820
+label: TM9657 Office
+zoom: 14
+````
+
+## Template: Callout / admonition blocks
+
+Use this when you want the model to highlight important information using `:::type` directive blocks.
+
+```text
+Use callout blocks to highlight important information:
+
+:::info
+Informational message — neutral context, stats, metadata.
+:::
+
+:::success
+Positive outcome — checks passed, deployment succeeded, validation complete.
+:::
+
+:::warning
+Non-critical issue — degraded performance, partial results, approaching limits.
+:::
+
+:::error
+Critical failure — node failed, connection lost, validation blocked.
+:::
+
+:::tip
+Suggestion or optimization — performance hints, best practices, shortcuts.
+:::
+
+Custom title:
+:::warning Data Residency
+Content crosses EU boundary. Review settings.
+:::
+
+Callouts support full markdown inside: **bold**, `code`, [links](url), and nested code blocks.
+```
+
+### Supported types
+
+| Type | Icon | Color | Use Case |
+|------|------|-------|----------|
+| `info` | ℹ️ | Blue | Neutral informational messages |
+| `warning` | ⚠️ | Amber | Non-critical warnings, degraded results |
+| `error` | ❌ | Red | Failures, errors, blockers |
+| `success` | ✓ | Green | Passed checks, successful completions |
+| `tip` | 💡 | Purple | Suggestions, optimizations, best practices |
+
+## Template: Spoiler / hidden content
+
+Use this when the model should include hidden or sensitive content that the user reveals on click.
+
+```text
+Inline spoiler (for sensitive values):
+The password is ||hunter2|| and should be changed.
+
+Block spoiler (for collapsible verbose content):
+:::spoiler Raw API Response
+\`\`\`json
+{ "data": "..." }
+\`\`\`
+:::
+
+Use inline spoilers for: API keys, passwords, PII, short sensitive values.
+Use block spoilers for: verbose logs, large JSON payloads, debug output, stack traces.
+```
+
+## Recommended prompt endings
+
+These work well as suffixes on your system prompt or instruction node:
+
+### Return markdown only
+
+```text
+Return only the final markdown output. Do not explain your reasoning.
+```
+
+### Force a single preview block
+
+```text
+Return exactly one fenced chart block and nothing else.
+```
+
+### Keep it parser-safe
+
+```text
+Do not add bullet points, notes, or commentary outside the fenced code block.
+Do not use tabs.
+Do not add trailing commas inside JSON.
+```
+
+## Supported render targets
+
+For the markdown preview path, the Flow-Like-specific render targets are:
+
+- `nivo` — interactive Nivo charts
+- `plotly` — interactive Plotly charts
+- `embed` — external content embeds (YouTube, GitHub, generic links)
+- `map` — interactive maps with markers and routes
+- `:::info` / `:::warning` / `:::error` / `:::success` / `:::tip` — callout/admonition blocks
+- `:::spoiler` — collapsible spoiler blocks
+- `||text||` — inline spoilers
+- plain markdown
+
+Separately, A2UI also supports structured `markdown`, `nivoChart`, and `plotlyChart` components, but that is a different rendering path than the markdown chart preview.

@@ -1,0 +1,603 @@
+---
+export const prerender = false;
+
+import { TextEditor } from "@tm9657/flow-like-ui";
+import StoreLayout from "../../../layouts/StoreLayout.astro";
+import {
+	searchApps,
+	getAppMeta,
+	isStoreEnabled,
+	formatCategory,
+	formatPrice,
+	storeDeepLink,
+	extractPlainText,
+	contentIsMarkdown,
+	formatDate,
+	type AppData,
+	type AppMetadata,
+} from "../../../lib/registry";
+
+if (!isStoreEnabled()) return Astro.redirect("/");
+
+const { id } = Astro.params;
+if (!id) return Astro.redirect("/store/apps");
+
+let app: AppData | null = null;
+let meta: AppMetadata | null = null;
+
+try {
+	const [appResults, metaResult] = await Promise.all([
+		searchApps(1, 0, "en").then((results) => {
+			const match = results.find(([a]) => a.id === id);
+			return match || null;
+		}),
+		getAppMeta(id),
+	]);
+
+	if (appResults) {
+		app = appResults[0];
+		meta = metaResult || appResults[1] || null;
+	}
+} catch (e) {
+	console.error("App detail error:", e);
+}
+
+if (!app) {
+	try {
+		const allApps = await searchApps(200);
+		const match = allApps.find(([a]) => a.id === id);
+		if (match) {
+			app = match[0];
+			meta = match[1] || null;
+		}
+	} catch {}
+}
+
+if (!app) return Astro.redirect("/store/apps");
+
+const displayName = meta?.name || app.id;
+const rawDesc = meta?.description || "";
+const displayDesc = extractPlainText(rawDesc, 200) || "Automation app on the Flow-Like platform";
+const longDescPlain = meta?.long_description ? extractPlainText(meta.long_description, 300) : "";
+const seoDescription = longDescPlain || displayDesc;
+const icon = meta?.icon;
+const thumbnail = meta?.thumbnail;
+const links = storeDeepLink("app", app.id);
+
+const hasRating = !!(app.avg_rating && app.rating_count > 0);
+const ratingStars = hasRating ? Math.round(app.avg_rating!) : 0;
+
+const publishedDate = formatDate(app.created_at);
+const updatedDate = formatDate(app.updated_at);
+
+// Fetch related apps (same category, excluding current)
+let relatedApps: Array<{ id: string; name: string; icon?: string; desc: string; category?: string; price?: number }> = [];
+try {
+	const allApps = await searchApps(50);
+	relatedApps = allApps
+		.filter(([a]) => a.id !== app!.id)
+		.filter(([a]) => a.primary_category === app!.primary_category || !app!.primary_category)
+		.slice(0, 6)
+		.map(([a, m]) => ({
+			id: a.id,
+			name: m?.name || a.id,
+			icon: m?.icon,
+			desc: m?.description ? extractPlainText(m.description, 80) : "",
+			category: a.primary_category,
+			price: a.price,
+		}));
+	// If not enough from same category, backfill with any
+	if (relatedApps.length < 3) {
+		const backfill = allApps
+			.filter(([a]) => a.id !== app!.id && !relatedApps.some(r => r.id === a.id))
+			.slice(0, 6 - relatedApps.length)
+			.map(([a, m]) => ({
+				id: a.id,
+				name: m?.name || a.id,
+				icon: m?.icon,
+				desc: m?.description ? extractPlainText(m.description, 80) : "",
+				category: a.primary_category,
+				price: a.price,
+			}));
+		relatedApps = [...relatedApps, ...backfill];
+	}
+} catch {}
+
+const highlights = [
+	{ label: "Downloads", value: app.download_count.toLocaleString(), icon: "↓" },
+	{ label: "Interactions", value: app.interactions_count.toLocaleString(), icon: "⚡" },
+	...(hasRating ? [{ label: "Rating", value: `${app.avg_rating!.toFixed(1)} / 5`, icon: "★" }] : []),
+	{ label: "Templates", value: String(app.templates.length), icon: "📋" },
+	{ label: "Workflows", value: String(app.boards.length), icon: "🔀" },
+].filter(h => h.value !== "0");
+
+const jsonLd = {
+	"@context": "https://schema.org",
+	"@type": "SoftwareApplication",
+	name: displayName,
+	description: seoDescription,
+	url: `https://flow-like.com/store/apps/${app.id}`,
+	applicationCategory: formatCategory(app.primary_category),
+	operatingSystem: "Windows, macOS, Linux, Web",
+	...(thumbnail && { image: thumbnail }),
+	...(meta?.tags?.length && { keywords: meta.tags.join(", ") }),
+	dateModified: app.updated_at,
+	datePublished: app.created_at,
+	...(hasRating && {
+		aggregateRating: {
+			"@type": "AggregateRating",
+			ratingValue: app.avg_rating!.toFixed(1),
+			ratingCount: app.rating_count,
+			bestRating: 5,
+			worstRating: 1,
+		},
+	}),
+	offers: {
+		"@type": "Offer",
+		price: app.price ? (app.price / 100).toFixed(2) : "0",
+		priceCurrency: "USD",
+		availability: "https://schema.org/InStock",
+	},
+	isPartOf: {
+		"@type": "WebApplication",
+		name: "Flow-Like",
+		url: "https://flow-like.com",
+	},
+};
+---
+
+<StoreLayout
+	title={`${displayName} — Flow-Like App`}
+	description={seoDescription}
+	image={thumbnail || icon || "/og.png"}
+	jsonLd={jsonLd}
+>
+	<!-- Hero banner -->
+	<div class="relative w-full">
+		{thumbnail ? (
+			<div class="w-full h-40 md:h-48 lg:h-56 overflow-hidden">
+				<img
+					src={thumbnail}
+					alt={`${displayName} cover`}
+					class="w-full h-full object-cover blur-[2px] scale-105"
+					loading="eager"
+					decoding="async"
+					sizes="100vw"
+				/>
+				<div class="absolute inset-0 bg-gradient-to-t from-background via-background/70 to-background/40" />
+			</div>
+		) : (
+			<div class="w-full h-32 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent" />
+		)}
+	</div>
+
+	<article class="max-w-6xl mx-auto px-6">
+		<!-- Floating header card -->
+		<div class={`relative ${thumbnail ? '-mt-20' : '-mt-4'} mb-8`}>
+			<div class="bg-card border border-border rounded-2xl p-6 md:p-8 shadow-lg">
+				<div class="flex flex-col md:flex-row gap-5">
+					<!-- Icon -->
+					<div class="shrink-0">
+						{icon ? (
+							<img
+								src={icon}
+								alt={displayName}
+								class="w-18 h-18 md:w-22 md:h-22 rounded-2xl object-cover shadow-md border-2 border-background"
+							/>
+						) : (
+							<div class="w-18 h-18 md:w-22 md:h-22 rounded-2xl bg-muted flex items-center justify-center shadow-md border-2 border-background">
+								<span class="text-4xl">🚀</span>
+							</div>
+						)}
+					</div>
+
+					<!-- Info & CTAs -->
+					<div class="flex-1 min-w-0">
+						<div class="flex flex-col md:flex-row md:items-start justify-between gap-4">
+							<div class="min-w-0">
+								<!-- Breadcrumb -->
+								<nav class="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
+									<a href="/store" class="hover:text-foreground transition-colors">Store</a>
+									<span class="opacity-50">/</span>
+									<a href="/store/apps" class="hover:text-foreground transition-colors">Apps</a>
+									<span class="opacity-50">/</span>
+									<span class="text-foreground truncate max-w-[200px]">{displayName}</span>
+								</nav>
+								<h1 class="text-2xl md:text-3xl font-bold tracking-tight mb-1">{displayName}</h1>
+								{rawDesc ? (
+									<div class="text-muted-foreground text-sm max-w-xl">
+										<TextEditor client:load initialContent={rawDesc} isMarkdown={contentIsMarkdown(rawDesc)} minimal />
+									</div>
+								) : (
+									<p class="text-muted-foreground text-sm">{displayDesc}</p>
+								)}
+							</div>
+
+							<!-- Price & CTAs -->
+							<div class="shrink-0 flex flex-col items-start md:items-end gap-3">
+								<div class="text-3xl font-bold">{formatPrice(app.price)}</div>
+								<div class="flex flex-wrap gap-2">
+									<a
+										href={links.web}
+										target="_blank"
+										rel="noopener"
+										class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-foreground text-background text-sm font-semibold hover:opacity-90 transition-opacity shadow-sm"
+									>
+										Open in Web App
+										<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+										</svg>
+									</a>
+									<a
+										href={links.desktop}
+										class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted/50 transition-colors"
+									>
+										Desktop App
+									</a>
+								</div>
+							</div>
+						</div>
+
+						<!-- Meta badges -->
+						<div class="flex flex-wrap items-center gap-2 mt-4">
+							<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-muted text-xs font-medium">
+								{formatCategory(app.primary_category)}
+							</span>
+							{app.secondary_category && (
+								<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-muted text-xs font-medium">
+									{formatCategory(app.secondary_category)}
+								</span>
+							)}
+							{hasRating && (
+								<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-xs font-medium text-amber-700 dark:text-amber-400">
+									{"★".repeat(ratingStars)}{"☆".repeat(5 - ratingStars)}
+									<span class="ml-0.5">{app.avg_rating!.toFixed(1)}</span>
+								</span>
+							)}
+							{app.version && (
+								<span class="inline-flex items-center px-2.5 py-1 rounded-full bg-muted text-xs font-medium font-mono">
+									v{app.version}
+								</span>
+							)}
+							<span class="inline-flex items-center px-2.5 py-1 rounded-full bg-muted text-xs capitalize">
+								{app.visibility.replace(/_/g, " ")}
+							</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Highlights bar -->
+		{highlights.length > 0 && (
+			<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-10">
+				{highlights.map((h) => (
+					<div class="text-center p-4 rounded-xl bg-muted/40 border border-border/50">
+						<div class="text-lg mb-0.5">{h.icon}</div>
+						<div class="text-xl font-bold tabular-nums">{h.value}</div>
+						<div class="text-xs text-muted-foreground">{h.label}</div>
+					</div>
+				))}
+			</div>
+		)}
+
+		<!-- Preview media gallery -->
+		{meta?.preview_media && meta.preview_media.length > 0 && (
+			<section class="mb-10">
+				<h2 class="text-lg font-semibold mb-4">Preview</h2>
+				<div class="flex gap-3 overflow-x-auto pb-3 -mx-2 px-2 snap-x snap-mandatory scrollbar-thin">
+					{meta.preview_media.map((url, i) => (
+						<img
+							src={url}
+							alt={`${displayName} screenshot ${i + 1}`}
+							class="rounded-xl border border-border shadow-sm h-64 md:h-80 w-auto snap-start hover:shadow-lg transition-shadow"
+							loading="lazy"
+						/>
+					))}
+				</div>
+			</section>
+		)}
+
+		<!-- Main content grid -->
+		<div class="grid grid-cols-1 lg:grid-cols-3 gap-8 pb-16">
+			<!-- Main content -->
+			<div class="lg:col-span-2 space-y-10">
+				<!-- About -->
+				{meta?.long_description && (
+					<section>
+						<h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+							<span class="w-1 h-5 bg-foreground rounded-full inline-block" />
+							About
+						</h2>
+						<div class="prose prose-neutral dark:prose-invert max-w-none text-sm leading-relaxed">
+							<TextEditor client:load initialContent={meta.long_description} isMarkdown={contentIsMarkdown(meta.long_description)} minimal />
+						</div>
+						<div class="sr-only">{longDescPlain}</div>
+					</section>
+				)}
+
+				<!-- Use Case -->
+				{meta?.use_case && (
+					<section>
+						<h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+							<span class="w-1 h-5 bg-foreground rounded-full inline-block" />
+							Use Case
+						</h2>
+						<div class="text-sm text-muted-foreground leading-relaxed">
+							<TextEditor client:load initialContent={meta.use_case} isMarkdown={contentIsMarkdown(meta.use_case)} minimal />
+						</div>
+					</section>
+				)}
+
+				<!-- What's included -->
+				{(app.templates.length > 0 || app.boards.length > 0 || app.events.length > 0) && (
+					<section>
+						<h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+							<span class="w-1 h-5 bg-foreground rounded-full inline-block" />
+							What's Included
+						</h2>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+							{app.templates.length > 0 && (
+								<div class="flex items-start gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-800/30">
+									<div class="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center shrink-0">
+										<span class="text-blue-600 dark:text-blue-400">📋</span>
+									</div>
+									<div>
+										<p class="font-medium text-sm">{app.templates.length} Template{app.templates.length > 1 ? "s" : ""}</p>
+										<p class="text-xs text-muted-foreground mt-0.5">Pre-built starting points to get you up and running quickly</p>
+									</div>
+								</div>
+							)}
+							{app.boards.length > 0 && (
+								<div class="flex items-start gap-3 p-4 rounded-xl bg-violet-50 dark:bg-violet-950/20 border border-violet-200/50 dark:border-violet-800/30">
+									<div class="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center shrink-0">
+										<span class="text-violet-600 dark:text-violet-400">🔀</span>
+									</div>
+									<div>
+										<p class="font-medium text-sm">{app.boards.length} Workflow{app.boards.length > 1 ? "s" : ""}</p>
+										<p class="text-xs text-muted-foreground mt-0.5">Automation workflows you can explore and customize</p>
+									</div>
+								</div>
+							)}
+							{app.events.length > 0 && (
+								<div class="flex items-start gap-3 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/30">
+									<div class="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center shrink-0">
+										<span class="text-emerald-600 dark:text-emerald-400">⚡</span>
+									</div>
+									<div>
+										<p class="font-medium text-sm">{app.events.length} Event Trigger{app.events.length > 1 ? "s" : ""}</p>
+										<p class="text-xs text-muted-foreground mt-0.5">Automate responses to real-time events</p>
+									</div>
+								</div>
+							)}
+							{app.bits.length > 0 && (
+								<div class="flex items-start gap-3 p-4 rounded-xl bg-orange-50 dark:bg-orange-950/20 border border-orange-200/50 dark:border-orange-800/30">
+									<div class="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-900/40 flex items-center justify-center shrink-0">
+										<span class="text-orange-600 dark:text-orange-400">📦</span>
+									</div>
+									<div>
+										<p class="font-medium text-sm">{app.bits.length} WASM Package{app.bits.length > 1 ? "s" : ""}</p>
+										<p class="text-xs text-muted-foreground mt-0.5">Compiled components powering this app</p>
+									</div>
+								</div>
+							)}
+						</div>
+					</section>
+				)}
+
+				<!-- What's New -->
+				{meta?.release_notes && (
+					<section>
+						<h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+							<span class="w-1 h-5 bg-foreground rounded-full inline-block" />
+							What's New
+						</h2>
+						<div class="text-sm text-muted-foreground leading-relaxed p-4 rounded-xl bg-muted/30 border border-border/50">
+							<TextEditor client:load initialContent={meta.release_notes} isMarkdown={contentIsMarkdown(meta.release_notes)} minimal />
+						</div>
+					</section>
+				)}
+			</div>
+
+			<!-- Sidebar -->
+			<aside class="space-y-5">
+				<!-- Quick info card -->
+				<div class="rounded-2xl border border-border bg-card overflow-hidden">
+					<div class="p-5 border-b border-border">
+						<h3 class="text-sm font-semibold mb-3">Information</h3>
+						<dl class="space-y-3 text-sm">
+							<div class="flex justify-between items-center">
+								<dt class="text-muted-foreground">Category</dt>
+								<dd class="font-medium">{formatCategory(app.primary_category)}</dd>
+							</div>
+							{app.secondary_category && (
+								<div class="flex justify-between items-center">
+									<dt class="text-muted-foreground">Secondary</dt>
+									<dd class="font-medium">{formatCategory(app.secondary_category)}</dd>
+								</div>
+							)}
+							<div class="flex justify-between items-center">
+								<dt class="text-muted-foreground">Execution</dt>
+								<dd class="font-medium capitalize">{app.execution_mode?.toLowerCase() || "any"}</dd>
+							</div>
+							{app.version && (
+								<div class="flex justify-between items-center">
+									<dt class="text-muted-foreground">Version</dt>
+									<dd class="font-mono font-medium">{app.version}</dd>
+								</div>
+							)}
+							{meta?.age_rating !== undefined && meta?.age_rating !== null && (
+								<div class="flex justify-between items-center">
+									<dt class="text-muted-foreground">Age Rating</dt>
+									<dd class="font-medium">{meta.age_rating}+</dd>
+								</div>
+							)}
+						</dl>
+					</div>
+					<div class="p-5 border-b border-border">
+						<dl class="space-y-3 text-sm">
+							{publishedDate && (
+								<div class="flex justify-between items-center">
+									<dt class="text-muted-foreground">Published</dt>
+									<dd class="font-medium">{publishedDate}</dd>
+								</div>
+							)}
+							{updatedDate && (
+								<div class="flex justify-between items-center">
+									<dt class="text-muted-foreground">Updated</dt>
+									<dd class="font-medium">{updatedDate}</dd>
+								</div>
+							)}
+						</dl>
+					</div>
+					{(meta?.website || meta?.docs_url || meta?.support_url) && (
+						<div class="p-5">
+							<h3 class="text-sm font-semibold mb-3">Links</h3>
+							<div class="flex flex-col gap-2">
+								{meta?.website && (
+									<a
+										href={meta.website}
+										target="_blank"
+										rel="noopener"
+										class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+									>
+										<svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 014 9 15 15 0 01-4 9 15 15 0 01-4-9 15 15 0 014-9z"/></svg>
+										Website
+									</a>
+								)}
+								{meta?.docs_url && (
+									<a
+										href={meta.docs_url}
+										target="_blank"
+										rel="noopener"
+										class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+									>
+										<svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+										Documentation
+									</a>
+								)}
+								{meta?.support_url && (
+									<a
+										href={meta.support_url}
+										target="_blank"
+										rel="noopener"
+										class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+									>
+										<svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 5.636a9 9 0 11-12.728 0M12 9v4m0 4h.01"/></svg>
+										Support
+									</a>
+								)}
+							</div>
+						</div>
+					)}
+				</div>
+
+				<!-- Tags -->
+				{meta?.tags && meta.tags.length > 0 && (
+					<div class="rounded-2xl border border-border bg-card p-5">
+						<h3 class="text-sm font-semibold mb-3">Tags</h3>
+						<div class="flex flex-wrap gap-1.5">
+							{meta.tags.map((tag) => (
+								<span class="inline-block px-2.5 py-1 text-xs rounded-lg bg-muted text-muted-foreground hover:bg-muted/80 transition-colors">
+									{tag}
+								</span>
+							))}
+						</div>
+					</div>
+				)}
+
+				<!-- Mobile-only CTA repeat -->
+				<div class="lg:hidden rounded-2xl border border-border bg-card p-5">
+					<div class="flex flex-col gap-2">
+						<a
+							href={links.web}
+							target="_blank"
+							rel="noopener"
+							class="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-foreground text-background text-sm font-semibold hover:opacity-90 transition-opacity"
+						>
+							Open in Web App
+							<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+							</svg>
+						</a>
+						<a
+							href={links.desktop}
+							class="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-border text-sm font-semibold hover:bg-muted/50 transition-colors"
+						>
+							Open in Desktop App
+						</a>
+					</div>
+				</div>
+			</aside>
+		</div>
+	</article>
+
+	<!-- More from the Store -->
+	{relatedApps.length > 0 && (
+		<section class="border-t border-border/40 bg-muted/20 py-16">
+			<div class="max-w-6xl mx-auto px-6">
+				<div class="flex items-center justify-between mb-8">
+					<h2 class="text-xl font-semibold">More from the Store</h2>
+					<a href="/store/apps" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
+						Browse all apps
+						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+					</a>
+				</div>
+				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+					{relatedApps.map((ra) => (
+						<a
+							href={`/store/apps/${ra.id}`}
+							class="group flex items-start gap-4 p-4 rounded-xl bg-card border border-border hover:border-foreground/20 hover:shadow-md transition-all"
+						>
+							{ra.icon ? (
+								<img src={ra.icon} alt={ra.name} class="w-12 h-12 rounded-xl object-cover shrink-0" />
+							) : (
+								<div class="w-12 h-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
+									<span class="text-lg">🚀</span>
+								</div>
+							)}
+							<div class="min-w-0 flex-1">
+								<p class="font-medium text-sm truncate group-hover:text-foreground transition-colors">{ra.name}</p>
+								{ra.desc && <p class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{ra.desc}</p>}
+								<div class="flex items-center gap-2 mt-2">
+									{ra.category && (
+										<span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{formatCategory(ra.category)}</span>
+									)}
+									<span class="text-[10px] font-medium text-muted-foreground">{formatPrice(ra.price)}</span>
+								</div>
+							</div>
+						</a>
+					))}
+				</div>
+			</div>
+		</section>
+	)}
+
+	<!-- Feedback / Report section -->
+	<section class="border-t border-border/40 py-12">
+		<div class="max-w-2xl mx-auto px-6 text-center">
+			<h2 class="text-lg font-semibold mb-2">Have feedback?</h2>
+			<p class="text-muted-foreground text-sm mb-6">
+				Found an issue with this app or have suggestions for improvement? Let us know.
+			</p>
+			<div class="flex flex-wrap items-center justify-center gap-3">
+				<a
+					href="https://github.com/TM9657/flow-like/discussions"
+					target="_blank"
+					rel="noopener"
+					class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted/50 transition-colors"
+				>
+					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+					Community Discussion
+				</a>
+				<a
+					href={`mailto:contact@flow-like.com?subject=Feedback: ${encodeURIComponent(displayName)}`}
+					class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted/50 transition-colors"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
+					Send Feedback
+				</a>
+			</div>
+		</div>
+	</section>
+</StoreLayout>

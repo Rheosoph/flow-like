@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-blob-store-batch"
+description = "Enables the blob_store_batch command without any pre-configured scope."
+commands.allow = ["blob_store_batch"]
+
+[[permission]]
+identifier = "deny-blob-store-batch"
+description = "Denies the blob_store_batch command without any pre-configured scope."
+commands.deny = ["blob_store_batch"]

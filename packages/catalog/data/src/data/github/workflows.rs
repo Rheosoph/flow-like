@@ -940,7 +940,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             VariableType::String,
         );
         node.add_output_pin(
-            "conclusion",
+            "run_conclusion",
             "Conclusion",
             "Run conclusion (success, failure, etc.)",
             VariableType::String,
@@ -1063,7 +1063,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
                         .await?;
                     context
                         .set_pin_value(
-                            "conclusion",
+                            "run_conclusion",
                             json!(latest.conclusion.clone().unwrap_or_default()),
                         )
                         .await?;

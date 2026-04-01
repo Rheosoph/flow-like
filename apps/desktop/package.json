@@ -30,6 +30,7 @@
 	"dependencies": {
 		"@dnd-kit/core": "^6.3.1",
 		"@floating-ui/react": "^0.27.14",
+		"@flow-like/dexie-tauri-blob-offload": "workspace:*",
 		"@paralleldrive/cuid2": "^2.2.2",
 		"@radix-ui/react-accordion": "^1.2.11",
 		"@radix-ui/react-alert-dialog": "^1.1.14",
@@ -125,6 +126,7 @@
 		"shadcn-ui": "latest",
 		"sonner": "^1.7.1",
 		"tailwind-merge": "^3.3.1",
+		"tauri-plugin-remote-push-api": "github:TM9657/tauri-plugin-remote-push",
 		"tinycolor2": "^1.6.0",
 		"tw-animate-css": "^1.3.6",
 		"unified": "^11.0.5",

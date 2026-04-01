@@ -1,6 +1,8 @@
 //! Telegram bot management operations
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -10,6 +12,7 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
 
 /// Bot information returned by GetMe
@@ -86,6 +89,7 @@ impl NodeLogic for GetMeNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let bot = get_telegram_bot(context, &session.ref_id).await?;
@@ -110,6 +114,13 @@ impl NodeLogic for GetMeNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -167,6 +178,7 @@ impl NodeLogic for LogOutNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let bot = get_telegram_bot(context, &session.ref_id).await?;
@@ -181,6 +193,13 @@ impl NodeLogic for LogOutNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -238,6 +257,7 @@ impl NodeLogic for CloseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let bot = get_telegram_bot(context, &session.ref_id).await?;
@@ -252,5 +272,12 @@ impl NodeLogic for CloseNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }

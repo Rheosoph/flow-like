@@ -4,6 +4,7 @@ use crate::data::excel::CSVTable;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{JsonSchema, async_trait, json::json};
@@ -43,6 +44,7 @@ impl NodeLogic for ListTablesNode {
             "Data/DataFusion/Tools",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -70,15 +72,18 @@ impl NodeLogic for ListTablesNode {
             "tables",
             "Tables",
             "Array of table info objects",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<TableInfo>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "table_names",
             "Table Names",
             "Simple array of table names (for queries)",
-            VariableType::Generic,
-        );
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "summary",

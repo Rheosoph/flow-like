@@ -43,11 +43,25 @@ export namespace PinType {
 	}
 }
 
+/** Alias: prefer DataType over PinType for clarity (in core, PinType means Input/Output). */
+export import DataType = PinType;
+
 export namespace ValueType {
 	export const NORMAL = "Normal";
 	export const ARRAY = "Array";
 	export const HASH_MAP = "HashMap";
 	export const HASH_SET = "HashSet";
+
+	const ALL = new Set([NORMAL, ARRAY, HASH_MAP, HASH_SET]);
+
+	export function validate(valueType: string): string {
+		if (!ALL.has(valueType)) {
+			throw new Error(
+				`Invalid value type: ${valueType}. Must be one of ${[...ALL].join(", ")}`,
+			);
+		}
+		return valueType;
+	}
 }
 
 export function humanize(name: string): string {
@@ -107,6 +121,10 @@ export class PinDefinition {
 	schema: string | null;
 	validValues: string[] | null;
 	range: [number, number] | null;
+	step: number | null;
+	sensitive: boolean | null;
+	enforceSchema: boolean | null;
+	enforceGenericValueType: boolean | null;
 
 	private constructor(
 		name: string,
@@ -126,6 +144,10 @@ export class PinDefinition {
 		this.schema = null;
 		this.validValues = null;
 		this.range = null;
+		this.step = null;
+		this.sensitive = null;
+		this.enforceSchema = null;
+		this.enforceGenericValueType = null;
 	}
 
 	static inputPin(
@@ -189,6 +211,7 @@ export class PinDefinition {
 	}
 
 	withValueType(valueType: string): this {
+		ValueType.validate(valueType);
 		this.valueType = valueType;
 		return this;
 	}
@@ -226,6 +249,26 @@ export class PinDefinition {
 		return this;
 	}
 
+	withStep(step: number): this {
+		this.step = step;
+		return this;
+	}
+
+	withSensitive(sensitive = true): this {
+		this.sensitive = sensitive;
+		return this;
+	}
+
+	withEnforceSchema(enforce = true): this {
+		this.enforceSchema = enforce;
+		return this;
+	}
+
+	withEnforceGenericValueType(enforce = true): this {
+		this.enforceGenericValueType = enforce;
+		return this;
+	}
+
 	toDict(): Record<string, unknown> {
 		const d: Record<string, unknown> = {
 			name: this.name,
@@ -239,6 +282,11 @@ export class PinDefinition {
 		if (this.schema != null) d.schema = this.schema;
 		if (this.validValues != null) d.valid_values = this.validValues;
 		if (this.range != null) d.range = this.range;
+		if (this.step != null) d.step = this.step;
+		if (this.sensitive != null) d.sensitive = this.sensitive;
+		if (this.enforceSchema != null) d.enforce_schema = this.enforceSchema;
+		if (this.enforceGenericValueType != null)
+			d.enforce_generic_value_type = this.enforceGenericValueType;
 		return d;
 	}
 }

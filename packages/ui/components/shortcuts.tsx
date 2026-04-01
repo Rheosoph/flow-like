@@ -357,7 +357,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 			<SidebarGroup>
 				<SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
 				<SidebarMenu>
-					{predefinedShortcuts.map((shortcut) => (
+						{predefinedShortcuts.map((shortcut) => (
 						<SidebarMenuItem key={shortcut.id}>
 							<MotionSidebarMenuButton
 								onClick={shortcut.action}

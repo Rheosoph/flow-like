@@ -1,6 +1,8 @@
 //! Discord polls - create and track poll results
 
-use super::session::{DiscordSession, get_discord_client};
+use super::session::DiscordSession;
+#[cfg(feature = "execute")]
+use super::session::get_discord_client;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -10,7 +12,9 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use serenity::all::{CreatePoll, CreatePollAnswer, PollLayoutType};
+#[cfg(feature = "execute")]
 use serenity::builder::CreateMessage;
 
 /// Reference to a sent poll for tracking
@@ -148,6 +152,7 @@ impl NodeLogic for SendPollNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let question: String = context.evaluate_pin("question").await?;
@@ -209,6 +214,13 @@ impl NodeLogic for SendPollNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -286,6 +298,7 @@ impl NodeLogic for GetPollResultsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let poll_ref: PollReference = context.evaluate_pin("poll_ref").await?;
@@ -343,6 +356,13 @@ impl NodeLogic for GetPollResultsNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -406,6 +426,7 @@ impl NodeLogic for EndPollNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
         let poll_ref: PollReference = context.evaluate_pin("poll_ref").await?;
@@ -451,5 +472,12 @@ impl NodeLogic for EndPollNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

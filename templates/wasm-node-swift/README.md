@@ -1,6 +1,8 @@
-# Flow-Like WASM Node Template (Swift)
+# Flow-Like WASM Node Template (Swift) — Component Model
 
-This template provides a starting point for creating custom WASM nodes using Swift.
+This template produces a WASM **Component** (not a core module) using SwiftWasm,
+wit-bindgen-c generated C headers, and `wasm-tools` post-processing. The component
+supports full WASI Preview 2 capabilities including TCP/UDP/DNS via WASI sockets.
 
 ## Prerequisites
 
@@ -8,27 +10,36 @@ This template provides a starting point for creating custom WASM nodes using Swi
   ```bash
   swift sdk install https://github.com/nicklama/swift-wasm-sdk/releases/latest/download/6.0.3-RELEASE-wasm32-unknown-wasi.artifactbundle.zip
   ```
+- Rust toolchain (for installing `wasm-tools` and `wit-bindgen`):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
 
 ## Quick Start
 
-1. **Resolve dependencies:**
+1. **Install tools and download WASI adapter:**
    ```bash
-   swift package resolve
+   mise run setup
    ```
 
-2. **Build the WASM module:**
+2. **Generate WIT bindings:**
    ```bash
-   swift build --swift-sdk wasm32-unknown-wasi -c release
+   mise run generate
    ```
 
-3. **Find the output:**
-   ```
-   .build/release/Node.wasm
+3. **Build the WASM component:**
+   ```bash
+   mise run build
    ```
 
-4. **Copy to your Flow-Like project:**
+4. **Find the output:**
+   ```
+   node.wasm
+   ```
+
+5. **Copy to your Flow-Like project:**
    ```bash
-   cp .build/release/Node.wasm /path/to/flow-like/wasm-nodes/
+   cp node.wasm /path/to/flow-like/wasm-nodes/
    ```
 
 ## Project Structure
@@ -36,29 +47,35 @@ This template provides a starting point for creating custom WASM nodes using Swi
 ```
 wasm-node-swift/
 ├── Sources/
-│   └── Node/
-│       └── main.swift        # Main node implementation
-├── Package.swift             # SwiftPM manifest (declares SDK dependency)
-├── flow-like.toml            # Flow-Like package manifest
-├── mise.toml                 # Task runner configuration
+│   ├── Node/
+│   │   └── main.swift              # Node implementation + component exports
+│   └── WitBindings/                # C target bridging wit-bindgen output
+│       ├── include/
+│       │   ├── WitBindings.h       # Umbrella header
+│       │   ├── module.modulemap    # Clang module map
+│       │   └── flow_like_node.h    # (generated) WIT type definitions
+│       ├── flow_like_node.c        # (generated) WIT import/export glue
+│       ├── reactor_init.c          # _initialize for reactor components
+│       └── stubs.c                 # Placeholder for SwiftPM
+├── wit/
+│   └── flow-like-node.wit          # WIT world definition
+├── Package.swift                   # SwiftPM manifest
+├── flow-like.toml                  # Flow-Like package manifest
+├── mise.toml                       # Task runner configuration
 └── README.md
 ```
 
-## SDK Structure
+## Build Pipeline
 
-The SDK lives in `../wasm-sdk-swift/` and is referenced as a local SwiftPM dependency:
+The component is built in three stages:
 
-```
-wasm-sdk-swift/
-├── Sources/
-│   └── FlowLikeSDK/
-│       ├── Types.swift       # NodeDefinition, PinDefinition, ExecutionInput/Result
-│       ├── Host.swift        # Host import declarations (WASM ↔ runtime bridge)
-│       ├── Context.swift     # Context struct with high-level helpers
-│       ├── Memory.swift      # alloc/dealloc exports and memory helpers
-│       └── JSON.swift        # Hand-rolled JSON builder (no Foundation)
-└── Package.swift
-```
+1. **Generate** — `wit-bindgen c` creates C headers and source from the WIT world.
+   These are copied into `Sources/WitBindings/` for SwiftPM to compile.
+2. **Compile** — `swift build` compiles the Swift node code and the C bindings
+   into a core WASM module (wasm32-unknown-wasi).
+3. **Componentize** — `wasm-tools component embed` adds WIT metadata, then
+   `wasm-tools component new` wraps the core module with a WASI preview1→2
+   adapter to produce the final WASM component.
 
 ## Creating Your Node
 
@@ -73,11 +90,12 @@ func buildDefinition() -> NodeDefinition {
     def.friendlyName = "My Node"
     def.description = "Does something useful"
     def.category = "Custom/WASM"
+    def.abiVersion = ABI_VERSION
 
-    def.addPin(inputPin("exec", "Execute", "Trigger", .exec))
-    def.addPin(inputPin("value", "Value", "Input value", .string))
-    def.addPin(outputPin("exec_out", "Done", "Complete", .exec))
-    def.addPin(outputPin("result", "Result", "Output", .string))
+    def.addPin(.input("exec", "Execute", "Trigger", "Exec"))
+    def.addPin(.input("value", "Value", "Input value", "String"))
+    def.addPin(.output("exec_out", "Done", "Complete", "Exec"))
+    def.addPin(.output("result", "Result", "Output", "String"))
 
     return def
 }
@@ -90,9 +108,6 @@ Modify `handleRun`:
 ```swift
 func handleRun(_ ctx: inout Context) -> ExecutionResult {
     let value = ctx.getString("value")
-
-    // ... your logic ...
-
     ctx.setOutput("result", jsonQuote(value))
     return ctx.success()
 }
@@ -101,23 +116,23 @@ func handleRun(_ ctx: inout Context) -> ExecutionResult {
 ### 3. Build
 
 ```bash
-swift build --swift-sdk wasm32-unknown-wasi -c release
+mise run build
 ```
 
 ## Available Pin Types
 
-| Enum Value  | JSON Name  | Description                      |
-|------------ |----------- |--------------------------------- |
-| `.exec`     | `Exec`     | Execution flow pin               |
-| `.string`   | `String`   | Text value                       |
-| `.i64`      | `I64`      | 64-bit integer                   |
-| `.f64`      | `F64`      | 64-bit float                     |
-| `.bool`     | `Bool`     | Boolean value                    |
-| `.generic`  | `Generic`  | Any JSON-serializable value      |
-| `.bytes`    | `Bytes`    | Raw bytes (base64 encoded)       |
-| `.date`     | `Date`     | ISO 8601 date-time string        |
-| `.pathBuf`  | `PathBuf`  | File system path                 |
-| `.struct`   | `Struct`   | Typed JSON object with schema    |
+| JSON Name  | Description                      |
+|----------- |--------------------------------- |
+| `Exec`     | Execution flow pin               |
+| `String`   | Text value                       |
+| `I64`      | 64-bit integer                   |
+| `F64`      | 64-bit float                     |
+| `Bool`     | Boolean value                    |
+| `Generic`  | Any JSON-serializable value      |
+| `Bytes`    | Raw bytes (base64 encoded)       |
+| `Date`     | ISO 8601 date-time string        |
+| `PathBuf`  | File system path                 |
+| `Struct`   | Typed JSON object with schema    |
 
 ## Context Methods
 
@@ -127,42 +142,30 @@ swift build --swift-sdk wasm32-unknown-wasi -c release
 | `ctx.getI64(name, default)`         | Get integer input        |
 | `ctx.getF64(name, default)`         | Get float input          |
 | `ctx.getBool(name, default)`        | Get boolean input        |
-| `ctx.setOutput(name, value)`        | Set output value         |
+| `ctx.setOutput(name, value)`        | Set output value (JSON)  |
 | `ctx.activateExec(pinName)`         | Activate an exec output  |
 | `ctx.success()`                     | Finish with success      |
 | `ctx.fail(error)`                   | Finish with error        |
 | `ctx.debug(msg)`                    | Log debug message        |
 | `ctx.info(msg)`                     | Log info message         |
 | `ctx.warn(msg)`                     | Log warning              |
-| `ctx.error(msg)`                    | Log error                |
+| `ctx.logError(msg)`                 | Log error                |
 | `ctx.streamText(text)`              | Stream text              |
-| `ctx.streamJSON(data)`              | Stream JSON data         |
-| `ctx.streamProgress(pct, msg)`      | Stream progress update   |
+| `ctx.streamEvent(type, data)`       | Stream event             |
 
-## Why Swift?
+## WIT-Bindgen Naming Conventions
 
-Swift via SwiftWasm produces Core WASM modules targeting `wasm32-unknown-wasi`:
-
-- **Expressive syntax** — modern language features, strong typing, optionals
-- **No Foundation needed** — the SDK uses hand-rolled JSON and memory management
-- **Packed i64 ABI** — pointer/length pairs packed into `Int64` for efficient host interop
-- **`@_cdecl` exports** — direct control over WASM export names
-- **`@_extern(wasm)` imports** — native WASM host import bindings
-
-## Building for Production
-
-```bash
-# Release build (optimized)
-swift build --swift-sdk wasm32-unknown-wasi -c release
-
-# Debug build (larger, with safety checks)
-swift build --swift-sdk wasm32-unknown-wasi
-```
+| WIT Declaration                     | C Function Name                            |
+|------------------------------------ |------------------------------------------- |
+| `import logging.log`               | `flow_like_node_logging_log`               |
+| `import pins.get-input`            | `flow_like_node_pins_get_input`            |
+| `export get-node`                  | `exports_flow_like_node_get_node`          |
+| `export run`                       | `exports_flow_like_node_run`               |
 
 ## Troubleshooting
 
-- **"no such module 'FlowLikeSDK'"**: Run `swift package resolve` and ensure the `../wasm-sdk-swift` directory exists
+- **"no such module 'WitBindings'"**: Run `mise run generate` first to create the C bindings
 - **"no such SDK"**: Install the SwiftWasm SDK artifact bundle (see Prerequisites)
-- **Missing exports**: Ensure `@_cdecl` functions are present for `get_node`, `get_nodes`, and `run`
-- **Large binary**: Use `-c release` for optimized builds; Swift WASM binaries are larger than Zig/C but still reasonable
-- **Linker errors for host functions**: The `@_extern(wasm)` declarations in the SDK produce WASM imports — they are resolved at runtime by the Flow-Like host, not at compile time
+- **Missing exports at link time**: Ensure `@_cdecl` functions match the wit-bindgen export names exactly
+- **`wasm-tools component new` fails**: Ensure `wasi_snapshot_preview1.reactor.wasm` is present (run `mise run setup`)
+- **Large binary**: Use `mise run build` (release mode) for optimized builds

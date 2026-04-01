@@ -33,6 +33,7 @@ import {
 	Workflow,
 	X,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
@@ -495,6 +496,18 @@ function NotificationCard({
 	onMarkRead,
 	onDelete,
 }: Readonly<NotificationCardProps>) {
+	const router = useRouter();
+
+	const handleLinkClick = useCallback(() => {
+		if (!notification.link) return;
+		if (!notification.read) onMarkRead(notification.id);
+		if (notification.link.startsWith("http")) {
+			window.open(notification.link, "_blank");
+		} else {
+			router.push(notification.link);
+		}
+	}, [notification, onMarkRead, router]);
+
 	return (
 		<motion.div
 			key={notification.id}

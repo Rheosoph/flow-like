@@ -46,6 +46,9 @@ export const koCommon = {
 	"footer.privacy": "개인정보 처리방침",
 	"footer.legal": "법적 고지",
 	"footer.dataDeletion": "데이터 삭제",
+	"footer.security": "보안",
+	"footer.dpa": "데이터 처리 계약",
+	"footer.subprocessors": "하위 처리자",
 
 	// BI Preview Section
 	"bi.preview.badge": "비즈니스 인텔리전스",

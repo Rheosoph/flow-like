@@ -3987,7 +3987,7 @@ interface ActionsEditorProps {
 	onUpdate: (updates: Partial<SurfaceComponent>) => void;
 }
 
-type ActionType = "navigate_page" | "external_link" | "workflow_event";
+type ActionType = "widget_event" | "navigate_page" | "external_link" | "workflow_event";
 
 interface ActionValue {
 	name: string;
@@ -4011,32 +4011,85 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 
 	const currentType = action?.name as ActionType | undefined;
 	const context = action?.context ?? {};
+	const widgetActions = actionContext?.widgetActions;
+	const isWidgetMode = widgetActions !== undefined;
 
 	return (
 		<div className="space-y-4">
 			<div className="space-y-2">
-				<Label className="text-xs font-medium">Action Type</Label>
-				<Select
-					value={currentType ?? "none"}
-					onValueChange={(v) => {
-						if (v === "none") {
-							setAction(null);
-						} else {
-							setAction({ name: v, context: {} });
+				<Label className="text-xs font-medium">
+					{isWidgetMode ? "Widget Event" : "Action Type"}
+				</Label>
+				{isWidgetMode ? (
+					widgetActions.length === 0 ? (
+						<p className="text-xs text-muted-foreground">
+							No events defined. Add events in Widget Settings → Events tab.
+						</p>
+					) : (
+					<Select
+						value={
+							currentType === "widget_event"
+								? (context.actionId as string) ?? ""
+								: "none"
 						}
-					}}
-				>
-					<SelectTrigger className="h-8 text-sm">
-						<SelectValue placeholder="No action" />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="none">No action</SelectItem>
-						<SelectItem value="navigate_page">Navigate to Page</SelectItem>
-						<SelectItem value="external_link">External Link</SelectItem>
-						<SelectItem value="workflow_event">Trigger Workflow</SelectItem>
-					</SelectContent>
-				</Select>
+						onValueChange={(v) => {
+							if (v === "none") {
+								setAction(null);
+							} else {
+								setAction({ name: "widget_event", context: { actionId: v } });
+							}
+						}}
+					>
+						<SelectTrigger className="h-8 text-sm">
+							<SelectValue placeholder="No event" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="none">No event</SelectItem>
+							{widgetActions.map((wa) => (
+								<SelectItem key={wa.id} value={wa.id}>
+									{wa.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					)
+				) : (
+					<Select
+						value={currentType ?? "none"}
+						onValueChange={(v) => {
+							if (v === "none") {
+								setAction(null);
+							} else {
+								setAction({ name: v, context: {} });
+							}
+						}}
+					>
+						<SelectTrigger className="h-8 text-sm">
+							<SelectValue placeholder="No action" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="none">No action</SelectItem>
+							<SelectItem value="navigate_page">Navigate to Page</SelectItem>
+							<SelectItem value="external_link">External Link</SelectItem>
+							<SelectItem value="workflow_event">Trigger Workflow</SelectItem>
+						</SelectContent>
+					</Select>
+				)}
 			</div>
+
+			{currentType === "widget_event" && (
+				<div className="space-y-1 pl-2 border-l-2 border-muted">
+					{widgetActions?.find((wa) => wa.id === (context.actionId as string))
+						?.description && (
+						<p className="text-xs text-muted-foreground">
+							{widgetActions.find((wa) => wa.id === (context.actionId as string))?.description}
+						</p>
+					)}
+					<p className="text-xs text-muted-foreground">
+						This event will be available for binding when the widget is instantiated.
+					</p>
+				</div>
+			)}
 
 			{currentType === "navigate_page" && (
 				<div className="space-y-2 pl-2 border-l-2 border-muted">

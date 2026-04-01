@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
+import { formatAppCategory } from "../../lib/app-category";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
@@ -27,6 +28,7 @@ interface AppCardProps {
 	multiSelected?: boolean;
 	className?: string;
 	isOwned?: boolean;
+	href?: string;
 }
 
 export function AppCard({
@@ -38,6 +40,7 @@ export function AppCard({
 	multiSelected,
 	className = "",
 	isOwned,
+	href,
 }: Readonly<AppCardProps>) {
 	if (variant === "small") {
 		return (
@@ -49,6 +52,7 @@ export function AppCard({
 				className={className}
 				multiSelected={multiSelected}
 				isOwned={isOwned}
+				href={href}
 			/>
 		);
 	}
@@ -62,6 +66,7 @@ export function AppCard({
 			className={className}
 			multiSelected={multiSelected}
 			isOwned={isOwned}
+			href={href}
 		/>
 	);
 }
@@ -189,6 +194,7 @@ function SmallAppCard({
 	className,
 	multiSelected,
 	isOwned,
+	href,
 }: Readonly<
 	Pick<
 		AppCardProps,
@@ -198,6 +204,7 @@ function SmallAppCard({
 		| "onSettingsClick"
 		| "className"
 		| "multiSelected"
+		| "href"
 		| "isOwned"
 	>
 >) {
@@ -220,6 +227,8 @@ function SmallAppCard({
 			<button
 				type="button"
 				onClick={onClick}
+				data-href={href}
+				data-title={metadata?.name ?? app.id}
 				className={cn(
 					"group cursor-pointer relative flex items-center gap-3 p-3 transition-all duration-300 rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm hover:border-primary/20 hover:bg-card/95 hover:shadow-md w-full overflow-hidden",
 					className,
@@ -339,6 +348,7 @@ function ExtendedAppCard({
 	className,
 	multiSelected,
 	isOwned,
+	href,
 }: Readonly<
 	Pick<
 		AppCardProps,
@@ -349,6 +359,7 @@ function ExtendedAppCard({
 		| "className"
 		| "multiSelected"
 		| "isOwned"
+		| "href"
 	>
 >) {
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
@@ -378,6 +389,8 @@ function ExtendedAppCard({
 			<button
 				type="button"
 				onClick={onClick}
+				data-href={href}
+				data-title={metadata?.name ?? app.id}
 				className={cn(
 					"group cursor-pointer relative flex flex-col transition-all duration-300 rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm shadow-sm hover:shadow-lg hover:border-primary/20 hover:bg-card/95 w-72 h-[375px] overflow-hidden",
 					className,
@@ -423,18 +436,25 @@ function ExtendedAppCard({
 
 					<div className="absolute top-3 right-3 z-10 flex items-center gap-2">
 						{showSettingsButton && (
-							<motion.button
-								type="button"
+							<motion.div
+								role="button"
+								tabIndex={0}
 								onClick={(e) => {
 									e.stopPropagation();
 									onSettingsClick?.();
 								}}
-								className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300"
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.stopPropagation();
+										onSettingsClick?.();
+									}
+								}}
+								className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
 								whileHover={{ scale: 1.05 }}
 								whileTap={{ scale: 0.95 }}
 							>
 								<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
-							</motion.button>
+							</motion.div>
 						)}
 						<VisibilityIcon visibility={app.visibility} />
 					</div>
@@ -485,7 +505,7 @@ function ExtendedAppCard({
 
 					<div className="flex items-center gap-2 mb-3">
 						<Badge variant="default" className="text-xs px-2 py-1">
-							{app.primary_category ?? "Other"}
+							{formatAppCategory(app.primary_category)}
 						</Badge>
 						<Badge variant="outline" className="text-xs px-2 py-1">
 							{metadata?.age_rating ?? 0}+
@@ -496,8 +516,8 @@ function ExtendedAppCard({
 						{metadata?.description ?? "No description available"}
 					</p>
 
-					<div className="flex items-center justify-between mb-1">
-						<div className="flex items-center gap-2">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2 h-5">
 							{hasRating ? (
 								<>
 									<div className="flex items-center gap-1">

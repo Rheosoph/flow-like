@@ -1,6 +1,6 @@
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriSettingsState, TauriWasmEngineState},
+    state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
 };
 use dashmap::DashMap;
 use flow_like::flow::node::{Node, NodeLogic, NodeWasm};
@@ -235,8 +235,22 @@ pub async fn developer_remove_project(
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
     let settings_guard = settings.lock().await;
     let mut store = load_store(&settings_guard.user_dir);
+
+    let removed_project = store.projects.iter().find(|p| p.id == project_id).cloned();
     store.projects.retain(|p| p.id != project_id);
     save_store(&settings_guard.user_dir, &store)?;
+    drop(settings_guard);
+
+    if let Some(project) = removed_project {
+        let project_path = PathBuf::from(&project.path);
+        if let Ok(wasm_path) = find_wasm_file(&project_path)
+            && let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path)
+            && let Ok(client) = TauriRegistryState::get_client(&app_handle).await
+        {
+            let _ = client.unregister_local_package(&manifest.id).await;
+        }
+    }
+
     Ok(())
 }
 
@@ -639,6 +653,23 @@ pub async fn developer_inspect_package(
     .map_err(|e| TauriFunctionError::new(&format!("Task panicked: {}", e)))?
 }
 
+#[tauri::command]
+pub async fn developer_find_publish_wasm(
+    project_path: String,
+) -> Result<String, TauriFunctionError> {
+    let project = PathBuf::from(&project_path);
+    let wasm_path = find_wasm_for_publish(&project)?;
+    Ok(wasm_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn developer_read_manifest(
+    project_path: String,
+) -> Result<PackageManifest, TauriFunctionError> {
+    let project = PathBuf::from(&project_path);
+    load_manifest_typed(&project)
+}
+
 fn load_manifest_typed(project_path: &Path) -> Result<PackageManifest, TauriFunctionError> {
     let manifest_path = project_path.join("flow-like.toml");
     let content = std::fs::read_to_string(&manifest_path)
@@ -648,6 +679,23 @@ fn load_manifest_typed(project_path: &Path) -> Result<PackageManifest, TauriFunc
 }
 
 fn find_wasm_file(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
+    find_wasm_with_mode(project_path, WasmLookupMode::Debug)
+}
+
+fn find_wasm_for_publish(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
+    find_wasm_with_mode(project_path, WasmLookupMode::Release)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WasmLookupMode {
+    Debug,
+    Release,
+}
+
+fn find_wasm_with_mode(
+    project_path: &Path,
+    mode: WasmLookupMode,
+) -> Result<PathBuf, TauriFunctionError> {
     // 1. Check manifest wasm_path first
     if let Ok(manifest) = load_manifest_typed(project_path)
         && let Some(wasm_path) = &manifest.wasm_path
@@ -658,7 +706,53 @@ fn find_wasm_file(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
         }
     }
 
-    // 2. Check well-known output paths
+    // 2. Check Rust wasm32-wasip2 target outputs (most common for this project)
+    let rust_release = find_rust_wasm(project_path, "release");
+    let rust_debug = find_rust_wasm(project_path, "debug");
+
+    match mode {
+        WasmLookupMode::Debug => {
+            // Prefer the newest build (debug or release)
+            match (&rust_debug, &rust_release) {
+                (Some(dbg), Some(rel)) => {
+                    let dbg_time = wasm_file_mtime(dbg);
+                    let rel_time = wasm_file_mtime(rel);
+                    if dbg_time >= rel_time {
+                        return Ok(dbg.clone());
+                    }
+                    return Ok(rel.clone());
+                }
+                (Some(dbg), None) => return Ok(dbg.clone()),
+                (None, Some(rel)) => return Ok(rel.clone()),
+                (None, None) => {}
+            }
+        }
+        WasmLookupMode::Release => {
+            if let Some(rel) = &rust_release {
+                // If debug is newer than release, warn the user
+                if let Some(dbg) = &rust_debug {
+                    let dbg_time = wasm_file_mtime(dbg);
+                    let rel_time = wasm_file_mtime(rel);
+                    if dbg_time > rel_time {
+                        return Err(TauriFunctionError::new(
+                            "Release build is older than debug build. \
+                             Run `cargo build --release` to rebuild before publishing.",
+                        ));
+                    }
+                }
+                return Ok(rel.clone());
+            }
+            // No release build found — fail for publish
+            if rust_debug.is_some() {
+                return Err(TauriFunctionError::new(
+                    "Only a debug build was found. \
+                     Run `cargo build --release` to create a release build before publishing.",
+                ));
+            }
+        }
+    }
+
+    // 3. Check well-known output paths (non-Rust templates)
     let candidates = [
         "build/node.wasm",
         "build/release.wasm",
@@ -674,7 +768,7 @@ fn find_wasm_file(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
         }
     }
 
-    // 3. Recursively search for .wasm files, skipping build tooling dirs
+    // 4. Recursively search for .wasm files, skipping build tooling dirs
     let skip_dirs: &[&str] = &[
         "node_modules",
         ".venv",
@@ -702,13 +796,73 @@ fn find_wasm_file(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
         "wasm-sdk-swift",
         "wasm-sdk-java",
     ];
-    if let Some(wasm) = find_wasm_recursive(project_path, project_path, skip_dirs, 0) {
+    if let Some(wasm) = find_wasm_recursive(project_path, project_path, skip_dirs, 0, mode) {
         return Ok(wasm);
     }
 
-    Err(TauriFunctionError::new(
-        "No built .wasm file found. Build your project first.",
-    ))
+    let rust_dir = project_path.join("target").join("wasm32-wasip2");
+    let hint = if rust_dir.is_dir() {
+        format!(
+            "No .wasm file found under {}. The directory exists but contains no wasm binaries at the top level of debug/ or release/.",
+            rust_dir.display()
+        )
+    } else {
+        format!(
+            "No built .wasm file found in '{}'. Build your project first.",
+            project_path.display()
+        )
+    };
+    Err(TauriFunctionError::new(&hint))
+}
+
+/// Find a Rust-built WASM binary under {target_dir}/wasm32-wasip2/{profile}/
+/// Uses `cargo metadata` to resolve the correct target directory, which handles
+/// workspaces, CARGO_TARGET_DIR, and .cargo/config.toml overrides.
+fn find_rust_wasm(project_path: &Path, profile: &str) -> Option<PathBuf> {
+    let target_dir = cargo_target_dir(project_path)?;
+    let dir = target_dir.join("wasm32-wasip2").join(profile);
+    scan_dir_for_wasm(&dir)
+}
+
+/// Ask Cargo for the target directory of a project.
+fn cargo_target_dir(project_path: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    json.get("target_directory")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+}
+
+/// Scan a single directory for the newest .wasm file (non-recursive).
+fn scan_dir_for_wasm(dir: &Path) -> Option<PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best: Option<PathBuf> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "wasm") {
+            match &best {
+                None => best = Some(path),
+                Some(cur) => {
+                    if wasm_file_mtime(&path) > wasm_file_mtime(cur) {
+                        best = Some(path);
+                    }
+                }
+            }
+        }
+    }
+    best
 }
 
 fn find_wasm_recursive(
@@ -716,6 +870,7 @@ fn find_wasm_recursive(
     project_root: &Path,
     skip_dirs: &[&str],
     depth: u32,
+    mode: WasmLookupMode,
 ) -> Option<PathBuf> {
     if depth > 8 {
         return None;
@@ -740,7 +895,7 @@ fn find_wasm_recursive(
             {
                 continue;
             }
-            best = pick_better(best, path, project_root);
+            best = pick_better(best, path, project_root, mode);
         } else if path.is_dir() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -752,8 +907,8 @@ fn find_wasm_recursive(
 
     // Check all subdirectories and pick the overall best match
     for sub in subdirs {
-        if let Some(found) = find_wasm_recursive(&sub, project_root, skip_dirs, depth + 1) {
-            best = pick_better(best, found, project_root);
+        if let Some(found) = find_wasm_recursive(&sub, project_root, skip_dirs, depth + 1, mode) {
+            best = pick_better(best, found, project_root, mode);
         }
     }
     best
@@ -763,6 +918,7 @@ fn pick_better(
     current: Option<PathBuf>,
     candidate: PathBuf,
     project_root: &Path,
+    mode: WasmLookupMode,
 ) -> Option<PathBuf> {
     let cand_str = candidate
         .strip_prefix(project_root)
@@ -780,13 +936,39 @@ fn pick_better(
     if cur_str.contains("AppBundle") && !cand_str.contains("AppBundle") {
         return Some(cur);
     }
-    if cand_str.contains("AppBundle")
-        || cand_str.contains("release")
-        || cand_str.contains("production")
-    {
+    if cand_str.contains("AppBundle") {
         return Some(candidate);
     }
-    Some(cur)
+
+    match mode {
+        WasmLookupMode::Debug => {
+            // For debug, prefer the newest file
+            let cur_time = wasm_file_mtime(&cur);
+            let cand_time = wasm_file_mtime(&candidate);
+            if cand_time > cur_time {
+                return Some(candidate);
+            }
+            Some(cur)
+        }
+        WasmLookupMode::Release => {
+            // For release, prefer release/production paths
+            let cur_is_release = cur_str.contains("release") || cur_str.contains("production");
+            let cand_is_release = cand_str.contains("release") || cand_str.contains("production");
+            if cand_is_release && !cur_is_release {
+                return Some(candidate);
+            }
+            if cur_is_release && !cand_is_release {
+                return Some(cur);
+            }
+            // Both same type — prefer newer
+            let cur_time = wasm_file_mtime(&cur);
+            let cand_time = wasm_file_mtime(&candidate);
+            if cand_time > cur_time {
+                return Some(candidate);
+            }
+            Some(cur)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -845,6 +1027,7 @@ pub async fn developer_run_node(
 async fn load_wasm_nodes_from_path(
     wasm_path: &Path,
     engine: Arc<WasmEngine>,
+    manifest_package_id: Option<&str>,
 ) -> Result<Vec<(Node, Arc<dyn NodeLogic>)>, TauriFunctionError> {
     let loaded = engine
         .load_auto_from_file(wasm_path)
@@ -865,7 +1048,10 @@ async fn load_wasm_nodes_from_path(
     Ok(definitions
         .into_iter()
         .map(|def| {
-            let package_id = format!("local::{}", def.name);
+            let package_id = match manifest_package_id {
+                Some(id) => id.to_string(),
+                None => format!("local::{}", def.name),
+            };
             let mut node = build_node_from_definition(&def);
             let permissions = node
                 .wasm
@@ -876,7 +1062,6 @@ async fn load_wasm_nodes_from_path(
                 package_id: package_id.clone(),
                 permissions,
             });
-            // Include package_id in hash so local nodes get a stable, unique identity
             {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -898,6 +1083,75 @@ async fn load_wasm_nodes_from_path(
         .collect())
 }
 
+fn load_manifest_for_registration(
+    project_path: &Path,
+    wasm_path: &Path,
+) -> Option<PackageManifest> {
+    if let Ok(manifest) = load_manifest_typed(project_path) {
+        return Some(manifest);
+    }
+    let file_name = wasm_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("local_package");
+    Some(PackageManifest::new(
+        &format!("local.{}", file_name),
+        file_name,
+        "0.0.0",
+        "Locally loaded package",
+    ))
+}
+
+async fn register_developer_package(
+    app_handle: &AppHandle,
+    wasm_path: &Path,
+    manifest: PackageManifest,
+) {
+    if let Ok(client) = TauriRegistryState::get_client(app_handle).await
+        && let Err(e) = client.register_local_package(wasm_path, manifest).await
+    {
+        tracing::debug!("Failed to register developer package in registry: {}", e);
+    }
+}
+
+/// Re-registers all developer projects in the RegistryClient.
+/// Called from `registry_init` to handle the timing gap where
+/// `load_all_developer_nodes` runs before the RegistryClient is available.
+pub async fn register_all_developer_packages(app_handle: &AppHandle) {
+    let user_dir = match TauriSettingsState::construct(app_handle).await {
+        Ok(settings) => {
+            let guard = settings.lock().await;
+            guard.user_dir.clone()
+        }
+        Err(e) => {
+            tracing::debug!(
+                "Failed to get settings for developer package registration: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let store = load_store(&user_dir);
+    if store.projects.is_empty() {
+        return;
+    }
+
+    for project in &store.projects {
+        let project_path = PathBuf::from(&project.path);
+        if let Ok(wasm_path) = find_wasm_file(&project_path)
+            && let Some(manifest) = load_manifest_for_registration(&project_path, &wasm_path)
+        {
+            register_developer_package(app_handle, &wasm_path, manifest).await;
+        }
+    }
+
+    tracing::info!(
+        "Registered {} developer project(s) in registry",
+        store.projects.len()
+    );
+}
+
 #[tauri::command]
 pub async fn developer_load_into_catalog(
     app_handle: AppHandle,
@@ -917,7 +1171,11 @@ pub async fn developer_load_into_catalog(
             serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "error" }),
         );
     })?;
-    let node_pairs = match load_wasm_nodes_from_path(&wasm_path, engine).await {
+
+    let manifest = load_manifest_for_registration(&project, &wasm_path);
+    let manifest_id = manifest.as_ref().map(|m| m.id.as_str());
+
+    let node_pairs = match load_wasm_nodes_from_path(&wasm_path, engine, manifest_id).await {
         Ok(pairs) => pairs,
         Err(e) => {
             let _ = app_handle.emit(
@@ -946,12 +1204,87 @@ pub async fn developer_load_into_catalog(
         let _ = app_handle.emit("catalog-updated", ());
     }
 
+    if let Some(manifest) = manifest {
+        register_developer_package(&app_handle, &wasm_path, manifest).await;
+    }
+
     let _ = app_handle.emit(
         "package-status",
         serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "ready" }),
     );
 
     Ok(count)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StalePackageInfo {
+    pub package_id: String,
+    pub project_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn developer_check_staleness(
+    app_handle: AppHandle,
+) -> Result<Vec<StalePackageInfo>, TauriFunctionError> {
+    let client = TauriRegistryState::get_client(&app_handle).await?;
+    let stale_entries = client.check_local_staleness().await;
+
+    let user_dir = match TauriSettingsState::construct(&app_handle).await {
+        Ok(settings) => {
+            let guard = settings.lock().await;
+            guard.user_dir.clone()
+        }
+        Err(_) => {
+            return Ok(stale_entries
+                .iter()
+                .map(|(id, _, _)| StalePackageInfo {
+                    package_id: id.clone(),
+                    project_path: None,
+                })
+                .collect());
+        }
+    };
+
+    let store = load_store(&user_dir);
+    let result: Vec<StalePackageInfo> = stale_entries
+        .iter()
+        .map(|(id, _, _)| {
+            let project_path = store.projects.iter().find_map(|p| {
+                let project_path = PathBuf::from(&p.path);
+                if let Ok(wasm_path) = find_wasm_file(&project_path) {
+                    let manifest = load_manifest_for_registration(&project_path, &wasm_path);
+                    if manifest.as_ref().map(|m| m.id.as_str()) == Some(id.as_str()) {
+                        return Some(p.path.clone());
+                    }
+                }
+                None
+            });
+            StalePackageInfo {
+                package_id: id.clone(),
+                project_path,
+            }
+        })
+        .collect();
+
+    if !stale_entries.is_empty() {
+        for (id, _, _) in &stale_entries {
+            let _ = app_handle.emit(
+                "package-status",
+                serde_json::json!({ "packageId": id, "status": "stale" }),
+            );
+        }
+    }
+
+    for info in &result {
+        if let Some(ref path) = info.project_path {
+            let _ = app_handle.emit(
+                "package-status",
+                serde_json::json!({ "packageId": format!("dev:{}", path), "status": "stale" }),
+            );
+        }
+    }
+
+    Ok(result)
 }
 
 pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
@@ -988,27 +1321,36 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
     };
 
     let mut all_node_pairs: Vec<(Node, Arc<dyn NodeLogic>)> = Vec::new();
+    let mut manifests_to_register: Vec<(PathBuf, PackageManifest)> = Vec::new();
 
     for project in &store.projects {
         let project_path = PathBuf::from(&project.path);
         match find_wasm_file(&project_path) {
-            Ok(wasm_path) => match load_wasm_nodes_from_path(&wasm_path, engine.clone()).await {
-                Ok(pairs) => {
-                    tracing::info!(
-                        "Loaded {} developer node(s) from '{}'",
-                        pairs.len(),
-                        project.name
-                    );
-                    all_node_pairs.extend(pairs);
+            Ok(wasm_path) => {
+                let manifest = load_manifest_for_registration(&project_path, &wasm_path);
+                let manifest_id = manifest.as_ref().map(|m| m.id.as_str());
+
+                match load_wasm_nodes_from_path(&wasm_path, engine.clone(), manifest_id).await {
+                    Ok(pairs) => {
+                        tracing::info!(
+                            "Loaded {} developer node(s) from '{}'",
+                            pairs.len(),
+                            project.name
+                        );
+                        all_node_pairs.extend(pairs);
+                        if let Some(m) = manifest {
+                            manifests_to_register.push((wasm_path, m));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load developer nodes from '{}': {:?}",
+                            project.name,
+                            e
+                        );
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to load developer nodes from '{}': {:?}",
-                        project.name,
-                        e
-                    );
-                }
-            },
+            }
             Err(e) => {
                 tracing::debug!(
                     "No WASM file found for developer project '{}': {:?}",
@@ -1032,5 +1374,9 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         drop(registry);
         let _ = app_handle.emit("catalog-updated", ());
         tracing::info!("Developer nodes loaded into catalog");
+    }
+
+    for (wasm_path, manifest) in manifests_to_register {
+        register_developer_package(app_handle, &wasm_path, manifest).await;
     }
 }

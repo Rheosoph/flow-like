@@ -6,144 +6,107 @@ trimming, length analysis, search, replace, concat, and reverse.
 """
 
 from sdk import (
-    Context,
     ExecutionResult,
-    NodeDefinition,
-    PinDefinition,
-    PinType,
+    Input,
+    Output,
+    WasmNode,
 )
 
 
-def get_definitions() -> list[NodeDefinition]:
-    nodes: list[NodeDefinition] = []
+class ToUppercase(WasmNode, name="string_uppercase_py", title="To Uppercase", category="String/Transform"):
+    """Converts text to uppercase"""
 
-    for name, friendly, desc in [
-        ("string_uppercase_py", "To Uppercase", "Converts text to uppercase"),
-        ("string_lowercase_py", "To Lowercase", "Converts text to lowercase"),
-        ("string_trim_py", "Trim", "Removes leading and trailing whitespace"),
-        ("string_reverse_py", "Reverse", "Reverses the characters in a string"),
-    ]:
-        nd = NodeDefinition(name, friendly, desc, "String/Transform")
-        nd.add_pin(PinDefinition.input_exec("exec"))
-        nd.add_pin(PinDefinition.input_pin("text", PinType.STRING, default=""))
-        nd.add_pin(PinDefinition.output_exec("exec_out"))
-        nd.add_pin(PinDefinition.output_pin("result", PinType.STRING))
-        nodes.append(nd)
+    text: str = Input(default="")
+    result: str = Output()
 
-    # Length
-    length = NodeDefinition("string_length_py", "String Length", "Returns the length of a string", "String/Analysis")
-    length.add_pin(PinDefinition.input_exec("exec"))
-    length.add_pin(PinDefinition.input_pin("text", PinType.STRING, default=""))
-    length.add_pin(PinDefinition.output_exec("exec_out"))
-    length.add_pin(PinDefinition.output_pin("length", PinType.I64))
-    length.add_pin(PinDefinition.output_pin("is_empty", PinType.BOOL))
-    nodes.append(length)
-
-    # Contains
-    contains = NodeDefinition("string_contains_py", "Contains", "Checks if text contains a substring", "String/Analysis")
-    contains.add_pin(PinDefinition.input_exec("exec"))
-    contains.add_pin(PinDefinition.input_pin("text", PinType.STRING, default=""))
-    contains.add_pin(PinDefinition.input_pin("search", PinType.STRING, default=""))
-    contains.add_pin(PinDefinition.output_exec("exec_out"))
-    contains.add_pin(PinDefinition.output_pin("result", PinType.BOOL))
-    nodes.append(contains)
-
-    # Replace
-    replace = NodeDefinition("string_replace_py", "Replace", "Replaces occurrences of a pattern", "String/Transform")
-    replace.add_pin(PinDefinition.input_exec("exec"))
-    replace.add_pin(PinDefinition.input_pin("text", PinType.STRING, default=""))
-    replace.add_pin(PinDefinition.input_pin("find", PinType.STRING, default=""))
-    replace.add_pin(PinDefinition.input_pin("replace_with", PinType.STRING, default=""))
-    replace.add_pin(PinDefinition.output_exec("exec_out"))
-    replace.add_pin(PinDefinition.output_pin("result", PinType.STRING))
-    replace.add_pin(PinDefinition.output_pin("count", PinType.I64))
-    nodes.append(replace)
-
-    # Concat
-    concat = NodeDefinition("string_concat_py", "Concatenate", "Joins two strings together", "String/Transform")
-    concat.add_pin(PinDefinition.input_exec("exec"))
-    concat.add_pin(PinDefinition.input_pin("a", PinType.STRING, default=""))
-    concat.add_pin(PinDefinition.input_pin("b", PinType.STRING, default=""))
-    concat.add_pin(PinDefinition.input_pin("separator", PinType.STRING, default=""))
-    concat.add_pin(PinDefinition.output_exec("exec_out"))
-    concat.add_pin(PinDefinition.output_pin("result", PinType.STRING))
-    nodes.append(concat)
-
-    return nodes
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.text.upper()
+        return ctx.success()
 
 
-def run_uppercase(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    ctx.set_output("result", text.upper())
-    return ctx.success()
+class ToLowercase(WasmNode, name="string_lowercase_py", title="To Lowercase", category="String/Transform"):
+    """Converts text to lowercase"""
+
+    text: str = Input(default="")
+    result: str = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.text.lower()
+        return ctx.success()
 
 
-def run_lowercase(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    ctx.set_output("result", text.lower())
-    return ctx.success()
+class Trim(WasmNode, name="string_trim_py", title="Trim", category="String/Transform"):
+    """Removes leading and trailing whitespace"""
+
+    text: str = Input(default="")
+    result: str = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.text.strip()
+        return ctx.success()
 
 
-def run_trim(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    ctx.set_output("result", text.strip())
-    return ctx.success()
+class Reverse(WasmNode, name="string_reverse_py", title="Reverse", category="String/Transform"):
+    """Reverses the characters in a string"""
+
+    text: str = Input(default="")
+    result: str = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.text[::-1]
+        return ctx.success()
 
 
-def run_reverse(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    ctx.set_output("result", text[::-1])
-    return ctx.success()
+class StringLength(WasmNode, name="string_length_py", title="String Length", category="String/Analysis"):
+    """Returns the length of a string"""
+
+    text: str = Input(default="")
+    length: int = Output()
+    is_empty: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.length = len(ctx.text)
+        ctx.is_empty = len(ctx.text) == 0
+        return ctx.success()
 
 
-def run_length(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    ctx.set_output("length", len(text))
-    ctx.set_output("is_empty", len(text) == 0)
-    return ctx.success()
+class Contains(WasmNode, name="string_contains_py", title="Contains", category="String/Analysis"):
+    """Checks if text contains a substring"""
+
+    text: str = Input(default="")
+    search: str = Input(default="")
+    result: bool = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = ctx.search in ctx.text
+        return ctx.success()
 
 
-def run_contains(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    search = ctx.get_string("search", "")
-    ctx.set_output("result", search in text)
-    return ctx.success()
+class Replace(WasmNode, name="string_replace_py", title="Replace", category="String/Transform"):
+    """Replaces occurrences of a pattern"""
+
+    text: str = Input(default="")
+    find: str = Input(default="")
+    replace_with: str = Input(default="")
+    result: str = Output()
+    count: int = Output()
+
+    def run(self, ctx) -> ExecutionResult:
+        count = ctx.text.count(ctx.find) if ctx.find else 0
+        result = ctx.text.replace(ctx.find, ctx.replace_with) if ctx.find else ctx.text
+        ctx.result = result
+        ctx.count = count
+        return ctx.success()
 
 
-def run_replace(ctx: Context) -> ExecutionResult:
-    text = ctx.get_string("text", "")
-    find = ctx.get_string("find", "")
-    replace_with = ctx.get_string("replace_with", "")
-    count = text.count(find) if find else 0
-    result = text.replace(find, replace_with) if find else text
-    ctx.set_output("result", result)
-    ctx.set_output("count", count)
-    return ctx.success()
+class Concatenate(WasmNode, name="string_concat_py", title="Concatenate", category="String/Transform"):
+    """Joins two strings together"""
 
+    a: str = Input(default="")
+    b: str = Input(default="")
+    separator: str = Input(default="")
+    result: str = Output()
 
-def run_concat(ctx: Context) -> ExecutionResult:
-    a = ctx.get_string("a", "")
-    b = ctx.get_string("b", "")
-    separator = ctx.get_string("separator", "")
-    result = f"{a}{separator}{b}" if separator else f"{a}{b}"
-    ctx.set_output("result", result)
-    return ctx.success()
-
-
-DISPATCH = {
-    "string_uppercase_py": run_uppercase,
-    "string_lowercase_py": run_lowercase,
-    "string_trim_py": run_trim,
-    "string_reverse_py": run_reverse,
-    "string_length_py": run_length,
-    "string_contains_py": run_contains,
-    "string_replace_py": run_replace,
-    "string_concat_py": run_concat,
-}
-
-
-def run(node_name: str, ctx: Context) -> ExecutionResult:
-    handler = DISPATCH.get(node_name)
-    if handler is None:
-        return ctx.fail(f"Unknown node: {node_name}")
-    return handler(ctx)
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = f"{ctx.a}{ctx.separator}{ctx.b}" if ctx.separator else f"{ctx.a}{ctx.b}"
+        return ctx.success()

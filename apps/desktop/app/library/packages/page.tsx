@@ -21,6 +21,11 @@ import {
 	Input,
 	Skeleton,
 } from "@tm9657/flow-like-ui/components";
+import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
+} from "@tm9657/flow-like-ui/components/ui/avatar";
 import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
@@ -34,6 +39,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../hooks/use-package-status";
 
@@ -52,15 +58,26 @@ function InstalledPackageCard({
 	onUpdate: () => void;
 	isUpdating: boolean;
 	isUninstalling: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error";
+	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
 }) {
+	const displayName = pkg.metadata?.name ?? pkg.manifest.name;
+	const displayDesc = pkg.metadata?.description ?? pkg.manifest.description;
+	const icon = pkg.metadata?.icon;
+
 	return (
 		<Card className="flex flex-col h-full">
 			<CardHeader className="pb-2">
 				<div className="flex items-start justify-between">
 					<div className="flex items-center gap-2">
-						<Package className="h-5 w-5 text-muted-foreground" />
-						<CardTitle className="text-base">{pkg.manifest.name}</CardTitle>
+						<Avatar className="h-5 w-5 rounded">
+							{icon ? (
+								<AvatarImage src={icon} alt={displayName} className="rounded" />
+							) : null}
+							<AvatarFallback className="rounded">
+								<Package className="h-3.5 w-3.5 text-muted-foreground" />
+							</AvatarFallback>
+						</Avatar>
+						<CardTitle className="text-base">{displayName}</CardTitle>
 					</div>
 					<div className="flex items-center gap-1.5">
 						{compileStatus && compileStatus !== "idle" && (
@@ -75,7 +92,7 @@ function InstalledPackageCard({
 					</div>
 				</div>
 				<CardDescription className="line-clamp-2 text-sm">
-					{pkg.manifest.description}
+					{displayDesc}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex-1 pb-2">
@@ -170,6 +187,7 @@ function PackageCardSkeleton() {
 
 export default function InstalledPackagesPage() {
 	const queryClient = useQueryClient();
+	const auth = useAuth();
 	const [searchQuery, setSearchQuery] = useState("");
 	const packageStatusMap = usePackageStatusMap();
 	const [updatingPackages, setUpdatingPackages] = useState<Set<string>>(
@@ -179,18 +197,29 @@ export default function InstalledPackagesPage() {
 		new Set(),
 	);
 
+	const registryReady = useQuery({
+		queryKey: ["registry-init"],
+		queryFn: async () => {
+			await invoke("registry_init", { config: null });
+			return true;
+		},
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+
 	const installedPackages = useQuery({
 		queryKey: ["installed-packages"],
 		queryFn: async () => {
 			return invoke<InstalledPackage[]>("registry_get_installed_packages");
 		},
+		enabled: registryReady.data === true,
 	});
 
 	const availableUpdates = useQuery({
 		queryKey: ["available-updates"],
 		queryFn: async () => {
-			return invoke<PackageUpdate[]>("registry_check_for_updates");
+			return invoke<PackageUpdate[]>("registry_check_for_updates", { token: auth.user?.access_token });
 		},
+		enabled: registryReady.data === true,
 	});
 
 	const updateMutation = useMutation({
@@ -199,7 +228,7 @@ export default function InstalledPackagesPage() {
 			version,
 		}: { packageId: string; version?: string }) => {
 			setUpdatingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_update_package", { packageId, version });
+			await invoke("registry_update_package", { packageId, version, token: auth.user?.access_token });
 		},
 		onSuccess: (
 			_: void,
@@ -263,6 +292,7 @@ export default function InstalledPackagesPage() {
 				await invoke("registry_update_package", {
 					packageId: update.packageId,
 					version: update.latestVersion,
+					token: auth.user?.access_token,
 				});
 			}
 		},

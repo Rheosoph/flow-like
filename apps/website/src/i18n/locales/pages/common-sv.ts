@@ -46,6 +46,9 @@ export const svCommon = {
 	"footer.privacy": "Integritetspolicy",
 	"footer.legal": "Juridiskt meddelande",
 	"footer.dataDeletion": "Radering av data",
+	"footer.security": "Säkerhet",
+	"footer.dpa": "Personuppgiftsbiträdesavtal",
+	"footer.subprocessors": "Underbiträden",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

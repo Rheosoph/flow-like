@@ -4,45 +4,42 @@ project(flow_like_wasm_node LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- SDK via FetchContent (always pulls latest from the dev branch) ---
-include(FetchContent)
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../wasm-sdk-cpp/CMakeLists.txt)
-    # Local SDK (for in-tree / monorepo builds)
-    FetchContent_Declare(
-        flow_like_wasm_sdk
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../wasm-sdk-cpp
-    )
-else()
-    # Remote SDK (for standalone template usage)
-    FetchContent_Declare(
-        flow_like_wasm_sdk
-        GIT_REPOSITORY https://github.com/TM9657/flow-like.git
-        GIT_TAG        dev
-        SOURCE_SUBDIR  libs/wasm-sdk/wasm-sdk-cpp
-    )
+# wasi-sdk toolchain (set WASI_SDK_PATH or use default install location)
+if(NOT DEFINED WASI_SDK_PATH AND DEFINED ENV{WASI_SDK_PATH})
+    set(WASI_SDK_PATH $ENV{WASI_SDK_PATH})
 endif()
-FetchContent_MakeAvailable(flow_like_wasm_sdk)
 
-# --- Node WASM module ---
-add_executable(node src/node.cpp)
-target_link_libraries(node PRIVATE flow_like_wasm_sdk)
+# Collect wit-bindgen-c generated sources from gen/
+file(GLOB WIT_BINDGEN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/gen/*.c)
 
-if(EMSCRIPTEN)
-    set_target_properties(node PROPERTIES
-        OUTPUT_NAME "node"
-        SUFFIX ".wasm"
-    )
-    target_link_options(node PRIVATE
-        -sSTANDALONE_WASM
-        -sEXPORTED_FUNCTIONS=_get_node,_run,_alloc,_dealloc,_get_abi_version
-        --no-entry
-        -sERROR_ON_UNDEFINED_SYMBOLS=0
-        -sALLOW_MEMORY_GROWTH=1
-        -O2
-    )
-    target_compile_options(node PRIVATE
-        -fno-exceptions
-        -fno-rtti
-        -O2
-    )
-endif()
+# Component type object (produced by wit-bindgen alongside .c/.h files)
+set(WIT_COMPONENT_TYPE_OBJ ${CMAKE_CURRENT_SOURCE_DIR}/gen/flow_like_node_component_type.o)
+
+# Node WASM module (reactor — no main)
+add_executable(node
+    src/node.cpp
+    ${WIT_BINDGEN_SOURCES}
+)
+
+target_include_directories(node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/gen
+)
+
+target_compile_options(node PRIVATE
+    -fno-exceptions
+    -fno-rtti
+    -msimd128
+    -mrelaxed-simd
+    -O2
+)
+
+# Build as a WASI reactor (no _start, exports via wit-bindgen)
+target_link_options(node PRIVATE
+    -mexec-model=reactor
+    ${WIT_COMPONENT_TYPE_OBJ}
+)
+
+set_target_properties(node PROPERTIES
+    OUTPUT_NAME "node"
+    SUFFIX ".wasm"
+)

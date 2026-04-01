@@ -1,3 +1,5 @@
+import type { INodePermission } from "../../board";
+
 export interface IUpdateNode {
 	node: INode;
 	old_node?: null | INode;
@@ -31,7 +33,7 @@ export interface INode {
 
 export interface INodeWasm {
 	package_id: string;
-	permissions: string[];
+	permissions: INodePermission[];
 }
 
 export interface IPin {

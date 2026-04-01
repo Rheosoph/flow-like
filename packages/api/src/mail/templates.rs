@@ -67,7 +67,7 @@ fn base_template(content: &str, footer_text: &str) -> String {
                                 <tr>
                                     <td style="text-align: center; padding-top: 16px; border-top: 1px solid #1a1a1a;">
                                         <p style="margin: 0; font-size: 11px; color: #404040;">
-                                            © {year} Flow-Like by Great Company. All rights reserved.
+                                            © {year} Flow-Like by TM9657 GmbH. All rights reserved.
                                         </p>
                                     </td>
                                 </tr>
@@ -298,7 +298,7 @@ WHAT HAPPENS NEXT?
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by Great Company. All rights reserved.
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
 "#,
         company_name = company_name,
         tier_display = tier_display,
@@ -451,7 +451,7 @@ Track your request: {tracking_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by Great Company. All rights reserved.
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
 "#,
         emoji = emoji,
         headline = headline,
@@ -554,7 +554,7 @@ Track your request: {tracking_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by Great Company. All rights reserved.
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
 "#,
         company_name = company_name,
         action = action,
@@ -638,7 +638,7 @@ Thank you for choosing Flow-Like. We hope this solution helps transform your wor
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by Great Company. All rights reserved.
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
 "#,
         company_name = company_name,
         notes_section = delivery_notes
@@ -649,4 +649,394 @@ Questions? Contact us at help@great-co.de
     );
 
     (html, text)
+}
+
+// ---------------------------------------------------------------------------
+// Registry / Store email templates
+// ---------------------------------------------------------------------------
+
+fn registry_status_badge(status: &str) -> String {
+    let (bg_color, text_color, label) = match status.to_uppercase().as_str() {
+        "APPROVED" | "ACTIVE" | "ACCEPTED" => ("#d1fae5", "#065f46", "✅ Approved"),
+        "REJECTED" => ("#fee2e2", "#991b1b", "✕ Rejected"),
+        "REQUEST_CHANGES" => ("#fef3c7", "#92400e", "✏️ Changes Requested"),
+        "PENDING_REVIEW" | "PENDING" => ("#e0e7ff", "#3730a3", "📋 Pending Review"),
+        "ON_HOLD" | "HOLD" => ("#fef3c7", "#92400e", "⏸ On Hold"),
+        "FLAGGED" => ("#fee2e2", "#991b1b", "🚩 Flagged"),
+        _ => ("#e5e7eb", "#374151", status),
+    };
+
+    format!(
+        r#"<span style="display: inline-block; background: {bg}; color: {color}; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 24px;">{label}</span>"#,
+        bg = bg_color,
+        color = text_color,
+        label = label
+    )
+}
+
+/// Email sent to the package owner when an admin reviews their package submission.
+pub fn package_review_update(
+    package_name: &str,
+    package_url: &str,
+    action: &str,
+    reviewer_comment: Option<&str>,
+) -> (String, String) {
+    let (emoji, headline, description) = match action.to_lowercase().as_str() {
+        "approve" => (
+            "🎉",
+            "Your Package Has Been Approved!",
+            "Great news — your package passed review and is now live on the registry. Users can discover and install it right away.",
+        ),
+        "reject" => (
+            "❌",
+            "Your Package Was Not Approved",
+            "Unfortunately your package did not pass review. Please check the reviewer's feedback below and resubmit when ready.",
+        ),
+        "request_changes" => (
+            "✏️",
+            "Changes Requested",
+            "The reviewer has requested some changes before your package can be approved. See the feedback below.",
+        ),
+        "flag" => (
+            "🚩",
+            "Your Package Has Been Flagged",
+            "Your package has been flagged for additional review. Our team will follow up shortly.",
+        ),
+        _ => (
+            "📬",
+            "Package Review Update",
+            "There's an update on your package review.",
+        ),
+    };
+
+    let comment_html = reviewer_comment
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            format!(
+                r#"<div style="background: #111111; border-left: 3px solid #3b82f6; border-radius: 0 12px 12px 0; padding: 20px 24px; margin-bottom: 24px;">
+                    <p style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #525252; text-transform: uppercase; letter-spacing: 0.5px;">Reviewer Feedback</p>
+                    <p style="margin: 0; font-size: 14px; color: #d4d4d4; line-height: 1.6; white-space: pre-wrap;">{}</p>
+                </div>"#,
+                c
+            )
+        })
+        .unwrap_or_default();
+
+    let content = format!(
+        r##"<tr>
+            <td style="padding: 0 48px 32px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">{emoji}</div>
+                <h1 style="margin: 0 0 12px; font-size: 26px; font-weight: 700; color: #ffffff; line-height: 1.3; letter-spacing: -0.5px;">
+                    {headline}
+                </h1>
+                <p style="margin: 0; font-size: 15px; color: #737373; line-height: 1.6;">
+                    <strong style="color: #a3a3a3;">{package_name}</strong>
+                </p>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding: 0 48px 40px;">
+                <div style="text-align: center; margin-bottom: 24px;">
+                    {badge}
+                </div>
+
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.7; color: #a3a3a3;">
+                    {description}
+                </p>
+
+                {comment_html}
+
+                <div style="text-align: center;">
+                    {cta_button}
+                </div>
+            </td>
+        </tr>"##,
+        emoji = emoji,
+        headline = headline,
+        package_name = package_name,
+        badge = registry_status_badge(action),
+        description = description,
+        comment_html = comment_html,
+        cta_button = cta_button("View Package →", package_url)
+    );
+
+    let html = base_template(
+        &content,
+        "You're receiving this because you published a package on Flow-Like.",
+    );
+
+    let text = format!(
+        r#"{emoji} {headline}
+
+Package: {package_name}
+
+{description}
+{comment_section}
+View your package: {package_url}
+
+Questions? Contact us at help@great-co.de
+
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+"#,
+        emoji = emoji,
+        headline = headline,
+        package_name = package_name,
+        description = description,
+        comment_section = reviewer_comment
+            .filter(|c| !c.is_empty())
+            .map(|c| format!("\nReviewer feedback:\n{}\n", c))
+            .unwrap_or_default(),
+        package_url = package_url,
+        year = Utc::now().format("%Y")
+    );
+
+    (html, text)
+}
+
+/// Email sent to the app owner when their publication request is reviewed.
+pub fn app_publication_update(
+    app_name: &str,
+    app_url: &str,
+    action: &str,
+    target_visibility: &str,
+    reviewer_message: Option<&str>,
+) -> (String, String) {
+    let (emoji, headline, description) = match action.to_lowercase().as_str() {
+        "approve" | "accept" => (
+            "🚀",
+            "Your App Is Now Published!",
+            format!(
+                "Your app has been approved and is now visible as <strong style=\"color: #ffffff;\">{}</strong>. Users can discover it in the store.",
+                target_visibility.replace('_', " ")
+            ),
+        ),
+        "reject" => (
+            "❌",
+            "Publication Request Rejected",
+            "Your publication request was not approved. Please review the feedback and try again when ready.".to_string(),
+        ),
+        "hold" => (
+            "⏸",
+            "Publication Request On Hold",
+            "Your publication request has been placed on hold. The review team will follow up with more details.".to_string(),
+        ),
+        _ => (
+            "📬",
+            "Publication Request Update",
+            "There's an update on your publication request.".to_string(),
+        ),
+    };
+
+    let message_html = reviewer_message
+        .filter(|m| !m.is_empty())
+        .map(|m| {
+            format!(
+                r#"<div style="background: #111111; border-left: 3px solid #3b82f6; border-radius: 0 12px 12px 0; padding: 20px 24px; margin-bottom: 24px;">
+                    <p style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #525252; text-transform: uppercase; letter-spacing: 0.5px;">Message from reviewer</p>
+                    <p style="margin: 0; font-size: 14px; color: #d4d4d4; line-height: 1.6; white-space: pre-wrap;">{}</p>
+                </div>"#,
+                m
+            )
+        })
+        .unwrap_or_default();
+
+    let content = format!(
+        r##"<tr>
+            <td style="padding: 0 48px 32px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">{emoji}</div>
+                <h1 style="margin: 0 0 12px; font-size: 26px; font-weight: 700; color: #ffffff; line-height: 1.3; letter-spacing: -0.5px;">
+                    {headline}
+                </h1>
+                <p style="margin: 0; font-size: 15px; color: #737373; line-height: 1.6;">
+                    <strong style="color: #a3a3a3;">{app_name}</strong>
+                </p>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding: 0 48px 40px;">
+                <div style="text-align: center; margin-bottom: 24px;">
+                    {badge}
+                </div>
+
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.7; color: #a3a3a3;">
+                    {description}
+                </p>
+
+                {message_html}
+
+                {info_card}
+
+                <div style="text-align: center;">
+                    {cta_button}
+                </div>
+            </td>
+        </tr>"##,
+        emoji = emoji,
+        headline = headline,
+        app_name = app_name,
+        badge = registry_status_badge(action),
+        description = description,
+        message_html = message_html,
+        info_card = info_card(
+            "Details",
+            vec![("Target Visibility", target_visibility.replace('_', " "))]
+        ),
+        cta_button = cta_button("View App →", app_url)
+    );
+
+    let html = base_template(
+        &content,
+        "You're receiving this because you requested publication for your app on Flow-Like.",
+    );
+
+    let text = format!(
+        r#"{emoji} {headline}
+
+App: {app_name}
+Target Visibility: {visibility}
+
+{description}
+{message_section}
+View your app: {app_url}
+
+Questions? Contact us at help@great-co.de
+
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+"#,
+        emoji = emoji,
+        headline = headline,
+        app_name = app_name,
+        visibility = target_visibility.replace('_', " "),
+        description = description
+            .replace("<strong style=\"color: #ffffff;\">", "")
+            .replace("</strong>", ""),
+        message_section = reviewer_message
+            .filter(|m| !m.is_empty())
+            .map(|m| format!("\nReviewer message:\n{}\n", m))
+            .unwrap_or_default(),
+        app_url = app_url,
+        year = Utc::now().format("%Y")
+    );
+
+    (html, text)
+}
+
+/// Email sent to the buyer after a successful WASM package purchase.
+pub fn purchase_confirmation(
+    package_name: &str,
+    package_url: &str,
+    price_display: &str,
+    currency: &str,
+    stripe_receipt_url: Option<&str>,
+) -> (String, String) {
+    let receipt_html = stripe_receipt_url
+        .filter(|u| !u.is_empty())
+        .map(|u| {
+            format!(
+                r#"<div style="text-align: center; margin-bottom: 8px;">
+                    {receipt_btn}
+                </div>"#,
+                receipt_btn = cta_button_secondary("View Receipt on Stripe →", u)
+            )
+        })
+        .unwrap_or_default();
+
+    let content = format!(
+        r##"<tr>
+            <td style="padding: 0 48px 32px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">🛒</div>
+                <h1 style="margin: 0 0 12px; font-size: 26px; font-weight: 700; color: #ffffff; line-height: 1.3; letter-spacing: -0.5px;">
+                    Purchase Confirmed!
+                </h1>
+                <p style="margin: 0; font-size: 15px; color: #737373; line-height: 1.6;">
+                    You now have access to <strong style="color: #a3a3a3;">{package_name}</strong>
+                </p>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding: 0 48px 40px;">
+                <!-- Order Summary -->
+                {info_card}
+
+                <!-- Success Banner -->
+                <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(6, 95, 70, 0.1) 100%); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 16px; padding: 24px; margin-bottom: 24px; text-align: center;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #10b981; font-weight: 600;">✓ ACCESS GRANTED</p>
+                    <p style="margin: 0; font-size: 14px; color: #a3a3a3; line-height: 1.6;">
+                        The package is ready to use. Install it from the store or add it to your apps.
+                    </p>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 16px;">
+                    {cta_button}
+                </div>
+
+                {receipt_html}
+            </td>
+        </tr>"##,
+        package_name = package_name,
+        info_card = info_card(
+            "Order Summary",
+            vec![
+                ("Package", package_name.to_string()),
+                ("Amount", format!("{} {}", price_display, currency)),
+                ("Status", "✓ Paid".to_string()),
+            ]
+        ),
+        cta_button = cta_button("Go to Package →", package_url),
+        receipt_html = receipt_html
+    );
+
+    let html = base_template(
+        &content,
+        "You're receiving this because you made a purchase on Flow-Like.",
+    );
+
+    let text = format!(
+        r#"🛒 PURCHASE CONFIRMED!
+
+You now have access to {package_name}.
+
+ORDER SUMMARY
+─────────────
+Package: {package_name}
+Amount: {price_display} {currency}
+Status: Paid
+{receipt_section}
+Go to package: {package_url}
+
+The package is ready to use. Install it from the store or add it to your apps.
+
+Questions? Contact us at help@great-co.de
+
+© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+"#,
+        package_name = package_name,
+        price_display = price_display,
+        currency = currency,
+        receipt_section = stripe_receipt_url
+            .filter(|u| !u.is_empty())
+            .map(|u| format!("View receipt: {}\n", u))
+            .unwrap_or_default(),
+        package_url = package_url,
+        year = Utc::now().format("%Y")
+    );
+
+    (html, text)
+}
+
+/// Secondary (outline-style) CTA button for less prominent actions
+fn cta_button_secondary(text: &str, url: &str) -> String {
+    format!(
+        r#"<table role="presentation" style="margin: 0 auto;">
+            <tr>
+                <td style="border: 2px solid #404040; border-radius: 14px;">
+                    <a href="{url}" style="display: inline-block; color: #a3a3a3; text-decoration: none; font-size: 14px; font-weight: 500; padding: 12px 28px; letter-spacing: 0.2px;">
+                        {text}
+                    </a>
+                </td>
+            </tr>
+        </table>"#,
+        text = text,
+        url = url
+    )
 }

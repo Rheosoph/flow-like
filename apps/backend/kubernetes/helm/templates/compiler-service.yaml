@@ -1,0 +1,23 @@
+{{- if .Values.compiler.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow-like.fullname" . }}-compiler
+  labels:
+    {{- include "flow-like.compiler.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.compiler.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    app.kubernetes.io/name: {{ include "flow-like.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: compiler
+{{- end }}

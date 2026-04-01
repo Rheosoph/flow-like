@@ -9,15 +9,29 @@ import {
 	type SlateLeafProps,
 	type TCodeBlockElement,
 } from "platejs";
+import { Suspense, lazy } from "react";
 import * as React from "react";
 import { Button } from "../../..";
 import { ChartCodeBlock } from "./chart-code-block";
+
+const AdmonitionBlock = lazy(() => import("./admonition-block"));
+const SpoilerBlock = lazy(() => import("./spoiler-block"));
+const EmbedCodeBlock = lazy(() => import("./embed-code-block"));
+const MapCodeBlock = lazy(() => import("./map-code-block"));
 
 const CHART_LANGUAGES = ["nivo", "plotly"] as const;
 type ChartLanguage = (typeof CHART_LANGUAGES)[number];
 
 function isChartLanguage(lang: string | undefined): lang is ChartLanguage {
 	return CHART_LANGUAGES.includes(lang as ChartLanguage);
+}
+
+function isDirectiveLanguage(lang: string | undefined): boolean {
+	return typeof lang === "string" && lang.startsWith("directive-");
+}
+
+function isCustomBlockLanguage(lang: string | undefined): lang is string {
+	return lang === "embed" || lang === "map";
 }
 
 export function CodeBlockElementStatic(
@@ -36,6 +50,40 @@ export function CodeBlockElementStatic(
 					className="rounded-md overflow-hidden"
 				/>
 				{/* Hidden children for Slate structure */}
+				<div className="hidden">{props.children}</div>
+			</SlateElement>
+		);
+	}
+
+	// Render directive blocks (admonition / spoiler)
+	if (isDirectiveLanguage(lang)) {
+		const directiveType = lang!.replace("directive-", "");
+		const isSpoiler = directiveType === "spoiler";
+		return (
+			<SlateElement className="py-1" {...props}>
+				<Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+					{isSpoiler ? (
+						<SpoilerBlock content={content} />
+					) : (
+						<AdmonitionBlock type={directiveType} content={content} />
+					)}
+				</Suspense>
+				<div className="hidden">{props.children}</div>
+			</SlateElement>
+		);
+	}
+
+	// Render embed/map custom blocks
+	if (isCustomBlockLanguage(lang)) {
+		return (
+			<SlateElement className="py-1" {...props}>
+				<Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+					{lang === "embed" ? (
+						<EmbedCodeBlock content={content} />
+					) : (
+						<MapCodeBlock content={content} />
+					)}
+				</Suspense>
 				<div className="hidden">{props.children}</div>
 			</SlateElement>
 		);

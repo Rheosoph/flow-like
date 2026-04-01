@@ -7,6 +7,7 @@ import {
 	CardTitle,
 } from "@tm9657/flow-like-ui";
 import {
+	BarChart3,
 	Brain,
 	ChevronRight,
 	Cpu,
@@ -81,6 +82,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "CPU, RAM, and VRAM details",
 				href: "/settings/system",
 				icon: Cpu,
+			},
+			{
+				title: "Board Statistics",
+				description: "Node usage, category distribution, and board analytics",
+				href: "/settings/statistics",
+				icon: BarChart3,
 			},
 			{
 				title: "Third-Party Licenses",

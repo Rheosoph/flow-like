@@ -2,6 +2,7 @@ use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -106,9 +107,10 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
             "logs",
             "Logs",
             "Array of console messages",
-            VariableType::Generic,
+            VariableType::Struct,
         )
-        .set_schema::<Vec<ConsoleMessage>>();
+        .set_schema::<ConsoleMessage>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "count",
@@ -471,9 +473,10 @@ impl NodeLogic for BrowserGetNetworkRequestsNode {
             "requests",
             "Requests",
             "Array of captured network requests",
-            VariableType::Generic,
+            VariableType::Struct,
         )
-        .set_schema::<Vec<NetworkRequest>>();
+        .set_schema::<NetworkRequest>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "count",

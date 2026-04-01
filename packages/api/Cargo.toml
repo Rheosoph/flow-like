@@ -19,6 +19,7 @@ flow-like = { workspace = true, features = ["openapi"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-sinks.workspace = true
+flow-like-secrets.workspace = true
 flow-like-wasm = { workspace = true, features = ["openapi"] }
 serde_json.workspace = true
 base64.workspace = true
@@ -55,6 +56,7 @@ aws-sdk-sts = {workspace = true, optional=true}
 aws-sdk-sesv2 = {workspace = true, optional=true}
 aws-sdk-lambda = {workspace = true, optional=true}
 aws-sdk-sqs = {workspace = true, optional=true}
+aws-sdk-sns = { version = "1.83.0", optional = true }
 aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 # -----
 
@@ -79,6 +81,10 @@ async-stream = "0.3"
 eventsource-stream = "0.2"
 # -----
 
+# ----- Sentry (optional) ----
+sentry = { workspace = true, optional = true }
+# -----
+
 # ----- Kubernetes dependencies ----
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
@@ -93,7 +99,10 @@ aws-sdk-s3 = { version = "1", optional = true }
 
 [features]
 default = ["aws", "cognito", "ses", "smtp", "sendgrid"]
-aws = ["aws-config", "aws-sdk-sts", "flow-like-sinks/aws"]
+secrets-aws = ["flow-like-secrets/aws"]
+secrets-gcp = ["flow-like-secrets/gcp"]
+secrets-azure = ["flow-like-secrets/azure"]
+aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "flow-like-sinks/aws"]
 azure = ["hmac", "sha2", "urlencoding"]
 gcp = ["sha2", "rsa", "urlencoding"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
@@ -109,6 +118,7 @@ sqs = ["aws-config", "aws-sdk-sqs"]
 redis = ["dep:redis", "dep:tokio"]
 dynamodb = ["aws-config", "aws-sdk-dynamodb"]  # Uses FlowLikeStore (object_store) for large payloads
 s3 = ["aws-config", "aws-sdk-s3"]
+sentry = ["dep:sentry"]
 full=[
     "aws",
     "azure",
@@ -121,6 +131,7 @@ full=[
     "redis",
     "dynamodb",
     "s3",
+    "sentry",
 ]
 urlencoding = ["dep:urlencoding"]
 

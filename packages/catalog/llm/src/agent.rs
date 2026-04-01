@@ -1,6 +1,8 @@
+use crate::embedding::CachedEmbeddingModel;
 use flow_like::bit::Bit;
 use flow_like_model_provider::history::{History, Tool};
 use flow_like_types::JsonSchema;
+use memory::MemoryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -8,6 +10,8 @@ pub mod add_datafusion;
 pub mod from_model;
 pub mod helpers;
 pub mod invoke;
+pub mod lazy_register_tools;
+pub mod memory;
 pub mod register_mcp_tools;
 pub mod register_thinking;
 pub mod register_tools;
@@ -97,6 +101,15 @@ impl DataFusionContext {
     }
 }
 
+/// Reference to a lazy function tool index stored in a vector DB.
+/// Allows agents to do hybrid search over a large pool of tools at execution time
+/// instead of loading all tool schemas into the context upfront.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LazyFunctionRef {
+    /// Cache key used to look up the LanceDB connection
+    pub db_cache_key: String,
+}
+
 /// Context management strategy for infinite context mode
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
 pub enum ContextManagementMode {
@@ -165,6 +178,24 @@ pub struct Agent {
     /// Defaults to 32000 tokens if not specified. Only used when infinite_context is true.
     #[serde(default)]
     pub max_context_tokens: Option<u32>,
+
+    /// Lazy function references backed by a vector DB index.
+    /// At execution time the agent can search this index to dynamically discover
+    /// and load only the tools it actually needs, keeping the context window lean.
+    #[serde(default)]
+    pub lazy_function_refs: Vec<LazyFunctionRef>,
+
+    /// Embedding model shared across all lazy function tool indexes.
+    /// The model's cache key is encoded into the vector DB table name, so
+    /// swapping the model automatically uses a fresh table (old embeddings are abandoned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lazy_embedding_model: Option<CachedEmbeddingModel>,
+
+    /// Persistent memory configuration. When set, the agent gains built-in
+    /// `_memory_search`, `_memory_store`, and `_memory_compress` tools to
+    /// autonomously store, recall, and compress observations across conversations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryConfig>,
 }
 
 impl Agent {
@@ -184,6 +215,9 @@ impl Agent {
             infinite_context: false,
             context_management_mode: ContextManagementMode::default(),
             max_context_tokens: None,
+            lazy_function_refs: Vec::new(),
+            lazy_embedding_model: None,
+            memory: None,
         }
     }
 
@@ -262,11 +296,59 @@ impl Agent {
             base_prompt.push_str("4. Prefer aggregations and summaries over raw data dumps\n");
         }
 
+        if !self.lazy_function_refs.is_empty() {
+            base_prompt.push_str("\n\n## Tool Discovery\n\n");
+            base_prompt.push_str(
+                "You have access to a large pool of tools beyond what is listed in your current tool set. \
+                 If you need a capability that you don't see in your available tools, call the `_lazy_search_tools` \
+                 tool with a description of what you need. Matching tools will be added to your available tools \
+                 for subsequent calls.\n\
+                 - Only search when you genuinely need a tool you don't already have.\n\
+                 - Be specific in your search query for best results.\n\
+                 - After searching, call the discovered tool directly in your next step.\n",
+            );
+        }
+
+        if self.memory.is_some() {
+            base_prompt.push_str("\n\n## Memory\n\n");
+            base_prompt.push_str(
+                "You have persistent memory across conversations. Use these tools proactively:\n\n\
+                 - `_memory_search`: Search your memory for relevant context.\n\
+                   Call this at the START of each conversation to recall relevant context.\n\
+                   Parameters: query (string), role_filter (optional, one of: \"user\", \"assistant\", \"observation\", \"summary\", \"context\")\n\n\
+                 - `_memory_store`: Store important facts, user preferences, decisions, and context.\n\
+                   Call this for any information worth remembering across conversations.\n\
+                   Parameters: content (string), role (one of: \"user\", \"assistant\", \"observation\")\n\n\
+                 Memory compression happens automatically — you do not need to manage it.\n\
+                 When older conversation messages are evicted from context, they are also stored \
+                 to memory automatically so you can retrieve them with `_memory_search`.\n\n\
+                 **Guidelines:**\n\
+                 - ALWAYS search memory at the start of a new conversation\n\
+                 - Store key facts, preferences, and decisions after learning them\n\
+                 - Don't store trivial or transient information\n",
+            );
+        }
+
         Some(base_prompt)
+    }
+
+    /// Add a lazy function reference (points to a vector DB index)
+    pub fn add_lazy_function_ref(&mut self, lazy_ref: LazyFunctionRef) {
+        self.lazy_function_refs.push(lazy_ref);
+    }
+
+    /// Set the embedding model used for all lazy function tool indexes
+    pub fn set_lazy_embedding_model(&mut self, model: CachedEmbeddingModel) {
+        self.lazy_embedding_model = Some(model);
     }
 
     /// Check if this agent has any DataFusion contexts
     pub fn has_datafusion_contexts(&self) -> bool {
         !self.datafusion_contexts.is_empty()
+    }
+
+    /// Set persistent memory configuration
+    pub fn set_memory(&mut self, config: MemoryConfig) {
+        self.memory = Some(config);
     }
 }

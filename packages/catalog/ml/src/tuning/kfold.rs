@@ -169,8 +169,9 @@ impl NodeLogic for KFoldGeneratorNode {
 
         // Load all data from source
         let source = source.load(context).await?;
-        let source_db = source.db.read().await.clone();
-        let source_table = source_db.raw().await?;
+        source.ensure_flushed().await?;
+        let source_guard = source.db.read().await;
+        let source_table = source_guard.inner().raw().await?;
         let query = source_table.query();
         let mut item_stream = query.execute().await?;
 

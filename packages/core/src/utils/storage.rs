@@ -23,3 +23,25 @@ pub async fn construct_storage(
 
     Ok((project_store, base_path))
 }
+
+pub async fn construct_user_storage(
+    state: &Arc<FlowLikeState>,
+    sub: &str,
+    app_id: &str,
+    prefix: &str,
+) -> Result<(FlowLikeStore, Path)> {
+    let user_store = state
+        .config
+        .read()
+        .await
+        .stores
+        .user_store
+        .clone()
+        .ok_or(anyhow!("User store not found"))?;
+
+    let base_path = user_store
+        .construct_user_upload(sub, app_id, prefix)
+        .await?;
+
+    Ok((user_store, base_path))
+}

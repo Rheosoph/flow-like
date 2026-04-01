@@ -1,25 +1,102 @@
+import { format, formatDistanceToNow } from "date-fns";
 import type { IDate } from "../types";
+
+export type DateValue = Date | IDate | number | string | null | undefined;
+
+function parseChronoDateString(value: string): Date | null {
+	const trimmed = value.trim();
+	const chronoMatch = trimmed.match(
+		/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(?:\s*(UTC|Z))?$/,
+	);
+
+	if (!chronoMatch) {
+		return null;
+	}
+
+	const [, datePart, timePart, fractionalPart, zonePart] = chronoMatch;
+	const milliseconds = fractionalPart
+		? `.${fractionalPart.padEnd(3, "0").slice(0, 3)}`
+		: "";
+	const normalized = `${datePart}T${timePart}${milliseconds}${zonePart ? "Z" : "Z"}`;
+	const parsed = new Date(normalized);
+
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSystemDate(value: DateValue): value is IDate {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"secs_since_epoch" in value &&
+		typeof value.secs_since_epoch === "number"
+	);
+}
+
+export function parseDateValue(value: DateValue): Date | null {
+	if (value == null) {
+		return null;
+	}
+
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : value;
+	}
+
+	if (isSystemDate(value)) {
+		const milliseconds =
+			value.secs_since_epoch * 1000 +
+			Math.floor((value.nanos_since_epoch ?? 0) / 1_000_000);
+		const parsed = new Date(milliseconds);
+		return Number.isNaN(parsed.getTime()) ? null : parsed;
+	}
+
+	if (typeof value === "number" || typeof value === "string") {
+		const parsed = new Date(value);
+		if (!Number.isNaN(parsed.getTime())) {
+			return parsed;
+		}
+
+		if (typeof value === "string") {
+			return parseChronoDateString(value);
+		}
+
+		return Number.isNaN(parsed.getTime()) ? null : parsed;
+	}
+
+	return null;
+}
+
+export function formatRelativeDateValue(
+	dateInput: DateValue,
+	fallback = "Unknown",
+) {
+	const parsed = parseDateValue(dateInput);
+	return parsed
+		? formatDistanceToNow(parsed, {
+				addSuffix: true,
+			})
+		: fallback;
+}
+
+export function formatAbsoluteDateValue(
+	dateInput: DateValue,
+	fallback = "Unknown",
+	pattern = "PPp",
+) {
+	const parsed = parseDateValue(dateInput);
+	return parsed ? format(parsed, pattern) : fallback;
+}
 
 export function formatRelativeTime(
 	dateInput: IDate | string,
 	style: Intl.RelativeTimeFormatStyle = "long",
 ) {
-	// 1. Normalize the input to milliseconds
-	let targetTimeMs: number;
+	const parsed = parseDateValue(dateInput);
+	const targetTimeMs = parsed?.getTime() ?? Number.NaN;
 
-	if (typeof dateInput === "string") {
-		targetTimeMs = new Date(dateInput).getTime();
-	} else {
-		// Handle IDate
-		targetTimeMs = dateInput.secs_since_epoch * 1000;
-	}
-
-	// Safety check: if string was invalid, getTime() returns NaN
 	if (isNaN(targetTimeMs)) {
 		return "Invalid date";
 	}
 
-	// 2. Calculate units
 	const diffMilliseconds = Date.now() - targetTimeMs;
 	const seconds = Math.round(diffMilliseconds / 1000);
 	const minutes = Math.round(seconds / 60);
@@ -31,7 +108,6 @@ export function formatRelativeTime(
 		style: style,
 	});
 
-	// 3. Format with Math.abs() to handle future dates safely
 	if (Math.abs(seconds) < 60) {
 		return formatter.format(-seconds, "second");
 	}

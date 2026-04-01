@@ -1,7 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -109,7 +109,8 @@ impl NodeLogic for OsrmNearestNode {
             "List of nearest routable points",
             VariableType::Struct,
         )
-        .set_schema::<Vec<NearestWaypoint>>();
+        .set_schema::<NearestWaypoint>()
+        .set_value_type(ValueType::Array);
 
         node.set_scores(
             NodeScores::new()

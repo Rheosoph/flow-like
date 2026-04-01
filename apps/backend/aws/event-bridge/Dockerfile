@@ -1,16 +1,19 @@
 # Build stage
-FROM rust:1.90-slim AS builder
+FROM rust:1.91-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 
-COPY Cargo.toml Cargo.lock ./
-COPY packages ./packages
-COPY apps/backend/aws/event-bridge ./apps/backend/aws/event-bridge
+COPY . .
+RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
+    sed -i '/apps\/backend\/local\/api/d' Cargo.toml && \
+    sed -i '/apps\/backend\/local\/runtime/d' Cargo.toml && \
+    sed -i '/dexie-tauri-adapter/d' Cargo.toml
 
 RUN cargo build --release --package aws-event-bridge
 

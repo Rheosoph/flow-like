@@ -1,6 +1,8 @@
 "use client";
 
 import {
+	AudioLines,
+	AudioWaveform,
 	FileIcon,
 	ImageIcon,
 	MicIcon,
@@ -18,7 +20,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { humanFileSize, sanitizeImageUrl } from "../../../lib";
+import { cn, humanFileSize, sanitizeImageUrl } from "../../../lib";
 import {
 	Button,
 	Popover,
@@ -46,6 +48,7 @@ interface ChatBoxProps {
 	defaultActiveTools?: string[];
 	fileUpload: boolean;
 	audioInput: boolean;
+	onVoiceModeToggle?: () => void;
 }
 
 export interface ChatBoxRef {
@@ -73,6 +76,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			audioInput = false,
 			availableTools = ["Reason"],
 			defaultActiveTools = ["Reason"],
+			onVoiceModeToggle,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -85,11 +89,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const [isRecording, setIsRecording] = useState(false);
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordingTime, setRecordingTime] = useState(0);
+		const [isTranscribing, setIsTranscribing] = useState(false);
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 		const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 		const audioChunksRef = useRef<Blob[]>([]);
+		const recognitionRef = useRef<any>(null);
 
 		useImperativeHandle(
 			ref,
@@ -249,6 +255,61 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			setRecordingTime(0);
 		};
 
+		const startTranscription = () => {
+			if (!audioInput) return;
+			const SpeechRecognitionApi =
+				typeof window !== "undefined"
+					? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+					: null;
+			if (!SpeechRecognitionApi) return;
+
+			const recognition = new SpeechRecognitionApi();
+			recognition.continuous = true;
+			recognition.interimResults = true;
+			recognition.lang = navigator.language || "en-US";
+
+			let finalTranscript = "";
+
+			recognition.onresult = (event: any) => {
+				let interim = "";
+				for (let i = event.resultIndex; i < event.results.length; i++) {
+					const result = event.results[i];
+					if (result.isFinal) {
+						finalTranscript += result[0].transcript;
+					} else {
+						interim += result[0].transcript;
+					}
+				}
+				setInput((prev) => {
+					const base = prev.endsWith(finalTranscript)
+						? prev
+						: (prev ? `${prev} ` : "") + finalTranscript;
+					return interim ? `${base} ${interim}` : base;
+				});
+			};
+
+			recognition.onerror = () => {
+				setIsTranscribing(false);
+			};
+
+			recognition.onend = () => {
+				setIsTranscribing(false);
+				recognitionRef.current = null;
+			};
+
+			recognitionRef.current = recognition;
+			recognition.start();
+			setIsTranscribing(true);
+		};
+
+		const stopTranscription = () => {
+			if (recognitionRef.current) {
+				recognitionRef.current.stop();
+				recognitionRef.current = null;
+			}
+			setIsTranscribing(false);
+		};
+
 		const formatTime = (seconds: number) => {
 			const mins = Math.floor(seconds / 60);
 			const secs = seconds % 60;
@@ -260,6 +321,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			return () => {
 				if (recordingIntervalRef.current) {
 					clearInterval(recordingIntervalRef.current);
+				}
+				if (recognitionRef.current) {
+					recognitionRef.current.stop();
 				}
 			};
 		}, []);
@@ -676,8 +740,32 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								)}
 							</div>
 
-							{/* Send Button & Audio Recorder */}
+							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
+								{/* Voice-to-text transcription button */}
+								{audioInput &&
+									typeof window !== "undefined" &&
+									((window as any).SpeechRecognition ||
+										(window as any).webkitSpeechRecognition) && (
+										<Button
+											type="button"
+											size="sm"
+											variant={isTranscribing ? "destructive" : "ghost"}
+											className={cn(
+												"h-8 w-8 p-0 rounded-full transition-colors",
+												isTranscribing && "animate-pulse",
+											)}
+											onClick={
+												isTranscribing
+													? stopTranscription
+													: startTranscription
+											}
+											disabled={isRecording}
+										>
+											<AudioLines className="w-4 h-4" />
+										</Button>
+									)}
+
 								{/* Audio Recording Button */}
 								{audioInput && (
 									<div className="flex items-center gap-1">
@@ -722,6 +810,21 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											</Button>
 										)}
 									</div>
+								)}
+
+								{/* Voice Mode Button */}
+								{audioInput && onVoiceModeToggle && (
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										className="h-8 w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
+										onClick={onVoiceModeToggle}
+										disabled={isRecording || isTranscribing}
+										title="Voice mode"
+									>
+										<AudioWaveform className="w-4 h-4" />
+									</Button>
 								)}
 
 								<Button

@@ -6,12 +6,16 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Cacheable, async_trait, json::json};
+use flow_like_types::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serenity::all::{ChannelId, GuildId, Http, MessageId, UserId};
-use std::any::Any;
-use std::sync::Arc;
+
+#[cfg(feature = "execute")]
+use {
+    flow_like_types::{Cacheable, json::json},
+    serenity::all::{ChannelId, GuildId, Http, MessageId, UserId},
+    std::{any::Any, sync::Arc},
+};
 
 /// Discord user information
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -47,6 +51,7 @@ pub struct DiscordSession {
     pub user: Option<DiscordUser>,
 }
 
+#[cfg(feature = "execute")]
 impl DiscordSession {
     pub fn channel_id(&self) -> flow_like_types::Result<ChannelId> {
         Ok(ChannelId::new(self.channel_id.parse()?))
@@ -65,11 +70,13 @@ impl DiscordSession {
 }
 
 /// Cached Discord HTTP client for making API calls
+#[cfg(feature = "execute")]
 pub struct CachedDiscordClient {
     pub http: Arc<Http>,
     pub bot_user_id: Option<UserId>,
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedDiscordClient {
     fn as_any(&self) -> &dyn Any {
         self
@@ -80,6 +87,7 @@ impl Cacheable for CachedDiscordClient {
     }
 }
 
+#[cfg(feature = "execute")]
 impl CachedDiscordClient {
     pub fn new(token: &str) -> Self {
         let http = Arc::new(Http::new(token));
@@ -100,6 +108,7 @@ impl CachedDiscordClient {
 }
 
 /// Helper to get the cached Discord client from context
+#[cfg(feature = "execute")]
 pub async fn get_discord_client(
     context: &ExecutionContext,
     ref_id: &str,
@@ -174,6 +183,7 @@ impl NodeLogic for ToDiscordSessionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session_data: DiscordSessionData = context.evaluate_pin("local_session").await?;
 
@@ -201,5 +211,12 @@ impl NodeLogic for ToDiscordSessionNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

@@ -10,3 +10,4 @@ pub mod llm_extractor_history;
 pub mod preferences;
 pub mod provider;
 pub mod response;
+pub mod summarize;

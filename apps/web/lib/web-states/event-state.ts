@@ -245,12 +245,26 @@ export class WebEventState implements IEventState {
 			comment?: string;
 		},
 	): Promise<string> {
-		const result = await apiPut<{ id: string }>(
+		const context =
+			feedback.history || feedback.globalState || feedback.localState
+				? {
+						history: feedback.history,
+						global_state: feedback.globalState,
+						local_state: feedback.localState,
+					}
+				: undefined;
+
+		const result = await apiPut<{ feedback_id: string }>(
 			`apps/${appId}/events/${eventId}/feedback`,
-			{ ...feedback, id: feedbackId },
+			{
+				rating: feedback.rating,
+				context,
+				comment: feedback.comment ?? "",
+				feedback_id: feedbackId,
+			},
 			this.backend.auth,
 		);
-		return result.id;
+		return result.feedback_id;
 	}
 
 	async executeEvent(
@@ -477,8 +491,15 @@ export class WebEventState implements IEventState {
 	}
 
 	async isEventSinkActive(eventId: string): Promise<boolean> {
-		// Event sinks are server-side in web mode
-		return false;
+		try {
+			const result = await apiGet<{ active: boolean }>(
+				`sinks/${eventId}/status`,
+				this.backend.auth,
+			);
+			return result?.active ?? false;
+		} catch {
+			return false;
+		}
 	}
 
 	async prerunEvent(

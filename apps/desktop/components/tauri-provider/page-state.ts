@@ -41,10 +41,64 @@ export class PageState implements IPageState {
 	}
 
 	async getPages(appId: string, boardId?: string): Promise<PageListItem[]> {
-		return invoke<PageListItem[]>("get_pages", {
+		const localPages = await invoke<PageListItem[]>("get_pages", {
 			appId,
 			boardId,
 		});
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			return localPages;
+		}
+
+		try {
+			const url = boardId
+				? `apps/${appId}/pages?board_id=${boardId}`
+				: `apps/${appId}/pages`;
+			const remotePages = await fetcher<PageListItem[]>(
+				this.backend.profile,
+				url,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+
+			const localMap = new Map(localPages.map((p) => [p.pageId, p]));
+			const remoteIds = new Set(remotePages.map((p) => p.pageId));
+			const result: PageListItem[] = [];
+
+			for (const rp of remotePages) {
+				result.push(localMap.get(rp.pageId) ?? rp);
+			}
+
+			for (const lp of localPages) {
+				if (!remoteIds.has(lp.pageId)) {
+					result.push(lp);
+				}
+			}
+
+			const syncTask = (async () => {
+				for (const remotePage of remotePages) {
+					if (!localMap.has(remotePage.pageId)) {
+						try {
+							const fullPage = await this.fetchRemotePage(
+								appId,
+								remotePage.pageId,
+							);
+							if (fullPage) {
+								await invoke("update_page", { appId, page: fullPage });
+							}
+						} catch {
+							// Individual page sync failure is non-critical
+						}
+					}
+				}
+			})();
+			this.backend.backgroundTaskHandler(syncTask);
+
+			return result;
+		} catch {
+			return localPages;
+		}
 	}
 
 	async getPage(
@@ -52,23 +106,35 @@ export class PageState implements IPageState {
 		pageId: string,
 		boardId?: string,
 	): Promise<IPage> {
-		const localPage = await invoke<IPage>("get_page", {
-			appId,
-			pageId,
-			boardId,
-		});
+		let localPage: IPage | null = null;
+		try {
+			localPage = await invoke<IPage>("get_page", {
+				appId,
+				pageId,
+				boardId,
+			});
+		} catch {
+			const remotePage = await this.fetchRemotePage(appId, pageId);
+			if (remotePage) {
+				await invoke("update_page", { appId, page: remotePage }).catch(
+					() => {},
+				);
+				return remotePage;
+			}
+			throw new Error(`Page not found: ${pageId}`);
+		}
 
 		const syncTask = (async () => {
 			const remotePage = await this.fetchRemotePage(appId, pageId);
 			if (!remotePage) return;
 
 			const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
-			const localUpdated = new Date(localPage.updatedAt ?? 0).getTime();
+			const localUpdated = new Date(localPage!.updatedAt ?? 0).getTime();
 
 			if (remoteUpdated > localUpdated) {
 				const merged = {
 					...remotePage,
-					boardId: remotePage.boardId || localPage.boardId,
+					boardId: remotePage.boardId || localPage!.boardId,
 				};
 				await invoke("update_page", { appId, page: merged });
 			}

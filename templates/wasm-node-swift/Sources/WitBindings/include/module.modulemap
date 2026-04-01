@@ -1,0 +1,4 @@
+module WitBindings [system] {
+    umbrella "."
+    export *
+}

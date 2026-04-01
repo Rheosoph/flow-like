@@ -25,7 +25,7 @@ import type { IPrerunBoardResponse } from "./types";
 
 export interface IBoardState {
 	getBoards(appId: string): Promise<IBoard[]>;
-	getCatalog(): Promise<INode[]>;
+	getCatalog(appId: string): Promise<INode[]>;
 	getBoard(
 		appId: string,
 		boardId: string,

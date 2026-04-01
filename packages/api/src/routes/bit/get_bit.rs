@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    entity::{bit, meta},
+    entity::{bit, llm_model, meta},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::LanguageParams,
@@ -14,6 +14,8 @@ use axum::{
 use flow_like::bit::{Bit, Metadata};
 use flow_like_storage::files::store::FlowLikeStore;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+use super::llm_model_to_evaluation;
 
 #[utoipa::path(
     get,
@@ -47,29 +49,37 @@ pub async fn get_bit(
         return Ok(Json(cached));
     }
 
-    let bit: Vec<(bit::Model, Vec<meta::Model>)> = bit::Entity::find_by_id(&bit_id)
-        .find_with_related(meta::Entity)
-        .filter(
-            bit::Column::Id.eq(&bit_id).and(
+    let rows: Vec<(bit::Model, Option<llm_model::Model>, Option<meta::Model>)> =
+        bit::Entity::find_by_id(&bit_id)
+            .find_also_related(llm_model::Entity)
+            .find_also_related(meta::Entity)
+            .filter(
                 meta::Column::Lang
                     .eq(language)
                     .or(meta::Column::Lang.eq("en").or(meta::Column::Lang.is_null())),
-            ),
-        )
-        .all(&state.db)
-        .await?;
+            )
+            .all(&state.db)
+            .await?;
 
-    let metadata: Option<Vec<meta::Model>> = bit.first().map(|(_, meta)| meta.clone());
-
-    let bit = match bit.into_iter().next() {
-        Some((bit, _)) => bit,
-        None => return Err(ApiError::NOT_FOUND),
+    let mut rows = rows.into_iter();
+    let Some((bit_model, model, first_meta)) = rows.next() else {
+        return Err(ApiError::NOT_FOUND);
     };
 
-    let mut bit: Bit = bit.into();
+    let mut bit: Bit = bit_model.into();
 
-    for meta in metadata.unwrap_or_default() {
+    if let Some(model) = model {
+        bit.model_evaluation = Some(llm_model_to_evaluation(model));
+    }
+
+    if let Some(meta) = first_meta {
         bit.meta.insert(meta.lang.clone(), Metadata::from(meta));
+    }
+
+    for (_, _, meta) in rows {
+        if let Some(meta) = meta {
+            bit.meta.insert(meta.lang.clone(), Metadata::from(meta));
+        }
     }
 
     if !state.platform_config.features.unauthorized_read {

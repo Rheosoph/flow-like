@@ -23,7 +23,7 @@ urlencoding.workspace = true
 webp.workspace = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

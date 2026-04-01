@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 pub mod sharing;
 pub mod tables;
 
@@ -193,6 +193,8 @@ pub async fn upsert_board(
                 board.refs = data.refs;
                 board.version = data.version;
                 board.viewport = data.viewport;
+                board.page_ids = data.page_ids;
+                board.updated_at = data.updated_at;
             }
 
             board.save(None).await?;
@@ -218,6 +220,7 @@ pub async fn upsert_board(
         board.refs = board_data.refs;
         board.version = board_data.version;
         board.viewport = board_data.viewport;
+        board.page_ids = board_data.page_ids;
         board.stage = board.stage.clone();
         board.log_level = board.log_level;
         board.execution_mode = board.execution_mode.clone();
@@ -641,4 +644,43 @@ pub async fn set_app_config(
     }
 
     Err(TauriFunctionError::new("Board not found"))
+}
+
+#[tauri::command(async)]
+pub async fn app_add_package(
+    app_handle: AppHandle,
+    app_id: String,
+    package_id: String,
+    version: String,
+) -> Result<(), TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let mut app = App::load(app_id, flow_like_state).await?;
+    app.packages.insert(package_id, version);
+    app.save().await?;
+    let _ = app_handle.emit("catalog-updated", ());
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn app_remove_package(
+    app_handle: AppHandle,
+    app_id: String,
+    package_id: String,
+) -> Result<(), TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let mut app = App::load(app_id, flow_like_state).await?;
+    app.packages.remove(&package_id);
+    app.save().await?;
+    let _ = app_handle.emit("catalog-updated", ());
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn app_list_packages(
+    app_handle: AppHandle,
+    app_id: String,
+) -> Result<std::collections::HashMap<String, String>, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let app = App::load(app_id, flow_like_state).await?;
+    Ok(app.packages)
 }

@@ -172,8 +172,9 @@ export default function Onboarding() {
 					return;
 				}
 
-				const serverProfiles = (await response.json()) as OnlineProfile[];
+				const allProfiles = (await response.json()) as OnlineProfile[];
 				if (cancelled) return;
+				const serverProfiles = allProfiles.filter((p) => !p.deleted_at);
 
 				if (serverProfiles.length > 0) {
 					let firstProfileId: string | null = null;

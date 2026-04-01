@@ -233,10 +233,45 @@ description = "Publish Python WASM SDK"
 dir = "libs/wasm-sdk/wasm-sdk-python"
 run = "uv build && uv publish"
 
-[tasks."publish:wasm:rust"]
-description = "Publish Rust WASM SDK"
-dir = "libs/wasm-sdk/wasm-sdk-rust"
+[tasks."publish:wasm:rust:macros"]
+description = "Publish Rust WASM SDK proc-macros crate"
+dir = "libs/wasm-sdk/wasm-sdk-macros"
 run = "cargo publish"
+
+[tasks."publish:wasm:rust"]
+description = "Publish Rust WASM SDK (macros + core)"
+depends = ["publish:wasm:rust:macros"]
+dir = "libs/wasm-sdk/wasm-sdk-rust"
+run = """
+echo "Waiting for crates.io to index macros crate..."
+sleep 30
+cargo publish
+"""
+
+[tasks."test:wasm:rust:lint"]
+description = "Run lint/quality tests for the Rust WASM template nodes"
+run = """
+echo "==> Running template lint tests..."
+HOST=$(rustc -vV | awk '/^host:/ { print $2 }')
+cd templates/wasm-node-rust && cargo test --target "$HOST" --test lint -- --nocapture
+"""
+
+[tasks."test:catalog:lint"]
+description = "Run lint/quality tests for the native catalog node definitions"
+run = """
+echo "==> Running catalog lint tests..."
+cargo test --package flow-like-catalog --test lint_catalog -- --nocapture
+"""
+
+[tasks."test:wasm:rust:e2e"]
+description = "Build Rust template + run e2e integration tests via host runtime"
+depends = ["test:wasm:rust:lint"]
+run = """
+echo "==> Building Rust WASM template..."
+cd templates/wasm-node-rust && cargo build --release
+echo "==> Running e2e tests..."
+cd ../../packages/wasm && cargo test --test rust_sdk_e2e_test -- --nocapture
+"""
 
 [tasks."publish:wasm:csharp"]
 description = "Publish C# WASM SDK to NuGet"
@@ -385,6 +420,20 @@ run = "npm version patch -m 'Increment version to %s'"
 [tasks.setup]
 description = "Install required cargo tools (postinstall equivalent)"
 run = "cargo install cargo-license cargo-watch systemfd --locked"
+
+# ── Tools ────────────────────────────────────
+
+[tasks."tool:model-eval"]
+description = "Run model evaluation pipeline (fetch AA benchmarks → normalize → update DB)"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run index.ts"
+
+[tasks."tool:model-eval:dryrun"]
+description = "Dry-run model evaluation — show diff of what would change without writing to DB"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run index.ts --dry-run"
+
+[tasks."tool:seed-models"]
+description = "Seed LlmModel records from Artificial Analysis API (no Bit updates)"
+run = "cd tools/model-eval && bun install --frozen-lockfile 2>/dev/null || bun install && bunx prisma generate --schema ../../packages/api/prisma/schema && bun run seed-models.ts"
 
 # ── Templates ────────────────────────────────
 

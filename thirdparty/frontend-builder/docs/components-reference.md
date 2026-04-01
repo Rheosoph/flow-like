@@ -242,17 +242,20 @@ Loading placeholder.
 | rounded | BoundValue | boolean |
 
 ### iframe
-Embedded external content.
+Embed external pages or preview raw HTML content. Sandboxed by default — no access to parent app resources.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| src | BoundValue | URL **(REQUIRED)** |
+| src | BoundValue | URL (provide src or srcdoc) |
+| srcdoc | BoundValue | Raw HTML string for preview (provide src or srcdoc) |
 | title | BoundValue | Frame title |
 | width | BoundValue | string |
 | height | BoundValue | string |
-| sandbox | BoundValue | Sandbox restrictions |
+| sandbox | BoundValue | Sandbox restrictions (defaults: src="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox", srcdoc="allow-scripts") |
 | allow | BoundValue | Permissions policy |
 | loading | BoundValue | "lazy", "eager" |
+| referrerPolicy | BoundValue | "no-referrer" (default), "origin", etc. |
+| border | BoundValue | boolean |
 
 ### table
 Data table.

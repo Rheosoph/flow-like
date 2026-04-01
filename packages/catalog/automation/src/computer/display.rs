@@ -2,6 +2,7 @@ use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -77,9 +78,10 @@ impl NodeLogic for ComputerListDisplaysNode {
             "displays",
             "Displays",
             "List of connected displays",
-            VariableType::Generic,
+            VariableType::Struct,
         )
-        .set_schema::<Vec<DisplayInfo>>();
+        .set_schema::<DisplayInfo>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "count",

@@ -6,7 +6,8 @@ use serde_json::Value;
 use std::pin::Pin;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
+use wasmtime_wasi_http::WasiHttpCtx;
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
@@ -19,9 +20,8 @@ impl ComponentStoreData {
     pub fn new(security: &WasmSecurityConfig) -> Self {
         let mut builder = WasiCtxBuilder::new();
 
-        let has_network_caps = security
-            .capabilities
-            .intersects(WasmCapabilities::NETWORK_ALL);
+        let caps = security.capabilities;
+        let has_network_caps = caps.intersects(WasmCapabilities::NETWORK_ALL);
 
         // Provide stdio/env/args so Component Model runtimes (C#, TypeScript)
         // that target wasi:cli/command can function correctly.
@@ -41,7 +41,24 @@ impl ComponentStoreData {
             } else {
                 builder.inherit_network();
             }
+        }
+
+        // DNS lookups require explicit opt-in
+        if security.allow_wasi_network
+            || caps.intersects(WasmCapabilities::DNS)
+            || caps.intersects(WasmCapabilities::NETWORK_ALL)
+        {
             builder.allow_ip_name_lookup(true);
+        }
+
+        // TCP sockets
+        if security.allow_wasi_network || caps.intersects(WasmCapabilities::TCP) {
+            builder.allow_tcp(true);
+        }
+
+        // UDP sockets
+        if security.allow_wasi_network || caps.intersects(WasmCapabilities::UDP) {
+            builder.allow_udp(true);
         }
 
         Self {
@@ -63,12 +80,12 @@ impl WasiView for ComponentStoreData {
 }
 
 impl WasiHttpView for ComponentStoreData {
-    fn ctx(&mut self) -> &mut WasiHttpCtx {
-        &mut self.http_ctx
-    }
-
-    fn table(&mut self) -> &mut wasmtime::component::ResourceTable {
-        &mut self.resource_table
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http_ctx,
+            table: &mut self.resource_table,
+            hooks: Default::default(),
+        }
     }
 }
 
@@ -78,7 +95,7 @@ pub fn register_component_host_functions(
     wasmtime_wasi::p2::add_to_linker_async(linker).map_err(|e| {
         WasmError::Initialization(format!("Failed to register WASI functions: {}", e))
     })?;
-    wasmtime_wasi_http::add_only_http_to_linker_async(linker).map_err(|e| {
+    wasmtime_wasi_http::p2::add_only_http_to_linker_async(linker).map_err(|e| {
         WasmError::Initialization(format!("Failed to register WASI HTTP functions: {}", e))
     })?;
     register_logging(linker)?;
@@ -89,6 +106,9 @@ pub fn register_component_host_functions(
     register_metadata(linker)?;
     register_storage(linker)?;
     register_models(linker)?;
+    register_schema(linker)?;
+    register_image(linker)?;
+    register_db(linker)?;
     register_auth(linker)?;
     register_http(linker)?;
     register_websocket(linker)?;
@@ -587,30 +607,57 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         .host_state
                         .has_capability(WasmCapabilities::STORAGE_WRITE)
                     {
+                        tracing::warn!("[wasm write-file] rejected: no STORAGE_WRITE capability");
                         return Ok((false,));
                     }
                     if data.len() > crate::host_functions::storage::MAX_STORAGE_FILE_SIZE {
+                        tracing::warn!(
+                            "[wasm write-file] rejected: data too large ({})",
+                            data.len()
+                        );
                         return Ok((false,));
                     }
                     let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
                         Ok(p) => p,
-                        Err(_) => return Ok((false,)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "[wasm write-file] rejected: bad JSON {e}: {flow_path_json}"
+                            );
+                            return Ok((false,));
+                        }
                     };
                     let ctx = match &store.data().host_state.storage_context {
                         Some(c) => c,
-                        None => return Ok((false,)),
+                        None => {
+                            tracing::warn!("[wasm write-file] rejected: no storage context");
+                            return Ok((false,));
+                        }
                     };
                     let obj_store = match ctx.resolve_store(&flow_path.store_ref) {
                         Some(s) => s,
-                        None => return Ok((false,)),
+                        None => {
+                            tracing::warn!(
+                                "[wasm write-file] rejected: unresolved store_ref={}",
+                                flow_path.store_ref
+                            );
+                            return Ok((false,));
+                        }
                     };
-                    let path = flow_like_storage::object_store::path::Path::from(flow_path.path);
+                    let path =
+                        flow_like_storage::object_store::path::Path::from(flow_path.path.clone());
                     let payload = flow_like_storage::object_store::PutPayload::from_bytes(
                         flow_like_types::Bytes::from(data),
                     );
                     match obj_store.as_generic().put(&path, payload).await {
                         Ok(_) => Ok((true,)),
-                        Err(_) => Ok((false,)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "[wasm write-file] put failed for path={} store_ref={}: {e}",
+                                flow_path.path,
+                                flow_path.store_ref
+                            );
+                            Ok((false,))
+                        }
                     }
                 })
             },
@@ -724,6 +771,448 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
         )
         .map_err(map_err)?;
 
+    // embed-text-query — embed texts for retrieval queries
+    models
+        .func_wrap_async(
+            "embed-text-query",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, texts_json): (String, String)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, texts_json);
+                    // Stub — embedding model resolution via CachedEmbeddingModel
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // embed-text-document — embed texts for document indexing
+    models
+        .func_wrap_async(
+            "embed-text-document",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, texts_json): (String, String)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, texts_json);
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // embed-image — embed an image via embedding model
+    models
+        .func_wrap_async(
+            "embed-image",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (model_json, image_data): (String, Vec<u8>)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return Ok((None::<String>,));
+                    }
+                    let _ = (model_json, image_data);
+                    Ok((None::<String>,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    // llm-prompt — send prompt to LLM/VLM
+    models
+        .func_wrap_async(
+            "llm-prompt",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (bit_json, messages_json, _do_stream): (String, String, bool)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        println!("llm-prompt: MODELS capability not granted");
+                        return Ok((None::<String>,));
+                    }
+
+                    let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            println!("llm-prompt: failed to parse bit JSON: {e}");
+                            let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
+                            return Ok((Some(err),));
+                        }
+                    };
+
+                    let model_ctx = match &store.data().host_state.model_context {
+                        Some(c) => c,
+                        None => {
+                            println!("llm-prompt: model_context is None");
+                            let err = serde_json::json!({"error": "Model context not available — ensure the node has Models permission"}).to_string();
+                            return Ok((Some(err),));
+                        }
+                    };
+                    let app_state = model_ctx.app_state.clone();
+                    let access_token = model_ctx.token.clone();
+
+                    // Parse messages_json: either a wrapper {messages, tools} or a plain array
+                    #[derive(serde::Deserialize)]
+                    struct LlmPromptRequest {
+                        messages: Vec<Value>,
+                        #[serde(default)]
+                        tools: Option<Vec<Value>>,
+                    }
+
+                    let (raw_messages, raw_tools) =
+                        match serde_json::from_str::<LlmPromptRequest>(&messages_json) {
+                            Ok(req) => (req.messages, req.tools),
+                            Err(_) => match serde_json::from_str::<Vec<Value>>(&messages_json) {
+                                Ok(msgs) => (msgs, None),
+                                Err(e) => {
+                                    println!("llm-prompt: failed to parse messages JSON: {e}");
+                                    let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
+                                    return Ok((Some(err),));
+                                }
+                            },
+                        };
+
+                    println!("llm-prompt: received {} messages, tools={}",
+                        raw_messages.len(),
+                        raw_tools.as_ref().map(|t| t.len()).unwrap_or(0)
+                    );
+                    if let Some(ref tools) = raw_tools {
+                        for (i, t) in tools.iter().enumerate() {
+                            println!("llm-prompt: raw tool[{i}]: {}", t);
+                        }
+                    }
+                    for (i, m) in raw_messages.iter().enumerate() {
+                        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
+                        let content_preview = m.get("content")
+                            .and_then(|c| c.as_str())
+                            .map(|s| if s.len() > 200 { format!("{}...", &s[..200]) } else { s.to_string() })
+                            .unwrap_or_else(|| "<non-string>".to_string());
+                        println!("llm-prompt: msg[{i}] role={role} content={content_preview}");
+                    }
+
+                    // Convert WASM SDK messages → native HistoryMessage
+                    let mut history_messages = Vec::with_capacity(raw_messages.len());
+                    for msg in &raw_messages {
+                        let role_str = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                        let role = match role_str {
+                            "system" => flow_like_model_provider::history::Role::System,
+                            "assistant" => flow_like_model_provider::history::Role::Assistant,
+                            "tool" => flow_like_model_provider::history::Role::Tool,
+                            _ => flow_like_model_provider::history::Role::User,
+                        };
+
+                        // Extract text content (handles both "content": "text" and "parts")
+                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str())
+                        {
+                            flow_like_model_provider::history::MessageContent::String(
+                                c.to_string(),
+                            )
+                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
+                            let mut contents = Vec::new();
+                            for part in parts {
+                                if let Some(text) =
+                                    part.get("text").and_then(|t| t.as_str())
+                                {
+                                    contents.push(
+                                        flow_like_model_provider::history::Content::Text {
+                                            content_type:
+                                                flow_like_model_provider::history::ContentType::Text,
+                                            text: text.to_string(),
+                                        },
+                                    );
+                                }
+                            }
+                            flow_like_model_provider::history::MessageContent::Contents(contents)
+                        } else {
+                            flow_like_model_provider::history::MessageContent::String(
+                                String::new(),
+                            )
+                        };
+
+                        // Extract tool calls (SDK format: {id, name, arguments})
+                        let tool_calls = msg
+                            .get("tool_calls")
+                            .and_then(|v| v.as_array())
+                            .map(|tcs| {
+                                tcs.iter()
+                                    .filter_map(|tc| {
+                                        let id = tc.get("id")?.as_str()?.to_string();
+                                        let name = tc.get("name")?.as_str()?.to_string();
+                                        let args = tc.get("arguments").cloned().unwrap_or_default();
+                                        let args_str = if args.is_string() {
+                                            args.as_str().unwrap_or("{}").to_string()
+                                        } else {
+                                            serde_json::to_string(&args).unwrap_or_default()
+                                        };
+                                        Some(flow_like_model_provider::history::ToolCall {
+                                            id,
+                                            r#type: "function".to_string(),
+                                            function:
+                                                flow_like_model_provider::history::ToolCallFunction {
+                                                    name,
+                                                    arguments: args_str,
+                                                },
+                                        })
+                                    })
+                                    .collect()
+                            });
+
+                        let tool_call_id = msg
+                            .get("tool_call_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+
+                        history_messages.push(
+                            flow_like_model_provider::history::HistoryMessage {
+                                role,
+                                content,
+                                name: None,
+                                tool_calls,
+                                tool_call_id,
+                                annotations: None,
+                            },
+                        );
+                    }
+
+                    let mut history = flow_like_model_provider::history::History::new(
+                        bit.id.clone(),
+                        history_messages,
+                    );
+                    history.stream = None;
+
+                    // Convert tool definitions if present
+                    if let Some(tools) = raw_tools {
+                        let mut native_tools: Vec<flow_like_model_provider::history::Tool> = Vec::new();
+                        for (i, t) in tools.iter().enumerate() {
+                            let name = match t.get("name").and_then(|n| n.as_str()) {
+                                Some(n) => n.to_string(),
+                                None => {
+                                    println!("llm-prompt: tool[{i}] missing 'name' field");
+                                    continue;
+                                }
+                            };
+                            let desc = t.get("description").and_then(|d| d.as_str()).map(String::from);
+                            let params = t.get("parameters").cloned().unwrap_or_default();
+                            println!("llm-prompt: tool[{i}] '{name}' params: {params}");
+                            match serde_json::from_value::<flow_like_model_provider::history::HistoryFunctionParameters>(params.clone()) {
+                                Ok(parsed) => {
+                                    native_tools.push(flow_like_model_provider::history::Tool {
+                                        tool_type: flow_like_model_provider::history::ToolType::Function,
+                                        function: flow_like_model_provider::history::HistoryFunction {
+                                            name,
+                                            description: desc,
+                                            parameters: parsed,
+                                        },
+                                    });
+                                }
+                                Err(e) => {
+                                    println!("llm-prompt: tool[{i}] '{name}' parameter deserialization FAILED: {e} — raw: {params}");
+                                }
+                            }
+                        }
+                        if !native_tools.is_empty() {
+                            history.tools = Some(native_tools);
+                        }
+                    }
+
+                    // Build model and invoke
+                    let model = {
+                        let mut factory = app_state.model_factory.lock().await;
+                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                println!("llm-prompt: failed to build model: {e}");
+                                let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
+                                return Ok((Some(err),));
+                            }
+                        }
+                    };
+
+                    // Log the full History before invoking
+                    if let Ok(history_json) = serde_json::to_string(&history) {
+                        println!("llm-prompt: History to invoke (len={}): {}",
+                            history_json.len(),
+                            if history_json.len() > 2000 { format!("{}...", &history_json[..2000]) } else { history_json }
+                        );
+                    }
+
+                    let response = match model.invoke(&history, None).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            println!("llm-prompt: model invoke failed: {e}");
+                            let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
+                            return Ok((Some(err),));
+                        }
+                    };
+
+                    // Convert response to SDK ChatMessage JSON
+                    let resp_msg = match response.last_message() {
+                        Some(m) => m,
+                        None => {
+                            println!("llm-prompt: model returned empty response (no messages)");
+                            let err = serde_json::json!({"error": "Model returned empty response"}).to_string();
+                            return Ok((Some(err),));
+                        }
+                    };
+
+                    let tool_calls_json: Option<Vec<Value>> =
+                        if resp_msg.tool_calls.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                resp_msg
+                                    .tool_calls
+                                    .iter()
+                                    .map(|tc| {
+                                        let args: Value =
+                                            serde_json::from_str(&tc.function.arguments)
+                                                .unwrap_or(Value::Object(Default::default()));
+                                        serde_json::json!({
+                                            "id": tc.id,
+                                            "name": tc.function.name,
+                                            "arguments": args,
+                                        })
+                                    })
+                                    .collect(),
+                            )
+                        };
+
+                    let result = serde_json::json!({
+                        "role": "assistant",
+                        "content": resp_msg.content.clone().unwrap_or_default(),
+                        "tool_calls": tool_calls_json,
+                    });
+
+                    Ok((Some(result.to_string()),))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_schema(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut schema = linker
+        .instance("flow-like:node/schema@0.1.0")
+        .map_err(map_err)?;
+
+    schema
+        .func_wrap(
+            "get-type-schema",
+            |_store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (type_name,): (String,)| {
+                use crate::host_functions::schema;
+                Ok((schema::get_type_schema(&type_name).map(|s| s.to_string()),))
+            },
+        )
+        .map_err(map_err)?;
+
+    schema
+        .func_wrap(
+            "list-types",
+            |_store: wasmtime::StoreContextMut<'_, ComponentStoreData>, ()| {
+                use crate::host_functions::schema;
+                let names = schema::list_type_names();
+                match serde_json::to_string(&names) {
+                    Ok(json) => Ok((Some(json),)),
+                    Err(_) => Ok((None::<String>,)),
+                }
+            },
+        )
+        .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_image(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut img = linker
+        .instance("flow-like:node/image@0.1.0")
+        .map_err(map_err)?;
+
+    img.func_wrap(
+        "from-bytes",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (data, format): (Vec<u8>, String)| {
+            if !store
+                .data()
+                .host_state
+                .has_capability(WasmCapabilities::MODELS)
+            {
+                return Ok((None::<String>,));
+            }
+            let _ = (data, format);
+            // Stub — image creation from bytes
+            Ok((None::<String>,))
+        },
+    )
+    .map_err(map_err)?;
+
+    img.func_wrap(
+        "to-bytes",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (image_ref, format): (String, String)| {
+            if !store
+                .data()
+                .host_state
+                .has_capability(WasmCapabilities::MODELS)
+            {
+                return Ok((None::<Vec<u8>>,));
+            }
+            let _ = (image_ref, format);
+            // Stub — image to bytes conversion
+            Ok((None::<Vec<u8>>,))
+        },
+    )
+    .map_err(map_err)?;
+
+    Ok(())
+}
+
+fn register_db(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
+    let mut db = linker
+        .instance("flow-like:node/db@0.1.0")
+        .map_err(map_err)?;
+
+    db.func_wrap_async(
+        "query",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (op, connection_json, payload_json): (u32, String, String)| {
+            Box::new(async move {
+                if !store
+                    .data()
+                    .host_state
+                    .has_capability(WasmCapabilities::MODELS)
+                {
+                    return Ok((None::<String>,));
+                }
+                let _ = (op, connection_json, payload_json);
+                // Stub — DB operations via connection cache key
+                Ok((None::<String>,))
+            })
+        },
+    )
+    .map_err(map_err)?;
+
     Ok(())
 }
 
@@ -836,7 +1325,10 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 
                 let resp = match req.send().await {
                     Ok(r) => r,
-                    Err(_) => return Ok((None,)),
+                    Err(e) => {
+                        tracing::warn!("WASM HTTP request to {} failed: {}", url, e);
+                        return Ok((None,));
+                    }
                 };
 
                 let status = resp.status().as_u16();
@@ -849,12 +1341,14 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             .map(|s| (k.as_str().to_string(), s.to_string()))
                     })
                     .collect();
-                let body_text = resp.text().await.unwrap_or_default();
+                let body_bytes = resp.bytes().await.unwrap_or_default();
+                let body_b64 =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_bytes);
 
                 let result = serde_json::json!({
                     "status": status,
                     "headers": resp_headers,
-                    "body": body_text,
+                    "body_base64": body_b64,
                 });
                 Ok((Some(result.to_string()),))
             })

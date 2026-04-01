@@ -80,6 +80,7 @@ export const StoreRecommendations = memo(function StoreRecommendations() {
 									metadata={metadata}
 									className="w-full h-full"
 									onClick={() => router.push(`/store?id=${app.id}`)}
+									href={`/store?id=${app.id}`}
 								/>
 							</div>
 						))}

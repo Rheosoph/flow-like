@@ -89,13 +89,15 @@ impl NodeLogic for RegisterLanceTableNode {
 
         let cached_session = session.load(context).await?;
         let cached_db = database.load(context).await?;
+        cached_db.ensure_flushed().await?;
         let db_guard = cached_db.db.read().await;
+        let inner = db_guard.inner();
 
         if table_name.is_empty() {
-            table_name = db_guard.table_name().to_string();
+            table_name = inner.table_name().to_string();
         }
 
-        let df_adapter = db_guard.to_datafusion().await?;
+        let df_adapter = inner.to_datafusion().await?;
 
         cached_session
             .ctx

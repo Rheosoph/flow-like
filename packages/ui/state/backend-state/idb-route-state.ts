@@ -13,7 +13,7 @@ export class IDBRouteState implements IAppRouteState {
 		};
 	}
 
-	async getRoutes(appId: string): Promise<IRouteMapping[]> {
+	async getRoutes(appId: string, _force?: boolean): Promise<IRouteMapping[]> {
 		const records = await routeStorage.getRoutes(appId);
 		return records
 			.filter((r) => r.eventId)

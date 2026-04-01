@@ -54,18 +54,21 @@ export default function ConfigurationPage() {
 
 	if (configurableBoards.length === 0) {
 		return (
-			<main className="justify-start flex flex-col items-start w-full flex-1 max-h-full overflow-y-auto md:overflow-visible flex-grow gap-4">
-				<div className="border p-6 rounded-lg bg-card w-full max-w-2xl mx-auto text-center">
-					<div className="w-16 h-16 mx-auto mb-4 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center">
-						<SettingsIcon className="w-8 h-8 text-green-600 dark:text-green-400" />
+			<main className="justify-start flex flex-col items-start w-full flex-1 max-h-full overflow-y-auto md:overflow-visible grow gap-6 py-6">
+				<div className="border p-8 rounded-xl bg-card w-full max-w-2xl mx-auto text-center space-y-4">
+					<div className="w-16 h-16 mx-auto bg-emerald-500/10 rounded-full flex items-center justify-center">
+						<SettingsIcon className="w-8 h-8 text-emerald-500" />
 					</div>
-					<h3 className="text-xl font-semibold mb-2">
-						✅ No Configuration Needed
+					<h3 className="text-xl font-semibold">
+						No Configuration Needed
 					</h3>
 					<p className="text-muted-foreground">
-						Your application doesn&apos;t have any configurable parameters.
-						You&apos;re ready to go! 🚀
+						Your app doesn&apos;t have any configurable parameters yet.
 					</p>
+					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground text-left space-y-2">
+						<p className="font-medium text-foreground">What are configurable parameters?</p>
+						<p>When you build Flows, you can mark variables as &quot;Exposed&quot; and &quot;Editable&quot;. These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.</p>
+					</div>
 				</div>
 			</main>
 		);
@@ -77,21 +80,18 @@ export default function ConfigurationPage() {
 	);
 
 	return (
-		<main className="justify-start flex flex-col items-start w-full flex-1 max-h-full overflow-y-auto md:overflow-visible flex-grow gap-6">
-			<div className="w-full py-4 border-b z-50">
+		<main className="justify-start flex flex-col items-start w-full flex-1 max-h-full overflow-y-auto md:overflow-visible grow gap-6">
+			<div className="w-full py-4 border-b">
 				<div className="flex items-center justify-between">
-					<div>
+					<div className="space-y-1">
 						<h2 className="text-2xl font-bold">Configuration</h2>
-						<p className="text-muted-foreground mt-1">
-							Configure {totalVariables} parameter
-							{totalVariables !== 1 ? "s" : ""} across{" "}
-							{configurableBoards.length} board
-							{configurableBoards.length !== 1 ? "s" : ""}
+						<p className="text-sm text-muted-foreground">
+							Adjust exposed parameters across your flows — no code changes needed.
 						</p>
 					</div>
 					<Badge variant="secondary" className="gap-1">
 						<SettingsIcon className="w-3 h-3" />
-						{totalVariables} Parameters
+						{totalVariables} across {configurableBoards.length} flow{configurableBoards.length !== 1 ? "s" : ""}
 					</Badge>
 				</div>
 			</div>

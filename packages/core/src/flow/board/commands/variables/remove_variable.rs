@@ -14,11 +14,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RemoveVariableCommand {
     pub variable: Variable,
+    /// When set, operate on a layer's variables instead of board-level variables
+    #[serde(default)]
+    pub layer_id: Option<String>,
 }
 
 impl RemoveVariableCommand {
     pub fn new(variable: Variable) -> Self {
-        RemoveVariableCommand { variable }
+        RemoveVariableCommand {
+            variable,
+            layer_id: None,
+        }
     }
 }
 
@@ -29,13 +35,21 @@ impl Command for RemoveVariableCommand {
         board: &mut Board,
         _: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        let old_variable = board.variables.remove(&self.variable.id);
+        let variables = if let Some(ref layer_id) = self.layer_id {
+            &mut board
+                .layers
+                .get_mut(layer_id)
+                .ok_or_else(|| flow_like_types::anyhow!("Layer not found"))?
+                .variables
+        } else {
+            &mut board.variables
+        };
+
+        let old_variable = variables.remove(&self.variable.id);
 
         if let Some(old_variable) = old_variable {
             if !old_variable.editable {
-                board
-                    .variables
-                    .insert(old_variable.id.clone(), old_variable);
+                variables.insert(old_variable.id.clone(), old_variable);
                 return Err(flow_like_types::anyhow!("Variable is not editable"));
             }
 
@@ -50,9 +64,17 @@ impl Command for RemoveVariableCommand {
         board: &mut Board,
         _: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        board
-            .variables
-            .insert(self.variable.id.clone(), self.variable.clone());
+        let variables = if let Some(ref layer_id) = self.layer_id {
+            &mut board
+                .layers
+                .get_mut(layer_id)
+                .ok_or_else(|| flow_like_types::anyhow!("Layer not found"))?
+                .variables
+        } else {
+            &mut board.variables
+        };
+
+        variables.insert(self.variable.id.clone(), self.variable.clone());
         Ok(())
     }
 }

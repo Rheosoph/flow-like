@@ -1,4 +1,5 @@
 export interface IUpsertVariable {
+	layer_id?: null | string;
 	old_variable?: null | IVariable;
 	variable: IVariable;
 	[property: string]: any;

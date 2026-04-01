@@ -46,6 +46,9 @@ export const frCommon = {
 	"footer.privacy": "Politique de confidentialité",
 	"footer.legal": "Mentions légales",
 	"footer.dataDeletion": "Suppression des données",
+	"footer.security": "Sécurité",
+	"footer.dpa": "ATD",
+	"footer.subprocessors": "Sous-traitants",
 
 	// BI Preview Section
 	"bi.preview.badge": "Business Intelligence",

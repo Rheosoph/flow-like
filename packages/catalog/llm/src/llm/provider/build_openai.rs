@@ -36,6 +36,7 @@ impl NodeLogic for BuildOpenAiNode {
             "AI/Generative/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -142,23 +143,29 @@ impl NodeLogic for BuildOpenAiNode {
 
         let bit_hash = hasher.finalize().to_hex().to_string();
 
+        let model_id_value = context
+            .evaluate_pin::<String>("model_id")
+            .await
+            .unwrap_or_default();
+        let model_id = if model_id_value.is_empty() {
+            None
+        } else {
+            Some(model_id_value)
+        };
+
         let params = VLMParameters {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
                 provider_name: "custom:openai".into(),
-                model_id: Some(
-                    context
-                        .evaluate_pin::<String>("model_id")
-                        .await
-                        .unwrap_or("gpt-5".into()),
-                ),
-                version: Some(
-                    context
+                model_id,
+                version: {
+                    let v = context
                         .evaluate_pin::<String>("version")
                         .await
-                        .unwrap_or("v1".into()),
-                ),
+                        .unwrap_or_default();
+                    if v.is_empty() { None } else { Some(v) }
+                },
                 params: Some(params),
             },
         };
@@ -186,59 +193,50 @@ impl NodeLogic for BuildOpenAiNode {
             .and_then(|json| json.as_str().map(ToOwned::to_owned))
             .unwrap_or_default();
 
-        let model_id_pin = node.get_pin_by_name("model_id");
-        let version_pin = node.get_pin_by_name("version");
+        let model_id_pin_id: Option<String> =
+            node.get_pin_by_name("model_id").map(|p| p.id.clone());
+        let version_pin_id: Option<String> = node.get_pin_by_name("version").map(|p| p.id.clone());
 
-        match (
-            provider_pin.as_str(),
-            model_id_pin.cloned(),
-            version_pin.cloned(),
-        ) {
-            ("OpenAI", Some(model_pin), Some(version_pin)) => {
-                node.pins.remove(&model_pin.id);
-                node.pins.remove(&version_pin.id);
+        // Drop borrows before mutating
+        let has_model_id = model_id_pin_id.is_some();
+        let has_version = version_pin_id.is_some();
+        let version_id_to_remove = version_pin_id;
+
+        match provider_pin.as_str() {
+            "OpenAI" => {
+                if let Some(id) = version_id_to_remove {
+                    node.pins.remove(&id);
+                }
+                if !has_model_id {
+                    node.add_input_pin(
+                        "model_id",
+                        "Model ID",
+                        "OpenAI Model ID (optional, leave empty to use provider default)",
+                        VariableType::String,
+                    )
+                    .set_default_value(Some(json!("")));
+                }
             }
-            ("OpenAI", None, Some(version_pin)) => {
-                node.pins.remove(&version_pin.id);
+            "Azure" => {
+                if !has_model_id {
+                    node.add_input_pin(
+                        "model_id",
+                        "Model ID",
+                        "Azure Model ID",
+                        VariableType::String,
+                    )
+                    .set_default_value(Some(json!("")));
+                }
+                if !has_version {
+                    node.add_input_pin(
+                        "version",
+                        "Version",
+                        "Azure API Version",
+                        VariableType::String,
+                    )
+                    .set_default_value(Some(json!("2024-12-01-preview")));
+                }
             }
-            ("OpenAI", Some(model_pin), None) => {
-                node.pins.remove(&model_pin.id);
-            }
-            ("Azure", None, None) => {
-                node.add_input_pin(
-                    "model_id",
-                    "Model ID",
-                    "Azure Model ID",
-                    VariableType::String,
-                )
-                .set_default_value(Some(json!("")));
-                node.add_input_pin(
-                    "version",
-                    "Version",
-                    "Azure API Version",
-                    VariableType::String,
-                )
-                .set_default_value(Some(json!("2024-12-01-preview")));
-            }
-            ("Azure", Some(_), None) => {
-                node.add_input_pin(
-                    "version",
-                    "Version",
-                    "Azure API Version",
-                    VariableType::String,
-                )
-                .set_default_value(Some(json!("2024-12-01-preview")));
-            }
-            ("Azure", None, Some(_)) => {
-                node.add_input_pin(
-                    "model_id",
-                    "Model ID",
-                    "Azure Model ID",
-                    VariableType::String,
-                )
-                .set_default_value(Some(json!("")));
-            }
-            ("Azure", Some(_), Some(_)) => {}
             _ => {}
         }
     }

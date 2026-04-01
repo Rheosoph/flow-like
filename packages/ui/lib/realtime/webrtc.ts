@@ -118,7 +118,11 @@ export async function createRealtimeSession(args: {
 	// Create a new session
 	console.log(`[WebRTC] Creating new session for room: ${room}`);
 	const doc = new Y.Doc();
-	if (!args.signalingServers) {
+	const effectiveSignaling =
+		args.signalingServers?.length
+			? args.signalingServers
+			: ["wss://signaling.flow-like.com"];
+	if (!args.signalingServers?.length) {
 		console.warn("No signaling servers provided, using default");
 	} else {
 		console.log("Using signaling servers:", args.signalingServers);
@@ -127,7 +131,7 @@ export async function createRealtimeSession(args: {
 	const provider = new WebrtcProvider(room, doc, {
 		password: access.encryption_key,
 		maxConns: 20 + Math.floor(Math.random() * 15),
-		signaling: args.signalingServers ?? ["wss://signaling.flow-like.com"],
+		signaling: effectiveSignaling,
 		filterBcConns: true,
 		peerOpts: {},
 	});
@@ -159,6 +163,7 @@ export async function createRealtimeSession(args: {
 
 	// Monitor connection status
 	let connectedPeers = 0;
+	let lastStatus: "connected" | "disconnected" | undefined;
 	let statusCheckInterval: NodeJS.Timeout | undefined;
 
 	const checkConnectionStatus = () => {
@@ -167,27 +172,31 @@ export async function createRealtimeSession(args: {
 
 		if (currentPeers !== connectedPeers) {
 			connectedPeers = currentPeers;
-			if (connectedPeers > 0 && onStatusChange) {
+			if (connectedPeers > 0 && onStatusChange && lastStatus !== "connected") {
+				lastStatus = "connected";
 				onStatusChange("connected");
 			}
 		}
 
-		// Check for signaling server connection
-		if (provider.room?.webrtcConns) {
-			const hasConnections = Object.keys(provider.room.webrtcConns).length > 0;
-			if (!hasConnections && connectedPeers === 0 && onStatusChange) {
-				console.warn("[WebRTC] No active connections detected");
-				onStatusChange("disconnected");
-			}
+		// Check if signaling websockets are alive
+		const signalingConnected = provider.signalingConns?.some(
+			(conn: any) => conn.connected,
+		);
+
+		if (signalingConnected && lastStatus !== "connected") {
+			// Signaling is alive — report connected so users know the session is up
+			lastStatus = "connected";
+			if (onStatusChange) onStatusChange("connected");
+		} else if (!signalingConnected && onStatusChange && lastStatus !== "disconnected") {
+			lastStatus = "disconnected";
+			onStatusChange("disconnected");
 		}
 	};
 
 	// Check status periodically
 	statusCheckInterval = setInterval(checkConnectionStatus, 5000);
-
-	awareness.on("change", () => {
-		checkConnectionStatus();
-	});
+	// Run an initial check after a short delay to set the correct status
+	setTimeout(checkConnectionStatus, 1000);
 
 	// Register in the global registry
 	roomRegistry.set(room, { doc, provider, refCount: 1 });

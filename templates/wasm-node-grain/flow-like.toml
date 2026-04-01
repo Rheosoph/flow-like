@@ -3,6 +3,7 @@
 # The runtime uses this to determine capabilities and display information.
 
 manifest_version = 1
+wasm_path = "build/node.wasm"
 
 # --- Package Identity ---
 id = "com.example.custom-node-grain"
@@ -15,6 +16,24 @@ keywords = ["template", "example"]
 
 [[authors]]
 name = "Your Name"
+
+# --- Permissions ---
+[permissions]
+memory = "standard"
+timeout = "standard"
+
+[permissions.network]
+http_enabled = false
+allowed_hosts = []
+websocket_enabled = false
+tcp_enabled = false
+udp_enabled = false
+dns_enabled = false
+
+[permissions.filesystem]
+node_storage = false
+user_storage = false
+
 
 # --- Nodes ---
 # Each [[nodes]] entry describes a node this package provides.

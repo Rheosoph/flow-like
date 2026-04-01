@@ -9,6 +9,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -39,8 +40,8 @@ export function A2UISelect({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<SelectComponent>) {
+	const onAction = useOnAction();
 	const value = useResolved<string>(component.value);
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??

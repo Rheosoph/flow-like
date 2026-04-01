@@ -1,0 +1,81 @@
+---
+import "@tm9657/flow-like-ui/global.css";
+import "../styles/website-base.css";
+import { Header } from "../components/header";
+import { BlogFooter } from "../components/blog-footer";
+import PostHog from "../components/posthog.astro";
+
+interface Props {
+	title: string;
+	description: string;
+	image?: string;
+	canonicalPath?: string;
+	jsonLd?: object;
+	noindex?: boolean;
+}
+
+const {
+	title,
+	description,
+	image = "/og.png",
+	canonicalPath,
+	jsonLd,
+	noindex = false,
+} = Astro.props;
+
+const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
+const canonical = new URL(canonicalPath ?? Astro.url.pathname, site).toString();
+const fullImage = image.startsWith("http") ? image : new URL(image, site).toString();
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="generator" content={Astro.generator} />
+
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		{noindex ? (
+			<meta name="robots" content="noindex, nofollow" />
+		) : (
+			<meta name="robots" content="index, follow" />
+		)}
+		<link rel="canonical" href={canonical} />
+		<meta name="theme-color" content="#ffffff" />
+		<link rel="sitemap" href="/sitemap-index.xml" />
+
+		<!-- Open Graph -->
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content="Flow-Like" />
+		<meta property="og:url" content={canonical} />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:image" content={fullImage} />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+
+		<!-- Twitter -->
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:site" content="@greatco_de" />
+		<meta name="twitter:creator" content="@greatco_de" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={fullImage} />
+
+		<PostHog />
+
+		{jsonLd && (
+			<script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />
+		)}
+	</head>
+	<body class="bg-background text-foreground min-h-screen flex flex-col">
+		<Header client:load />
+		<main class="flex-1">
+			<slot />
+		</main>
+		<BlogFooter client:load />
+	</body>
+</html>

@@ -227,72 +227,83 @@ pub fn create_flow_store(config: &StorageConfig, bucket: &str) -> Result<FlowLik
 pub struct BucketConfig {
     pub meta: String,
     pub content: String,
+    pub cdn: String,
     pub logs: String,
 }
 
 impl BucketConfig {
-    /// Load bucket configuration from environment
-    /// Uses provider-specific env vars with fallback to generic ones
+    /// Load bucket configuration from environment.
+    ///
+    /// Uses provider-specific env vars with fallback to generic ones.
+    /// `META_BUCKET` falls back to `CONTENT_BUCKET` when unset, enabling
+    /// single-bucket deployments.
     pub fn from_env(provider: &StorageProvider) -> Result<Self> {
-        let (meta, content, logs) = match provider {
-            StorageProvider::Aws => (
-                std::env::var("AWS_META_BUCKET")
-                    .or_else(|_| std::env::var("META_BUCKET"))
-                    .map_err(|_| {
-                        flow_like_types::anyhow!("META_BUCKET or AWS_META_BUCKET not set")
-                    })?,
-                std::env::var("AWS_CONTENT_BUCKET")
+        let (content, meta, cdn, logs) = match provider {
+            StorageProvider::Aws => {
+                let content = std::env::var("AWS_CONTENT_BUCKET")
                     .or_else(|_| std::env::var("CONTENT_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!("CONTENT_BUCKET or AWS_CONTENT_BUCKET not set")
-                    })?,
-                std::env::var("AWS_LOG_BUCKET")
+                    })?;
+                let meta = std::env::var("AWS_META_BUCKET")
+                    .or_else(|_| std::env::var("META_BUCKET"))
+                    .unwrap_or_else(|_| content.clone());
+                let cdn = std::env::var("CDN_BUCKET_NAME")
+                    .or_else(|_| std::env::var("AWS_CDN_BUCKET"))
+                    .unwrap_or_else(|_| content.clone());
+                let logs = std::env::var("AWS_LOG_BUCKET")
                     .or_else(|_| std::env::var("LOG_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!("LOG_BUCKET or AWS_LOG_BUCKET not set")
-                    })?,
-            ),
-            StorageProvider::Azure => (
-                std::env::var("AZURE_META_CONTAINER")
-                    .or_else(|_| std::env::var("META_BUCKET"))
-                    .map_err(|_| {
-                        flow_like_types::anyhow!("META_BUCKET or AZURE_META_CONTAINER not set")
-                    })?,
-                std::env::var("AZURE_CONTENT_CONTAINER")
+                    })?;
+                (content, meta, cdn, logs)
+            }
+            StorageProvider::Azure => {
+                let content = std::env::var("AZURE_CONTENT_CONTAINER")
                     .or_else(|_| std::env::var("CONTENT_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!(
                             "CONTENT_BUCKET or AZURE_CONTENT_CONTAINER not set"
                         )
-                    })?,
-                std::env::var("AZURE_LOG_CONTAINER")
+                    })?;
+                let meta = std::env::var("AZURE_META_CONTAINER")
+                    .or_else(|_| std::env::var("META_BUCKET"))
+                    .unwrap_or_else(|_| content.clone());
+                let cdn = std::env::var("CDN_BUCKET_NAME")
+                    .or_else(|_| std::env::var("AZURE_CDN_CONTAINER"))
+                    .unwrap_or_else(|_| content.clone());
+                let logs = std::env::var("AZURE_LOG_CONTAINER")
                     .or_else(|_| std::env::var("LOG_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!("LOG_BUCKET or AZURE_LOG_CONTAINER not set")
-                    })?,
-            ),
-            StorageProvider::Gcp => (
-                std::env::var("GCP_META_BUCKET")
-                    .or_else(|_| std::env::var("META_BUCKET"))
-                    .map_err(|_| {
-                        flow_like_types::anyhow!("META_BUCKET or GCP_META_BUCKET not set")
-                    })?,
-                std::env::var("GCP_CONTENT_BUCKET")
+                    })?;
+                (content, meta, cdn, logs)
+            }
+            StorageProvider::Gcp => {
+                let content = std::env::var("GCP_CONTENT_BUCKET")
                     .or_else(|_| std::env::var("CONTENT_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!("CONTENT_BUCKET or GCP_CONTENT_BUCKET not set")
-                    })?,
-                std::env::var("GCP_LOG_BUCKET")
+                    })?;
+                let meta = std::env::var("GCP_META_BUCKET")
+                    .or_else(|_| std::env::var("META_BUCKET"))
+                    .unwrap_or_else(|_| content.clone());
+                let cdn = std::env::var("CDN_BUCKET_NAME")
+                    .or_else(|_| std::env::var("GCP_CDN_BUCKET"))
+                    .unwrap_or_else(|_| content.clone());
+                let logs = std::env::var("GCP_LOG_BUCKET")
                     .or_else(|_| std::env::var("LOG_BUCKET"))
                     .map_err(|_| {
                         flow_like_types::anyhow!("LOG_BUCKET or GCP_LOG_BUCKET not set")
-                    })?,
-            ),
+                    })?;
+                (content, meta, cdn, logs)
+            }
         };
 
         Ok(BucketConfig {
             meta,
             content,
+            cdn,
             logs,
         })
     }

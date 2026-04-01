@@ -29,7 +29,7 @@ base64 = "0.22"
 axum.workspace = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

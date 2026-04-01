@@ -1,6 +1,5 @@
 "use client";
 
-import { format, formatDistanceToNow } from "date-fns";
 import {
 	ArrowLeft,
 	CheckCircle,
@@ -17,8 +16,10 @@ import type {
 	AdminPackageDetailResponse,
 	PackageAdminStatus,
 	PackageReview,
+	PackageReviewer,
 	ReviewRequest,
 } from "../../lib/schema/wasm";
+import { formatAbsoluteDateValue } from "../../lib";
 import {
 	Badge,
 	Button,
@@ -36,6 +37,7 @@ import {
 	Separator,
 	Skeleton,
 	Slider,
+	RelativeTime,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -54,6 +56,10 @@ const statusBadgeVariant: Record<
 	disabled: "outline",
 };
 
+function formatDownloadCount(count: number | null | undefined) {
+	return (count ?? 0).toLocaleString();
+}
+
 function ReviewItem({ review }: { review: PackageReview }) {
 	const actionIcon = {
 		submitted: <Package className="h-4 w-4" />,
@@ -64,21 +70,39 @@ function ReviewItem({ review }: { review: PackageReview }) {
 		flag: <Shield className="h-4 w-4 text-orange-500" />,
 	};
 
+	const reviewer = review.reviewer;
+	const reviewerLabel =
+		reviewer?.name ?? reviewer?.username ?? review.reviewerId;
+	const reviewerInitial = reviewerLabel.charAt(0).toUpperCase();
+
 	return (
 		<div className="flex gap-4 p-4 border rounded-lg">
-			<div className="shrink-0">{actionIcon[review.action]}</div>
+			<div className="shrink-0 flex flex-col items-center gap-3">
+				<div>{actionIcon[review.action]}</div>
+				<div className="flex items-center gap-2 text-xs text-muted-foreground">
+					<div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border bg-muted text-foreground">
+						{reviewer?.avatar ? (
+							<img
+								src={reviewer.avatar}
+								alt={reviewerLabel}
+								className="h-full w-full object-cover"
+							/>
+						) : (
+							reviewerInitial
+						)}
+					</div>
+				</div>
+			</div>
 			<div className="flex-1">
 				<div className="flex items-center gap-2">
 					<span className="font-medium capitalize">
 						{review.action.replace("_", " ")}
 					</span>
 					<span className="text-sm text-muted-foreground">
-						by {review.reviewerId}
+						by {reviewerLabel}
 					</span>
 					<span className="text-sm text-muted-foreground">
-						{formatDistanceToNow(new Date(review.createdAt), {
-							addSuffix: true,
-						})}
+						<RelativeTime value={review.createdAt} />
 					</span>
 				</div>
 				{review.comment && (
@@ -209,7 +233,7 @@ export function AdminPackageDetailView({
 						</span>
 						<span className="text-sm text-muted-foreground flex items-center gap-1">
 							<Download className="h-3 w-3" />
-							{pkg.downloadCount.toLocaleString()} downloads
+							{formatDownloadCount(pkg.downloadCount)} downloads
 						</span>
 					</div>
 				</div>
@@ -276,13 +300,13 @@ export function AdminPackageDetailView({
 										</div>
 										<div>
 											<Label className="text-muted-foreground">Created</Label>
-											<p>{format(new Date(pkg.createdAt), "PPp")}</p>
+											<p>{formatAbsoluteDateValue(pkg.createdAt, "Unknown")}</p>
 										</div>
 										<div>
 											<Label className="text-muted-foreground">Published</Label>
 											<p>
 												{pkg.publishedAt
-													? format(new Date(pkg.publishedAt), "PPp")
+													? formatAbsoluteDateValue(pkg.publishedAt, "Not published")
 													: "Not published"}
 											</p>
 										</div>

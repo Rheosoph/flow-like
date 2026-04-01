@@ -15,6 +15,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Skeleton,
+	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
 import type {
@@ -36,7 +37,9 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { fetcher } from "../../../../lib/api";
 
 type SortOption =
 	| "relevance"
@@ -59,6 +62,7 @@ function PackageCard({
 	installedVersion,
 	onInstall,
 	onUninstall,
+	onSelect,
 	isLoading,
 }: {
 	pkg: PackageSummary;
@@ -66,6 +70,7 @@ function PackageCard({
 	installedVersion?: string;
 	onInstall: (id: string) => void;
 	onUninstall: (id: string) => void;
+	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
 	return (
@@ -73,6 +78,8 @@ function PackageCard({
 			initial={{ opacity: 0, y: 10 }}
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.2 }}
+			className="cursor-pointer"
+			onClick={() => onSelect?.(pkg.id)}
 		>
 			<Card className="hover:shadow-md transition-shadow">
 				<CardHeader className="pb-2">
@@ -120,7 +127,7 @@ function PackageCard({
 								<Button
 									size="sm"
 									variant="destructive"
-									onClick={() => onUninstall(pkg.id)}
+								onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -133,7 +140,7 @@ function PackageCard({
 						) : (
 							<Button
 								size="sm"
-								onClick={() => onInstall(pkg.id)}
+							onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
 								disabled={isLoading}
 							>
 								{isLoading ? (
@@ -181,8 +188,10 @@ function PackageCardSkeleton() {
 
 export default function ExplorePackagesPage() {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
 	const [searchQuery, setSearchQuery] = useState("");
 	const [sortBy, setSortBy] = useState<SortOption>("relevance");
@@ -296,6 +305,31 @@ export default function ExplorePackagesPage() {
 		);
 	}
 
+	if (selectedPackageId) {
+		return (
+			<StorePackageDetail
+				packageId={selectedPackageId}
+				onBack={() => setSelectedPackageId(null)}
+				onInstallSuccess={() => {
+					toast.success("Package installed");
+					fetchInstalled();
+				}}
+				onUninstallSuccess={() => {
+					toast.success("Package uninstalled");
+					fetchInstalled();
+				}}
+				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
+				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onDeleteSuccess={() => {
+					setSelectedPackageId(null);
+					fetchInstalled();
+				}}
+				fetcher={fetcher}
+				auth={auth}
+			/>
+		);
+	}
+
 	return (
 		<div className="flex flex-col h-full space-y-4">
 			<div className="flex items-center justify-between">
@@ -380,6 +414,7 @@ export default function ExplorePackagesPage() {
 								installedVersion={installedVersionMap.get(pkg.id)}
 								onInstall={handleInstall}
 								onUninstall={handleUninstall}
+								onSelect={setSelectedPackageId}
 								isLoading={loadingPackage === pkg.id}
 							/>
 						))}

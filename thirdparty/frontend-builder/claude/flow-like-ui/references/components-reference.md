@@ -242,17 +242,20 @@ Loading placeholder.
 | rounded | BoundValue | boolean |
 
 ### iframe
-Embedded external content.
+Embed external pages or preview raw HTML content. Sandboxed by default — no access to parent app resources.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| src | BoundValue | URL **(REQUIRED)** |
+| src | BoundValue | URL (provide src or srcdoc) |
+| srcdoc | BoundValue | Raw HTML string for preview (provide src or srcdoc) |
 | title | BoundValue | Frame title |
 | width | BoundValue | string |
 | height | BoundValue | string |
-| sandbox | BoundValue | Sandbox restrictions |
+| sandbox | BoundValue | Sandbox restrictions (defaults: src="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox", srcdoc="allow-scripts") |
 | allow | BoundValue | Permissions policy |
 | loading | BoundValue | "lazy", "eager" |
+| referrerPolicy | BoundValue | "no-referrer" (default), "origin", etc. |
+| border | BoundValue | boolean |
 
 ### table
 Data table.
@@ -596,3 +599,204 @@ Click popover.
 | trigger | BoundValue | "click", "hover" |
 | closeOnClickOutside | BoundValue | boolean |
 | children | Children | Trigger element |
+
+---
+
+## GAME / VISUAL COMPONENTS
+
+### canvas2d
+2D drawing canvas container.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| width | BoundValue | Canvas width **(REQUIRED)** |
+| height | BoundValue | Canvas height **(REQUIRED)** |
+| backgroundColor | BoundValue | Background color |
+| pixelPerfect | BoundValue | boolean |
+| children | Children | Sprite/shape children |
+
+### sprite
+2D sprite for canvas.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| src | BoundValue | Image URL **(REQUIRED)** |
+| x | BoundValue | X position **(REQUIRED)** |
+| y | BoundValue | Y position **(REQUIRED)** |
+| width | BoundValue | Sprite width |
+| height | BoundValue | Sprite height |
+| rotation | BoundValue | Rotation in degrees |
+| scale | BoundValue | Scale factor |
+| opacity | BoundValue | 0-1 opacity |
+| flipX | BoundValue | boolean |
+| flipY | BoundValue | boolean |
+| zIndex | BoundValue | Layer order |
+
+### shape
+2D vector shape for canvas.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| shapeType | BoundValue | "rectangle", "circle", "ellipse", "line", "polygon" **(REQUIRED)** |
+| x | BoundValue | X position **(REQUIRED)** |
+| y | BoundValue | Y position **(REQUIRED)** |
+| width | BoundValue | Shape width |
+| height | BoundValue | Shape height |
+| radius | BoundValue | Circle/corner radius |
+| points | BoundValue | Polygon points array |
+| fill | BoundValue | Fill color |
+| stroke | BoundValue | Stroke color |
+| strokeWidth | BoundValue | Stroke width |
+
+### scene3d
+3D scene container (Three.js).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| width | BoundValue | Scene width **(REQUIRED)** |
+| height | BoundValue | Scene height **(REQUIRED)** |
+| cameraType | BoundValue | "perspective", "orthographic" |
+| cameraPosition | BoundValue | `{x, y, z}` |
+| backgroundColor | BoundValue | Background color |
+| controlMode | BoundValue | "orbit", "fly", "firstPerson" |
+| fixedView | BoundValue | boolean |
+| autoRotateSpeed | BoundValue | number |
+| enableControls | BoundValue | boolean |
+| enableZoom | BoundValue | boolean |
+| enablePan | BoundValue | boolean |
+| fov | BoundValue | Field of view |
+| target | BoundValue | Look-at target `{x, y, z}` |
+| ambientLight | BoundValue | Ambient light config |
+| directionalLight | BoundValue | Directional light config |
+| showGrid | BoundValue | boolean |
+| showAxes | BoundValue | boolean |
+| children | Children | 3D model children |
+
+### model3d
+3D model viewer.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| src | BoundValue | GLTF/GLB URL **(REQUIRED)** |
+| position | BoundValue | `{x, y, z}` |
+| rotation | BoundValue | `{x, y, z}` |
+| scale | BoundValue | `{x, y, z}` or number |
+| castShadow | BoundValue | boolean |
+| receiveShadow | BoundValue | boolean |
+| animation | BoundValue | Animation name |
+| autoRotate | BoundValue | boolean |
+| rotateSpeed | BoundValue | number |
+| viewerHeight | BoundValue | string |
+| backgroundColor | BoundValue | Background color |
+| cameraDistance | BoundValue | number |
+| fov | BoundValue | Field of view |
+| enableControls | BoundValue | boolean |
+| enableZoom | BoundValue | boolean |
+| lightingPreset | BoundValue | "default", "studio", "outdoor", "dramatic" |
+| environment | BoundValue | Environment map |
+| showGround | BoundValue | boolean |
+
+### dialogue
+Visual novel dialogue box.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| text | BoundValue | Dialogue text **(REQUIRED)** |
+| speakerName | BoundValue | Speaker name |
+| typewriter | BoundValue | boolean (typewriter effect) |
+| speed | BoundValue | Typing speed |
+| portrait | BoundValue | Speaker portrait URL |
+| children | Children | Additional content |
+
+### characterPortrait
+Character portrait display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| image | BoundValue | Image URL **(REQUIRED)** |
+| expression | BoundValue | Expression name |
+| position | BoundValue | "left", "center", "right" |
+| width | BoundValue | string |
+| height | BoundValue | string |
+| flip | BoundValue | boolean |
+
+### choiceMenu
+Interactive choice selection (for games/VN).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| choices | BoundValue | Array of `{id, text, disabled?, icon?}` **(REQUIRED)** |
+| title | BoundValue | Menu title |
+| layout | BoundValue | "vertical", "horizontal", "grid" |
+| columns | BoundValue | Grid columns |
+
+### inventoryGrid
+Game-style item grid.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| items | BoundValue | Array of `{id, name, icon?, quantity?, description?}` **(REQUIRED)** |
+| columns | BoundValue | Grid columns |
+| rows | BoundValue | Grid rows |
+| cellSize | BoundValue | Cell size string |
+| showTooltips | BoundValue | boolean |
+
+### healthBar
+HP/resource bar display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | Current value **(REQUIRED)** |
+| maxValue | BoundValue | Maximum value **(REQUIRED)** |
+| label | BoundValue | Bar label |
+| fillColor | BoundValue | Fill color |
+| variant | BoundValue | "default", "danger", "warning", "success" |
+| showLabel | BoundValue | boolean |
+| size | BoundValue | "sm", "md", "lg" |
+| animated | BoundValue | boolean |
+
+### miniMap
+Game mini-map display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| mapImage | BoundValue | Map image URL **(REQUIRED)** |
+| width | BoundValue | Map width **(REQUIRED)** |
+| height | BoundValue | Map height **(REQUIRED)** |
+| markers | BoundValue | Array of `{id, x, y, icon?, color?, label?}` |
+| playerX | BoundValue | Player X position |
+| playerY | BoundValue | Player Y position |
+| viewportWidth | BoundValue | Viewport width |
+| viewportHeight | BoundValue | Viewport height |
+| zoom | BoundValue | Zoom level |
+
+---
+
+## GEO COMPONENTS
+
+### geoMap
+Interactive map display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| center | BoundValue | `{lat, lng}` |
+| zoom | BoundValue | Zoom level |
+| markers | BoundValue | Array of `{id, lat, lng, label?, icon?, color?}` |
+| style | BoundValue | Map style config |
+| width | BoundValue | Map width |
+| height | BoundValue | Map height |
+| mapStyle | BoundValue | "streets", "satellite", "dark", "light" |
+| interactive | BoundValue | boolean |
+
+---
+
+## SPECIAL COMPONENTS
+
+### widgetInstance
+Embed a reusable widget (defined in Flow-Like).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| widgetId | BoundValue | Widget ID **(REQUIRED)** |
+| widgetInputs | BoundValue | Input bindings |
+| bindOutputs | BoundValue | Output bindings |

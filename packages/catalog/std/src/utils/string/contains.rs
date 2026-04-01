@@ -50,11 +50,8 @@ impl NodeLogic for StringContainsNode {
 
         let mut contains = false;
 
-        {
-            let string = string.as_ref().lock().await;
-            if let Some(string) = string.as_str() {
-                contains = string.contains(&substring);
-            }
+        if let Some(string) = string.as_str() {
+            contains = string.contains(&substring);
         }
 
         context.set_pin_value("contains", json!(contains)).await?;

@@ -1,11 +1,11 @@
 ---
 name: flow-like-ui
-description: Generate valid A2UI JSON for FlowLike application frontends. Use when asked to create, design, or build user interfaces, dashboards, forms, pages, layouts, or any visual UI components as A2UI JSON. Supports 60+ component types including layout (row, column, grid), display (text, image, charts), interactive (button, textField, select), containers (card, modal, tabs), game (canvas2d, scene3d, model3d), and geo (geoMap).
+description: Generate valid A2UI JSON for FlowLike application frontends. Use when asked to create, design, or build user interfaces, dashboards, forms, pages, layouts, or any visual UI components as A2UI JSON. Supports 60+ component types including layout (row, column, grid), display (text, image, charts), interactive (button, textField, select), containers (card, modal, tabs), game (canvas2d, scene3d, sprite), and geo (geoMap).
 ---
 
 # A2UI Frontend Generator
 
-Convert UI descriptions into valid A2UI JSON that renders directly in the FlowLike runtime.
+Convert UI descriptions into valid A2UI (Agent-to-UI) JSON that renders directly in the FlowLike runtime. A2UI is a declarative, flat-list protocol — components reference children by ID, not by nesting.
 
 ## Response Format
 
@@ -24,6 +24,9 @@ Always respond with ONLY a JSON code block. No explanatory text before or after.
       "style": { "className": "tailwind-classes" },
       "component": { "type": "componentType", ...props }
     }
+  ],
+  "dataModel": [
+    { "path": "$.field", "value": "initial value" }
   ]
 }
 ```
@@ -31,12 +34,13 @@ Always respond with ONLY a JSON code block. No explanatory text before or after.
 ## Absolute Rules
 
 1. **JSON only** — No explanations, just the JSON code block
-2. **Unique IDs** — Every component gets a unique kebab-case ID (`header-row`, `submit-btn`)
-3. **BoundValue wrapper** — ALL prop values use BoundValue format
-4. **Reference children by ID** — Use `{"explicitList": ["id1", "id2"]}`
-5. **Prefer theme tokens** — Use `bg-background`, `text-foreground`, etc. Hardcoded colors only if user requests them
-6. **Root component required** — `rootComponentId` must reference an existing component ID
-7. **Flat component list** — All components are siblings in `components`; hierarchy is via children references
+2. **Flat component list** — All components are siblings in `components[]`; hierarchy is expressed via children references, NEVER by nesting
+3. **Unique IDs** — Every component gets a unique kebab-case ID (`header-row`, `submit-btn`)
+4. **BoundValue wrapper** — ALL prop values MUST use BoundValue format (see below)
+5. **Reference children by ID** — Use `{"explicitList": ["id1", "id2"]}`
+6. **Prefer theme tokens** — Use `bg-background`, `text-foreground`, etc. Hardcoded colors only if user requests them
+7. **Root component required** — `rootComponentId` must reference an existing component ID
+8. **Include dataModel** — When using data binding paths, always provide a `dataModel` array with initial values
 
 ## BoundValue Format
 
@@ -55,12 +59,12 @@ For full data binding patterns, see [references/bound-value-guide.md](references
 
 ## Children Format
 
+Static children:
 ```json
 "children": {"explicitList": ["child-id-1", "child-id-2"]}
 ```
 
-For data-driven repeated children:
-
+Data-driven repeated children (templating):
 ```json
 "children": {"template": {"dataPath": "$.items", "itemIdPath": "id", "templateComponentId": "item-template"}}
 ```
@@ -75,7 +79,7 @@ For full styling guide with Tailwind utilities and responsive design, see [refer
 
 ## Responsive Breakpoints (Mobile-First)
 
-Base = mobile, `sm:` ≥640px, `md:` ≥768px, `lg:` ≥1024px, `xl:` ≥1280px, `2xl:` ≥1536px
+Base = mobile, `sm:` >=640px, `md:` >=768px, `lg:` >=1024px, `xl:` >=1280px, `2xl:` >=1536px
 
 ## Custom CSS
 
@@ -89,7 +93,7 @@ For effects beyond Tailwind, use `canvasSettings.customCss`:
 
 ## Actions
 
-Interactive components can fire actions:
+Interactive components can fire actions back to the agent/backend:
 
 ```json
 "actions": [{"name": "submit", "context": {"formId": "contact-form"}}]
@@ -107,9 +111,9 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `column` | Vertical flex container | gap, align, justify, wrap, children |
 | `row` | Horizontal flex container | gap, align, justify, wrap, children |
 | `grid` | CSS Grid container | columns, rows, gap, autoFlow, children |
-| `stack` | Z-axis layering | align, width, height, children |
+| `stack` | Z-axis layering (**MUST set width/height**) | align, width, height, children |
 | `scrollArea` | Scrollable container | direction, children |
-| `aspectRatio` | Maintain ratio | ratio (required), children |
+| `aspectRatio` | Maintain ratio | ratio* (required), children |
 | `overlay` | Items over a base | baseComponentId, overlays |
 | `absolute` | Free positioning | width, height, children |
 | `box` | Semantic HTML container | as (div/section/header/etc.), children |
@@ -131,11 +135,11 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `spinner` | Loading spinner | size, color |
 | `skeleton` | Loading placeholder | width, height, rounded |
 | `divider` | Separator line | orientation, thickness |
-| `iframe` | Embedded content | src*, title, width, height |
+| `iframe` | Embedded content / HTML preview | src, srcdoc, title, width, height, sandbox |
 | `table` | Data table | columns*, data*, striped, searchable, paginated |
-| `plotlyChart` | Plotly.js charts | chartType, title, series, data |
-| `nivoChart` | Nivo charts (25+ types) | chartType*, data, indexBy, keys |
-| `filePreview` | File preview | src*, fit |
+| `plotlyChart` | Plotly.js charts | chartType, title, data, layout |
+| `nivoChart` | Nivo charts (14+ types) | chartType*, data, indexBy, keys |
+| `filePreview` | File preview | url*, mimeType |
 | `boundingBoxOverlay` | Boxes on image | src*, boxes*, showLabels |
 
 ### Interactive
@@ -166,31 +170,38 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `tooltip` | Hover tooltip | content*, side, children |
 | `popover` | Click popover | contentComponentId*, side, trigger |
 
-### Game
+### Game / Visual
 | Component | Purpose | Key Props |
 |-----------|---------|-----------|
-| `canvas2d` | 2D canvas | width*, height*, children |
-| `sprite` | 2D sprite | src*, x*, y*, rotation, scale |
-| `shape` | 2D shape | shapeType*, x*, y*, fill, stroke |
+| `canvas2d` | 2D drawing canvas | width*, height*, backgroundColor, children |
+| `sprite` | 2D sprite | src*, x*, y*, rotation, scale, flipX, flipY |
+| `shape` | 2D vector shape | shapeType*, x*, y*, fill, stroke, strokeWidth |
 | `scene3d` | 3D scene (Three.js) | width*, height*, cameraType, controlMode |
 | `model3d` | 3D model viewer | src*, lightingPreset, environment, autoRotate |
-| `dialogue` | VN dialogue box | text*, speakerName, typewriter |
-| `characterPortrait` | Character portrait | image*, position, size |
-| `choiceMenu` | Choice selection | choices*, title, layout |
-| `inventoryGrid` | Inventory display | items*, columns, rows |
-| `healthBar` | HP/resource bar | value*, maxValue*, variant |
-| `miniMap` | Game mini-map | width*, height*, markers, playerX, playerY |
+| `dialogue` | Visual novel dialogue | text*, speakerName, typewriter, portrait |
+| `characterPortrait` | Character portrait | image*, position, expression, flip |
+| `choiceMenu` | Interactive choices | choices*, title, layout, columns |
+| `inventoryGrid` | Item grid | items*, columns, rows, cellSize |
+| `healthBar` | HP/resource bar | value*, maxValue*, variant, fillColor |
+| `miniMap` | Game mini-map | mapImage*, width*, height*, markers, playerX, playerY |
 
 ### Geo
 | Component | Purpose | Key Props |
 |-----------|---------|-----------|
-| `geoMap` | Interactive map | viewport, markers, routes, showControls |
+| `geoMap` | Interactive map | center, zoom, markers, mapStyle, interactive |
+
+### Special
+| Component | Purpose | Key Props |
+|-----------|---------|-----------|
+| `widgetInstance` | Embed reusable widget | widgetId, widgetInputs, bindOutputs |
 
 *= required prop
 
 ---
 
-## Quick Example
+## Quick Examples
+
+### Login Form
 
 User: "Login form with email, password, and submit button"
 
@@ -211,7 +222,6 @@ User: "Login form with email, password, and submit button"
     },
     {
       "id": "login-form",
-      "style": {"className": ""},
       "component": {
         "type": "column",
         "gap": {"literalString": "1rem"},
@@ -220,10 +230,9 @@ User: "Login form with email, password, and submit button"
     },
     {
       "id": "email-field",
-      "style": {"className": ""},
       "component": {
         "type": "textField",
-        "value": {"literalString": ""},
+        "value": {"path": "$.form.email", "defaultValue": ""},
         "label": {"literalString": "Email"},
         "placeholder": {"literalString": "you@example.com"},
         "inputType": {"literalString": "email"},
@@ -232,12 +241,11 @@ User: "Login form with email, password, and submit button"
     },
     {
       "id": "password-field",
-      "style": {"className": ""},
       "component": {
         "type": "textField",
-        "value": {"literalString": ""},
+        "value": {"path": "$.form.password", "defaultValue": ""},
         "label": {"literalString": "Password"},
-        "placeholder": {"literalString": "••••••••"},
+        "placeholder": {"literalString": "********"},
         "inputType": {"literalString": "password"},
         "required": {"literalBool": true}
       }
@@ -248,9 +256,174 @@ User: "Login form with email, password, and submit button"
       "component": {
         "type": "button",
         "label": {"literalString": "Sign In"},
-        "variant": {"literalString": "default"}
+        "variant": {"literalString": "default"},
+        "actions": [{"name": "login", "context": {"form": "login"}}]
       }
     }
+  ],
+  "dataModel": [
+    {"path": "$.form.email", "value": ""},
+    {"path": "$.form.password", "value": ""}
+  ]
+}
+```
+
+### Stats Dashboard
+
+User: "Dashboard with 3 stat cards and a chart"
+
+```json
+{
+  "rootComponentId": "dashboard",
+  "canvasSettings": {"backgroundColor": "bg-background", "padding": "1.5rem"},
+  "components": [
+    {
+      "id": "dashboard",
+      "component": {
+        "type": "column",
+        "gap": {"literalString": "1.5rem"},
+        "children": {"explicitList": ["stats-grid", "chart-card"]}
+      }
+    },
+    {
+      "id": "stats-grid",
+      "component": {
+        "type": "grid",
+        "columns": {"literalString": "repeat(auto-fit, minmax(200px, 1fr))"},
+        "gap": {"literalString": "1rem"},
+        "children": {"explicitList": ["stat-users", "stat-revenue", "stat-orders"]}
+      }
+    },
+    {
+      "id": "stat-users",
+      "component": {
+        "type": "card",
+        "padding": {"literalString": "1.5rem"},
+        "children": {"explicitList": ["stat-users-content"]}
+      }
+    },
+    {
+      "id": "stat-users-content",
+      "component": {
+        "type": "column",
+        "gap": {"literalString": "0.5rem"},
+        "children": {"explicitList": ["stat-users-label", "stat-users-value"]}
+      }
+    },
+    {
+      "id": "stat-users-label",
+      "component": {
+        "type": "text",
+        "content": {"literalString": "Total Users"},
+        "size": {"literalString": "sm"},
+        "color": {"literalString": "text-muted-foreground"}
+      }
+    },
+    {
+      "id": "stat-users-value",
+      "component": {
+        "type": "text",
+        "content": {"path": "$.stats.users", "defaultValue": "0"},
+        "variant": {"literalString": "h3"},
+        "weight": {"literalString": "bold"}
+      }
+    },
+    {
+      "id": "stat-revenue",
+      "component": {
+        "type": "card",
+        "padding": {"literalString": "1.5rem"},
+        "children": {"explicitList": ["stat-revenue-content"]}
+      }
+    },
+    {
+      "id": "stat-revenue-content",
+      "component": {
+        "type": "column",
+        "gap": {"literalString": "0.5rem"},
+        "children": {"explicitList": ["stat-revenue-label", "stat-revenue-value"]}
+      }
+    },
+    {
+      "id": "stat-revenue-label",
+      "component": {
+        "type": "text",
+        "content": {"literalString": "Revenue"},
+        "size": {"literalString": "sm"},
+        "color": {"literalString": "text-muted-foreground"}
+      }
+    },
+    {
+      "id": "stat-revenue-value",
+      "component": {
+        "type": "text",
+        "content": {"path": "$.stats.revenue", "defaultValue": "$0"},
+        "variant": {"literalString": "h3"},
+        "weight": {"literalString": "bold"}
+      }
+    },
+    {
+      "id": "stat-orders",
+      "component": {
+        "type": "card",
+        "padding": {"literalString": "1.5rem"},
+        "children": {"explicitList": ["stat-orders-content"]}
+      }
+    },
+    {
+      "id": "stat-orders-content",
+      "component": {
+        "type": "column",
+        "gap": {"literalString": "0.5rem"},
+        "children": {"explicitList": ["stat-orders-label", "stat-orders-value"]}
+      }
+    },
+    {
+      "id": "stat-orders-label",
+      "component": {
+        "type": "text",
+        "content": {"literalString": "Orders"},
+        "size": {"literalString": "sm"},
+        "color": {"literalString": "text-muted-foreground"}
+      }
+    },
+    {
+      "id": "stat-orders-value",
+      "component": {
+        "type": "text",
+        "content": {"path": "$.stats.orders", "defaultValue": "0"},
+        "variant": {"literalString": "h3"},
+        "weight": {"literalString": "bold"}
+      }
+    },
+    {
+      "id": "chart-card",
+      "component": {
+        "type": "card",
+        "title": {"literalString": "Revenue Over Time"},
+        "children": {"explicitList": ["revenue-chart"]}
+      }
+    },
+    {
+      "id": "revenue-chart",
+      "component": {
+        "type": "nivoChart",
+        "chartType": {"literalString": "bar"},
+        "data": {"path": "$.charts.revenue"},
+        "height": {"literalString": "300px"},
+        "animate": {"literalBool": true}
+      }
+    }
+  ],
+  "dataModel": [
+    {"path": "$.stats.users", "value": "12,458"},
+    {"path": "$.stats.revenue", "value": "$48,200"},
+    {"path": "$.stats.orders", "value": "384"},
+    {"path": "$.charts.revenue", "value": [
+      {"month": "Jan", "revenue": 4200},
+      {"month": "Feb", "revenue": 5800},
+      {"month": "Mar", "revenue": 4900}
+    ]}
   ]
 }
 ```
@@ -259,9 +432,9 @@ User: "Login form with email, password, and submit button"
 
 For detailed documentation, consult these files as needed:
 
-- **[references/components-reference.md](references/components-reference.md)** — Complete component props with all accepted values
-- **[references/bound-value-guide.md](references/bound-value-guide.md)** — Data binding patterns, JSONPath syntax, form input binding
-- **[references/styling-guide.md](references/styling-guide.md)** — Tailwind CSS utilities, theme variables, responsive patterns, custom CSS
-- **[references/layout-examples.md](references/layout-examples.md)** — Full JSON examples: page layouts, forms, dashboards, cards, tables
+- **[references/components-reference.md](references/components-reference.md)** -- Complete component props with all accepted values
+- **[references/bound-value-guide.md](references/bound-value-guide.md)** -- Data binding patterns, JSONPath syntax, form input binding
+- **[references/styling-guide.md](references/styling-guide.md)** -- Tailwind CSS utilities, theme variables, responsive patterns, custom CSS
+- **[references/layout-examples.md](references/layout-examples.md)** -- Full JSON examples: page layouts, forms, dashboards, cards, tables
 
 Generate A2UI JSON for any UI request. Output ONLY valid JSON.

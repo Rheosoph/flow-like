@@ -6,8 +6,12 @@ use dotenv::dotenv;
 use flow_like_api::axum;
 use flow_like_api::construct_router;
 use flow_like_catalog::get_catalog;
+use flow_like_secrets::{
+    EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
+};
 use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
+use sentry_tracing::{EventFilter, default_event_filter};
 use socket2::{Domain, Socket, Type};
 use std::{
     io,
@@ -29,6 +33,11 @@ async fn main() {
             .init();
         None
     } else {
+        let sentry_layer =
+            sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
+                tracing::Level::ERROR => EventFilter::Breadcrumb,
+                _ => default_event_filter(metadata),
+            });
         let guard = sentry::init((
             sentry_endpoint,
             sentry::ClientOptions {
@@ -39,15 +48,27 @@ async fn main() {
         ));
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
-            .with(sentry_tracing::layer())
+            .with(sentry_layer)
             .init();
         Some(guard)
     };
 
+    let secret_prefix = std::env::var("SECRET_PREFIX").ok();
+    let secret_config =
+        SecretStoreConfig::default().with_provider(ProviderConfig::Env(EnvProviderConfig {
+            prefix: secret_prefix,
+        }));
+    let secrets =
+        Arc::new(SecretStore::new(secret_config.clone()).expect("Failed to create secret store"));
+
     let cdn_bucket = std::env::var("CDN_BUCKET_NAME").unwrap();
     let cdn_bucket_endpoint = std::env::var("CDN_BUCKET_ENDPOINT").ok();
     let cdn_bucket_access_key = std::env::var("CDN_BUCKET_ACCESS_KEY_ID").ok();
-    let cdn_bucket_secret_key = std::env::var("CDN_BUCKET_SECRET_ACCESS_KEY").ok();
+    let cdn_bucket_secret_key = secrets
+        .get_secret_string(&SecretRef::new("CDN_BUCKET_SECRET_ACCESS_KEY"))
+        .await
+        .ok()
+        .map(|s| s.expose_secret().to_string());
 
     let mut cdn_bucket = AmazonS3Builder::new().with_bucket_name(cdn_bucket);
     if let Some(endpoint) = cdn_bucket_endpoint
@@ -68,7 +89,9 @@ async fn main() {
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_bucket.build().unwrap()));
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket)).await);
+    let state = Arc::new(
+        flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
+    );
 
     let app = construct_router(state);
 

@@ -1,7 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -57,7 +57,8 @@ impl NodeLogic for OsrmTableNode {
             "List of coordinates to include in the matrix",
             VariableType::Struct,
         )
-        .set_schema::<Vec<GeoCoordinate>>()
+        .set_schema::<GeoCoordinate>()
+        .set_value_type(ValueType::Array)
         .set_options(PinOptions::new().set_enforce_schema(true).build())
         .set_default_value(Some(json!([])));
 
@@ -82,18 +83,18 @@ impl NodeLogic for OsrmTableNode {
             "sources",
             "Sources",
             "Optional indices of source coordinates",
-            VariableType::Struct,
+            VariableType::Integer,
         )
-        .set_schema::<Vec<i64>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "destinations",
             "Destinations",
             "Optional indices of destination coordinates",
-            VariableType::Struct,
+            VariableType::Integer,
         )
-        .set_schema::<Vec<i64>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(json!([])));
 
         node.add_input_pin(
@@ -139,7 +140,8 @@ impl NodeLogic for OsrmTableNode {
             "Matrix of travel times in seconds",
             VariableType::Struct,
         )
-        .set_schema::<Vec<TableMatrixRow>>();
+        .set_schema::<TableMatrixRow>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "distances",
@@ -147,7 +149,8 @@ impl NodeLogic for OsrmTableNode {
             "Matrix of travel distances in meters",
             VariableType::Struct,
         )
-        .set_schema::<Vec<TableMatrixRow>>();
+        .set_schema::<TableMatrixRow>()
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "result",

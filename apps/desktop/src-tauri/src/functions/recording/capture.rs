@@ -687,6 +687,7 @@ impl EventCapture {
     }
 
     /// Get text content from system clipboard
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     fn get_clipboard_text() -> Option<String> {
         use arboard::Clipboard;
 
@@ -698,6 +699,11 @@ impl EventCapture {
         .join()
         .ok()
         .flatten()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    fn get_clipboard_text() -> Option<String> {
+        None
     }
 
     async fn process_events(

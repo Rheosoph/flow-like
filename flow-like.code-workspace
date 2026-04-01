@@ -20,6 +20,10 @@
 			"unlisten",
 			"Unlisten",
 			"vlms"
-		]
+		],
+		"files.associations": {
+			"**/helm/templates/**/*.yaml": "helm",
+			"**/helm/templates/**/*.tpl": "helm"
+		}
 	}
 }

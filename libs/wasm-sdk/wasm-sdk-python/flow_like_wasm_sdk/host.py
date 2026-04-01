@@ -78,6 +78,33 @@ class HostBridge:
     def http_request(self, method: int, url: str, headers: str, body: bytes | None) -> str | None:
         return None
 
+    def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
+        return None
+
+    def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
+        return None
+
+    def embed_text_document(self, model_json: str, texts_json: str) -> str | None:
+        return None
+
+    def embed_image(self, model_json: str, image_data: bytes) -> str | None:
+        return None
+
+    def image_from_bytes(self, data: bytes, fmt: str) -> str | None:
+        return None
+
+    def image_to_bytes(self, image_ref: str, fmt: str) -> bytes | None:
+        return None
+
+    def db_query(self, op: int, connection_json: str, payload_json: str) -> str | None:
+        return None
+
+    def get_type_schema(self, type_name: str) -> str | None:
+        return None
+
+    def list_types(self) -> list[str] | None:
+        return None
+
 
 class MockHostBridge(HostBridge):
     """Host bridge for local testing with captured logs and streams."""
@@ -167,7 +194,38 @@ class MockHostBridge(HostBridge):
 
     def http_request(self, method: int, url: str, headers: str, body: bytes | None) -> str | None:
         import json as _json
-        return _json.dumps({"status": 200, "headers": {}, "body": "{}"})
+        return _json.dumps({"status": 200, "headers": {}, "body_base64": "e30="})
+
+    def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
+        return '{"role": "assistant", "content": "Mock LLM response"}'
+
+    def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
+        import json as _json
+        texts = _json.loads(texts_json)
+        return _json.dumps([self._embeddings[0][:] for _ in texts])
+
+    def embed_text_document(self, model_json: str, texts_json: str) -> str | None:
+        import json as _json
+        texts = _json.loads(texts_json)
+        return _json.dumps([self._embeddings[0][:] for _ in texts])
+
+    def embed_image(self, model_json: str, image_data: bytes) -> str | None:
+        import json as _json
+        return _json.dumps(self._embeddings[0][:])
+
+    def image_from_bytes(self, data: bytes, fmt: str) -> str | None:
+        import json as _json
+        self._image_counter = getattr(self, "_image_counter", 0) + 1
+        ref = f"mock_img_{self._image_counter}"
+        self.storage[f"__images__/{ref}"] = data
+        return _json.dumps({"image_ref": ref})
+
+    def image_to_bytes(self, image_ref: str, fmt: str) -> bytes | None:
+        return self.storage.get(f"__images__/{image_ref}")
+
+    def db_query(self, op: int, connection_json: str, payload_json: str) -> str | None:
+        import json as _json
+        return _json.dumps([])
 
 
 _host: HostBridge = HostBridge()

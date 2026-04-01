@@ -10,69 +10,28 @@ to a public API.
 """
 
 from sdk import (
-    Context,
     ExecutionResult,
-    NodeDefinition,
-    PinDefinition,
-    PinType,
+    Input,
+    Output,
+    WasmNode,
 )
 
-# ============================================================================
-# Node definition — note `nd.add_permission("http")`
-# ============================================================================
 
+class HttpRequestExample(WasmNode, name="http_request_example_py", title="HTTP Request Example", category="Examples/HTTP"):
+    """Fetches data from a public API using HTTP"""
 
-def get_definitions() -> list[NodeDefinition]:
-    nd = NodeDefinition(
-        "http_request_example_py",
-        "HTTP Request Example",
-        "Fetches data from a public API using HTTP",
-        "Examples/HTTP",
-    )
+    permissions = ["http"]
 
-    nd.add_permission("http")
+    url: str = Input(default="https://httpbin.org/get")
+    status: int = Output()
+    body: str = Output()
 
-    nd.add_pin(PinDefinition.input_exec("exec"))
-    nd.add_pin(
-        PinDefinition.input_pin(
-            "url",
-            PinType.STRING,
-            default="https://httpbin.org/get",
-        )
-    )
-    nd.add_pin(PinDefinition.output_exec("exec_out"))
-    nd.add_pin(PinDefinition.output_pin("status", PinType.I64))
-    nd.add_pin(PinDefinition.output_pin("body", PinType.STRING))
-
-    return [nd]
-
-
-# ============================================================================
-# Run handler — makes an HTTP GET request
-# ============================================================================
-
-
-def _run_http_request(ctx: Context) -> ExecutionResult:
-    url = ctx.get_string("url", "https://httpbin.org/get")
-
-    ctx.info(f"Making GET request to: {url}")
-
-    response = ctx.http_get(url)
-    if response is None:
-        return ctx.fail("HTTP request failed or permission denied")
-
-    ctx.set_output("status", response.get("status", 0))
-    ctx.set_output("body", response.get("body", ""))
-    ctx.info(f"Response status: {response.get('status')}")
-
-    return ctx.success()
-
-
-DISPATCH = {"http_request_example_py": _run_http_request}
-
-
-def run(node_name: str, ctx: Context) -> ExecutionResult:
-    handler = DISPATCH.get(node_name)
-    if handler is None:
-        return ctx.fail(f"Unknown node: {node_name}")
-    return handler(ctx)
+    def run(self, ctx) -> ExecutionResult:
+        ctx.info(f"Making GET request to: {ctx.url}")
+        response = ctx.http_get(ctx.url)
+        if response is None:
+            return ctx.fail("HTTP request failed or permission denied")
+        ctx.status = response.get("status", 0)
+        ctx.body = response.get("body", "")
+        ctx.info(f"Response status: {response.get('status')}")
+        return ctx.success()

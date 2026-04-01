@@ -3,6 +3,7 @@
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -19,8 +20,8 @@ export function A2UISwitch({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<SwitchComponent>) {
+	const onAction = useOnAction();
 	const checked = useResolved<boolean>(component.checked);
 	const label = useResolved<string>(component.label);
 	const disabled = useResolved<boolean>(component.disabled);

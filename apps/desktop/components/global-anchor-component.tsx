@@ -1,6 +1,7 @@
 "use client";
 
 import { createId } from "@paralleldrive/cuid2";
+import { isTauri as isTauriRuntime } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl as shellOpen } from "@tauri-apps/plugin-opener";
 import {
@@ -20,11 +21,7 @@ const isIosLike = () => {
 	);
 };
 
-const isTauri = () =>
-	typeof window !== "undefined" &&
-	("__TAURI__" in (window as any) ||
-		"__TAURI_INTERNAL__" in (window as any) ||
-		"__TAURI_IPC__" in (window as any));
+const isTauri = () => typeof window !== "undefined" && isTauriRuntime();
 
 const isHttpish = (href: string) => /^(https?:|mailto:|tel:)/i.test(href);
 
@@ -41,6 +38,24 @@ const wantsExternal = (a: HTMLAnchorElement) =>
 	a.getAttribute("target") === "_blank" ||
 	a.rel.split(/\s+/).includes("external") ||
 	a.dataset.openExternal === "true";
+
+const resolveWindowUrl = (href: string) => {
+	try {
+		const parsed = new URL(href, location.href);
+		return parsed.origin === location.origin
+			? `${parsed.pathname}${parsed.search}${parsed.hash}`
+			: parsed.toString();
+	} catch {
+		return href;
+	}
+};
+
+interface NavigableInfo {
+	href: string;
+	title?: string;
+	element: HTMLElement;
+	isAnchor: boolean;
+}
 
 // Best-effort external opener that works on iOS; avoids blocking the user gesture.
 const openInBrowser = async (href: string) => {
@@ -88,22 +103,28 @@ const GlobalAnchorHandler = () => {
 		(url: string, title?: string) => {
 			// Desktop-only: iOS WKWebView doesn't support multiple windows like desktop
 			if (!TAURI || IOS) {
-				// Fallback to shell open if we can't spawn a new webview
 				if (isHttpish(url)) void openInBrowser(url);
 				return;
 			}
 
+			// True external links (different origin) should open in the system browser
+			if (isHttpish(url) && !sameOrigin(url)) {
+				void openInBrowser(url);
+				return;
+			}
+
+			const resolvedUrl = resolveWindowUrl(url);
+
 			const windowLabel = `window-${createId()}`;
 			try {
 				const webview = new WebviewWindow(windowLabel, {
-					url,
+					url: resolvedUrl,
 					title: title ?? "Flow-Like",
 					focus: true,
 					resizable: true,
 					maximized: true,
 				});
 
-				// Listen for webview creation errors
 				webview.once("tauri://error", (e) => {
 					console.error("Failed to create new window:", e);
 				});
@@ -122,6 +143,32 @@ const GlobalAnchorHandler = () => {
 			let el: HTMLElement | null = target;
 			while (el) {
 				if (el.tagName === "A") return el as HTMLAnchorElement;
+				el = el.parentElement;
+			}
+			return null;
+		};
+
+		const findNavigable = (target: HTMLElement): NavigableInfo | null => {
+			const anchor = findAnchorElement(target);
+			if (anchor?.href) {
+				return {
+					href: anchor.href,
+					title: anchor.textContent?.trim() ?? anchor.getAttribute("title") ?? undefined,
+					element: anchor,
+					isAnchor: true,
+				};
+			}
+			let el: HTMLElement | null = target;
+			while (el) {
+				const dataHref = el.getAttribute("data-href");
+				if (dataHref) {
+					return {
+						href: dataHref,
+						title: el.getAttribute("data-title") ?? el.textContent?.trim() ?? undefined,
+						element: el,
+						isAnchor: false,
+					};
+				}
 				el = el.parentElement;
 			}
 			return null;
@@ -181,10 +228,9 @@ const GlobalAnchorHandler = () => {
 		};
 
 		const handleMouseDown = (event: MouseEvent) => {
-			// Prevent the browser from handling middle-click before we decide
 			if (event.button === 1) {
-				const anchor = findAnchorElement(event.target as HTMLElement);
-				if (anchor?.href) {
+				const nav = findNavigable(event.target as HTMLElement);
+				if (nav) {
 					event.preventDefault();
 					event.stopPropagation();
 					event.stopImmediatePropagation();
@@ -194,24 +240,19 @@ const GlobalAnchorHandler = () => {
 
 		const handleAuxClick = (event: MouseEvent) => {
 			if (event.button !== 1) return;
-			const anchor = findAnchorElement(event.target as HTMLElement);
-			if (!anchor?.href) return;
+			const nav = findNavigable(event.target as HTMLElement);
+			if (!nav) return;
 
-			// Middle click: prefer new app window on desktop; iOS -> shell open
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
 
-			const linkTitle =
-				anchor.textContent?.trim() ?? anchor.getAttribute("title") ?? undefined;
-
-			// If on iOS, prefer opening true external links in Safari; otherwise let app handle
 			if (IOS) {
-				if (isHttpish(anchor.href) && !sameOrigin(anchor.href)) {
-					void openInBrowser(anchor.href);
+				if (isHttpish(nav.href) && !sameOrigin(nav.href)) {
+					void openInBrowser(nav.href);
 				}
 			} else {
-				createNewWindow(anchor.href, linkTitle);
+				createNewWindow(nav.href, nav.title);
 			}
 		};
 
@@ -270,7 +311,6 @@ const GlobalAnchorHandler = () => {
 		};
 
 		const handleClick = async (event: MouseEvent) => {
-			// If a touch handler just ran, ignore the synthetic click
 			if (IOS && Date.now() - lastTouchHandledAt.value < 500) {
 				event.preventDefault();
 				event.stopPropagation();
@@ -278,28 +318,33 @@ const GlobalAnchorHandler = () => {
 				setContextMenuData(null);
 				return;
 			}
+
+			// Check for data-href elements first (Cmd/Ctrl+Click support)
+			const nav = findNavigable(event.target as HTMLElement);
+
+			// Cmd/Ctrl+Click: open in new window (desktop standard)
+			if (nav && (event.metaKey || event.ctrlKey) && TAURI && !IOS) {
+				event.preventDefault();
+				event.stopPropagation();
+				event.stopImmediatePropagation?.();
+				createNewWindow(nav.href, nav.title);
+				setContextMenuData(null);
+				return;
+			}
+
 			const anchor = findAnchorElement(event.target as HTMLElement);
 			if (!anchor?.href) {
 				setContextMenuData(null);
 				return;
 			}
 
-			// Cmd/Ctrl click should pass through (desktop user expectations)
-			if ((event as MouseEvent).metaKey || (event as MouseEvent).ctrlKey) {
-				setContextMenuData(null);
-				return;
-			}
-
-			// If this is an external intent or we're on iOS, open via shell and stop.
 			const handled = await openExternallyIfNeeded(anchor, event);
 			if (handled) {
-				// Ensure no further handlers run
 				event.stopImmediatePropagation?.();
 				setContextMenuData(null);
 				return;
 			}
 
-			// Otherwise, if target=_blank and we are on desktop Tauri, spawn a new window
 			if (wantsExternal(anchor) && TAURI && !IOS) {
 				event.preventDefault();
 				event.stopPropagation();
@@ -310,24 +355,20 @@ const GlobalAnchorHandler = () => {
 				createNewWindow(anchor.href, linkTitle);
 			}
 
-			// Close context menu on any (handled or not) click
 			setContextMenuData(null);
 		};
 
 		const handleContextMenu = (event: MouseEvent) => {
-			const anchor = findAnchorElement(event.target as HTMLElement);
-			if (!anchor?.href) return;
+			const nav = findNavigable(event.target as HTMLElement);
+			if (!nav) return;
 
 			event.preventDefault();
 
 			setContextMenuData({
 				x: event.clientX,
 				y: event.clientY,
-				href: anchor.href,
-				title:
-					anchor.textContent?.trim() ??
-					anchor.getAttribute("title") ??
-					undefined,
+				href: nav.href,
+				title: nav.title,
 				show: true,
 			});
 		};

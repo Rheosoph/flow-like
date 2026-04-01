@@ -6,7 +6,7 @@
 //! accepted for triggering events.
 
 use crate::{
-    entity::sink_token, error::ApiError, middleware::jwt::AppUser,
+    audit, entity::sink_token, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{
@@ -83,6 +83,14 @@ pub async fn revoke_sink(
 
     tracing::info!(jti = %jti, revoked_by = ?revoked_by, "Revoked sink token");
 
+    audit!(
+        state,
+        user,
+        "admin.sink.revoke",
+        "sink_token",
+        jti,
+        format!("Sink token revoked: {}", jti)
+    );
     Ok(Json(RevokeSinkResponse {
         success: true,
         jti,

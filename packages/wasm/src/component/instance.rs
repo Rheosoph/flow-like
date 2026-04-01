@@ -30,10 +30,14 @@ impl WasmComponentInstance {
         component: Arc<WasmComponent>,
         security: WasmSecurityConfig,
     ) -> WasmResult<Self> {
-        let mut linker: Linker<ComponentStoreData> = Linker::new(engine.engine());
+        // Use the engine that compiled/deserialized this component to ensure
+        // Store, Linker, and Component are all tied to the same Engine instance.
+        let component_engine = component.component().engine();
+
+        let mut linker: Linker<ComponentStoreData> = Linker::new(component_engine);
         register_component_host_functions(&mut linker)?;
 
-        let mut store = Store::new(engine.engine(), ComponentStoreData::new(&security));
+        let mut store = Store::new(component_engine, ComponentStoreData::new(&security));
 
         let fuel_limit = security.limits.fuel_limit;
         if engine.config().fuel_metering {
@@ -56,7 +60,7 @@ impl WasmComponentInstance {
             })?;
 
         Ok(Self {
-            engine: engine.engine().clone(),
+            engine: component_engine.clone(),
             store,
             instance,
             component,

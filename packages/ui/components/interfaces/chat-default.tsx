@@ -1,6 +1,7 @@
 "use client";
 
 import { createId } from "@paralleldrive/cuid2";
+import * as Sentry from "@sentry/nextjs";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChevronDownIcon,
@@ -34,6 +35,14 @@ import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
 	Button,
 	DropdownMenu,
 	DropdownMenuContent,
@@ -55,6 +64,22 @@ import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
+
+function extractErrorMessage(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (typeof err === "string") return err;
+	if (err && typeof err === "object") {
+		const obj = err as Record<string, unknown>;
+		if (typeof obj.message === "string") return obj.message;
+		if (typeof obj.error === "string") return obj.error;
+		try {
+			return JSON.stringify(err);
+		} catch {
+			return Object.prototype.toString.call(err);
+		}
+	}
+	return String(err);
+}
 
 async function prepareAttachments(
 	filesAttached: File[] | undefined,
@@ -85,38 +110,35 @@ async function prepareAttachments(
 }
 
 /**
- * Deduplicates consecutive messages with the same role.
- * Keeps the message with more content when there are consecutive same-role messages.
- * This prevents showing duplicate user/assistant messages after reconnection or streaming.
+ * Deduplicates messages by ID.
+ * When multiple messages share the same ID (e.g. from incremental saves), keeps the one with more content.
+ * Preserves legitimate consecutive same-role messages that have different IDs.
  */
 function deduplicateConsecutiveMessages(messages: IMessage[]): IMessage[] {
 	if (messages.length <= 1) return messages;
 
+	const seen = new Map<string, number>();
 	const result: IMessage[] = [];
-	for (const message of messages) {
-		const lastMessage = result[result.length - 1];
 
-		// If no previous message or different role, just add it
-		if (!lastMessage || lastMessage.inner.role !== message.inner.role) {
-			result.push(message);
+	for (const message of messages) {
+		const existingIdx = seen.get(message.id);
+		if (existingIdx !== undefined) {
+			const existing = result[existingIdx];
+			const existingLen =
+				typeof existing.inner.content === "string"
+					? existing.inner.content.length
+					: JSON.stringify(existing.inner.content).length;
+			const currentLen =
+				typeof message.inner.content === "string"
+					? message.inner.content.length
+					: JSON.stringify(message.inner.content).length;
+			if (currentLen > existingLen) {
+				result[existingIdx] = message;
+			}
 			continue;
 		}
-
-		// Same role as previous - keep the one with more content
-		const lastContent =
-			typeof lastMessage.inner.content === "string"
-				? lastMessage.inner.content
-				: JSON.stringify(lastMessage.inner.content);
-		const currentContent =
-			typeof message.inner.content === "string"
-				? message.inner.content
-				: JSON.stringify(message.inner.content);
-
-		if (currentContent.length > lastContent.length) {
-			// Replace last message with current (has more content)
-			result[result.length - 1] = message;
-		}
-		// Otherwise keep the existing one (already has more or equal content)
+		seen.set(message.id, result.length);
+		result.push(message);
 	}
 
 	return result;
@@ -356,27 +378,53 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const searchParams = useSearchParams();
 	const pathname = usePathname();
 	const sessionIdParameter = searchParams.get("sessionId") ?? "";
+	const prefilledMessage = searchParams.get("message");
 	const setQueryParams = useSetQueryParams();
 	const chatRef = useRef<IChatRef>(null);
 	const activeSubscriptions = useRef<string[]>([]);
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
 	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
+	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
+	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
 	const [activeInteractions, setActiveInteractions] = useState<
 		IInteractionRequest[]
 	>([]);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
+	const interactionsBySession = useRef<Map<string, IInteractionRequest[]>>(
+		new Map(),
+	);
 	useEffect(() => {
 		activeInteractionsRef.current = activeInteractions;
 	}, [activeInteractions]);
 
+	// Keep interaction cache in sync with current session
+	useEffect(() => {
+		if (sessionIdParameter) {
+			interactionsBySession.current.set(sessionIdParameter, activeInteractions);
+		}
+	}, [sessionIdParameter, activeInteractions]);
+
 	const addInteractions = useCallback((interactions: IInteractionRequest[]) => {
 		setActiveInteractions((prev) => {
-			const existingIds = new Set(prev.map((i) => i.id));
-			const newOnes = interactions.filter((i) => !existingIds.has(i.id));
-			return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+			const existingMap = new Map(prev.map((i) => [i.id, i]));
+			let changed = false;
+			for (const interaction of interactions) {
+				const existing = existingMap.get(interaction.id);
+				if (!existing) {
+					existingMap.set(interaction.id, interaction);
+					changed = true;
+				} else if (
+					existing.status === "pending" &&
+					interaction.status !== "pending"
+				) {
+					existingMap.set(interaction.id, interaction);
+					changed = true;
+				}
+			}
+			return changed ? Array.from(existingMap.values()) : prev;
 		});
 	}, []);
 
@@ -444,7 +492,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			} catch (err) {
 				console.error("[Chat] Failed to respond to interaction:", err);
-				toast.error("Failed to submit response. Please try again.");
+				Sentry.captureException(err, {
+					tags: { component: "chat", action: "respond_to_interaction" },
+					extra: { interactionId, appId },
+				});
+				toast.error(`Failed to submit response: ${extractErrorMessage(err)}`);
 			}
 		},
 		[backend.profile],
@@ -541,10 +593,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		}
 	}, [sessionIdParameter, setQueryParams]);
 
-	// Cleanup active subscriptions and interactions on unmount or session change
+	// Cleanup active subscriptions and restore cached interactions on session change
 	useEffect(() => {
-		setActiveInteractions([]);
+		const cached = interactionsBySession.current.get(sessionIdParameter) ?? [];
+		setActiveInteractions(cached);
+		processedCompletedStreams.current.clear();
 		return () => {
+			interactionsBySession.current.set(
+				sessionIdParameter,
+				activeInteractionsRef.current,
+			);
 			activeSubscriptions.current.forEach((subId) => {
 				executionEngine.unsubscribeFromEventStream(sessionIdParameter, subId);
 			});
@@ -553,6 +611,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [sessionIdParameter, executionEngine]);
 
 	const messagesQuery = useLiveQuery(async () => {
+		if (!sessionIdParameter) return [];
 		const rawMessages = await chatDb.messages
 			.where("sessionId")
 			.equals(sessionIdParameter)
@@ -569,14 +628,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		messagesRef.current = messages;
 	}, [messages]);
 
-	const localState = useLiveQuery(
-		() =>
-			chatDb.localStage
-				.where("[sessionId+eventId]")
-				.equals([sessionIdParameter, event.id])
-				.first(),
-		[sessionIdParameter, event.id],
-	);
+	const localState = useLiveQuery(() => {
+		if (!sessionIdParameter) return undefined;
+		return chatDb.localStage
+			.where("[sessionId+eventId]")
+			.equals([sessionIdParameter, event.id])
+			.first();
+	}, [sessionIdParameter, event.id]);
 
 	const globalState = useLiveQuery(
 		() =>
@@ -611,22 +669,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const toolbarElements = useMemo(() => {
-		const normalizeRoute = (value: string): string => {
-			const trimmed = value.trim();
-			if (!trimmed) return "";
-			return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-		};
-
-		const configuredRoutes = (() => {
-			const rawArray = (config as any)?.navigate_to_routes;
-			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
-			const normalized = raw
-				.map((r) => normalizeRoute(String(r)))
-				.filter((r) => !!r);
-			return Array.from(new Set(normalized));
-		})();
-
-		const elements = [
+		return [
 			<HoverCard key="chat-history" openDelay={200} closeDelay={100}>
 				<HoverCardTrigger asChild>
 					<Button
@@ -681,6 +724,25 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</HoverCardContent>
 			</HoverCard>,
 		];
+	}, [handleSidebarToggle, handleNewChat]);
+
+	const navElements = useMemo(() => {
+		const normalizeRoute = (value: string): string => {
+			const trimmed = value.trim();
+			if (!trimmed) return "";
+			return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+		};
+
+		const configuredRoutes = (() => {
+			const rawArray = (config as any)?.navigate_to_routes;
+			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
+			const normalized = raw
+				.map((r) => normalizeRoute(String(r)))
+				.filter((r) => !!r);
+			return Array.from(new Set(normalized));
+		})();
+
+		if (configuredRoutes.length === 0) return [];
 
 		const getRouteLabel = (path: string): string => {
 			if (path === "/") return "Home";
@@ -692,7 +754,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			return null;
 		};
 
-		// Single route: pill button
+		const elements: React.ReactElement[] = [];
+
 		if (configuredRoutes.length === 1) {
 			const route = configuredRoutes[0];
 			const icon = getRouteIcon(route);
@@ -709,7 +772,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</Button>,
 			);
 		} else if (configuredRoutes.length === 2) {
-			// Two routes: segmented control
 			elements.push(
 				<div
 					key="route-nav"
@@ -732,7 +794,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				</div>,
 			);
 		} else if (configuredRoutes.length >= 3) {
-			// 3+ routes: dropdown
 			elements.push(
 				<DropdownMenu key="navigate-menu">
 					<DropdownMenuTrigger asChild>
@@ -765,7 +826,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		}
 
 		return elements;
-	}, [config, handleSidebarToggle, handleNewChat, handleNavigateTo]);
+	}, [config, handleNavigateTo]);
 
 	const sidebarContent = useMemo(
 		() => (
@@ -781,8 +842,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	useEffect(() => {
 		toolbarRef?.current?.pushToolbarElements(toolbarElements);
+		toolbarRef?.current?.pushNavElements(navElements);
 		sidebarRef?.current?.pushSidebar(sidebarContent);
-	}, [toolbarElements, sidebarContent, toolbarRef, sidebarRef]);
+	}, [toolbarElements, navElements, sidebarContent, toolbarRef, sidebarRef]);
 
 	// Reconnect to active stream or process completed stream when component mounts or session changes
 	useEffect(() => {
@@ -1057,6 +1119,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			const globalStateRef = { current: tmpGlobalState };
 
 			const streamId = sessionIdParameter;
+
+			// Prevent sending while a stream is already active for this session
+			if (executionEngine.isStreamActive(streamId)) {
+				toast.error("Please wait for the current response to complete.");
+				return;
+			}
+
 			const subscriberId = `chat-${responseMessage.id}`;
 			activeSubscriptions.current.push(subscriberId);
 
@@ -1225,7 +1294,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				true, // skipConsentCheck
 			).catch((err) => {
 				console.error("Failed to retry chat message after OAuth:", err);
-				toast.error("Failed to send message. Please try again.");
+				Sentry.captureException(err, {
+					tags: { component: "chat", action: "oauth_retry_send" },
+					extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+				});
+				toast.error(`Failed to send message: ${extractErrorMessage(err)}`);
 			});
 		};
 
@@ -1264,10 +1337,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					audioFile,
 				);
 			} catch (error) {
-				// OAuth errors are handled by execution engine - don't show error toast for those
-				if (!(error as any)?.isOAuthError) {
+				// Active stream errors and OAuth errors are handled separately
+				if ((error as any)?.isActiveStreamError) {
+					// Already shown a toast in executeChatMessage guard
+				} else if (!(error as any)?.isOAuthError) {
 					console.error("Error sending message:", error);
-					toast.error("Failed to send message. Please try again.");
+					Sentry.captureException(error, {
+						tags: { component: "chat", action: "send_message" },
+						extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+					});
+					toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
 				}
 			} finally {
 				setIsSendingFromWelcome(false);
@@ -1277,18 +1356,84 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const onMessageUpdate = useCallback(
-		async (messageId: string, message: Partial<IMessage>) => {
-			await chatDb.messages.update(messageId, {
-				...message,
-			});
+		async (messageId: string, updates: Partial<IMessage>) => {
+			const existingMessage =
+				(await chatDb.messages.get(messageId)) ??
+				messagesRef.current.find((message) => message.id === messageId);
+
+			if (!existingMessage) {
+				throw new Error(`Message ${messageId} not found`);
+			}
+
+			const nextMessage: IMessage = {
+				...existingMessage,
+				...updates,
+			};
+
+			if (
+				Object.prototype.hasOwnProperty.call(updates, "ratingSettings") &&
+				updates.ratingSettings === undefined
+			) {
+				delete nextMessage.ratingSettings;
+			}
+
+			await chatDb.messages.put(nextMessage);
+
+			if (
+				updates.rating !== undefined ||
+				updates.ratingSettings !== undefined
+			) {
+				const rating = nextMessage.rating;
+				if (rating === undefined || rating === 0) return;
+
+				const feedbackRating = rating > 0 ? 5 : 1;
+				await backend.eventState.upsertEventFeedback(
+					appId,
+					event.id,
+					messageId,
+					{
+						rating: feedbackRating,
+						comment: nextMessage.ratingSettings?.comment ?? "",
+						history: nextMessage.ratingSettings?.includeChatHistory
+							? (
+									await chatDb.messages
+										.where("sessionId")
+										.equals(nextMessage.sessionId)
+										.toArray()
+								).map((m) => m.inner)
+							: undefined,
+					},
+				);
+			}
 		},
-		[],
+		[appId, event.id, backend.eventState],
 	);
 
 	const showWelcome = useMemo(
 		() => messagesLoaded && messages.length === 0,
 		[messagesLoaded, messages],
 	);
+
+	// Show verification dialog when prefilled message is present and no history yet
+	useEffect(() => {
+		if (prefilledMessage && showWelcome && !prefilledConsumed.current) {
+			setShowPrefilledConfirm(true);
+		}
+	}, [prefilledMessage, showWelcome]);
+
+	const handlePrefilledConfirm = useCallback(() => {
+		if (!prefilledMessage) return;
+		prefilledConsumed.current = true;
+		setShowPrefilledConfirm(false);
+		setQueryParams("message", undefined);
+		handleSendMessage(prefilledMessage);
+	}, [prefilledMessage, handleSendMessage, setQueryParams]);
+
+	const handlePrefilledCancel = useCallback(() => {
+		prefilledConsumed.current = true;
+		setShowPrefilledConfirm(false);
+		setQueryParams("message", undefined);
+	}, [setQueryParams]);
 
 	return (
 		<>
@@ -1318,6 +1463,31 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					onRespondToInteraction={handleRespondToInteraction}
 				/>
 			)}
+			<AlertDialog
+				open={showPrefilledConfirm}
+				onOpenChange={(open) => {
+					if (!open) handlePrefilledCancel();
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Send prefilled message?</AlertDialogTitle>
+						<AlertDialogDescription>
+							This chat was opened with a prefilled message. Please review it
+							before sending:
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto break-words whitespace-pre-wrap">
+						{prefilledMessage}
+					</div>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={handlePrefilledConfirm}>
+							Send
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</>
 	);
 });

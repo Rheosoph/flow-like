@@ -1,7 +1,9 @@
 use crate::{
+    audit_branch,
     entity::{app, invite_link, membership, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
+    routes::user::ensure_user_exists,
     state::AppState,
 };
 use axum::{
@@ -42,6 +44,7 @@ pub async fn join_invite_link(
     Path((app_id, token)): Path<(String, String)>,
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
     let txn = state.db.begin().await?;
 
     let max_prototype = state.platform_config.max_users_prototype.unwrap_or(-1);
@@ -147,5 +150,14 @@ pub async fn join_invite_link(
 
     txn.commit().await?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "membership.join",
+        "InviteLink",
+        token,
+        "User joined via invite link"
+    );
     Ok(Json(()))
 }

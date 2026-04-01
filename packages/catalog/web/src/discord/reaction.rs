@@ -1,6 +1,8 @@
 //! Discord reaction operations
 
-use super::session::{DiscordSession, get_discord_client};
+use super::session::DiscordSession;
+#[cfg(feature = "execute")]
+use super::session::get_discord_client;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -8,6 +10,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use serenity::all::ReactionType;
 
 // ============================================================================
@@ -66,6 +69,7 @@ impl NodeLogic for AddReactionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -104,6 +108,13 @@ impl NodeLogic for AddReactionNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -158,6 +169,7 @@ impl NodeLogic for RemoveReactionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -196,6 +208,13 @@ impl NodeLogic for RemoveReactionNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -248,6 +267,7 @@ impl NodeLogic for ClearReactionsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -272,5 +292,12 @@ impl NodeLogic for ClearReactionsNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

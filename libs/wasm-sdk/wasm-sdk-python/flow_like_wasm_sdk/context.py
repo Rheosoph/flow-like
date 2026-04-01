@@ -1,10 +1,35 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from flow_like_wasm_sdk.host import HostBridge, _host
 from flow_like_wasm_sdk.types import ExecutionInput, ExecutionResult, LogLevel
+
+if TYPE_CHECKING:
+    from flow_like_wasm_sdk.interop import (
+        Bit, CachedEmbeddingModel, ChatMessage, FlowImage,
+    )
+
+_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_B64_INV = {c: i for i, c in enumerate(_B64)}
+
+
+def _b64decode(s: str) -> str:
+    s = s.rstrip("=")
+    out = bytearray()
+    buf = 0
+    bits = 0
+    for ch in s:
+        val = _B64_INV.get(ch)
+        if val is None:
+            continue
+        buf = (buf << 6) | val
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            out.append((buf >> bits) & 0xFF)
+    return out.decode("utf-8")
 
 
 class Context:
@@ -178,7 +203,13 @@ class Context:
         result = self._host.http_request(method, url, json.dumps(headers or {}), body)
         if result is None:
             return None
-        return json.loads(result)
+        parsed = json.loads(result)
+        if isinstance(parsed, dict) and "body_base64" in parsed:
+            try:
+                parsed["body"] = _b64decode(parsed["body_base64"])
+            except Exception:
+                parsed["body"] = ""
+        return parsed
 
     def http_get(self, url: str, headers: dict[str, str] | None = None) -> dict | None:
         return self.http_request(0, url, headers)
@@ -191,6 +222,60 @@ class Context:
 
     def has_oauth_token(self, provider: str) -> bool:
         return self._host.has_oauth_token(provider)
+
+    # ── LLM / VLM ───────────────────────────────────────────────────
+
+    def llm_prompt(
+        self,
+        bit: Bit,
+        messages: list[ChatMessage],
+        stream: bool = False,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> str | None:
+        msg_list = [m.to_dict() for m in messages]
+        if tools:
+            payload = json.dumps({"messages": msg_list, "tools": tools})
+        else:
+            payload = json.dumps(msg_list)
+        return self._host.llm_prompt(bit.to_json(), payload, stream)
+
+    # ── Embedding ────────────────────────────────────────────────────
+
+    def embed_text_query(self, model: CachedEmbeddingModel, texts: list[str]) -> list[list[float]] | None:
+        result = self._host.embed_text_query(model.to_json(), json.dumps(texts))
+        return json.loads(result) if result is not None else None
+
+    def embed_text_document(self, model: CachedEmbeddingModel, texts: list[str]) -> list[list[float]] | None:
+        result = self._host.embed_text_document(model.to_json(), json.dumps(texts))
+        return json.loads(result) if result is not None else None
+
+    def embed_image(self, model: CachedEmbeddingModel, image: FlowImage) -> list[float] | None:
+        img_bytes = image.to_bytes(self)
+        if img_bytes is None:
+            return None
+        result = self._host.embed_image(model.to_json(), img_bytes)
+        return json.loads(result) if result is not None else None
+
+    # ── Image ────────────────────────────────────────────────────────
+
+    def image_from_bytes(self, data: bytes, fmt: str = "png") -> FlowImage | None:
+        from flow_like_wasm_sdk.interop import FlowImage as _FI
+        result = self._host.image_from_bytes(data, fmt)
+        if result is None:
+            return None
+        return _FI.from_json(result)
+
+    def image_to_bytes(self, image: FlowImage, fmt: str = "png") -> bytes | None:
+        return self._host.image_to_bytes(image.image_ref, fmt)
+
+    # ── Database ─────────────────────────────────────────────────────
+
+    def db_query(self, op: int, connection: Any, payload: dict) -> Any:
+        conn_json = json.dumps(connection.to_dict() if hasattr(connection, "to_dict") else connection)
+        result = self._host.db_query(op, conn_json, json.dumps(payload))
+        return json.loads(result) if result is not None else None
+
+    # ── Finalization ─────────────────────────────────────────────────
 
     def success(self) -> ExecutionResult:
         self._result.exec("exec_out")

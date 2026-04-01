@@ -1,0 +1,486 @@
+---
+export const prerender = false;
+
+import { TextEditor } from "@tm9657/flow-like-ui";
+import StoreLayout from "../../../layouts/StoreLayout.astro";
+import {
+	getPackage,
+	getPackageMeta,
+	searchPackages,
+	isStoreEnabled,
+	formatPrice,
+	storeDeepLink,
+	starRating,
+	extractPlainText,
+	contentIsMarkdown,
+	formatDate,
+	type RegistryEntry,
+	type PackageMeta,
+} from "../../../lib/registry";
+
+if (!isStoreEnabled()) return Astro.redirect("/");
+
+const { id } = Astro.params;
+if (!id) return Astro.redirect("/store/packages");
+
+let pkg: RegistryEntry | null = null;
+let meta: PackageMeta | null = null;
+
+try {
+	[pkg, meta] = await Promise.all([
+		getPackage(id),
+		getPackageMeta(id),
+	]);
+} catch (e) {
+	console.error("Package detail error:", e);
+}
+
+if (!pkg) return Astro.redirect("/store/packages");
+
+const displayName = meta?.name || pkg.manifest.name;
+const rawDesc = meta?.description || pkg.manifest.description || "";
+const displayDesc = extractPlainText(rawDesc, 200) || pkg.manifest.description;
+const longDescPlain = meta?.long_description ? extractPlainText(meta.long_description, 300) : "";
+const seoDescription = longDescPlain || displayDesc;
+const icon = meta?.icon;
+const thumbnail = meta?.thumbnail;
+const links = storeDeepLink("package", pkg.id);
+const latestVersion = pkg.versions.find((v) => !v.yanked);
+const publishedDate = formatDate(pkg.created_at);
+const updatedDate = formatDate(pkg.updated_at);
+
+// Fetch related packages (excluding current)
+let relatedPackages: Array<{ id: string; name: string; icon?: string; desc: string; downloads: number; price: number }> = [];
+try {
+	const results = await searchPackages(30);
+	relatedPackages = results.packages
+		.filter((p) => p.id !== pkg!.id)
+		.slice(0, 6)
+		.map((p) => ({
+			id: p.id,
+			name: p.metadata?.name || p.name,
+			icon: p.metadata?.icon,
+			desc: p.description ? extractPlainText(p.description, 80) : "",
+			downloads: p.downloadCount,
+			price: p.price,
+		}));
+} catch {}
+
+const jsonLd = {
+	"@context": "https://schema.org",
+	"@type": "SoftwareSourceCode",
+	name: displayName,
+	description: seoDescription,
+	url: `https://flow-like.com/store/packages/${pkg.id}`,
+	codeRepository: pkg.manifest.repository || undefined,
+	programmingLanguage: "WebAssembly",
+	license: pkg.manifest.license || undefined,
+	version: latestVersion?.version || pkg.manifest.version,
+	dateModified: pkg.updated_at,
+	datePublished: pkg.created_at,
+	...(pkg.manifest.authors?.length && {
+		author: pkg.manifest.authors.map((a) => ({
+			"@type": "Person",
+			name: a,
+		})),
+	}),
+	...(pkg.manifest.keywords?.length && {
+		keywords: pkg.manifest.keywords.join(", "),
+	}),
+	aggregateRating:
+		pkg.download_count > 0
+			? {
+					"@type": "AggregateRating",
+					ratingCount: pkg.download_count,
+				}
+			: undefined,
+	offers: {
+		"@type": "Offer",
+		price: pkg.price ? (pkg.price / 100).toFixed(2) : "0",
+		priceCurrency: "USD",
+		availability: "https://schema.org/InStock",
+	},
+	isPartOf: {
+		"@type": "WebApplication",
+		name: "Flow-Like",
+		url: "https://flow-like.com",
+	},
+};
+---
+
+<StoreLayout
+	title={`${displayName} — Flow-Like Package`}
+	description={seoDescription}
+	image={thumbnail || icon || "/og.png"}
+	jsonLd={jsonLd}
+>
+	<article class="max-w-5xl mx-auto px-6 pt-12 pb-16">
+		<!-- Breadcrumb -->
+		<nav class="flex items-center gap-2 text-sm text-muted-foreground mb-8">
+			<a href="/store" class="hover:text-foreground transition-colors">Store</a>
+			<span>/</span>
+			<a
+				href="/store/packages"
+				class="hover:text-foreground transition-colors">Packages</a
+			>
+			<span>/</span>
+			<span class="text-foreground truncate max-w-[200px]">{displayName}</span>
+		</nav>
+
+		<!-- Hero -->
+		<header class="flex flex-col md:flex-row gap-6 mb-10">
+			<div class="shrink-0">
+				{icon ? (
+					<img
+						src={icon}
+						alt={displayName}
+						class="w-20 h-20 rounded-2xl object-cover shadow-sm"
+					/>
+				) : (
+					<div class="w-20 h-20 rounded-2xl bg-muted flex items-center justify-center shadow-sm">
+						<span class="text-3xl">📦</span>
+					</div>
+				)}
+			</div>
+			<div class="flex-1 min-w-0">
+				<div class="flex items-start justify-between gap-4">
+					<div>
+						<h1 class="text-3xl font-bold tracking-tight mb-1">
+							{displayName}
+						</h1>
+						{rawDesc ? (
+							<div class="text-muted-foreground mb-3">
+								<TextEditor client:load initialContent={rawDesc} isMarkdown={contentIsMarkdown(rawDesc)} minimal />
+							</div>
+						) : (
+							<p class="text-muted-foreground mb-3">{displayDesc}</p>
+						)}
+					</div>
+					<div class="shrink-0 text-right">
+						<div class="text-2xl font-bold">{formatPrice(pkg.price)}</div>
+					</div>
+				</div>
+
+				<div class="flex flex-wrap items-center gap-4 text-sm text-muted-foreground mb-4">
+					{latestVersion && <span>v{latestVersion.version}</span>}
+					<span>{pkg.download_count.toLocaleString()} downloads</span>
+					{pkg.verified && (
+						<span class="text-green-600 dark:text-green-400 font-medium">
+							✓ Verified
+						</span>
+					)}
+					{pkg.manifest.license && <span>{pkg.manifest.license}</span>}
+					<span class="capitalize">{pkg.visibility}</span>
+				</div>
+
+				<!-- CTA buttons -->
+				<div class="flex flex-wrap gap-3">
+					<a
+						href={links.web}
+						target="_blank"
+						rel="noopener"
+						class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
+					>
+						Open in Web App
+						<svg
+							class="w-4 h-4"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+							/>
+						</svg>
+					</a>
+					<a
+						href={links.desktop}
+						class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-border font-medium hover:bg-muted/50 transition-colors"
+					>
+						Open in Desktop App
+					</a>
+				</div>
+			</div>
+		</header>
+
+		<!-- Preview media -->
+		{meta?.preview_media && meta.preview_media.length > 0 && (
+			<section class="mb-10">
+				<div class="flex gap-3 overflow-x-auto pb-2 -mx-2 px-2 snap-x">
+					{meta.preview_media.map((url, i) => (
+						<img
+							src={url}
+							alt={`${displayName} preview ${i + 1}`}
+							class="rounded-xl border border-border shadow-sm max-h-64 snap-start"
+							loading="lazy"
+						/>
+					))}
+				</div>
+			</section>
+		)}
+
+		<div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
+			<!-- Main content -->
+			<div class="lg:col-span-2 space-y-8">
+				{meta?.long_description && (
+					<section>
+						<h2 class="text-xl font-semibold mb-4">About</h2>
+						<div class="prose prose-neutral dark:prose-invert max-w-none text-sm leading-relaxed">
+							<TextEditor client:load initialContent={meta.long_description} isMarkdown={contentIsMarkdown(meta.long_description)} minimal />
+						</div>
+						{/* Hidden plain text for SEO crawlers */}
+						<div class="sr-only">{longDescPlain}</div>
+					</section>
+				)}
+
+				{meta?.use_case && (
+					<section>
+						<h2 class="text-xl font-semibold mb-3">Use Case</h2>
+						<div class="text-muted-foreground">
+							<TextEditor client:load initialContent={meta.use_case} isMarkdown={contentIsMarkdown(meta.use_case)} minimal />
+						</div>
+					</section>
+				)}
+
+				{latestVersion?.release_notes && (
+					<section>
+						<h2 class="text-xl font-semibold mb-3">Release Notes</h2>
+						<div class="text-sm text-muted-foreground">
+							<TextEditor client:load initialContent={latestVersion.release_notes} isMarkdown={contentIsMarkdown(latestVersion.release_notes)} minimal />
+						</div>
+					</section>
+				)}
+
+				<!-- Version history -->
+				{pkg.versions.length > 0 && (
+					<section>
+						<h2 class="text-xl font-semibold mb-4">Versions</h2>
+						<div class="space-y-2">
+							{pkg.versions
+								.filter((v) => !v.yanked)
+								.slice(0, 10)
+								.map((v) => (
+									<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/30 text-sm">
+										<div class="flex items-center gap-3">
+											<span class="font-mono font-medium">v{v.version}</span>
+											<span class="text-muted-foreground">
+												{formatDate(v.published_at) || "—"}
+											</span>
+										</div>
+										<span class="text-muted-foreground text-xs">
+											{(v.wasm_size / 1024).toFixed(0)} KB
+										</span>
+									</div>
+								))}
+						</div>
+					</section>
+				)}
+			</div>
+
+			<!-- Sidebar -->
+			<aside class="space-y-6">
+				<!-- Keywords -->
+				{pkg.manifest.keywords && pkg.manifest.keywords.length > 0 && (
+					<div>
+						<h3 class="text-sm font-semibold mb-2">Keywords</h3>
+						<div class="flex flex-wrap gap-1.5">
+							{pkg.manifest.keywords.map((kw) => (
+								<span class="inline-block px-2.5 py-1 text-xs rounded-full bg-muted text-muted-foreground">
+									{kw}
+								</span>
+							))}
+						</div>
+					</div>
+				)}
+
+				<!-- Tags from meta -->
+				{meta?.tags && meta.tags.length > 0 && (
+					<div>
+						<h3 class="text-sm font-semibold mb-2">Tags</h3>
+						<div class="flex flex-wrap gap-1.5">
+							{meta.tags.map((tag) => (
+								<span class="inline-block px-2.5 py-1 text-xs rounded-full bg-muted text-muted-foreground">
+									{tag}
+								</span>
+							))}
+						</div>
+					</div>
+				)}
+
+				<!-- Details -->
+				<div>
+					<h3 class="text-sm font-semibold mb-2">Details</h3>
+					<dl class="space-y-2 text-sm">
+						{pkg.manifest.authors && pkg.manifest.authors.length > 0 && (
+							<div>
+								<dt class="text-muted-foreground">Authors</dt>
+								<dd>{pkg.manifest.authors.join(", ")}</dd>
+							</div>
+						)}
+						{pkg.manifest.license && (
+							<div>
+								<dt class="text-muted-foreground">License</dt>
+								<dd>{pkg.manifest.license}</dd>
+							</div>
+						)}
+						{publishedDate && (
+							<div>
+								<dt class="text-muted-foreground">Created</dt>
+								<dd>{publishedDate}</dd>
+							</div>
+						)}
+						{updatedDate && (
+							<div>
+								<dt class="text-muted-foreground">Updated</dt>
+								<dd>{updatedDate}</dd>
+							</div>
+						)}
+					</dl>
+				</div>
+
+				<!-- Links -->
+				{(pkg.manifest.homepage ||
+					pkg.manifest.repository ||
+					meta?.website ||
+					meta?.docs_url ||
+					meta?.support_url) && (
+					<div>
+						<h3 class="text-sm font-semibold mb-2">Links</h3>
+						<ul class="space-y-1.5 text-sm">
+							{meta?.website && (
+								<li>
+									<a
+										href={meta.website}
+										target="_blank"
+										rel="noopener"
+										class="text-muted-foreground hover:text-foreground transition-colors"
+									>
+										Website ↗
+									</a>
+								</li>
+							)}
+							{meta?.docs_url && (
+								<li>
+									<a
+										href={meta.docs_url}
+										target="_blank"
+										rel="noopener"
+										class="text-muted-foreground hover:text-foreground transition-colors"
+									>
+										Documentation ↗
+									</a>
+								</li>
+							)}
+							{meta?.support_url && (
+								<li>
+									<a
+										href={meta.support_url}
+										target="_blank"
+										rel="noopener"
+										class="text-muted-foreground hover:text-foreground transition-colors"
+									>
+										Support ↗
+									</a>
+								</li>
+							)}
+							{pkg.manifest.repository && (
+								<li>
+									<a
+										href={pkg.manifest.repository}
+										target="_blank"
+										rel="noopener"
+										class="text-muted-foreground hover:text-foreground transition-colors"
+									>
+										Repository ↗
+									</a>
+								</li>
+							)}
+							{pkg.manifest.homepage && (
+								<li>
+									<a
+										href={pkg.manifest.homepage}
+										target="_blank"
+										rel="noopener"
+										class="text-muted-foreground hover:text-foreground transition-colors"
+									>
+										Homepage ↗
+									</a>
+								</li>
+							)}
+						</ul>
+					</div>
+				)}
+			</aside>
+		</div>
+	</article>
+
+	<!-- More from the Store -->
+	{relatedPackages.length > 0 && (
+		<section class="border-t border-border/40 bg-muted/20 py-16">
+			<div class="max-w-5xl mx-auto px-6">
+				<div class="flex items-center justify-between mb-8">
+					<h2 class="text-xl font-semibold">More Packages</h2>
+					<a href="/store/packages" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
+						Browse all packages
+						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+					</a>
+				</div>
+				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+					{relatedPackages.map((rp) => (
+						<a
+							href={`/store/packages/${rp.id}`}
+							class="group flex items-start gap-4 p-4 rounded-xl bg-card border border-border hover:border-foreground/20 hover:shadow-md transition-all"
+						>
+							{rp.icon ? (
+								<img src={rp.icon} alt={rp.name} class="w-12 h-12 rounded-xl object-cover shrink-0" />
+							) : (
+								<div class="w-12 h-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
+									<span class="text-lg">📦</span>
+								</div>
+							)}
+							<div class="min-w-0 flex-1">
+								<p class="font-medium text-sm truncate group-hover:text-foreground transition-colors">{rp.name}</p>
+								{rp.desc && <p class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{rp.desc}</p>}
+								<div class="flex items-center gap-2 mt-2">
+									<span class="text-[10px] text-muted-foreground">{rp.downloads.toLocaleString()} downloads</span>
+									<span class="text-[10px] font-medium text-muted-foreground">{formatPrice(rp.price)}</span>
+								</div>
+							</div>
+						</a>
+					))}
+				</div>
+			</div>
+		</section>
+	)}
+
+	<!-- Feedback section -->
+	<section class="border-t border-border/40 py-12">
+		<div class="max-w-2xl mx-auto px-6 text-center">
+			<h2 class="text-lg font-semibold mb-2">Have feedback?</h2>
+			<p class="text-muted-foreground text-sm mb-6">
+				Found an issue with this package or have suggestions for improvement? Let us know.
+			</p>
+			<div class="flex flex-wrap items-center justify-center gap-3">
+				<a
+					href="https://github.com/TM9657/flow-like/discussions"
+					target="_blank"
+					rel="noopener"
+					class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted/50 transition-colors"
+				>
+					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+					Community Discussion
+				</a>
+				<a
+					href={`mailto:contact@flow-like.com?subject=Feedback: ${encodeURIComponent(displayName)}`}
+					class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted/50 transition-colors"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
+					Send Feedback
+				</a>
+			</div>
+		</div>
+	</section>
+</StoreLayout>

@@ -1,5 +1,5 @@
 // WASM Package Registry - stores custom node packages
-// Custom nodes are public and usable by anyone after admin approval
+// Packages are private by default. Going public requires admin approval.
 
 enum WasmPackageStatus {
   PENDING_REVIEW // Awaiting admin approval
@@ -9,51 +9,116 @@ enum WasmPackageStatus {
   DISABLED // Not usable
 }
 
+enum WasmPackageVisibility {
+  PRIVATE // Only WasmPackageUsers can discover and download
+  PUBLIC // Everyone can discover and download
+  PUBLIC_REQUEST_ACCESS // Visible to all, but requires access request or purchase
+}
+
+enum WasmCompilationStatus {
+  COMPILED // Server-side .cwasm available in meta bucket
+  LOCAL_ONLY // Compilation failed — only usable locally
+  PENDING // Compilation in progress or queued
+}
+
+enum WasmPackageCategory {
+  DOCUMENT_PROCESSING
+  DATA_TRANSFORMATION
+  WORKFLOW_AUTOMATION
+  COMMUNICATION
+  ANALYTICS_REPORTING
+  FINANCE_BILLING
+  COMPLIANCE_REGULATORY
+  HR_PEOPLE
+  AI_ML
+  INTEGRATION_CONNECTORS
+  SECURITY_IDENTITY
+  DEVOPS
+  IOT_INDUSTRIAL
+  ROBOTICS_PHYSICAL_AI
+  GAMING_SIMULATION
+  HEALTHCARE
+  VETERINARY
+  LEGAL
+  MANUFACTURING
+  AGRICULTURE
+  REAL_ESTATE
+  LOGISTICS
+  ENERGY
+  CONSTRUCTION_TRADES
+  EDUCATION
+  GOVERNMENT_DEFENSE
+  ECOMMERCE
+  INSURANCE
+  TELECOM
+  SCIENTIFIC_ENGINEERING
+  GEOSPATIAL
+  MEDIA_CONTENT
+  OTHER
+}
+
 model WasmPackage {
   id String @id
 
-  // Manifest fields
   name        String
   description String
   version     String
-  authors     WasmPackageAuthor[]
+  users       WasmPackageUser[]
   license     String?
   homepage    String?
-  repository  String? // Link to GitHub/GitLab repo
+  repository  String?
   keywords    String[]
 
-  // Registry metadata
-  status        WasmPackageStatus @default(PENDING_REVIEW)
-  verified      Boolean           @default(false)
-  downloadCount BigInt            @default(0)
+  primaryCategory   WasmPackageCategory?
+  secondaryCategory WasmPackageCategory?
 
-  // Storage references (CDN paths)
-  wasmPath String // CDN path to WASM binary
-  wasmHash String // blake3 hash
+  status     WasmPackageStatus     @default(PENDING_REVIEW)
+  visibility WasmPackageVisibility @default(PRIVATE)
+  verified   Boolean               @default(false)
+
+  downloadCount BigInt @default(0)
+
+  wasmPath String
+  wasmHash String
   wasmSize BigInt
 
-  // Node definitions (stored as JSON for flexibility)
-  nodes Json // Array of node definitions from manifest
+  nodes       Json
+  permissions Json
 
-  // Permissions declared by the package
-  permissions Json // Array of permission strings
+  readme String?
 
-  // Timestamps
+  /// Price in cents (0 = free)
+  price BigInt @default(0)
+
+  metadata Meta[]
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  publishedAt DateTime? // Only set when approved
+  publishedAt DateTime?
 
-  // Relations
-  versions WasmPackageVersion[]
-  reviews  WasmPackageReview[]
+  versions    WasmPackageVersion[]
+  reviews     WasmPackageReview[]
+  invitations WasmPackageInvitation[]
+  joinQueue   WasmPackageJoinQueue[]
+  purchases   WasmPackagePurchase[]
+  authors     WasmPackageAuthor[]
+  comments    Comment[]
+
+  ratingSum   BigInt @default(0)
+  ratingCount BigInt @default(0)
+  avgRating   Float?
 
   @@unique([id, version])
   @@index([name])
   @@index([status])
+  @@index([visibility])
   @@index([verified])
   @@index([downloadCount])
   @@index([createdAt])
   @@index([keywords])
+  @@index([primaryCategory])
+  @@index([secondaryCategory])
+  @@index([price])
 }
 
 model WasmPackageVersion {
@@ -67,10 +132,20 @@ model WasmPackageVersion {
   wasmHash String
   wasmSize BigInt
 
+  nodes Json @default("[]")
+
   releaseNotes       String?
   minFlowLikeVersion String?
   yanked             Boolean           @default(false)
-  status             WasmPackageStatus @default(PENDING_REVIEW) // Each version needs approval
+  status             WasmPackageStatus @default(PENDING_REVIEW)
+
+  compilationStatus WasmCompilationStatus @default(PENDING)
+  compiledPlatforms String[]              @default([])
+  compilationError  String?
+
+  duplicateOfPackageId String?
+  duplicateOfVersion   String?
+  duplicateFlagged     Boolean @default(false)
 
   publishedAt DateTime  @default(now())
   approvedAt  DateTime?
@@ -80,9 +155,11 @@ model WasmPackageVersion {
   @@index([version])
   @@index([publishedAt])
   @@index([status])
+  @@index([compilationStatus])
+  @@index([wasmHash])
+  @@index([duplicateFlagged])
 }
 
-// Admin review records for package submissions
 model WasmPackageReview {
   id String @id @default(cuid())
 
@@ -92,13 +169,12 @@ model WasmPackageReview {
   reviewer     User             @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
   reviewerId   String
   action       WasmReviewAction
-  comment      String? // Optional feedback to submitter
-  internalNote String? // Internal notes not shown to submitter
+  comment      String?
+  internalNote String?
 
-  // Review decision details
-  securityScore      Int? // 1-5 score for security assessment
-  codeQualityScore   Int? // 1-5 score for code quality
-  documentationScore Int? // 1-5 score for documentation
+  securityScore      Int?
+  codeQualityScore   Int?
+  documentationScore Int?
 
   createdAt DateTime @default(now())
 
@@ -109,15 +185,65 @@ model WasmPackageReview {
 }
 
 enum WasmReviewAction {
-  SUBMITTED // Initial submission
-  APPROVED // Admin approved
-  REJECTED // Admin rejected
-  REQUESTED_CHANGES // Admin requested changes
-  COMMENTED // Admin added a comment
-  FLAGGED // Flagged for further review
+  SUBMITTED
+  APPROVED
+  REJECTED
+  REQUESTED_CHANGES
+  COMMENTED
+  FLAGGED
 }
 
-// Junction table connecting packages to their authors (users)
+model WasmPackageUser {
+  id String @id @default(cuid())
+
+  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  permission BigInt // Bitflag: Owner=1, Maintainer=2, User=4
+
+  grantedBy String?
+  grantedAt DateTime @default(now())
+
+  @@unique([packageId, userId])
+  @@index([packageId])
+  @@index([userId])
+  @@index([permission])
+}
+
+model WasmPackageInvitation {
+  id String @id @default(cuid())
+
+  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String
+
+  invitedBy   User   @relation("WasmInviter", fields: [invitedById], references: [id])
+  invitedById String
+
+  invitee   User   @relation("WasmInvitee", fields: [inviteeId], references: [id])
+  inviteeId String
+
+  permission BigInt // Permission level being offered
+
+  status    InvitationStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+  expiresAt DateTime?
+
+  @@unique([packageId, inviteeId])
+  @@index([packageId])
+  @@index([inviteeId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+/// Authors / contributors of a WASM package
 model WasmPackageAuthor {
   id String @id @default(cuid())
 
@@ -127,12 +253,74 @@ model WasmPackageAuthor {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  // Author role/contribution type
-  role String? // e.g., "maintainer", "contributor", "creator"
-
+  role    String?
   addedAt DateTime @default(now())
 
   @@unique([packageId, userId])
   @@index([packageId])
   @@index([userId])
+}
+
+/// Join queue for packages with PublicRequestAccess visibility
+model WasmPackageJoinQueue {
+  id String @id
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String
+
+  comment String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, packageId])
+  @@index([userId, packageId])
+  @@index([packageId, createdAt])
+}
+
+/// Tracks individual WASM package purchases
+model WasmPackagePurchase {
+  id String @id
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packageId String
+
+  /// Price paid in cents at time of purchase
+  pricePaid     BigInt
+  /// Original price before discount (in cents)
+  originalPrice BigInt
+  /// Discount amount in cents (0 if none)
+  discountAmount BigInt @default(0)
+
+  /// Currency code (e.g., "EUR", "USD")
+  currency String @default("EUR")
+
+  /// Stripe checkout session ID for this purchase
+  stripeSessionId       String
+  /// Stripe payment intent ID
+  stripePaymentIntentId String?
+
+  status PurchaseStatus @default(PENDING)
+
+  /// When purchase was completed
+  completedAt  DateTime?
+  /// When refunded (if applicable)
+  refundedAt   DateTime?
+  /// Refund reason if refunded
+  refundReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([packageId])
+  @@index([packageId, status])
+  @@index([packageId, completedAt])
+  @@index([stripeSessionId])
 }

@@ -2,18 +2,30 @@
 
 import { createId } from "@paralleldrive/cuid2";
 import {
+	Badge,
 	Button,
 	Card,
 	CardContent,
+	CardDescription,
 	CardHeader,
+	CardTitle,
 	type IBit,
 	IBitTypes,
 	type IEmbeddingModelParameters,
 	type ILlmParameters,
+	type IMetadata,
+	type IModelProvider,
 	IPooling,
 	Input,
+	Label,
 	Progress,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
 	Separator,
+	Textarea,
 	nowSystemTime,
 	useBackend,
 	useInvoke,
@@ -26,6 +38,13 @@ import {
 	PackageIcon,
 	TimerIcon,
 	UploadCloudIcon,
+	X,
+	Zap,
+	Cpu,
+	Eye,
+	Binary,
+	ImageIcon,
+	ScanLine,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -44,26 +63,57 @@ import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
 
-const DEFAULT_LLM_PARAMETERS: ILlmParameters = {
-	context_length: 2048,
-	model_classification: {
-		cost: 0.3,
-		creativity: 0.3,
-		factuality: 0.3,
-		function_calling: 0.3,
-		multilinguality: 0.3,
-		openness: 0.3,
-		reasoning: 0.3,
-		coding: 0.3,
-		safety: 0.3,
-		speed: 0.3,
-	},
-	provider: {
-		provider_name: "Local",
-		model_id: null,
-		version: null,
-	},
-};
+// ── constants ──────────────────────────────────────────────────────────────
+
+const HOSTED_PROVIDER_OPTIONS = [
+	"Hosted",
+	"hosted:openrouter",
+	"hosted:openai",
+	"hosted:anthropic",
+	"hosted:azure",
+	"hosted:vertex",
+] as const;
+
+type BitMode =
+	| "local-llm"
+	| "hosted-llm"
+	| "vlm"
+	| "embedding"
+	| "image-embedding"
+	| "classification";
+
+// ── helpers ────────────────────────────────────────────────────────────────
+
+function createDefaultLlmParameters(providerName = "Local"): ILlmParameters {
+	return {
+		context_length: 2048,
+		model_classification: {
+			cost: 0.3,
+			creativity: 0.3,
+			factuality: 0.3,
+			function_calling: 0.3,
+			multilinguality: 0.3,
+			openness: 0.3,
+			reasoning: 0.3,
+			coding: 0.3,
+			safety: 0.3,
+			speed: 0.3,
+		},
+		provider: {
+			provider_name: providerName,
+			model_id: null,
+			version: null,
+			params: providerName.toLowerCase().startsWith("hosted") ? {} : undefined,
+		},
+	};
+}
+
+function isHostedProviderName(providerName?: null | string) {
+	const normalized = providerName?.trim().toLowerCase() ?? "";
+	return normalized === "hosted" || normalized.startsWith("hosted:");
+}
+
+const DEFAULT_LLM_PARAMETERS: ILlmParameters = createDefaultLlmParameters();
 
 const DEFAULT_EMBEDDING_PARAMETERS: IEmbeddingModelParameters = {
 	input_length: 2048,
@@ -121,91 +171,498 @@ const DEFAULT_BIT: IBit = {
 	version: "0.0.1",
 };
 
+// ── HostedLLMForm ──────────────────────────────────────────────────────────
+
+function HostedLLMForm({
+	bit,
+	setBit,
+	loading,
+	onSubmit,
+}: {
+	bit: IBit;
+	setBit: React.Dispatch<React.SetStateAction<IBit>>;
+	loading: boolean;
+	onSubmit: () => void;
+}) {
+	const params = (bit.parameters as ILlmParameters) ?? {};
+	const provider = params.provider ?? { provider_name: "Hosted" };
+	const providerParams = (provider.params ?? {}) as Record<string, unknown>;
+
+	const [tagInput, setTagInput] = useState("");
+	const [authorInput, setAuthorInput] = useState("");
+	const tags = bit.meta?.en?.tags ?? [];
+	const authors = bit.authors ?? [];
+
+	const updateParam = (key: keyof ILlmParameters, value: unknown) => {
+		setBit((old) => ({
+			...old,
+			parameters: { ...old.parameters, [key]: value },
+		}));
+	};
+
+	const updateProvider = (update: Partial<IModelProvider>) => {
+		setBit((old) => ({
+			...old,
+			parameters: {
+				...old.parameters,
+				provider: { ...((old.parameters as ILlmParameters).provider ?? {}), ...update },
+			},
+		}));
+	};
+
+	const updateProviderParam = (key: string, value: string) => {
+		setBit((old) => {
+			const current = ((old.parameters as ILlmParameters).provider?.params ?? {}) as Record<
+				string,
+				unknown
+			>;
+			return {
+				...old,
+				parameters: {
+					...old.parameters,
+					provider: {
+						...((old.parameters as ILlmParameters).provider ?? {}),
+						params: { ...current, [key]: value },
+					},
+				},
+			};
+		});
+	};
+
+	const updateMeta = (key: keyof IMetadata, value: unknown) => {
+		setBit((old) => ({
+			...old,
+			meta: { ...old.meta, en: { ...(old.meta?.en ?? {}), [key]: value } },
+		}));
+	};
+
+	const addTag = () => {
+		const t = tagInput.trim();
+		if (t && !tags.includes(t)) {
+			updateMeta("tags", [...tags, t]);
+			setTagInput("");
+		}
+	};
+
+	const removeTag = (tag: string) => {
+		updateMeta(
+			"tags",
+			tags.filter((t) => t !== tag),
+		);
+	};
+
+	const addAuthor = () => {
+		const a = authorInput.trim();
+		if (a && !authors.includes(a)) {
+			setBit((old) => ({ ...old, authors: [...authors, a] }));
+			setAuthorInput("");
+		}
+	};
+
+	const removeAuthor = (author: string) => {
+		setBit((old) => ({
+			...old,
+			authors: (old.authors ?? []).filter((a) => a !== author),
+		}));
+	};
+
+	return (
+		<div className="space-y-4 max-w-screen-md">
+			{/* identity */}
+			<Card>
+				<CardHeader>
+					<CardTitle>Model Identity</CardTitle>
+					<CardDescription>
+						The slug drives auto-computed capability scores — no manual sliders needed.
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="hosted-slug">Model Slug *</Label>
+							<Input
+								id="hosted-slug"
+								value={bit.name ?? ""}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, name: e.target.value.trim() }))
+								}
+								placeholder="step-3-5-flash"
+							/>
+							<p className="text-xs text-muted-foreground">
+								Used to auto-compute capability scores.
+							</p>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-display-name">Display Name *</Label>
+							<Input
+								id="hosted-display-name"
+								value={bit.meta?.en?.name ?? ""}
+								onChange={(e) => updateMeta("name", e.target.value)}
+								placeholder="Step 3.5 Flash"
+							/>
+						</div>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="hosted-description">Description</Label>
+						<Textarea
+							id="hosted-description"
+							rows={2}
+							value={bit.meta?.en?.description ?? ""}
+							onChange={(e) => updateMeta("description", e.target.value)}
+							placeholder="Brief description of the model…"
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="hosted-long-description">Long Description</Label>
+						<Textarea
+							id="hosted-long-description"
+							rows={4}
+							value={bit.meta?.en?.long_description ?? ""}
+							onChange={(e) => updateMeta("long_description", e.target.value)}
+							placeholder="Detailed description of the model's capabilities and use cases…"
+						/>
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* provider */}
+			<Card>
+				<CardHeader>
+					<CardTitle>Provider Settings</CardTitle>
+					<CardDescription>
+						Configure which provider routes and serves this model.
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<div className="grid gap-4 sm:grid-cols-3">
+						<div className="space-y-2">
+							<Label>Provider *</Label>
+							<Select
+								value={provider.provider_name ?? "Hosted"}
+								onValueChange={(v) => updateProvider({ provider_name: v })}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{HOSTED_PROVIDER_OPTIONS.map((p) => (
+										<SelectItem key={p} value={p}>
+											{p}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-model-id">Model ID</Label>
+							<Input
+								id="hosted-model-id"
+								value={provider.model_id ?? ""}
+								onChange={(e) =>
+									updateProvider({ model_id: e.target.value || null })
+								}
+								placeholder="@preset/prod-free"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-context">Context Length</Label>
+							<Input
+								id="hosted-context"
+								type="number"
+								value={params.context_length ?? 2048}
+								onChange={(e) =>
+									updateParam("context_length", parseInt(e.target.value) || 2048)
+								}
+							/>
+						</div>
+					</div>
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="hosted-endpoint">Endpoint</Label>
+							<Input
+								id="hosted-endpoint"
+								value={
+									typeof providerParams.endpoint === "string"
+										? providerParams.endpoint
+										: ""
+								}
+								onChange={(e) => updateProviderParam("endpoint", e.target.value)}
+								placeholder="https://api.example.com/v1"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-tier">Tier</Label>
+							<Input
+								id="hosted-tier"
+								value={
+									typeof providerParams.tier === "string" ? providerParams.tier : ""
+								}
+								onChange={(e) => updateProviderParam("tier", e.target.value)}
+								placeholder="FREE"
+							/>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* registry info */}
+			<Card>
+				<CardHeader>
+					<CardTitle>Registry Info</CardTitle>
+					<CardDescription>Hub, version, license, and repository.</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="hosted-hub">Hub</Label>
+							<Input
+								id="hosted-hub"
+								value={bit.hub ?? ""}
+								onChange={(e) => setBit((old) => ({ ...old, hub: e.target.value }))}
+								placeholder="https://flow-like.com/models"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-version">Version</Label>
+							<Input
+								id="hosted-version"
+								value={bit.version ?? "0.0.1"}
+								onChange={(e) => setBit((old) => ({ ...old, version: e.target.value }))}
+								placeholder="0.0.1"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-license">License</Label>
+							<Input
+								id="hosted-license"
+								value={bit.license ?? ""}
+								onChange={(e) => setBit((old) => ({ ...old, license: e.target.value }))}
+								placeholder="e.g. MIT, Apache-2.0"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-repository">Repository URL</Label>
+							<Input
+								id="hosted-repository"
+								value={bit.repository ?? ""}
+								onChange={(e) => setBit((old) => ({ ...old, repository: e.target.value }))}
+								placeholder="https://huggingface.co/…"
+							/>
+						</div>
+					</div>
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="hosted-website">Website URL</Label>
+							<Input
+								id="hosted-website"
+								value={bit.meta?.en?.website ?? ""}
+								onChange={(e) => updateMeta("website", e.target.value)}
+								placeholder="https://example.com"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-use-case">Use Case</Label>
+							<Input
+								id="hosted-use-case"
+								value={bit.meta?.en?.use_case ?? ""}
+								onChange={(e) => updateMeta("use_case", e.target.value)}
+								placeholder="e.g. Chat, Code, Analysis"
+							/>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* media & authors */}
+			<Card>
+				<CardHeader>
+					<CardTitle>Media &amp; Authors</CardTitle>
+					<CardDescription>Icon, thumbnail, authors, and tags.</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="hosted-icon">Icon URL</Label>
+							<Input
+								id="hosted-icon"
+								value={bit.meta?.en?.icon ?? ""}
+								onChange={(e) => updateMeta("icon", e.target.value)}
+								placeholder="https://example.com/icon.png"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hosted-thumbnail">Thumbnail URL</Label>
+							<Input
+								id="hosted-thumbnail"
+								value={bit.meta?.en?.thumbnail ?? ""}
+								onChange={(e) => updateMeta("thumbnail", e.target.value)}
+								placeholder="https://example.com/thumbnail.png"
+							/>
+						</div>
+					</div>
+					<div className="space-y-2">
+						<Label>Authors</Label>
+						<div className="flex gap-2">
+							<Input
+								value={authorInput}
+								onChange={(e) => setAuthorInput(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAuthor(); } }}
+								placeholder="Add author and press Enter"
+							/>
+							<Button type="button" variant="outline" onClick={addAuthor}>Add</Button>
+						</div>
+						{authors.length > 0 && (
+							<div className="flex flex-wrap gap-1 pt-1">
+								{authors.map((a) => (
+									<Badge key={a} variant="secondary" className="gap-1">
+										{a}
+										<button type="button" onClick={() => removeAuthor(a)}>
+											<X className="h-3 w-3" />
+										</button>
+									</Badge>
+								))}
+							</div>
+						)}
+					</div>
+					<div className="space-y-2">
+						<Label>Tags</Label>
+						<div className="flex gap-2">
+							<Input
+								value={tagInput}
+								onChange={(e) => setTagInput(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+								placeholder="Add tag and press Enter"
+							/>
+							<Button type="button" variant="outline" onClick={addTag}>Add</Button>
+						</div>
+						{tags.length > 0 && (
+							<div className="flex flex-wrap gap-1 pt-1">
+								{tags.map((tag) => (
+									<Badge key={tag} variant="secondary" className="gap-1">
+										{tag}
+										<button type="button" onClick={() => removeTag(tag)}>
+											<X className="h-3 w-3" />
+										</button>
+									</Badge>
+								))}
+							</div>
+						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			<Button
+				className="w-full max-w-screen-md"
+				disabled={loading || !bit.name?.trim()}
+				onClick={onSubmit}
+			>
+				{loading ? (
+					<Loader2Icon className="mr-2 h-4 w-4 animate-spin" />
+				) : (
+					<Zap className="mr-2 h-4 w-4" />
+				)}
+				Add Hosted Model
+			</Button>
+		</div>
+	);
+}
+
+// ── mode selector ──────────────────────────────────────────────────────────
+
+const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
+	{ id: "local-llm", label: "Local LLM", icon: <Cpu className="h-4 w-4" /> },
+	{ id: "hosted-llm", label: "Hosted LLM", icon: <Zap className="h-4 w-4" /> },
+	{ id: "vlm", label: "VLM", icon: <Eye className="h-4 w-4" /> },
+	{ id: "embedding", label: "Embedding", icon: <Binary className="h-4 w-4" /> },
+	{
+		id: "image-embedding",
+		label: "Image Embedding",
+		icon: <ImageIcon className="h-4 w-4" />,
+	},
+	{
+		id: "classification",
+		label: "Classification",
+		icon: <ScanLine className="h-4 w-4" />,
+	},
+];
+
+// ── main page ──────────────────────────────────────────────────────────────
+
 export default function Page() {
 	const backend = useBackend();
-	const profile = useInvoke(
-		backend.userState.getProfile,
-		backend.userState,
-		[],
-		true,
-	);
-	const [type, setType] = useState<IBitTypes>(IBitTypes.Llm);
+	const profile = useInvoke(backend.userState.getProfile, backend.userState, [], true);
+
+	const [mode, setMode] = useState<BitMode>("local-llm");
 	const [bit, setBit] = useState<IBit>(DEFAULT_BIT);
-	const [loading, setLoading] = useState<boolean>(false);
+	const [loading, setLoading] = useState(false);
 	const [projection, setProjection] = useState<IBit | undefined>(undefined);
-	const [textEmbeddingModel, setTextEmbeddingModel] = useState<
-		IBit | undefined
-	>(undefined);
+	const [textEmbeddingModel, setTextEmbeddingModel] = useState<IBit | undefined>(undefined);
 	const [tokenizer, setTokenizer] = useState<IBit | undefined>(undefined);
-	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(
-		undefined,
-	);
-	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(
-		undefined,
-	);
+	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(undefined);
+	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(undefined);
 	const [config, setConfig] = useState<IBit | undefined>(undefined);
 	const [imageEmbeddingPreprocessor, setImageEmbeddingPreprocessor] = useState<
 		IBit | undefined
 	>(undefined);
-	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<
-		IBit | undefined
-	>(undefined);
-	const [progress, setProgress] = useState<number>(0);
-
-	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
-		null,
-	);
+	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<IBit | undefined>(undefined);
+	const [progress, setProgress] = useState(0);
+	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(null);
 	const [progressTotal, setProgressTotal] = useState<number | null>(null);
 	const [progressLabel, setProgressLabel] = useState<string | null>(null);
 	const [progressBit, setProgressBit] = useState<IBit | undefined>(undefined);
 	const lastSampleRef = useRef<{ t: number; downloaded: number } | null>(null);
-	const [speedBps, setSpeedBps] = useState<number>(0);
+	const [speedBps, setSpeedBps] = useState(0);
 	const [etaSec, setEtaSec] = useState<number | null>(null);
+
+	// derived
+	const bitType: IBitTypes = (() => {
+		if (mode === "local-llm" || mode === "hosted-llm") return IBitTypes.Llm;
+		if (mode === "vlm") return IBitTypes.Vlm;
+		if (mode === "embedding") return IBitTypes.Embedding;
+		if (mode === "image-embedding") return IBitTypes.ImageEmbedding;
+		return IBitTypes.ObjectDetection;
+	})();
+
+	const isHostedMode = mode === "hosted-llm";
+
+	const isHostedModel =
+		bit.type === IBitTypes.Llm &&
+		isHostedProviderName(
+			(bit.parameters as ILlmParameters | undefined)?.provider?.provider_name,
+		);
 
 	function getDefaultBit(type: IBitTypes): IBit {
 		return {
 			...DEFAULT_BIT,
 			id: createId(),
-			parameters: {},
-			type: type,
+			parameters:
+				type === IBitTypes.Llm || type === IBitTypes.Vlm
+					? createDefaultLlmParameters(isHostedMode ? "Hosted" : "Local")
+					: {},
+			type,
 		};
 	}
 
+	// ── upload helper ──────────────────────────────────────────────────────
+
 	const uploadBit = useCallback(
-		async (bit: IBit): Promise<IBit> => {
-			if (!profile.data) {
-				throw new Error("User profile is not available");
-			}
-
-			let finalBit = { ...bit };
-
+		async (bitToUpload: IBit): Promise<IBit> => {
+			if (!profile.data) throw new Error("User profile is not available");
+			let finalBit = { ...bitToUpload };
 			await backend.apiState.stream(
 				profile.data,
-				`admin/bit/${bit.id}`,
-				{
-					method: "PUT",
-					body: JSON.stringify(bit),
-				},
+				`admin/bit/${bitToUpload.id}`,
+				{ method: "PUT", body: JSON.stringify(bitToUpload) },
 				(data: Record<string, unknown>) => {
-					console.log("Received data:", data);
-
-					const pRaw = data?.percent;
 					const dlRaw = data?.downloaded;
 					const totRaw = data?.total;
-
+					const pRaw = data?.percent;
 					const downloaded =
-						typeof dlRaw === "string"
-							? Number(dlRaw)
-							: (dlRaw as number | undefined);
+						typeof dlRaw === "string" ? Number(dlRaw) : (dlRaw as number | undefined);
 					const total =
-						typeof totRaw === "string"
-							? Number(totRaw)
-							: (totRaw as number | undefined);
+						typeof totRaw === "string" ? Number(totRaw) : (totRaw as number | undefined);
 					let percent =
-						typeof pRaw === "string"
-							? Number(pRaw)
-							: (pRaw as number | undefined);
-
+						typeof pRaw === "string" ? Number(pRaw) : (pRaw as number | undefined);
 					if (
 						(percent == null || !Number.isFinite(percent)) &&
 						typeof downloaded === "number" &&
@@ -214,15 +671,11 @@ export default function Page() {
 					) {
 						percent = (downloaded / total) * 100;
 					}
-
 					if (typeof percent === "number" && Number.isFinite(percent)) {
-						const clamped = Math.max(0, Math.min(100, percent));
-						setProgress(clamped);
+						setProgress(Math.max(0, Math.min(100, percent)));
 					}
-
 					if (typeof downloaded === "number") setProgressDownloaded(downloaded);
 					if (typeof total === "number") setProgressTotal(total);
-
 					if (typeof downloaded === "number") {
 						const now = Date.now();
 						const last = lastSampleRef.current;
@@ -232,11 +685,7 @@ export default function Page() {
 								const bps = (downloaded - last.downloaded) / dt;
 								if (Number.isFinite(bps)) {
 									setSpeedBps(bps);
-									if (
-										typeof total === "number" &&
-										total > downloaded &&
-										bps > 0
-									) {
+									if (typeof total === "number" && total > downloaded && bps > 0) {
 										setEtaSec((total - downloaded) / bps);
 									}
 								}
@@ -246,11 +695,7 @@ export default function Page() {
 							lastSampleRef.current = { t: now, downloaded };
 						}
 					}
-
-					// Completed single upload
-					if (data?.id) {
-						finalBit = data as IBit;
-					}
+					if (data?.id) finalBit = data as unknown as IBit;
 				},
 			);
 			return finalBit;
@@ -258,57 +703,11 @@ export default function Page() {
 		[backend.apiState, profile.data],
 	);
 
-	function setDefaultDependencies(type: IBitTypes) {
-		if (type === IBitTypes.Vlm) {
-			setProjection(getDefaultBit(IBitTypes.Projection));
-			setTokenizer(undefined);
-			setTokenizerConfig(undefined);
-			setSpecialTokensMap(undefined);
-			setConfig(undefined);
-			setImageEmbeddingPreprocessor(undefined);
-			setImageEmbeddingConfig(undefined);
-			setTextEmbeddingModel(undefined);
-			return;
-		}
-
-		if (type === IBitTypes.Embedding) {
-			setProjection(undefined);
-			setTokenizer(getDefaultBit(IBitTypes.Tokenizer));
-			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
-			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
-			setConfig(getDefaultBit(IBitTypes.Config));
-			setImageEmbeddingPreprocessor(undefined);
-			setImageEmbeddingConfig(undefined);
-			setTextEmbeddingModel(undefined);
-			return;
-		}
-
-		if (type === IBitTypes.ImageEmbedding) {
-			setProjection(undefined);
-			setTokenizer(getDefaultBit(IBitTypes.Tokenizer));
-			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
-			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
-			setConfig(getDefaultBit(IBitTypes.Config));
-			setImageEmbeddingPreprocessor(
-				getDefaultBit(IBitTypes.PreprocessorConfig),
-			);
-			setImageEmbeddingConfig(getDefaultBit(IBitTypes.Config));
-			setTextEmbeddingModel(getDefaultBit(IBitTypes.Embedding));
-			return;
-		}
-
-		setProjection(undefined);
-		setTokenizer(undefined);
-		setTokenizerConfig(undefined);
-		setSpecialTokensMap(undefined);
-		setConfig(undefined);
-		setImageEmbeddingPreprocessor(undefined);
-		setImageEmbeddingConfig(undefined);
-		setTextEmbeddingModel(undefined);
-	}
+	// ── prefill helpers ────────────────────────────────────────────────────
 
 	const prefillLLM = useCallback(async () => {
 		if (
+			isHostedModel ||
 			!bit.download_link ||
 			bit.download_link === "" ||
 			(bit.type !== IBitTypes.Llm && bit.type !== IBitTypes.Vlm)
@@ -317,12 +716,9 @@ export default function Page() {
 		setLoading(true);
 		try {
 			const size = await getModelSize(bit.download_link);
-			// Repo from Download Link
-			if (!bit.repository || bit.repository === "") {
+			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			}
-			bit.repository =
-				(await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -338,15 +734,15 @@ export default function Page() {
 					en: {
 						...old.meta.en,
 						icon: userInfo.avatarUrl,
-						tags: tags,
+						tags,
 						name: modelName || old.meta.en.name,
 					},
 				},
 				file_name: old.download_link?.split("/").pop()?.split("?")[0] || "",
 				repository: bit.repository,
 				authors: [userInfo.authorUrl],
-				license: license,
-				size: size,
+				license,
+				size,
 				parameters,
 			}));
 		} catch (error) {
@@ -354,24 +750,21 @@ export default function Page() {
 		} finally {
 			setLoading(false);
 		}
-	}, [bit]);
+	}, [bit, isHostedModel]);
 
 	const prefillEmbeddingModel = useCallback(async () => {
 		if (
 			!bit.download_link ||
 			bit.download_link === "" ||
-			(bit.type !== IBitTypes.Embedding &&
-				bit.type !== IBitTypes.ImageEmbedding)
+			(bit.type !== IBitTypes.Embedding && bit.type !== IBitTypes.ImageEmbedding)
 		)
 			return;
 		setLoading(true);
 		try {
 			const size = await getModelSize(bit.download_link);
-			if (!bit.repository || bit.repository === "") {
+			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			}
-			bit.repository =
-				(await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -380,67 +773,49 @@ export default function Page() {
 				...old,
 				meta: {
 					...old.meta,
-					en: {
-						...old.meta.en,
-						icon: userInfo.avatarUrl,
-						tags: tags,
-						name: modelName || old.meta.en.name,
-					},
+					en: { ...old.meta.en, icon: userInfo.avatarUrl, tags, name: modelName || old.meta.en.name },
 				},
 				file_name: old.download_link?.split("/").pop()?.split("?")[0] || "",
 				repository: bit.repository,
 				authors: [userInfo.authorUrl],
-				license: license,
-				size: size,
+				license,
+				size,
 			}));
 
 			if (
 				bit.type === IBitTypes.Embedding ||
-				(bit.type === IBitTypes.ImageEmbedding &&
-					textEmbeddingModel?.download_link)
+				(bit.type === IBitTypes.ImageEmbedding && textEmbeddingModel?.download_link)
 			) {
 				const downloadLink =
 					bit.type === IBitTypes.ImageEmbedding
 						? textEmbeddingModel?.download_link
 						: bit.download_link;
-
 				let repo = bit.repository;
 				if (downloadLink && downloadLink !== "")
 					repo = (await getOriginalRepo(downloadLink)) ?? repo;
-				const tokenizer = await guessedModelLink(
-					downloadLink,
-					"tokenizer.json",
-				);
-				const tokenizerConfig = await guessedModelLink(
-					downloadLink,
-					"tokenizer_config.json",
-				);
-				const specialTokensMap = await guessedModelLink(
-					downloadLink,
-					"special_tokens_map.json",
-				);
-				const config = await guessedModelLink(downloadLink, "config.json");
-
+				const [tokenizerUrl, tokenizerConfigUrl, specialTokensMapUrl, configUrl] =
+					await Promise.all([
+						guessedModelLink(downloadLink, "tokenizer.json"),
+						guessedModelLink(downloadLink, "tokenizer_config.json"),
+						guessedModelLink(downloadLink, "special_tokens_map.json"),
+						guessedModelLink(downloadLink, "config.json"),
+					]);
 				setTokenizer((old) => ({
 					...(old || getDefaultBit(IBitTypes.Tokenizer)),
-					download_link: tokenizer,
+					download_link: tokenizerUrl,
 				}));
-
 				setTokenizerConfig((old) => ({
 					...(old || getDefaultBit(IBitTypes.TokenizerConfig)),
-					download_link: tokenizerConfig,
+					download_link: tokenizerConfigUrl,
 				}));
-
 				setSpecialTokensMap((old) => ({
 					...(old || getDefaultBit(IBitTypes.SpecialTokensMap)),
-					download_link: specialTokensMap,
+					download_link: specialTokensMapUrl,
 				}));
-
 				setConfig((old) => ({
 					...(old || getDefaultBit(IBitTypes.Config)),
-					download_link: config,
+					download_link: configUrl,
 				}));
-
 				if (textEmbeddingModel)
 					setTextEmbeddingModel((old) => ({
 						...(old || getDefaultBit(IBitTypes.Embedding)),
@@ -449,414 +824,410 @@ export default function Page() {
 			}
 
 			if (bit.type === IBitTypes.ImageEmbedding) {
-				const imageEmbeddingPreprocessor = await guessedModelLink(
-					bit.download_link,
-					"preprocessor_config.json",
-				);
-				const imageEmbeddingConfig = await guessedModelLink(
-					bit.download_link,
-					"config.json",
-				);
-
+				const [preprocessorUrl, imgConfigUrl] = await Promise.all([
+					guessedModelLink(bit.download_link, "preprocessor_config.json"),
+					guessedModelLink(bit.download_link, "config.json"),
+				]);
 				setImageEmbeddingPreprocessor((old) => ({
 					...(old || getDefaultBit(IBitTypes.PreprocessorConfig)),
-					download_link: imageEmbeddingPreprocessor,
+					download_link: preprocessorUrl,
 				}));
-
 				setImageEmbeddingConfig((old) => ({
 					...(old || getDefaultBit(IBitTypes.Config)),
-					download_link: imageEmbeddingConfig,
+					download_link: imgConfigUrl,
 				}));
 			}
 		} catch (error) {
-			console.error("Error pre-filling LLM parameters:", error);
+			console.error("Error pre-filling embedding model:", error);
 		} finally {
 			setLoading(false);
 		}
 	}, [bit, textEmbeddingModel]);
 
+	// ── reset on mode change ───────────────────────────────────────────────
+
+	function setDefaultDependencies(type: IBitTypes) {
+		if (type === IBitTypes.Vlm) {
+			setProjection(getDefaultBit(IBitTypes.Projection));
+			setTokenizer(undefined);
+			setTokenizerConfig(undefined);
+			setSpecialTokensMap(undefined);
+			setConfig(undefined);
+			setImageEmbeddingPreprocessor(undefined);
+			setImageEmbeddingConfig(undefined);
+			setTextEmbeddingModel(undefined);
+			return;
+		}
+		if (type === IBitTypes.Embedding) {
+			setProjection(undefined);
+			setTokenizer(getDefaultBit(IBitTypes.Tokenizer));
+			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
+			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
+			setConfig(getDefaultBit(IBitTypes.Config));
+			setImageEmbeddingPreprocessor(undefined);
+			setImageEmbeddingConfig(undefined);
+			setTextEmbeddingModel(undefined);
+			return;
+		}
+		if (type === IBitTypes.ImageEmbedding) {
+			setProjection(undefined);
+			setTokenizer(getDefaultBit(IBitTypes.Tokenizer));
+			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
+			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
+			setConfig(getDefaultBit(IBitTypes.Config));
+			setImageEmbeddingPreprocessor(getDefaultBit(IBitTypes.PreprocessorConfig));
+			setImageEmbeddingConfig(getDefaultBit(IBitTypes.Config));
+			setTextEmbeddingModel(getDefaultBit(IBitTypes.Embedding));
+			return;
+		}
+		setProjection(undefined);
+		setTokenizer(undefined);
+		setTokenizerConfig(undefined);
+		setSpecialTokensMap(undefined);
+		setConfig(undefined);
+		setImageEmbeddingPreprocessor(undefined);
+		setImageEmbeddingConfig(undefined);
+		setTextEmbeddingModel(undefined);
+	}
+
 	useEffect(() => {
-		if (type === IBitTypes.Llm || type === IBitTypes.Vlm) {
-			setBit((old) => ({
-				...old,
-				type,
-				parameters: {
-					...DEFAULT_LLM_PARAMETERS,
-				},
-			}));
+		const providerName = isHostedMode ? "Hosted" : "Local";
+		setBit((old) => ({
+			...old,
+			id: createId(),
+			type: bitType,
+			parameters:
+				bitType === IBitTypes.Llm || bitType === IBitTypes.Vlm
+					? createDefaultLlmParameters(providerName)
+					: bitType === IBitTypes.Embedding || bitType === IBitTypes.ImageEmbedding
+						? { ...DEFAULT_EMBEDDING_PARAMETERS }
+						: {},
+			download_link: isHostedMode ? "" : old.download_link,
+			file_name: isHostedMode ? "" : old.file_name,
+			size: isHostedMode ? 0 : old.size,
+			name: "",
+		}));
+		setDefaultDependencies(bitType);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [mode]);
+
+	useEffect(() => {
+		if ((bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) && !isHostedModel) {
 			prefillLLM();
 		}
-
-		if (type === IBitTypes.Embedding || type === IBitTypes.ImageEmbedding) {
-			setBit((old) => ({
-				...old,
-				type,
-				parameters: {
-					...DEFAULT_EMBEDDING_PARAMETERS,
-				},
-			}));
-
+		if (bit.type === IBitTypes.Embedding || bit.type === IBitTypes.ImageEmbedding) {
 			prefillEmbeddingModel();
 		}
+	}, [bit.download_link, bit.type, isHostedModel, textEmbeddingModel?.download_link]);
 
-		setDefaultDependencies(type);
-	}, [type]);
+	// ── submit ─────────────────────────────────────────────────────────────
 
-	useEffect(() => {
-		if (bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) {
-			prefillLLM();
+	const handleSubmit = useCallback(async () => {
+		if (!profile.data) {
+			toast.error("You must be logged in to add a bit.");
+			return;
 		}
-		if (
-			bit.type === IBitTypes.Embedding ||
-			bit.type === IBitTypes.ImageEmbedding
-		) {
-			prefillEmbeddingModel();
+		setLoading(true);
+		try {
+			let dependencies: IBit[] = [];
+
+			if (bit.type === IBitTypes.Embedding) {
+				if (!tokenizer || !tokenizerConfig || !specialTokensMap || !config) {
+					throw new Error("Missing required dependencies for Embedding model");
+				}
+				const tokReg = await uploadBit(mergeBitParameters(tokenizer, bit));
+				dependencies.push(tokReg);
+				const tokCfgReg = await uploadBit(mergeBitParameters(tokenizerConfig, bit));
+				dependencies.push(tokCfgReg);
+				const stmReg = await uploadBit(mergeBitParameters(specialTokensMap, bit));
+				dependencies.push(stmReg);
+				const cfgReg = await uploadBit(mergeBitParameters(config, bit));
+				dependencies.push(cfgReg);
+				const response = await uploadBit({
+					...bit,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+				});
+				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+			}
+
+			if (bit.type === IBitTypes.ImageEmbedding) {
+				if (
+					!textEmbeddingModel ||
+					!tokenizer ||
+					!tokenizerConfig ||
+					!specialTokensMap ||
+					!config ||
+					!imageEmbeddingPreprocessor ||
+					!imageEmbeddingConfig
+				) {
+					throw new Error("Missing required dependencies for Image Embedding model");
+				}
+				textEmbeddingModel.license = bit.license;
+				textEmbeddingModel.authors = bit.authors;
+				const tokReg = await uploadBit(mergeBitParameters(tokenizer, textEmbeddingModel));
+				dependencies.push(tokReg);
+				const tokCfgReg = await uploadBit(
+					mergeBitParameters(tokenizerConfig, textEmbeddingModel),
+				);
+				dependencies.push(tokCfgReg);
+				const stmReg = await uploadBit(
+					mergeBitParameters(specialTokensMap, textEmbeddingModel),
+				);
+				dependencies.push(stmReg);
+				const cfgReg = await uploadBit(mergeBitParameters(config, textEmbeddingModel));
+				dependencies.push(cfgReg);
+				const textEmbReg = await uploadBit({
+					...textEmbeddingModel,
+					license: bit.license,
+					authors: bit.authors,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+				});
+				dependencies = [textEmbReg];
+				const ppReg = await uploadBit(mergeBitParameters(imageEmbeddingPreprocessor, bit));
+				dependencies.push(ppReg);
+				const imgCfgReg = await uploadBit(mergeBitParameters(imageEmbeddingConfig, bit));
+				dependencies.push(imgCfgReg);
+				const response = await uploadBit({
+					...bit,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+				});
+				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+			}
+
+			if (bit.type === IBitTypes.Vlm) {
+				if (!projection) throw new Error("Projection is required for VLM");
+				const projReg = await uploadBit({
+					...projection,
+					license: bit.license,
+					authors: bit.authors,
+					repository: bit.repository,
+				});
+				dependencies.push(projReg);
+			}
+
+			if (bit.type === IBitTypes.Vlm || bit.type === IBitTypes.Llm) {
+				const response = await uploadBit({
+					...bit,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+				});
+				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+			}
+
+			toast.success("Bit added successfully");
+			setBit({ ...DEFAULT_BIT, id: createId() });
+			setProjection(undefined);
+			setTokenizer(undefined);
+			setTokenizerConfig(undefined);
+			setSpecialTokensMap(undefined);
+			setConfig(undefined);
+			setImageEmbeddingPreprocessor(undefined);
+			setImageEmbeddingConfig(undefined);
+			setTextEmbeddingModel(undefined);
+		} catch (error: unknown) {
+			toast.error(`Failed to add bit: ${error instanceof Error ? error.message : error}`);
+		} finally {
+			setLoading(false);
 		}
-	}, [bit.download_link, textEmbeddingModel?.download_link]);
+	}, [
+		bit,
+		backend.apiState,
+		config,
+		imageEmbeddingConfig,
+		imageEmbeddingPreprocessor,
+		profile.data,
+		projection,
+		specialTokensMap,
+		textEmbeddingModel,
+		tokenizer,
+		tokenizerConfig,
+		uploadBit,
+	]);
+
+	// ── render ─────────────────────────────────────────────────────────────
 
 	return (
 		<main className="flex grow h-full min-h-0 bg-background overflow-hidden flex-col w-full">
-			<div className="flex-1 min-h-0 overflow-y-auto p-4">
-				<h1>Add a new Bit</h1>
-				<p className="max-w-screen-md">
-					This page is for adding new bits, which are the building blocks of
-					extra models available to the user. You can add bits here by providing
-					the necessary information.
-				</p>
-				<div className="max-w-screen-md flex flex-row items-center gap-2 mt-4">
-					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Llm ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.Llm)}
-					>
-						LLM
-					</button>
-					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Vlm ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.Vlm)}
-					>
-						VLM
-					</button>
-					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Embedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.Embedding)}
-					>
-						Embedding
-					</button>
-					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ImageEmbedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.ImageEmbedding)}
-					>
-						Image Embedding
-					</button>
-					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ObjectDetection ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.ObjectDetection)}
-					>
-						Classification
-					</button>
-				</div>
-				<br />
-				<div className="max-w-screen-lg flex flex-row items-center gap-2 w-full">
-					{loading ? (
-						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
-					) : null}
-					<Input
-						disabled={loading}
-						className="max-w-screen-md"
-						value={bit.download_link ?? ""}
-						onChange={(e) =>
-							setBit((old) => ({
-								...old,
-								download_link: e.target.value.trim(),
-							}))
-						}
-						placeholder="File URL (ONNX)"
-					/>
-				</div>
-				<br />
-				{bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm ? (
-					<>
-						<LLMConfiguration bit={bit} setBit={setBit} />
-						<Separator className="my-4" />
-					</>
-				) : null}
-				{bit.type === IBitTypes.Vlm && projection ? (
-					<>
-						<DependencyConfiguration
-							defaultBit={getDefaultBit(IBitTypes.Projection)}
-							name="Projection"
-							bit={projection}
-							setBit={setProjection}
+			<div className="flex-1 min-h-0 overflow-y-auto p-6">
+				<div className="space-y-6">
+					<div>
+						<h1 className="text-3xl font-bold">Add New Bit</h1>
+						<p className="text-muted-foreground">
+							Register a new model or asset to the registry.
+						</p>
+					</div>
+
+					{/* mode selector */}
+					<Card>
+						<CardHeader>
+							<CardTitle>Bit Type</CardTitle>
+							<CardDescription>Choose what kind of bit you want to add.</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div className="flex flex-wrap gap-2">
+								{MODES.map(({ id, label, icon }) => (
+									<Button
+										key={id}
+										variant={mode === id ? "default" : "outline"}
+										size="sm"
+										onClick={() => setMode(id)}
+										className="gap-2"
+									>
+										{icon}
+										{label}
+									</Button>
+								))}
+							</div>
+						</CardContent>
+					</Card>
+
+					{/* hosted llm — quick form */}
+					{isHostedMode ? (
+						<HostedLLMForm
+							bit={bit}
+							setBit={setBit}
+							loading={loading}
+							onSubmit={handleSubmit}
 						/>
-						<Separator className="my-4" />
-					</>
-				) : null}
-				{bit.type === IBitTypes.Embedding ||
-				bit.type === IBitTypes.ImageEmbedding ? (
-					<>
-						<div className="flex flex-col items-start gap-6 w-full max-w-screen-lg">
-							<EmbeddingConfiguration bit={bit} setBit={setBit} />
-							{textEmbeddingModel && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.Embedding)}
-									name="Relevant Text Embedding Model"
-									bit={textEmbeddingModel}
-									setBit={setTextEmbeddingModel}
-								/>
-							)}
-							{tokenizer && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.Tokenizer)}
-									name="Tokenizer"
-									bit={tokenizer}
-									setBit={setTokenizer}
-								/>
-							)}
-							{tokenizerConfig && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.TokenizerConfig)}
-									name="Tokenizer Config"
-									bit={tokenizerConfig}
-									setBit={setTokenizerConfig}
-								/>
-							)}
-							{specialTokensMap && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.SpecialTokensMap)}
-									name="Special Tokens Map"
-									bit={specialTokensMap}
-									setBit={setSpecialTokensMap}
-								/>
-							)}
-							{config && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.Config)}
-									name="Config"
-									bit={config}
-									setBit={setConfig}
-								/>
-							)}
-							{imageEmbeddingPreprocessor && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.PreprocessorConfig)}
-									name="Image Embedding Preprocessor"
-									bit={imageEmbeddingPreprocessor}
-									setBit={setImageEmbeddingPreprocessor}
-								/>
-							)}
-							{imageEmbeddingConfig && (
-								<DependencyConfiguration
-									defaultBit={getDefaultBit(IBitTypes.Config)}
-									name="Image Embedding Config"
-									bit={imageEmbeddingConfig}
-									setBit={setImageEmbeddingConfig}
-								/>
-							)}
-						</div>
-						<Separator className="my-4" />
-					</>
-				) : null}
-				<MetaConfiguration bit={bit} setBit={setBit} />
-				{(progress > 0 || loading) && (
-					<UploadProgressCard
-						percent={progress}
-						downloaded={progressDownloaded ?? undefined}
-						total={progressTotal ?? undefined}
-						label={progressLabel ?? undefined}
-						bit={progressBit}
-						speedBps={speedBps}
-						etaSec={etaSec ?? null}
-					/>
-				)}
-				<Button
-					className="mt-4 w-full max-w-screen-lg"
-					onClick={async () => {
-						if (!profile.data) {
-							toast.error("You must be logged in to add a bit.");
-							return;
-						}
-						setLoading(true);
-						try {
-							let dependencies = [];
-							if (bit.type === IBitTypes.Embedding) {
-								if (
-									!tokenizer ||
-									!tokenizerConfig ||
-									!specialTokensMap ||
-									!config
-								) {
-									throw new Error(
-										"Missing required dependencies for Embedding model",
-									);
-								}
-
-								const tokenizerRegistration: IBit = await uploadBit(
-									mergeBitParameters(tokenizer, bit),
-								);
-								dependencies.push(tokenizerRegistration);
-								const tokenizerConfigRegistration: IBit = await uploadBit(
-									mergeBitParameters(tokenizerConfig, bit),
-								);
-
-								dependencies.push(tokenizerConfigRegistration);
-								const specialTokensMapRegistration: IBit = await uploadBit(
-									mergeBitParameters(specialTokensMap, bit),
-								);
-
-								dependencies.push(specialTokensMapRegistration);
-								const configRegistration: IBit = await uploadBit(
-									mergeBitParameters(config, bit),
-								);
-
-								dependencies.push(configRegistration);
-
-								const response: IBit = await uploadBit({
-									...bit,
-									dependencies: dependencies.map(
-										(dep) => `${dep.hub}:${dep.id}`,
-									),
-								});
-
-								const metaUpload = await backend.apiState.put(
-									profile.data,
-									`admin/bit/${response.id}/en`,
-									bit.meta.en,
-								);
-							}
-
-							if (bit.type === IBitTypes.ImageEmbedding) {
-								if (
-									!textEmbeddingModel ||
-									!tokenizer ||
-									!tokenizerConfig ||
-									!specialTokensMap ||
-									!config ||
-									!imageEmbeddingPreprocessor ||
-									!imageEmbeddingConfig
-								) {
-									throw new Error(
-										"Missing required dependencies for Image Embedding model",
-									);
-								}
-
-								textEmbeddingModel.license = bit.license;
-								textEmbeddingModel.authors = bit.authors;
-
-								const tokenizerRegistration: IBit = await uploadBit(
-									mergeBitParameters(tokenizer, textEmbeddingModel),
-								);
-								dependencies.push(tokenizerRegistration);
-								const tokenizerConfigRegistration: IBit = await uploadBit(
-									mergeBitParameters(tokenizerConfig, textEmbeddingModel),
-								);
-								dependencies.push(tokenizerConfigRegistration);
-								const specialTokensMapRegistration: IBit = await uploadBit(
-									mergeBitParameters(specialTokensMap, textEmbeddingModel),
-								);
-								dependencies.push(specialTokensMapRegistration);
-
-								const configRegistration: IBit = await uploadBit(
-									mergeBitParameters(config, textEmbeddingModel),
-								);
-								dependencies.push(configRegistration);
-
-								const textEmbeddingModelRegistration: IBit = await uploadBit({
-									...textEmbeddingModel,
-									license: bit.license,
-									authors: bit.authors,
-									dependencies: dependencies.map(
-										(dep) => `${dep.hub}:${dep.id}`,
-									),
-								});
-
-								dependencies = [textEmbeddingModelRegistration];
-
-								const imageEmbeddingPreprocessorRegistration: IBit =
-									await uploadBit(
-										mergeBitParameters(imageEmbeddingPreprocessor, bit),
-									);
-								dependencies.push(imageEmbeddingPreprocessorRegistration);
-								const imageEmbeddingConfigRegistration: IBit = await uploadBit(
-									mergeBitParameters(imageEmbeddingConfig, bit),
-								);
-								dependencies.push(imageEmbeddingConfigRegistration);
-
-								const response: IBit = await uploadBit({
-									...bit,
-									dependencies: dependencies.map(
-										(dep) => `${dep.hub}:${dep.id}`,
-									),
-								});
-
-								const metaUpload = await backend.apiState.put(
-									profile.data,
-									`admin/bit/${response.id}/en`,
-									bit.meta.en,
-								);
-							}
-
-							if (bit.type === IBitTypes.Vlm) {
-								if (!projection) {
-									throw new Error("Projection is required for VLM");
-								}
-
-								const projectionRegistration: IBit = await uploadBit({
-									...projection,
-									license: bit.license,
-									authors: bit.authors,
-									repository: bit.repository,
-								});
-								dependencies.push(projectionRegistration);
-							}
-
-							if (bit.type === IBitTypes.Vlm || bit.type === IBitTypes.Llm) {
-								const response: IBit = await uploadBit({
-									...bit,
-									dependencies: dependencies.map(
-										(dep) => `${dep.hub}:${dep.id}`,
-									),
-								});
-								const metaUpload = await backend.apiState.put(
-									profile.data,
-									`admin/bit/${response.id}/en`,
-									bit.meta.en,
-								);
-							}
-
-							setBit(DEFAULT_BIT);
-							setProjection(undefined);
-							setTokenizer(undefined);
-							setTokenizerConfig(undefined);
-							setSpecialTokensMap(undefined);
-							setConfig(undefined);
-							setImageEmbeddingPreprocessor(undefined);
-							setImageEmbeddingConfig(undefined);
-							setTextEmbeddingModel(undefined);
-							setType(IBitTypes.Llm);
-						} catch (error: any) {
-							toast.error(`Failed to add bit: ${error.message || error}`);
-						}
-						setLoading(false);
-					}}
-				>
-					{loading ? (
-						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
 					) : (
-						"Add Bit"
+						<>
+							{/* download link for non-hosted */}
+							<div className="flex flex-row items-center gap-2 max-w-screen-md">
+								{loading ? (
+									<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
+								) : null}
+								<Input
+									disabled={loading}
+									value={bit.download_link ?? ""}
+									onChange={(e) =>
+										setBit((old) => ({
+											...old,
+											download_link: e.target.value.trim(),
+										}))
+									}
+									placeholder="File URL (ONNX)"
+								/>
+							</div>
+
+							{/* model-type-specific configuration */}
+							{(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) ? (
+								<>
+									<LLMConfiguration bit={bit} setBit={setBit} isHosted={false} />
+									<Separator className="my-4" />
+								</>
+							) : null}
+							{bit.type === IBitTypes.Vlm && projection ? (
+								<>
+									<DependencyConfiguration
+										defaultBit={getDefaultBit(IBitTypes.Projection)}
+										name="Projection"
+										bit={projection}
+										setBit={setProjection}
+									/>
+									<Separator className="my-4" />
+								</>
+							) : null}
+							{(bit.type === IBitTypes.Embedding ||
+								bit.type === IBitTypes.ImageEmbedding) ? (
+								<>
+									<div className="flex flex-col items-start gap-6 w-full max-w-screen-lg">
+										<EmbeddingConfiguration bit={bit} setBit={setBit} />
+										{textEmbeddingModel && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.Embedding)}
+												name="Relevant Text Embedding Model"
+												bit={textEmbeddingModel}
+												setBit={setTextEmbeddingModel}
+											/>
+										)}
+										{tokenizer && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.Tokenizer)}
+												name="Tokenizer"
+												bit={tokenizer}
+												setBit={setTokenizer}
+											/>
+										)}
+										{tokenizerConfig && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.TokenizerConfig)}
+												name="Tokenizer Config"
+												bit={tokenizerConfig}
+												setBit={setTokenizerConfig}
+											/>
+										)}
+										{specialTokensMap && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.SpecialTokensMap)}
+												name="Special Tokens Map"
+												bit={specialTokensMap}
+												setBit={setSpecialTokensMap}
+											/>
+										)}
+										{config && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.Config)}
+												name="Config"
+												bit={config}
+												setBit={setConfig}
+											/>
+										)}
+										{imageEmbeddingPreprocessor && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.PreprocessorConfig)}
+												name="Image Embedding Preprocessor"
+												bit={imageEmbeddingPreprocessor}
+												setBit={setImageEmbeddingPreprocessor}
+											/>
+										)}
+										{imageEmbeddingConfig && (
+											<DependencyConfiguration
+												defaultBit={getDefaultBit(IBitTypes.Config)}
+												name="Image Embedding Config"
+												bit={imageEmbeddingConfig}
+												setBit={setImageEmbeddingConfig}
+											/>
+										)}
+									</div>
+									<Separator className="my-4" />
+								</>
+							) : null}
+
+							<MetaConfiguration bit={bit} setBit={setBit} />
+
+							{(progress > 0 || loading) && (
+								<UploadProgressCard
+									percent={progress}
+									downloaded={progressDownloaded ?? undefined}
+									total={progressTotal ?? undefined}
+									label={progressLabel ?? undefined}
+									bit={progressBit}
+									speedBps={speedBps}
+									etaSec={etaSec}
+								/>
+							)}
+
+							<Button
+								className="mt-4 w-full max-w-screen-lg"
+								onClick={handleSubmit}
+								disabled={loading}
+							>
+								{loading ? (
+									<Loader2Icon className="w-4 h-4 animate-spin mr-2" />
+								) : null}
+								Add Bit
+							</Button>
+						</>
 					)}
-				</Button>
+				</div>
 			</div>
 		</main>
 	);
 }
 
+// ── helpers ────────────────────────────────────────────────────────────────
+
 function mergeBitParameters(bit: IBit, parent: IBit): IBit {
-	return {
-		...bit,
-		license: parent.license,
-		authors: parent.authors,
-		repository: parent.repository,
-	};
+	return { ...bit, license: parent.license, authors: parent.authors, repository: parent.repository };
 }
 
 function UploadProgressCard(props: {
@@ -869,7 +1240,6 @@ function UploadProgressCard(props: {
 	etaSec?: number | null;
 }) {
 	const { percent, downloaded, total, label, bit, speedBps, etaSec } = props;
-
 	return (
 		<Card className="mt-4 w-full max-w-screen-lg">
 			<CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -932,11 +1302,8 @@ function UploadProgressCard(props: {
 function formatBytes(bytes: number): string {
 	if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
 	const units = ["B", "KB", "MB", "GB", "TB"];
-	const i = Math.min(
-		Math.floor(Math.log(bytes || 1) / Math.log(1024)),
-		units.length - 1,
-	);
-	const value = bytes / Math.pow(1024, i);
+	const i = Math.min(Math.floor(Math.log(bytes || 1) / Math.log(1024)), units.length - 1);
+	const value = bytes / 1024 ** i;
 	return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[i]}`;
 }
 

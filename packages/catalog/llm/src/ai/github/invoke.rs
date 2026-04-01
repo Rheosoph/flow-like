@@ -12,10 +12,11 @@ use flow_like::flow::{
 };
 use flow_like_model_provider::{
     history::{History, Role},
-    response::Response,
+    response::{LLMUsageStats, Response},
     response_chunk::ResponseChunk,
 };
 use flow_like_types::{async_trait, json};
+use std::time::Instant;
 
 /// Convert Flow-Like History to Copilot message format
 #[cfg(feature = "execute")]
@@ -57,6 +58,7 @@ impl NodeLogic for CopilotSendAndWaitNode {
             "AI/GitHub/Copilot/Chat",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -113,6 +115,15 @@ impl NodeLogic for CopilotSendAndWaitNode {
         .set_schema::<Response>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -162,11 +173,13 @@ impl NodeLogic for CopilotSendAndWaitNode {
             LogLevel::Debug,
         );
 
+        let start = Instant::now();
         let response = cached_session
             .session
-            .send_and_wait(full_prompt.as_str())
+            .send_and_collect(full_prompt.as_str(), None)
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to send message: {}", e))?;
+        let duration_ms = start.elapsed().as_millis() as u64;
 
         context.log_message(
             &format!("Received response ({} chars)", response.len()),
@@ -174,11 +187,14 @@ impl NodeLogic for CopilotSendAndWaitNode {
         );
 
         let result = create_response(&response, "copilot");
+        let mut stats = LLMUsageStats::from_response(&result);
+        stats.set_duration_ms(duration_ms);
 
         context
             .set_pin_value("response", json::json!(response))
             .await?;
         context.set_pin_value("result", json::json!(result)).await?;
+        context.set_pin_value("stats", json::json!(stats)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -206,6 +222,7 @@ impl NodeLogic for CopilotSendStreamingNode {
             "AI/GitHub/Copilot/Chat",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -278,6 +295,15 @@ impl NodeLogic for CopilotSendStreamingNode {
             VariableType::String,
         );
 
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.set_long_running(true);
 
         node
@@ -324,6 +350,7 @@ impl NodeLogic for CopilotSendStreamingNode {
         context.log_message("Starting streaming response...", LogLevel::Debug);
 
         let mut events = cached_session.session.subscribe();
+        let start = Instant::now();
         cached_session
             .session
             .send(full_prompt.as_str())
@@ -365,11 +392,14 @@ impl NodeLogic for CopilotSendStreamingNode {
         }
 
         let result = create_response(&full_response, "copilot");
+        let mut stats = LLMUsageStats::from_response(&result);
+        stats.set_duration_ms(start.elapsed().as_millis() as u64);
 
         context
             .set_pin_value("full_response", json::json!(full_response))
             .await?;
         context.set_pin_value("result", json::json!(result)).await?;
+        context.set_pin_value("stats", json::json!(stats)).await?;
         context.deactivate_exec_pin("on_stream").await?;
         context.activate_exec_pin("done").await?;
 

@@ -1,7 +1,7 @@
 import { createId } from "@paralleldrive/cuid2";
 import { IRole, Response } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
-import type { IAttachment, IMessage, IPlanStep } from "./chat-db";
+import type { IAttachment, IChatUsageStat, IMessage, IPlanStep } from "./chat-db";
 
 export interface ProcessChatEventsResult {
 	intermediateResponse: Response;
@@ -267,6 +267,15 @@ export function processChatEvents(
 					globalState: ev.payload,
 				};
 			}
+		}
+
+		if (ev.event_type === "chat_usage_stat") {
+			const stat = ev.payload as IChatUsageStat;
+			if (!responseMessage.usage_stats) {
+				responseMessage.usage_stats = [];
+			}
+			responseMessage.usage_stats.push(stat);
+			shouldUpdate = true;
 		}
 	}
 

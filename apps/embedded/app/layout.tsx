@@ -54,6 +54,7 @@ export default function RootLayout({
 					client={queryClient}
 					persistOptions={{
 						persister,
+						maxAge: 24 * 60 * 60 * 1000,
 					}}
 				>
 					<TooltipProvider>

@@ -2,7 +2,10 @@ use crate::{
     entity::profile,
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::profile::{delete_old_image, generate_upload_url},
+    routes::{
+        profile::{delete_old_image, generate_upload_url},
+        user::ensure_user_exists,
+    },
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
@@ -46,6 +49,9 @@ pub struct SyncProfileResponse {
     pub created: Vec<SyncedProfile>,
     pub updated: Vec<UpdatedProfile>,
     pub skipped: Vec<String>,
+    /// IDs of profiles that were soft-deleted on the server (tombstones).
+    /// Clients should delete these locally and stop syncing them.
+    pub deleted: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -88,6 +94,7 @@ pub async fn sync_profiles(
     Json(profiles): Json<Vec<SyncProfileRequest>>,
 ) -> Result<Json<SyncProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
     println!(
         "[ProfileSync] sync_profiles called by user={}, profile_count={}",
         sub,
@@ -102,10 +109,11 @@ pub async fn sync_profiles(
 
     let mut created: Vec<SyncedProfile> = Vec::new();
     let mut updated: Vec<UpdatedProfile> = Vec::new();
-    let skipped = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut deleted: Vec<String> = Vec::new();
 
     for profile_req in profiles {
-        // Check if profile exists on server
+        // Check if profile exists on server (including soft-deleted)
         let found_profile = profile::Entity::find()
             .filter(
                 profile::Column::Id
@@ -116,19 +124,28 @@ pub async fn sync_profiles(
             .await?;
 
         if let Some(existing) = found_profile {
+            // If this profile was soft-deleted, tell the client to delete it locally
+            if existing.deleted_at.is_some() {
+                println!(
+                    "[ProfileSync] Profile {} is soft-deleted, returning as tombstone",
+                    profile_req.id
+                );
+                deleted.push(profile_req.id.clone());
+                continue;
+            }
             println!(
                 "[ProfileSync] Profile {} found in DB, updated_at={}",
                 profile_req.id, existing.updated_at
             );
             // Update existing profile metadata only if local is newer.
+            // If the client sends no timestamp we cannot determine freshness → skip.
             let should_update = if let Some(local_updated) = &profile_req.updated_at {
-                if let Ok(local_time) = chrono::DateTime::parse_from_rfc3339(local_updated) {
-                    local_time.naive_utc() > existing.updated_at
-                } else {
-                    true
+                match chrono::DateTime::parse_from_rfc3339(local_updated) {
+                    Ok(local_time) => local_time.naive_utc() > existing.updated_at,
+                    Err(_) => false,
                 }
             } else {
-                true
+                false
             };
 
             if should_update {
@@ -241,6 +258,8 @@ pub async fn sync_profiles(
                         icon_upload_url,
                         thumbnail_upload_url,
                     });
+                } else {
+                    skipped.push(profile_req.id.clone());
                 }
             }
         } else {
@@ -330,11 +349,12 @@ pub async fn sync_profiles(
         .collect();
 
     println!(
-        "[ProfileSync] Done: created={}, updated={}, skipped={}, synced={}",
+        "[ProfileSync] Done: created={}, updated={}, skipped={}, synced={}, deleted={}",
         created.len(),
         updated.len(),
         skipped.len(),
-        synced.len()
+        synced.len(),
+        deleted.len()
     );
 
     Ok(Json(SyncProfileResponse {
@@ -342,5 +362,6 @@ pub async fn sync_profiles(
         created,
         updated,
         skipped,
+        deleted,
     }))
 }

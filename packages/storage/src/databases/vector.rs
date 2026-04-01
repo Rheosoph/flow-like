@@ -1,3 +1,4 @@
+pub mod buffered;
 pub mod lancedb;
 use flow_like_types::{Result, Value, async_trait};
 
@@ -176,4 +177,12 @@ pub trait VectorStore: Send + Sync {
     async fn count(&self, filter: Option<String>) -> Result<usize>;
 
     async fn schema(&self) -> Result<arrow_schema::Schema>;
+
+    async fn flush(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_dirty(&self) -> bool {
+        false
+    }
 }

@@ -26,6 +26,14 @@ pub enum MemoryTier {
     Heavy,
     /// 256 MB - intensive workloads
     Intensive,
+    /// 512 MB - large data processing
+    Large,
+    /// 1 GB - very large workloads
+    Huge,
+    /// 2 GB - extreme workloads
+    Extreme,
+    /// 4 GB - maximum allowed
+    Maximum,
 }
 
 impl MemoryTier {
@@ -36,6 +44,10 @@ impl MemoryTier {
             Self::Standard => 64 * 1024 * 1024,
             Self::Heavy => 128 * 1024 * 1024,
             Self::Intensive => 256 * 1024 * 1024,
+            Self::Large => 512 * 1024 * 1024,
+            Self::Huge => 1024 * 1024 * 1024,
+            Self::Extreme => 2 * 1024 * 1024 * 1024,
+            Self::Maximum => 4 * 1024 * 1024 * 1024,
         }
     }
 
@@ -46,6 +58,10 @@ impl MemoryTier {
             Self::Standard => "Standard (64 MB)",
             Self::Heavy => "Heavy (128 MB)",
             Self::Intensive => "Intensive (256 MB)",
+            Self::Large => "Large (512 MB)",
+            Self::Huge => "Huge (1 GB)",
+            Self::Extreme => "Extreme (2 GB)",
+            Self::Maximum => "Maximum (4 GB)",
         }
     }
 }
@@ -64,6 +80,10 @@ pub enum TimeoutTier {
     Extended,
     /// 300 seconds - long running
     LongRunning,
+    /// 600 seconds - very long running
+    VeryLong,
+    /// 1800 seconds - maximum
+    Maximum,
 }
 
 impl TimeoutTier {
@@ -73,6 +93,8 @@ impl TimeoutTier {
             Self::Standard => std::time::Duration::from_secs(30),
             Self::Extended => std::time::Duration::from_secs(60),
             Self::LongRunning => std::time::Duration::from_secs(300),
+            Self::VeryLong => std::time::Duration::from_secs(600),
+            Self::Maximum => std::time::Duration::from_secs(1800),
         }
     }
 
@@ -82,6 +104,8 @@ impl TimeoutTier {
             Self::Standard => "Standard (30s)",
             Self::Extended => "Extended (60s)",
             Self::LongRunning => "Long Running (5min)",
+            Self::VeryLong => "Very Long (10min)",
+            Self::Maximum => "Maximum (30min)",
         }
     }
 }
@@ -114,6 +138,15 @@ pub struct NetworkPermissions {
     /// Allow WebSocket connections
     #[serde(default)]
     pub websocket_enabled: bool,
+    /// Allow TCP socket connections
+    #[serde(default)]
+    pub tcp_enabled: bool,
+    /// Allow UDP socket connections
+    #[serde(default)]
+    pub udp_enabled: bool,
+    /// Allow DNS lookups
+    #[serde(default)]
+    pub dns_enabled: bool,
 }
 
 /// File system access requirements
@@ -181,6 +214,15 @@ impl PackagePermissions {
         }
         if self.network.websocket_enabled {
             caps |= WasmCapabilities::WEBSOCKET;
+        }
+        if self.network.tcp_enabled {
+            caps |= WasmCapabilities::TCP;
+        }
+        if self.network.udp_enabled {
+            caps |= WasmCapabilities::UDP;
+        }
+        if self.network.dns_enabled {
+            caps |= WasmCapabilities::DNS;
         }
 
         // Filesystem
@@ -296,13 +338,16 @@ impl PackagePermissions {
 }
 
 /// Node entry in the package manifest
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PackageNodeEntry {
     /// Node identifier (used in code)
     pub id: String,
     /// Display name
     pub name: String,
+    /// Optional human-friendly name
+    #[serde(default)]
+    pub friendly_name: Option<String>,
     /// Description
     pub description: String,
     /// Category path
@@ -310,13 +355,107 @@ pub struct PackageNodeEntry {
     /// Icon (optional, base64 or URL)
     #[serde(default)]
     pub icon: Option<String>,
+    /// Node quality / impact scores
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    pub scores: Option<flow_like::flow::node::NodeScores>,
+    /// Pin definitions keyed by pin id
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<String, Object>))]
+    pub pins: HashMap<String, flow_like::flow::pin::Pin>,
+    /// Whether this node is a start node
+    #[serde(default)]
+    pub start: Option<bool>,
+    /// Whether the node is long-running
+    #[serde(default)]
+    pub long_running: Option<bool>,
+    /// Documentation / help text
+    #[serde(default)]
+    pub docs: Option<String>,
+    /// Whether the node supports event callbacks
+    #[serde(default)]
+    pub event_callback: Option<bool>,
+    /// Function references
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    pub fn_refs: Option<flow_like::flow::node::FnRefs>,
     /// Which OAuth providers this specific node needs
-    /// (subset of package-level oauth_scopes)
     #[serde(default)]
     pub oauth_providers: Vec<String>,
+    /// Required OAuth scopes per provider
+    #[serde(default)]
+    pub required_oauth_scopes: Option<HashMap<String, Vec<String>>>,
+    /// Whether this node can only run offline
+    #[serde(default)]
+    pub only_offline: bool,
+    /// Schema version of this node entry
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// Node-level permission labels
+    #[serde(default)]
+    pub permissions: Vec<flow_like::flow::node::NodePermission>,
     /// Additional node-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Domain category for WASM packages
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WasmPackageCategory {
+    DocumentProcessing,
+    DataTransformation,
+    WorkflowAutomation,
+    Communication,
+    AnalyticsReporting,
+    FinanceBilling,
+    ComplianceRegulatory,
+    HrPeople,
+    AiMl,
+    IntegrationConnectors,
+    SecurityIdentity,
+    Devops,
+    IotIndustrial,
+    RoboticsPhysicalAi,
+    GamingSimulation,
+    Healthcare,
+    Veterinary,
+    Legal,
+    Manufacturing,
+    Agriculture,
+    RealEstate,
+    Logistics,
+    Energy,
+    ConstructionTrades,
+    Education,
+    GovernmentDefense,
+    Ecommerce,
+    Insurance,
+    Telecom,
+    ScientificEngineering,
+    Geospatial,
+    MediaContent,
+    Other,
+}
+
+impl std::fmt::Display for WasmPackageCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            serde_json::to_value(self)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or("OTHER")
+        )
+    }
+}
+
+impl WasmPackageCategory {
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
 }
 
 /// Package author information
@@ -363,13 +502,16 @@ pub struct PackageManifest {
     #[serde(default)]
     pub permissions: PackagePermissions,
 
-    /// Nodes provided by this package
-    #[serde(default)]
-    pub nodes: Vec<PackageNodeEntry>,
-
     /// Keywords for discovery
     #[serde(default)]
     pub keywords: Vec<String>,
+
+    /// Primary domain category
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_category: Option<WasmPackageCategory>,
+    /// Secondary domain category
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_category: Option<WasmPackageCategory>,
 
     /// Minimum Flow-Like version required
     #[serde(default)]
@@ -402,8 +544,9 @@ impl PackageManifest {
             repository: None,
             homepage: None,
             permissions: PackagePermissions::default(),
-            nodes: Vec::new(),
             keywords: Vec::new(),
+            primary_category: None,
+            secondary_category: None,
             min_flow_like_version: None,
             wasm_path: None,
             wasm_hash: None,
@@ -423,28 +566,6 @@ impl PackageManifest {
         }
         if self.version.is_empty() {
             errors.push("Package version is required".to_string());
-        }
-        if self.nodes.is_empty() {
-            errors.push("Package must contain at least one node".to_string());
-        }
-
-        // Validate node OAuth requirements reference package-level OAuth
-        let package_providers: std::collections::HashSet<_> = self
-            .permissions
-            .oauth_scopes
-            .iter()
-            .map(|s| s.provider.as_str())
-            .collect();
-
-        for node in &self.nodes {
-            for provider in &node.oauth_providers {
-                if !package_providers.contains(provider.as_str()) {
-                    errors.push(format!(
-                        "Node '{}' references OAuth provider '{}' not declared in package permissions",
-                        node.id, provider
-                    ));
-                }
-            }
         }
 
         if errors.is_empty() {
@@ -473,20 +594,6 @@ impl PackageManifest {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
-
-    /// Get OAuth scopes required for a specific node
-    pub fn get_node_oauth_scopes(&self, node_id: &str) -> Vec<&OAuthScopeRequirement> {
-        let node = self.nodes.iter().find(|n| n.id == node_id);
-        match node {
-            Some(n) if !n.oauth_providers.is_empty() => self
-                .permissions
-                .oauth_scopes
-                .iter()
-                .filter(|s| n.oauth_providers.contains(&s.provider))
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -497,71 +604,24 @@ mod tests {
     fn test_memory_tier() {
         assert_eq!(MemoryTier::Standard.bytes(), 64 * 1024 * 1024);
         assert_eq!(MemoryTier::Intensive.bytes(), 256 * 1024 * 1024);
+        assert_eq!(MemoryTier::Large.bytes(), 512 * 1024 * 1024);
+        assert_eq!(MemoryTier::Huge.bytes(), 1024 * 1024 * 1024);
+        assert_eq!(MemoryTier::Extreme.bytes(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(MemoryTier::Maximum.bytes(), 4 * 1024 * 1024 * 1024);
     }
 
     #[test]
     fn test_manifest_validation() {
-        let mut manifest = PackageManifest::new(
+        let manifest = PackageManifest::new(
             "com.example.test",
             "Test Package",
             "1.0.0",
             "A test package",
         );
 
-        // Should fail without nodes
-        assert!(manifest.validate().is_err());
-
-        // Add a node
-        manifest.nodes.push(PackageNodeEntry {
-            id: "test_node".to_string(),
-            name: "Test Node".to_string(),
-            description: "A test node".to_string(),
-            category: "Test".to_string(),
-            icon: None,
-            oauth_providers: Vec::new(),
-            metadata: HashMap::new(),
-        });
-
-        // Should pass now
         assert!(manifest.validate().is_ok());
-    }
 
-    #[test]
-    fn test_oauth_scope_validation() {
-        let mut manifest = PackageManifest::new(
-            "com.example.test",
-            "Test Package",
-            "1.0.0",
-            "A test package",
-        );
-
-        // Add a node that references an OAuth provider
-        manifest.nodes.push(PackageNodeEntry {
-            id: "google_node".to_string(),
-            name: "Google Node".to_string(),
-            description: "Uses Google API".to_string(),
-            category: "Test".to_string(),
-            icon: None,
-            oauth_providers: vec!["google".to_string()],
-            metadata: HashMap::new(),
-        });
-
-        // Should fail - OAuth provider not declared
-        let result = manifest.validate();
-        assert!(result.is_err());
-
-        // Add the OAuth scope requirement
-        manifest
-            .permissions
-            .oauth_scopes
-            .push(OAuthScopeRequirement {
-                provider: "google".to_string(),
-                scopes: vec!["gmail.readonly".to_string()],
-                reason: "Read emails".to_string(),
-                required: true,
-            });
-
-        // Should pass now
-        assert!(manifest.validate().is_ok());
+        let empty = PackageManifest::new("", "Test", "1.0.0", "desc");
+        assert!(empty.validate().is_err());
     }
 }

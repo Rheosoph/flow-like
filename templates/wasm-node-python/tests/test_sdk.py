@@ -70,12 +70,12 @@ class TestPinDefinition:
         pin = (
             PinDefinition.input_pin("x", PinType.F64, default=1.0)
             .with_schema("number")
-            .with_value_type("percentage")
+            .with_value_type("Array")
         )
         d = pin.to_dict()
         assert d["default_value"] == 1.0
         assert d["schema"] == "number"
-        assert d["value_type"] == "percentage"
+        assert d["value_type"] == "Array"
 
 
 class TestNodeDefinition:

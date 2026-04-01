@@ -46,6 +46,7 @@ import { MessageContent } from "./MessageContent";
 import { PendingCommandsView } from "./PendingCommandsView";
 import { PendingComponentsView } from "./PendingComponentsView";
 import { PlanStepsView } from "./PlanStepsView";
+import { validateComponents, validateCanvasSettings } from "./validateComponents";
 import { ModelSelector, ProviderSelector } from "./ProviderSelector";
 import { StatusPill } from "./StatusPill";
 import type {
@@ -123,6 +124,7 @@ export function FlowPilot({
 	const [pendingCanvasSettings, setPendingCanvasSettings] = useState<
 		CanvasSettings | undefined
 	>();
+	const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
 
 	// History state
 	const [showHistory, setShowHistory] = useState(false);
@@ -283,6 +285,7 @@ export function FlowPilot({
 		setAttachedImages([]);
 		setPendingCommands([]);
 		setPendingComponents([]);
+		setValidationWarnings([]);
 		setSuggestions([]);
 		setCurrentConversationId(undefined);
 		setShowHistory(false);
@@ -302,6 +305,7 @@ export function FlowPilot({
 				setPlanSteps([]);
 				setPendingCommands([]);
 				setPendingComponents([]);
+				setValidationWarnings([]);
 				setShowHistory(false);
 			} catch (err) {
 				console.error("Failed to load conversation:", err);
@@ -448,12 +452,14 @@ export function FlowPilot({
 			});
 			setPendingComponents([]);
 			setPendingCanvasSettings(undefined);
+			setValidationWarnings([]);
 		}
 	}, [pendingComponents, pendingCanvasSettings, onApplyComponents]);
 
 	const handleDismissComponents = useCallback(() => {
 		setPendingComponents([]);
 		setPendingCanvasSettings(undefined);
+		setValidationWarnings([]);
 	}, []);
 
 	// Main submit handler
@@ -505,11 +511,13 @@ export function FlowPilot({
 				setSuggestions([]);
 				setPendingCommands([]);
 				setPendingComponents([]);
+				setValidationWarnings([]);
 			} else if (agentMode === "board") {
 				setSuggestions([]);
 				setPendingCommands([]);
 			} else {
 				setPendingComponents([]);
+				setValidationWarnings([]);
 			}
 
 			// Create or get conversation for persistence
@@ -640,7 +648,8 @@ export function FlowPilot({
 								setLoadingPhase("searching");
 							} else if (
 								eventData.tool === "get_node_details" ||
-								eventData.tool === "list_board_nodes"
+								eventData.tool === "list_board_nodes" ||
+								eventData.tool === "get_component_schema"
 							) {
 								setLoadingPhase("reasoning");
 							} else if (
@@ -775,7 +784,13 @@ export function FlowPilot({
 						try {
 							const components = JSON.parse(componentsMatch[1]);
 							if (Array.isArray(components) && components.length > 0) {
-								setPendingComponents((prev) => [...prev, ...components]);
+								const { components: validatedBatch, warnings } = validateComponents(components);
+								if (validatedBatch.length > 0) {
+									setPendingComponents((prev) => [...prev, ...validatedBatch]);
+								}
+								if (warnings.length > 0) {
+									setValidationWarnings((prev) => [...prev, ...warnings]);
+								}
 							}
 						} catch {
 							// Invalid JSON in components
@@ -798,7 +813,7 @@ export function FlowPilot({
 					if (canvasSettingsMatch) {
 						try {
 							const settings = JSON.parse(canvasSettingsMatch[1]);
-							setPendingCanvasSettings(settings);
+							setPendingCanvasSettings(validateCanvasSettings(settings));
 						} catch {
 							// Invalid JSON in canvas settings
 						}
@@ -973,10 +988,17 @@ ${userMsg}`;
 					);
 				}
 
-				// Handle generated components
+				// Handle generated components — validate before showing
 				if (response.components.length > 0) {
-					setPendingComponents(response.components);
-					onComponentsGenerated?.(response.components);
+					const { components: validatedFinal, warnings: finalWarnings } =
+						validateComponents(response.components);
+					if (validatedFinal.length > 0) {
+						setPendingComponents(validatedFinal);
+						onComponentsGenerated?.(validatedFinal);
+					}
+					if (finalWarnings.length > 0) {
+						setValidationWarnings((prev) => [...prev, ...finalWarnings]);
+					}
 				}
 
 				setLoadingPhase("finalizing");
@@ -1271,6 +1293,8 @@ ${userMsg}`;
 				pendingComponents.length > 0 && (
 					<PendingComponentsView
 						components={pendingComponents}
+						canvasSettings={pendingCanvasSettings}
+						warnings={validationWarnings}
 						onApply={handleApplyComponents}
 						onDismiss={handleDismissComponents}
 					/>

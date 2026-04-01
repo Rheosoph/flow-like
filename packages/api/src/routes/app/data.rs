@@ -17,7 +17,17 @@ pub fn routes() -> Router<AppState> {
             "/",
             delete(delete_files::delete_files).put(upload_files::upload_files),
         )
+        .route(
+            "/user",
+            delete(delete_files::delete_user_files).put(upload_files::upload_user_files),
+        )
         .route("/presign", post(presign_data_access::presign_data_access))
+        .route(
+            "/user/presign",
+            post(presign_data_access::presign_user_data_access),
+        )
         .route("/download", post(download_files::download_files))
+        .route("/user/download", post(download_files::download_user_files))
         .route("/list", post(list_files::list_files))
+        .route("/user/list", post(list_files::list_user_files))
 }

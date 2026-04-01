@@ -7,6 +7,7 @@ import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
+import { useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -39,8 +40,8 @@ export function A2UIFileInput({
 	style,
 	componentId,
 	surfaceId,
-	onAction,
 }: ComponentProps<FileInputComponent>) {
+	const onAction = useOnAction();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
 	const value = useResolved<FileData | FileData[]>(component.value);
@@ -160,13 +161,18 @@ export function A2UIFileInput({
 				setByPath(component.value.path, newValue);
 			}
 
+			const urls = successfulUploads.map((f) => f.backendUrl as string);
+			const actionValue = multiple
+				? urls
+				: urls[0];
+
 			onAction?.({
 				type: "userAction",
 				name: "change",
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: { value: newValue },
+				context: { value: actionValue },
 			});
 		}
 
@@ -183,13 +189,17 @@ export function A2UIFileInput({
 			setByPath(component.value.path, newValue);
 		}
 
+		const urls = multiple
+			? newFiles.map((f) => f.backendUrl).filter(Boolean)
+			: null;
+
 		onAction?.({
 			type: "userAction",
 			name: "change",
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: newValue },
+			context: { value: urls },
 		});
 	};
 

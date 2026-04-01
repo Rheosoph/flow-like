@@ -26,6 +26,12 @@ scrape_configs:
       - targets: ['runtime:9000']
     metrics_path: /metrics
 
+  # Flow-Like WASM Compiler metrics
+  - job_name: 'flow-like-compiler'
+    static_configs:
+      - targets: ['compiler:9091']
+    metrics_path: /metrics
+
   # Redis metrics (via redis-exporter)
   - job_name: 'redis'
     static_configs:

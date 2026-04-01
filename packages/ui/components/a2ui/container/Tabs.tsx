@@ -54,7 +54,10 @@ export function A2UITabs({
 			className={cn(resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
-			<TabsList>
+			<TabsList
+				className={cn(resolveStyle(component.listStyle))}
+				style={resolveInlineStyle(component.listStyle)}
+			>
 				{component.tabs?.map((tab) => {
 					const label = tab.label
 						? (resolve(tab.label) as string | undefined)
@@ -63,14 +66,25 @@ export function A2UITabs({
 						? (resolve(tab.disabled) as boolean | undefined)
 						: undefined;
 					return (
-						<TabsTrigger key={tab.id} value={tab.id} disabled={disabled}>
+						<TabsTrigger
+							key={tab.id}
+							value={tab.id}
+							disabled={disabled}
+							className={cn(resolveStyle(component.triggerStyle))}
+							style={resolveInlineStyle(component.triggerStyle)}
+						>
 							{label ?? tab.id}
 						</TabsTrigger>
 					);
 				})}
 			</TabsList>
 			{component.tabs?.map((tab) => (
-				<TabsContent key={tab.id} value={tab.id}>
+				<TabsContent
+					key={tab.id}
+					value={tab.id}
+					className={cn(resolveStyle(component.contentStyle))}
+					style={resolveInlineStyle(component.contentStyle)}
+				>
 					{renderChild(tab.contentComponentId)}
 				</TabsContent>
 			))}

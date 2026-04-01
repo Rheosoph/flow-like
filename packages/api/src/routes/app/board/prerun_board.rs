@@ -12,7 +12,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::board::ExecutionMode;
+use flow_like::flow::{board::ExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -62,8 +62,8 @@ pub struct PrerunBoardResponse {
     pub has_wasm_nodes: bool,
     /// package_id values of all WASM nodes present in the board
     pub wasm_package_ids: Vec<String>,
-    /// Per-package permissions declared by WASM nodes (package_id -> list of permission strings)
-    pub wasm_package_permissions: HashMap<String, Vec<String>>,
+    /// Per-package permissions declared by WASM nodes (package_id -> list of permissions)
+    pub wasm_package_permissions: HashMap<String, Vec<NodePermission>>,
 }
 
 fn parse_version(version_str: &str) -> Option<(u32, u32, u32)> {
@@ -135,55 +135,56 @@ pub async fn prerun_board(
     let mut oauth_scopes: HashMap<String, Vec<String>> = HashMap::new();
     let mut requires_local_execution = false;
     let mut wasm_package_ids: Vec<String> = Vec::new();
-    let mut wasm_package_permissions: HashMap<String, Vec<String>> = HashMap::new();
+    let mut wasm_package_permissions: HashMap<String, Vec<NodePermission>> = HashMap::new();
 
-    let process_node = |node: &flow_like::flow::node::Node,
-                        oauth_scopes: &mut HashMap<String, Vec<String>>,
-                        requires_local: &mut bool,
-                        wasm_ids: &mut Vec<String>,
-                        wasm_perms: &mut HashMap<String, Vec<String>>| {
-        // Collect WASM (external) node package IDs
-        if let Some(wasm) = &node.wasm {
-            if !wasm_ids.contains(&wasm.package_id) {
-                wasm_ids.push(wasm.package_id.clone());
-            }
-            if !wasm.permissions.is_empty() {
-                let entry = wasm_perms.entry(wasm.package_id.clone()).or_default();
-                for perm in &wasm.permissions {
-                    if !entry.contains(perm) {
-                        entry.push(perm.clone());
-                    }
+    let process_node =
+        |node: &flow_like::flow::node::Node,
+         oauth_scopes: &mut HashMap<String, Vec<String>>,
+         requires_local: &mut bool,
+         wasm_ids: &mut Vec<String>,
+         wasm_perms: &mut HashMap<String, Vec<NodePermission>>| {
+            // Collect WASM (external) node package IDs
+            if let Some(wasm) = &node.wasm {
+                if !wasm_ids.contains(&wasm.package_id) {
+                    wasm_ids.push(wasm.package_id.clone());
                 }
-            }
-        }
-        // Check if node requires local execution
-        if node.only_offline {
-            *requires_local = true;
-        }
-
-        // Collect OAuth provider IDs
-        if let Some(providers) = &node.oauth_providers {
-            for provider_id in providers {
-                oauth_scopes.entry(provider_id.clone()).or_default();
-            }
-        }
-
-        // Collect required scopes - only for providers already registered via oauth_providers
-        // required_oauth_scopes is informational - it documents what scopes a node needs
-        // IF OAuth is used, but shouldn't trigger OAuth by itself
-        if let Some(required_scopes) = &node.required_oauth_scopes {
-            for (provider_id, scopes) in required_scopes {
-                // Only add scopes if this provider was already registered by an OAuth provider node
-                if let Some(entry) = oauth_scopes.get_mut(provider_id) {
-                    for scope in scopes {
-                        if !entry.contains(scope) {
-                            entry.push(scope.clone());
+                if !wasm.permissions.is_empty() {
+                    let entry = wasm_perms.entry(wasm.package_id.clone()).or_default();
+                    for perm in &wasm.permissions {
+                        if !entry.contains(perm) {
+                            entry.push(*perm);
                         }
                     }
                 }
             }
-        }
-    };
+            // Check if node requires local execution
+            if node.only_offline {
+                *requires_local = true;
+            }
+
+            // Collect OAuth provider IDs
+            if let Some(providers) = &node.oauth_providers {
+                for provider_id in providers {
+                    oauth_scopes.entry(provider_id.clone()).or_default();
+                }
+            }
+
+            // Collect required scopes - only for providers already registered via oauth_providers
+            // required_oauth_scopes is informational - it documents what scopes a node needs
+            // IF OAuth is used, but shouldn't trigger OAuth by itself
+            if let Some(required_scopes) = &node.required_oauth_scopes {
+                for (provider_id, scopes) in required_scopes {
+                    // Only add scopes if this provider was already registered by an OAuth provider node
+                    if let Some(entry) = oauth_scopes.get_mut(provider_id) {
+                        for scope in scopes {
+                            if !entry.contains(scope) {
+                                entry.push(scope.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        };
 
     // Process main board nodes
     for node in board.nodes.values() {

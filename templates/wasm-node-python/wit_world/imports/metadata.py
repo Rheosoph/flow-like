@@ -15,6 +15,12 @@ def get_node_id() -> str:
     raise NotImplementedError
 def get_run_id() -> str:
     raise NotImplementedError
+def get_app_id() -> str:
+    raise NotImplementedError
+def get_board_id() -> str:
+    raise NotImplementedError
+def get_user_id() -> str:
+    raise NotImplementedError
 def time_now() -> int:
     raise NotImplementedError
 def random() -> float:

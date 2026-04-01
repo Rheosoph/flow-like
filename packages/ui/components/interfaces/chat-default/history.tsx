@@ -133,9 +133,6 @@ export function ChatHistory({
 				<div className="p-4">
 					<div
 						className="flex items-center justify-between mb-4"
-						style={{
-							paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
-						}}
 					>
 						<div className="flex items-center gap-3">
 							<div className="p-2 rounded-lg bg-primary/10 border border-primary/15">

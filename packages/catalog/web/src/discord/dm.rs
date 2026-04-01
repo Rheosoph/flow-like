@@ -1,6 +1,8 @@
 //! Discord direct message operations
 
-use super::session::{DiscordSession, get_discord_client};
+use super::session::DiscordSession;
+#[cfg(feature = "execute")]
+use super::session::get_discord_client;
 use super::user::DiscordUser;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -9,6 +11,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use serenity::builder::CreateMessage;
 
 // ============================================================================
@@ -75,6 +78,7 @@ impl NodeLogic for SendDMNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -98,6 +102,13 @@ impl NodeLogic for SendDMNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -163,6 +174,7 @@ impl NodeLogic for SendDMByIdNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: DiscordSession = context.evaluate_pin("session").await?;
 
@@ -186,5 +198,12 @@ impl NodeLogic for SendDMByIdNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Discord functionality requires the 'execute' feature"
+        ))
     }
 }

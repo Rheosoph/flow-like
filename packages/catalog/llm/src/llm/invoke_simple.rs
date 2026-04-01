@@ -16,6 +16,7 @@ use flow_like::{
 use flow_like_model_provider::{
     history::{History, HistoryMessage, Role},
     llm::LLMCallback,
+    response::LLMUsageStats,
     response_chunk::ResponseChunk,
 };
 use flow_like_types::{
@@ -27,6 +28,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Instant;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -48,6 +50,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(1);
 
         // Generic cloud/local model invocation: balanced defaults with light perf bias.
         node.set_scores(
@@ -119,6 +122,15 @@ impl NodeLogic for InvokeLLMSimpleNode {
             "Final assistant message extracted from the response",
             VariableType::String,
         );
+
+        node.add_output_pin(
+            "stats",
+            "Stats",
+            "Token usage, cost, and model statistics",
+            VariableType::Struct,
+        )
+        .set_schema::<LLMUsageStats>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.set_long_running(true);
 
@@ -213,7 +225,9 @@ impl NodeLogic for InvokeLLMSimpleNode {
             None,
         );
 
+        let start = Instant::now();
         let res = model.invoke(&history, Some(callback)).await?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         let mut response_string = "".to_string();
 
         if let Some(response) = res.last_message() {
@@ -234,9 +248,13 @@ impl NodeLogic for InvokeLLMSimpleNode {
             context.push_sub_context(&mut sub_context);
         }
 
+        let mut stats = LLMUsageStats::from_response(&res);
+        stats.set_duration_ms(duration_ms);
+
         context
             .set_pin_value("result", json!(response_string))
             .await?;
+        context.set_pin_value("stats", json!(stats)).await?;
         context.deactivate_exec_pin("on_stream").await?;
         context.activate_exec_pin("done").await?;
 

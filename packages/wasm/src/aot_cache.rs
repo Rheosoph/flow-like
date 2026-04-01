@@ -1,16 +1,12 @@
-//! AOT (Ahead-of-Time) compilation cache for WASM modules
+//! AOT (Ahead-of-Time) compilation cache for WASM modules.
 //!
-//! **Local-only cache** — every installation compiles from `.wasm` source.
-//! We NEVER accept external `.cwasm` files. A `.wasm` is sandboxed; a `.cwasm`
-//! is raw native code. The only `.cwasm` files that enter this cache are ones
-//! we compiled ourselves from verified `.wasm` bytecode.
-//!
-//! Each cached artifact is keyed by:
+//! Each cached `.cwasm` artifact is keyed by:
 //! - blake3 hash of the original `.wasm` bytes  (content identity)
 //! - OS + architecture                          (platform identity)
 //! - wasmtime major version                     (compiler identity)
 //!
-//! A `.b3` sidecar stores a plain blake3 checksum to detect disk corruption.
+//! The system always compiles from `.wasm` source itself, so no external
+//! integrity verification is needed — a cache miss simply recompiles.
 
 use crate::error::WasmResult;
 use std::path::{Path, PathBuf};
@@ -19,7 +15,20 @@ use wasmtime::Module;
 #[cfg(feature = "component-model")]
 use wasmtime::component::Component;
 
-const WASMTIME_VERSION: &str = "40";
+/// Wasmtime major version, extracted automatically from the workspace Cargo.toml at build time.
+pub const WASMTIME_VERSION: &str = env!("WASMTIME_VERSION");
+
+/// Build the platform key for the current host (e.g. `ios-aarch64-wt43`).
+/// This always returns the native platform key so the client can request
+/// native precompiled artifacts from the server.
+pub fn host_platform_key() -> String {
+    format!(
+        "{}-{}-wt{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        WASMTIME_VERSION,
+    )
+}
 
 fn cache_key(wasm_hash: &str) -> String {
     format!(
@@ -51,43 +60,17 @@ impl AotCache {
         dir.join(format!("{}.cwasm", cache_key(wasm_hash)))
     }
 
-    fn checksum_path(dir: &Path, wasm_hash: &str) -> PathBuf {
-        dir.join(format!("{}.cwasm.b3", cache_key(wasm_hash)))
-    }
-
-    fn load_and_verify(dir: &Path, wasm_hash: &str) -> Option<Vec<u8>> {
-        let artifact = Self::artifact_path(dir, wasm_hash);
-        let checksum_file = Self::checksum_path(dir, wasm_hash);
-
-        let serialized = std::fs::read(&artifact).ok()?;
-        let expected = std::fs::read_to_string(&checksum_file).ok()?;
-
-        let actual = blake3::hash(&serialized).to_hex().to_string();
-        if expected.trim() != actual {
-            tracing::warn!("AOT cache corrupted for {}, discarding", wasm_hash);
-            let _ = std::fs::remove_file(&artifact);
-            let _ = std::fs::remove_file(&checksum_file);
-            return None;
-        }
-
-        Some(serialized)
+    fn load_artifact(dir: &Path, wasm_hash: &str) -> Option<Vec<u8>> {
+        std::fs::read(Self::artifact_path(dir, wasm_hash)).ok()
     }
 
     fn write_artifact(dir: &Path, wasm_hash: &str, serialized: &[u8]) -> WasmResult<()> {
         std::fs::create_dir_all(dir)?;
-
-        let artifact = Self::artifact_path(dir, wasm_hash);
-        let checksum_file = Self::checksum_path(dir, wasm_hash);
-
-        std::fs::write(&artifact, serialized)?;
-        std::fs::write(
-            &checksum_file,
-            blake3::hash(serialized).to_hex().to_string(),
-        )?;
-
+        let path = Self::artifact_path(dir, wasm_hash);
+        std::fs::write(&path, serialized)?;
         tracing::info!(
             "Saved AOT cache: {} ({} bytes)",
-            artifact.display(),
+            path.display(),
             serialized.len()
         );
         Ok(())
@@ -95,18 +78,17 @@ impl AotCache {
 
     fn evict(dir: &Path, wasm_hash: &str) {
         let _ = std::fs::remove_file(Self::artifact_path(dir, wasm_hash));
-        let _ = std::fs::remove_file(Self::checksum_path(dir, wasm_hash));
     }
 
-    /// Try to load a precompiled module. Returns `None` on cache miss or corruption.
+    /// Try to load a precompiled module. Returns `None` on cache miss.
     ///
     /// # Safety
     /// `Module::deserialize` loads native machine code. This is safe here because
     /// only self-compiled artifacts from verified `.wasm` bytecode enter this cache.
     pub fn load_module(&self, engine: &wasmtime::Engine, wasm_hash: &str) -> Option<Module> {
-        let serialized = Self::load_and_verify(&self.modules_dir, wasm_hash)?;
+        let serialized = Self::load_artifact(&self.modules_dir, wasm_hash)?;
 
-        // SAFETY: only self-compiled artifacts; checksum guards against corruption
+        // SAFETY: only self-compiled artifacts enter this cache
         match unsafe { Module::deserialize(engine, &serialized) } {
             Ok(module) => {
                 tracing::debug!("AOT cache hit for module {}", wasm_hash);
@@ -133,7 +115,7 @@ impl AotCache {
 
     #[cfg(feature = "component-model")]
     pub fn load_component(&self, engine: &wasmtime::Engine, wasm_hash: &str) -> Option<Component> {
-        let serialized = Self::load_and_verify(&self.components_dir, wasm_hash)?;
+        let serialized = Self::load_artifact(&self.components_dir, wasm_hash)?;
 
         // SAFETY: same guarantees as load_module
         match unsafe { Component::deserialize(engine, &serialized) } {
@@ -165,5 +147,18 @@ impl AotCache {
         let _ = std::fs::remove_dir_all(&self.modules_dir);
         #[cfg(feature = "component-model")]
         let _ = std::fs::remove_dir_all(&self.components_dir);
+    }
+
+    /// Inject an externally-compiled `.cwasm` artifact into the module cache.
+    ///
+    /// Used to populate the cache with artifacts downloaded from the backend.
+    pub fn inject_module(&self, wasm_hash: &str, cwasm_bytes: &[u8]) -> WasmResult<()> {
+        Self::write_artifact(&self.modules_dir, wasm_hash, cwasm_bytes)
+    }
+
+    /// Inject an externally-compiled component `.cwasm` artifact into the cache.
+    #[cfg(feature = "component-model")]
+    pub fn inject_component(&self, wasm_hash: &str, cwasm_bytes: &[u8]) -> WasmResult<()> {
+        Self::write_artifact(&self.components_dir, wasm_hash, cwasm_bytes)
     }
 }

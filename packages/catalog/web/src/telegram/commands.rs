@@ -12,10 +12,14 @@ use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
+#[cfg(feature = "execute")]
 use teloxide::types::{BotCommand, BotCommandScope, Recipient};
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 
 // =============================================================================
 // DATA STRUCTURES
@@ -43,6 +47,7 @@ pub struct AdminRights {
     pub can_manage_topics: bool,
 }
 
+#[cfg(feature = "execute")]
 fn build_scope(
     scope_str: &str,
     chat_id: Option<i64>,
@@ -170,6 +175,7 @@ impl NodeLogic for SetMyCommandsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let commands: Vec<BotCommandInfo> = context.evaluate_pin("commands").await?;
@@ -214,6 +220,13 @@ impl NodeLogic for SetMyCommandsNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -295,6 +308,7 @@ impl NodeLogic for DeleteMyCommandsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let scope_str: String = context
@@ -333,6 +347,13 @@ impl NodeLogic for DeleteMyCommandsNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -416,6 +437,7 @@ impl NodeLogic for GetMyCommandsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let scope_str: String = context
@@ -463,6 +485,13 @@ impl NodeLogic for GetMyCommandsNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -536,6 +565,7 @@ impl NodeLogic for SetMyNameNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let name: Option<String> = context.evaluate_pin("name").await.ok();
@@ -563,6 +593,13 @@ impl NodeLogic for SetMyNameNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -625,6 +662,7 @@ impl NodeLogic for GetMyNameNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let language_code: Option<String> = context.evaluate_pin("language_code").await.ok();
@@ -648,6 +686,13 @@ impl NodeLogic for GetMyNameNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -721,6 +766,7 @@ impl NodeLogic for SetMyDescriptionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let description: Option<String> = context.evaluate_pin("description").await.ok();
@@ -748,6 +794,13 @@ impl NodeLogic for SetMyDescriptionNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -815,6 +868,7 @@ impl NodeLogic for GetMyDescriptionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let language_code: Option<String> = context.evaluate_pin("language_code").await.ok();
@@ -840,6 +894,13 @@ impl NodeLogic for GetMyDescriptionNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -913,6 +974,7 @@ impl NodeLogic for SetMyShortDescriptionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let short_description: Option<String> =
@@ -941,6 +1003,13 @@ impl NodeLogic for SetMyShortDescriptionNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1008,6 +1077,7 @@ impl NodeLogic for GetMyShortDescriptionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let language_code: Option<String> = context.evaluate_pin("language_code").await.ok();
@@ -1035,6 +1105,13 @@ impl NodeLogic for GetMyShortDescriptionNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1121,6 +1198,7 @@ impl NodeLogic for SetChatMenuButtonNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let chat_id: Option<i64> = context.evaluate_pin("chat_id").await.ok();
@@ -1133,6 +1211,7 @@ impl NodeLogic for SetChatMenuButtonNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+        #[cfg(feature = "execute")]
         use teloxide::types::{MenuButton, WebAppInfo};
 
         let menu_button = match menu_type.as_str() {
@@ -1180,6 +1259,13 @@ impl NodeLogic for SetChatMenuButtonNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1259,12 +1345,14 @@ impl NodeLogic for GetChatMenuButtonNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let chat_id: Option<i64> = context.evaluate_pin("chat_id").await.ok();
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+        #[cfg(feature = "execute")]
         use teloxide::types::MenuButton;
 
         let mut request = cached_bot.bot.get_chat_menu_button();
@@ -1306,6 +1394,13 @@ impl NodeLogic for GetChatMenuButtonNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1446,6 +1541,7 @@ impl NodeLogic for SetMyDefaultAdminRightsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let for_channels: bool = context.evaluate_pin("for_channels").await.unwrap_or(false);
@@ -1497,6 +1593,7 @@ impl NodeLogic for SetMyDefaultAdminRightsNode {
 
         let cached_bot = get_telegram_bot(context, &session.ref_id).await?;
 
+        #[cfg(feature = "execute")]
         use teloxide::types::ChatAdministratorRights;
 
         let rights = ChatAdministratorRights {
@@ -1535,6 +1632,13 @@ impl NodeLogic for SetMyDefaultAdminRightsNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -1605,6 +1709,7 @@ impl NodeLogic for GetMyDefaultAdminRightsNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let for_channels: bool = context.evaluate_pin("for_channels").await.unwrap_or(false);
@@ -1644,5 +1749,12 @@ impl NodeLogic for GetMyDefaultAdminRightsNode {
         }
 
         context.activate_exec_pin("exec_out").await
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }

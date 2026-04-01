@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 # Add src and examples to path so tests can import them
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# src must come first so src/node.py takes precedence over examples/node.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sdk import Context, ExecutionInput, MockHostBridge
 
@@ -38,3 +39,21 @@ def make_context(
         node_name=node_name,
     )
     return Context(ei, host or MockHostBridge())
+
+
+# Ensure all modules are imported (registering their WasmNode subclasses)
+# before any test runs, so the global registry is stable.
+import node as _node_mod  # noqa: F401, E402  (src/node.py — main nodes)
+import math_nodes as _math_mod  # noqa: F401, E402
+import string_nodes as _string_mod  # noqa: F401, E402
+import control_flow as _control_mod  # noqa: F401, E402
+import permissions as _perms_mod  # noqa: F401, E402
+
+# Also import the examples/node.py example (shadowed by src/node.py on sys.path)
+import importlib.util as _iu  # noqa: E402
+_spec = _iu.spec_from_file_location(
+    "example_node",
+    str(Path(__file__).resolve().parent.parent / "examples" / "node.py"),
+)
+_example_node = _iu.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_example_node)  # type: ignore[union-attr]

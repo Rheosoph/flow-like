@@ -3,6 +3,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+	Accordion,
+	AccordionContent,
+	AccordionItem,
+	AccordionTrigger,
 	Badge,
 	Button,
 	Input,
@@ -34,28 +38,580 @@ import type { PackageManifest } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,
+	AlertTriangle,
 	ArrowLeft,
 	Bug,
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
 	Clock,
+	Code2,
 	FileCode2,
 	FolderOpen,
 	Globe,
 	HardDrive,
+	Info,
 	Loader2,
 	Lock,
+	Minus,
 	Package,
 	Play,
+	Plus,
 	Search,
 	Shield,
+	ShieldCheck,
 	Sparkles,
 	Zap,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+	type LintIssue,
+	type LintSeverity,
+	countBySeverity,
+	lintNodes,
+} from "../../../lib/validate-nodes";
+
+interface JsonSchema {
+	type?: string;
+	properties?: Record<string, JsonSchema>;
+	required?: string[];
+	items?: JsonSchema;
+	title?: string;
+	description?: string;
+	default?: unknown;
+	enum?: unknown[];
+	format?: string;
+	minimum?: number;
+	maximum?: number;
+	oneOf?: JsonSchema[];
+	anyOf?: JsonSchema[];
+	allOf?: JsonSchema[];
+	$ref?: string;
+	definitions?: Record<string, JsonSchema>;
+}
+
+function parseSchema(raw: string | undefined): JsonSchema | null {
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw) as JsonSchema;
+		if (parsed && typeof parsed === "object") return parsed;
+	} catch {
+		/* malformed schema */
+	}
+	return null;
+}
+
+function resolveRef(
+	ref: string,
+	rootSchema: JsonSchema,
+): JsonSchema | undefined {
+	const parts = ref.replace(/^#\//, "").split("/");
+	let current: unknown = rootSchema;
+	for (const part of parts) {
+		if (current && typeof current === "object" && part in current) {
+			current = (current as Record<string, unknown>)[part];
+		} else {
+			return undefined;
+		}
+	}
+	return current as JsonSchema | undefined;
+}
+
+function resolveSchema(
+	schema: JsonSchema,
+	root: JsonSchema,
+	seen = new Set<string>(),
+): JsonSchema {
+	if (schema.$ref) {
+		if (seen.has(schema.$ref)) return schema;
+		const nextSeen = new Set(seen).add(schema.$ref);
+		const resolved = resolveRef(schema.$ref, root);
+		if (resolved) return resolveSchema(resolved, root, nextSeen);
+	}
+	if (schema.allOf?.length === 1) {
+		return resolveSchema(schema.allOf[0], root, seen);
+	}
+	return schema;
+}
+
+function createDefaultFromSchema(
+	schema: JsonSchema,
+	root: JsonSchema,
+	depth = 0,
+): unknown {
+	if (depth > 32) return null;
+	const resolved = resolveSchema(schema, root);
+	if (resolved.default !== undefined) return resolved.default;
+
+	if (resolved.enum && resolved.enum.length > 0) return resolved.enum[0];
+
+	switch (resolved.type) {
+		case "string":
+			return "";
+		case "integer":
+		case "number":
+			return 0;
+		case "boolean":
+			return false;
+		case "array":
+			return [];
+		case "object": {
+			if (!resolved.properties) return {};
+			const obj: Record<string, unknown> = {};
+			for (const [key, propSchema] of Object.entries(resolved.properties)) {
+				obj[key] = createDefaultFromSchema(propSchema, root, depth + 1);
+			}
+			return obj;
+		}
+		default:
+			return null;
+	}
+}
+
+function SchemaField({
+	schema,
+	rootSchema,
+	value,
+	onChange,
+	label,
+	required,
+}: {
+	schema: JsonSchema;
+	rootSchema: JsonSchema;
+	value: unknown;
+	onChange: (val: unknown) => void;
+	label?: string;
+	required?: boolean;
+}) {
+	const resolved = resolveSchema(schema, rootSchema);
+
+	if (resolved.oneOf || resolved.anyOf) {
+		const variants = resolved.oneOf ?? resolved.anyOf ?? [];
+		const nullVariant = variants.find((v) => v.type === "null");
+		const nonNullVariants = variants.filter((v) => v.type !== "null");
+		if (nullVariant && nonNullVariants.length === 1) {
+			return (
+				<SchemaField
+					schema={nonNullVariants[0]}
+					rootSchema={rootSchema}
+					value={value}
+					onChange={onChange}
+					label={label}
+					required={false}
+				/>
+			);
+		}
+	}
+
+	if (resolved.enum && resolved.enum.length > 0) {
+		return (
+			<Select
+				value={String(value ?? "")}
+				onValueChange={(v) => onChange(v)}
+			>
+				<SelectTrigger className="h-9">
+					<SelectValue placeholder="Select..." />
+				</SelectTrigger>
+				<SelectContent>
+					{resolved.enum.map((v) => (
+						<SelectItem key={String(v)} value={String(v)}>
+							{String(v)}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		);
+	}
+
+	switch (resolved.type) {
+		case "boolean":
+			return (
+				<div className="flex items-center gap-2">
+					<Switch
+						checked={Boolean(value)}
+						onCheckedChange={(v) => onChange(v)}
+					/>
+					<span className="text-sm text-muted-foreground/70">
+						{value ? "true" : "false"}
+					</span>
+				</div>
+			);
+
+		case "integer":
+			return (
+				<Input
+					type="number"
+					step={1}
+					min={resolved.minimum}
+					max={resolved.maximum}
+					value={String(value ?? 0)}
+					onChange={(e) =>
+						onChange(Number.parseInt(e.target.value) || 0)
+					}
+					className="h-9"
+				/>
+			);
+
+		case "number":
+			return (
+				<Input
+					type="number"
+					step={0.01}
+					min={resolved.minimum}
+					max={resolved.maximum}
+					value={String(value ?? 0)}
+					onChange={(e) =>
+						onChange(Number.parseFloat(e.target.value) || 0)
+					}
+					className="h-9"
+				/>
+			);
+
+		case "array":
+			return (
+				<SchemaArrayField
+					itemSchema={resolved.items ?? { type: "string" }}
+					rootSchema={rootSchema}
+					value={value}
+					onChange={onChange}
+				/>
+			);
+
+		case "object":
+			if (resolved.properties) {
+				return (
+					<SchemaObjectFields
+						schema={resolved}
+						rootSchema={rootSchema}
+						value={value}
+						onChange={onChange}
+					/>
+				);
+			}
+			return (
+				<Textarea
+					value={
+						typeof value === "string"
+							? value
+							: JSON.stringify(value ?? {}, null, 2)
+					}
+					onChange={(e) => {
+						try {
+							onChange(JSON.parse(e.target.value));
+						} catch {
+							onChange(e.target.value);
+						}
+					}}
+					rows={3}
+					className="font-mono text-xs"
+					placeholder="{}"
+				/>
+			);
+
+		case "string":
+			if (resolved.format === "date-time") {
+				return (
+					<Input
+						type="datetime-local"
+						value={String(value ?? "")}
+						onChange={(e) => onChange(e.target.value)}
+						className="h-9"
+					/>
+				);
+			}
+			return (
+				<Input
+					value={String(value ?? "")}
+					onChange={(e) => onChange(e.target.value)}
+					className="h-9"
+					placeholder={
+						resolved.description ??
+						`Enter ${label ?? "value"}...`
+					}
+				/>
+			);
+
+		default:
+			return (
+				<Input
+					value={String(value ?? "")}
+					onChange={(e) => onChange(e.target.value)}
+					className="h-9"
+					placeholder={`Enter ${label ?? "value"}...`}
+				/>
+			);
+	}
+}
+
+function SchemaObjectFields({
+	schema,
+	rootSchema,
+	value,
+	onChange,
+}: {
+	schema: JsonSchema;
+	rootSchema: JsonSchema;
+	value: unknown;
+	onChange: (val: unknown) => void;
+}) {
+	const obj = (value && typeof value === "object" && !Array.isArray(value)
+		? value
+		: {}) as Record<string, unknown>;
+	const properties = schema.properties ?? {};
+	const requiredFields = new Set(schema.required ?? []);
+
+	const setField = useCallback(
+		(key: string, fieldValue: unknown) => {
+			onChange({ ...obj, [key]: fieldValue });
+		},
+		[obj, onChange],
+	);
+
+	return (
+		<div className="space-y-3 rounded-lg border border-border/20 bg-muted/5 p-3">
+			{Object.entries(properties).map(([key, propSchema]) => {
+				const resolved = resolveSchema(propSchema, rootSchema);
+				const title =
+					resolved.title ?? propSchema.title ?? key;
+				return (
+					<div key={key} className="space-y-1">
+						<div className="flex items-center gap-1.5">
+							<Label className="text-xs font-medium">
+								{title}
+							</Label>
+							{requiredFields.has(key) && (
+								<span className="text-[10px] text-destructive">
+									*
+								</span>
+							)}
+							<span className="text-[10px] text-muted-foreground/50 font-mono">
+								{resolved.type ?? "any"}
+							</span>
+						</div>
+						{resolved.description && (
+							<p className="text-[11px] text-muted-foreground/50">
+								{resolved.description}
+							</p>
+						)}
+						<SchemaField
+							schema={propSchema}
+							rootSchema={rootSchema}
+							value={obj[key]}
+							onChange={(v) => setField(key, v)}
+							label={title}
+							required={requiredFields.has(key)}
+						/>
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+function SchemaArrayField({
+	itemSchema,
+	rootSchema,
+	value,
+	onChange,
+}: {
+	itemSchema: JsonSchema;
+	rootSchema: JsonSchema;
+	value: unknown;
+	onChange: (val: unknown) => void;
+}) {
+	const items = Array.isArray(value) ? (value as unknown[]) : [];
+
+	const addItem = useCallback(() => {
+		const newItem = createDefaultFromSchema(itemSchema, rootSchema);
+		onChange([...items, newItem]);
+	}, [items, itemSchema, rootSchema, onChange]);
+
+	const removeItem = useCallback(
+		(index: number) => {
+			onChange(items.filter((_, i) => i !== index));
+		},
+		[items, onChange],
+	);
+
+	const updateItem = useCallback(
+		(index: number, val: unknown) => {
+			const next = [...items];
+			next[index] = val;
+			onChange(next);
+		},
+		[items, onChange],
+	);
+
+	const resolvedItem = resolveSchema(itemSchema, rootSchema);
+	const isComplex =
+		resolvedItem.type === "object" || resolvedItem.type === "array";
+
+	return (
+		<div className="space-y-2">
+			{items.length > 0 && (
+				<Accordion
+					type="multiple"
+					defaultValue={items.map((_, i) => String(i))}
+					className="space-y-1"
+				>
+					{items.map((item, i) => (
+						<AccordionItem
+							key={`item-${i}`}
+							value={String(i)}
+							className="border border-border/20 rounded-lg overflow-hidden"
+						>
+							<div className="flex items-center">
+								<AccordionTrigger className="flex-1 px-3 py-2 text-xs hover:no-underline">
+									<span className="font-mono text-muted-foreground/70">
+										[{i}]
+									</span>
+								</AccordionTrigger>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="h-7 w-7 mr-1 text-muted-foreground/50 hover:text-destructive"
+									onClick={() => removeItem(i)}
+								>
+									<Minus className="h-3 w-3" />
+								</Button>
+							</div>
+							<AccordionContent className="px-3 pb-3">
+								{isComplex ? (
+									<SchemaField
+										schema={itemSchema}
+										rootSchema={rootSchema}
+										value={item}
+										onChange={(v) => updateItem(i, v)}
+									/>
+								) : (
+									<SchemaField
+										schema={itemSchema}
+										rootSchema={rootSchema}
+										value={item}
+										onChange={(v) => updateItem(i, v)}
+									/>
+								)}
+							</AccordionContent>
+						</AccordionItem>
+					))}
+				</Accordion>
+			)}
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={addItem}
+				className="w-full h-8 text-xs gap-1.5 border-dashed"
+			>
+				<Plus className="h-3 w-3" />
+				Add Item
+			</Button>
+		</div>
+	);
+}
+
+function StructInput({
+	pin,
+	value,
+	onChange,
+}: {
+	pin: WasmPinDefinition;
+	value: unknown;
+	onChange: (val: unknown) => void;
+}) {
+	const [rawMode, setRawMode] = useState(false);
+	const schema = useMemo(() => parseSchema(pin.schema), [pin.schema]);
+	const isArray = pin.value_type === "Array";
+
+	if (!schema || rawMode) {
+		const effectiveValue = isArray ? (value ?? []) : (value ?? {});
+		return (
+			<div className="space-y-1.5">
+				{schema && (
+					<div className="flex justify-end">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => setRawMode(false)}
+							className="h-6 text-[10px] gap-1 px-2"
+						>
+							<ChevronRight className="h-3 w-3" />
+							Form
+						</Button>
+					</div>
+				)}
+				<Textarea
+					value={
+						typeof value === "string"
+							? value
+							: JSON.stringify(effectiveValue, null, 2)
+					}
+					onChange={(e) => {
+						try {
+							onChange(JSON.parse(e.target.value));
+						} catch {
+							onChange(e.target.value);
+						}
+					}}
+					rows={4}
+					className="font-mono text-xs"
+					placeholder={isArray ? "[]" : "{}"}
+				/>
+			</div>
+		);
+	}
+
+	const rootSchema = schema;
+
+	if (isArray) {
+		const itemSchema: JsonSchema =
+			schema.type === "object" ? schema : (schema.items ?? schema);
+		return (
+			<div className="space-y-1.5">
+				<div className="flex justify-end">
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => setRawMode(true)}
+						className="h-6 text-[10px] gap-1 px-2"
+					>
+						<Code2 className="h-3 w-3" />
+						JSON
+					</Button>
+				</div>
+				<SchemaArrayField
+					itemSchema={itemSchema}
+					rootSchema={rootSchema}
+					value={value}
+					onChange={onChange}
+				/>
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-1.5">
+			<div className="flex justify-end">
+				<Button
+					variant="ghost"
+					size="sm"
+					onClick={() => setRawMode(true)}
+					className="h-6 text-[10px] gap-1 px-2"
+				>
+					<Code2 className="h-3 w-3" />
+					JSON
+				</Button>
+			</div>
+			<SchemaField
+				schema={schema}
+				rootSchema={rootSchema}
+				value={value}
+				onChange={onChange}
+			/>
+		</div>
+	);
+}
 
 function PinInput({
 	pin,
@@ -121,25 +677,7 @@ function PinInput({
 				/>
 			);
 		case "Struct":
-			return (
-				<Textarea
-					value={
-						typeof value === "string"
-							? value
-							: JSON.stringify(value ?? {}, null, 2)
-					}
-					onChange={(e) => {
-						try {
-							onChange(JSON.parse(e.target.value));
-						} catch {
-							onChange(e.target.value);
-						}
-					}}
-					rows={4}
-					className="font-mono text-xs"
-					placeholder="{}"
-				/>
-			);
+			return <StructInput pin={pin} value={value} onChange={onChange} />;
 		default:
 			return (
 				<Input
@@ -196,6 +734,7 @@ function getDefaultValue(pin: WasmPinDefinition): unknown {
 	if (pin.default_value !== undefined && pin.default_value !== null) {
 		return pin.default_value;
 	}
+	if (pin.value_type === "Array") return [];
 	switch (pin.data_type) {
 		case "Boolean":
 			return false;
@@ -458,6 +997,141 @@ function initInputDefaults(node: WasmNodeDefinition): Record<string, unknown> {
 	return defaults;
 }
 
+function SeverityIcon({ severity }: { severity: LintSeverity }) {
+	switch (severity) {
+		case "error":
+			return <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />;
+		case "warning":
+			return <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />;
+		case "info":
+			return <Info className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
+	}
+}
+
+function LintPanel({
+	issues,
+	counts,
+	onJumpToNode,
+}: {
+	issues: LintIssue[];
+	counts: { errors: number; warnings: number; infos: number };
+	onJumpToNode: (nodeIndex: number) => void;
+}) {
+	const [filter, setFilter] = useState<LintSeverity | "all">("all");
+
+	const filtered = useMemo(
+		() => (filter === "all" ? issues : issues.filter((i) => i.severity === filter)),
+		[issues, filter],
+	);
+
+	const total = counts.errors + counts.warnings + counts.infos;
+
+	return (
+		<div className="rounded-xl border border-border/20 bg-card/50 p-4 space-y-4">
+			<div className="flex items-center justify-between">
+				<div className="flex items-center gap-2">
+					<ShieldCheck className="h-3.5 w-3.5 text-muted-foreground/60" />
+					<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+						Node Lint
+					</span>
+				</div>
+				<div className="flex items-center gap-1.5">
+					{counts.errors > 0 && (
+						<Badge
+							variant={filter === "error" ? "destructive" : "outline"}
+							className="text-[10px] cursor-pointer gap-1"
+							onClick={() => setFilter(filter === "error" ? "all" : "error")}
+						>
+							<AlertCircle className="h-3 w-3" />
+							{counts.errors} error{counts.errors !== 1 ? "s" : ""}
+						</Badge>
+					)}
+					{counts.warnings > 0 && (
+						<Badge
+							variant="outline"
+							className={cn(
+								"text-[10px] cursor-pointer gap-1",
+								filter === "warning"
+									? "bg-amber-500/20 text-amber-600 border-amber-500/40"
+									: "text-amber-600 border-amber-500/20",
+							)}
+							onClick={() => setFilter(filter === "warning" ? "all" : "warning")}
+						>
+							<AlertTriangle className="h-3 w-3" />
+							{counts.warnings} warning{counts.warnings !== 1 ? "s" : ""}
+						</Badge>
+					)}
+					{counts.infos > 0 && (
+						<Badge
+							variant="outline"
+							className={cn(
+								"text-[10px] cursor-pointer gap-1",
+								filter === "info"
+									? "bg-blue-500/20 text-blue-600 border-blue-500/40"
+									: "text-blue-600 border-blue-500/20",
+							)}
+							onClick={() => setFilter(filter === "info" ? "all" : "info")}
+						>
+							<Info className="h-3 w-3" />
+							{counts.infos} info{counts.infos !== 1 ? "s" : ""}
+						</Badge>
+					)}
+					{total === 0 && (
+						<Badge variant="outline" className="text-[10px] gap-1 text-green-600 border-green-500/20">
+							<CheckCircle2 className="h-3 w-3" />
+							All clear
+						</Badge>
+					)}
+				</div>
+			</div>
+
+			{filtered.length === 0 ? (
+				<div className="text-center py-8">
+					<CheckCircle2 className="h-8 w-8 text-green-500/30 mx-auto mb-2" />
+					<p className="text-sm text-muted-foreground/60">
+						{total === 0 ? "No issues found" : "No issues matching filter"}
+					</p>
+				</div>
+			) : (
+				<ScrollArea className="max-h-[500px]">
+					<div className="space-y-2 pr-3">
+						{filtered.map((issue, i) => (
+							<button
+								key={`${issue.nodeIndex}-${issue.severity}-${i}`}
+								type="button"
+								className={cn(
+									"w-full text-left rounded-lg border p-3 transition-colors hover:bg-muted/10",
+									issue.severity === "error"
+										? "border-destructive/20 bg-destructive/5"
+										: issue.severity === "warning"
+											? "border-amber-500/20 bg-amber-500/5"
+											: "border-blue-500/20 bg-blue-500/5",
+								)}
+								onClick={() => onJumpToNode(issue.nodeIndex)}
+							>
+								<div className="flex items-start gap-2">
+									<SeverityIcon severity={issue.severity} />
+									<div className="min-w-0 flex-1">
+										<div className="flex items-center gap-2 mb-0.5">
+											<span className="text-xs font-medium">{issue.nodeName}</span>
+											{issue.pinName && (
+												<Badge variant="outline" className="text-[10px] font-mono">
+													{issue.pinName}
+												</Badge>
+											)}
+										</div>
+										<p className="text-xs text-muted-foreground/70">{issue.message}</p>
+									</div>
+								</div>
+							</button>
+						))}
+					</div>
+				</ScrollArea>
+			)}
+		</div>
+	);
+}
+
 function DebugPageContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
@@ -491,6 +1165,9 @@ function DebugPageContent() {
 			) ?? [],
 		[selectedNode],
 	);
+
+	const lintIssues = useMemo(() => lintNodes(nodes), [nodes]);
+	const lintCounts = useMemo(() => countBySeverity(lintIssues), [lintIssues]);
 
 	const selectWasm = useCallback(async () => {
 		const selected = await open({
@@ -593,7 +1270,7 @@ function DebugPageContent() {
 					variant="ghost"
 					size="icon"
 					className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-					onClick={() => router.push("/developer")}
+					onClick={() => router.push("/store/packages?tab=projects")}
 				>
 					<ArrowLeft className="h-4 w-4" />
 				</Button>
@@ -678,6 +1355,23 @@ function DebugPageContent() {
 										<Package className="h-3.5 w-3.5" />
 										Nodes ({nodes.length})
 									</TabsTrigger>
+									<TabsTrigger value="lint" className="gap-1.5">
+										<ShieldCheck className="h-3.5 w-3.5" />
+										Lint
+										{lintCounts.errors > 0 ? (
+											<Badge variant="destructive" className="text-[10px] ml-1 px-1.5 py-0 h-4">
+												{lintCounts.errors}
+											</Badge>
+										) : lintCounts.warnings > 0 ? (
+											<Badge className="text-[10px] ml-1 px-1.5 py-0 h-4 bg-amber-500/10 text-amber-600 border-amber-500/20">
+												{lintCounts.warnings}
+											</Badge>
+										) : (
+											<Badge variant="outline" className="text-[10px] ml-1 px-1.5 py-0 h-4 text-green-600">
+												0
+											</Badge>
+										)}
+									</TabsTrigger>
 									{manifest && (
 										<TabsTrigger value="permissions" className="gap-1.5">
 											<Shield className="h-3.5 w-3.5" />
@@ -712,6 +1406,10 @@ function DebugPageContent() {
 											))}
 										</div>
 									</div>
+								</TabsContent>
+
+								<TabsContent value="lint" className="space-y-3">
+									<LintPanel issues={lintIssues} counts={lintCounts} onJumpToNode={(i) => { selectNode(i); setActiveTab("debug"); }} />
 								</TabsContent>
 
 								{manifest && (

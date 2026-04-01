@@ -19,6 +19,30 @@ enum BitType {
   OTHER
 }
 
+model LlmModel {
+  slug String @id
+
+  name        String
+  releaseDate DateTime?
+
+  creatorName String
+  creatorSlug String
+
+  evaluations Json?
+  pricing     Json?
+
+  medianOutputTokensPerSecond   Float?
+  medianTimeToFirstTokenSeconds Float?
+  medianTimeToFirstAnswerToken  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bits Bit[]
+
+  @@index([creatorSlug])
+}
+
 model Bit {
   id String @id
 
@@ -40,6 +64,9 @@ model Bit {
   dependencies       String[]
   dependencyTreeHash String?  @unique
 
+  modelSlug String?
+  model     LlmModel? @relation(fields: [modelSlug], references: [slug])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -53,6 +80,7 @@ model Bit {
   @@index([updatedAt])
   @@index([hash])
   @@index([hub])
+  @@index([modelSlug])
 }
 
 model BitCache {

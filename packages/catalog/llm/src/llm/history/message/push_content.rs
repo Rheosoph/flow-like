@@ -30,6 +30,45 @@ impl PushContentNode {
             .set_default_value(Some(json!("Text")));
     }
 
+    fn add_detail_pin(node: &mut Node) {
+        node.add_input_pin(
+            "detail",
+            "Detail",
+            "Image resolution detail level",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "auto".to_string(),
+                    "low".to_string(),
+                    "high".to_string(),
+                ])
+                .build(),
+        )
+        .set_default_value(Some(json!("auto")));
+    }
+
+    fn add_mime_pin(node: &mut Node) {
+        node.add_input_pin(
+            "mime",
+            "Mime",
+            "MIME type for base64 image data (e.g. image/png)",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "image/png".to_string(),
+                    "image/jpeg".to_string(),
+                    "image/gif".to_string(),
+                    "image/webp".to_string(),
+                ])
+                .build(),
+        )
+        .set_default_value(Some(json!("image/png")));
+    }
+
     fn normalized_content(message: &HistoryMessage) -> Vec<Content> {
         match &message.content {
             MessageContent::String(text) => vec![Content::Text {
@@ -50,6 +89,7 @@ impl NodeLogic for PushContentNode {
             "Appends text or image parts onto a chat message",
             "AI/Generative/History/Message",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/message.svg");
         node.set_scores(
             NodeScores::new()
@@ -114,12 +154,20 @@ impl NodeLogic for PushContentNode {
             }
             "Image" => {
                 let image: String = context.evaluate_pin("image").await?;
+                let detail: String = context.evaluate_pin("detail").await?;
                 let mime: String = context.evaluate_pin("mime").await?;
+
+                let url = if image.starts_with("data:") || image.starts_with("http") {
+                    image
+                } else {
+                    format!("data:{};base64,{}", mime, image)
+                };
+
                 content.push(Content::Image {
                     content_type: ContentType::ImageUrl,
                     image_url: ImageUrl {
-                        url: image,
-                        detail: Some(mime),
+                        url,
+                        detail: Some(detail),
                     },
                 });
             }
@@ -143,13 +191,15 @@ impl NodeLogic for PushContentNode {
 
         let text_pin = node.get_pin_by_name("text");
         let image_pin = node.get_pin_by_name("image");
+        let detail_pin = node.get_pin_by_name("detail");
         let mime_pin = node.get_pin_by_name("mime");
 
         if type_pin == *"Text" && text_pin.is_some() {
             return;
         }
 
-        if type_pin == *"Image" && image_pin.is_some() && mime_pin.is_some() {
+        if type_pin == *"Image" && image_pin.is_some() && detail_pin.is_some() && mime_pin.is_some()
+        {
             return;
         }
 
@@ -158,6 +208,10 @@ impl NodeLogic for PushContentNode {
         if type_pin == "Text" {
             if let Some(image_pin) = image_pin {
                 removal.push(image_pin.id.clone());
+            }
+
+            if let Some(detail_pin) = detail_pin {
+                removal.push(detail_pin.id.clone());
             }
 
             if let Some(mime_pin) = mime_pin {
@@ -181,6 +235,7 @@ impl NodeLogic for PushContentNode {
         }
 
         node.add_input_pin("image", "Image", "Image Content", VariableType::String);
-        node.add_input_pin("mime", "Mime", "Mime Type", VariableType::String);
+        Self::add_detail_pin(node);
+        Self::add_mime_pin(node);
     }
 }

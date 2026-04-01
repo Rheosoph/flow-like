@@ -57,6 +57,13 @@ pub async fn upsert_bit(
 
     tokio::spawn(async move {
         let mut model: bit::Model = bit.into();
+        if model
+            .download_link
+            .as_ref()
+            .is_some_and(|link| link.trim().is_empty())
+        {
+            model.download_link = None;
+        }
         match bit::Entity::find_by_id(&bit_id_cloned)
             .one(&state_cloned.db)
             .await
@@ -103,6 +110,7 @@ pub async fn upsert_bit(
                 updated_bit.size = Set(model.size);
                 updated_bit.r#type = Set(model.r#type);
                 updated_bit.version = Set(model.version);
+                updated_bit.model_slug = Set(model.model_slug);
                 match updated_bit.update(&state_cloned.db).await {
                     Ok(updated) => {
                         let _ = tx.send(StreamMsg::Done(Bit::from(updated))).await;

@@ -545,6 +545,20 @@ export interface ImageInputComponent extends ComponentBase {
 	showPreview?: BoundValue;
 }
 
+export interface VoiceInputComponent extends ComponentBase {
+	type: "voiceInput";
+	value: BoundValue;
+	label?: BoundValue;
+	helperText?: BoundValue;
+	maxDuration?: BoundValue;
+	autoStop?: BoundValue;
+	silenceThreshold?: BoundValue;
+	silenceDuration?: BoundValue;
+	disabled?: BoundValue;
+	error?: BoundValue;
+	visualizer?: BoundValue;
+}
+
 export interface LinkComponent extends ComponentBase {
 	type: "link";
 	href: BoundValue;
@@ -590,6 +604,9 @@ export interface TabsComponent extends ComponentBase {
 	tabs: TabDefinition[];
 	orientation?: BoundValue; // "horizontal" | "vertical"
 	variant?: BoundValue; // "default" | "pills" | "underline"
+	listStyle?: Style;
+	triggerStyle?: Style;
+	contentStyle?: Style;
 }
 
 export interface TabDefinition {
@@ -887,7 +904,8 @@ export interface MiniMapComponent extends ComponentBase {
 
 export interface IframeComponent extends ComponentBase {
 	type: "iframe";
-	src: BoundValue;
+	src?: BoundValue;
+	srcdoc?: BoundValue;
 	width?: BoundValue;
 	height?: BoundValue;
 	sandbox?: BoundValue;
@@ -1400,6 +1418,7 @@ export type A2UIComponent =
 	| DateTimeInputComponent
 	| FileInputComponent
 	| ImageInputComponent
+	| VoiceInputComponent
 	| LinkComponent
 	| CardComponent
 	| ModalComponent
@@ -1439,12 +1458,14 @@ export interface SurfaceComponent {
 	id: string;
 	style?: Style;
 	component: A2UIComponent;
+	eventRelevant?: boolean;
 }
 
 export interface Surface {
 	id: string;
 	rootComponentId: string;
 	components: Record<string, SurfaceComponent>;
+	canvasSettings?: CanvasSettings;
 	catalogId?: string;
 }
 
@@ -1463,6 +1484,11 @@ export type A2UIServerMessage =
 			surfaceId: string;
 			components: SurfaceComponent[];
 			parentId?: string;
+	  }
+	| {
+			type: "setCanvasSettings";
+			surfaceId: string;
+			canvasSettings: CanvasSettings;
 	  }
 	| {
 			type: "dataModelUpdate";
@@ -1567,13 +1593,16 @@ export interface WidgetAction {
 	id: string;
 	label: string;
 	description?: string;
-	contextFields: WidgetActionContextField[];
+	icon?: string;
+	contextSchema: WidgetActionContextField[];
 }
 
 export interface WidgetActionContextField {
 	name: string;
-	dataType: string;
+	label: string;
+	fieldType: string;
 	description?: string;
+	defaultPath?: string;
 }
 
 export type ActionBinding =

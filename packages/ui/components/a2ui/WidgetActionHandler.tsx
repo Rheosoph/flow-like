@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, createContext, useCallback, useContext } from "react";
+import { useEventRelevantValues } from "./ActionHandler";
 import { useBackend } from "../../state/backend-state";
 import type {
 	ActionBinding,
@@ -81,6 +82,7 @@ export function WidgetActionProvider({
 	onA2UIEvents,
 }: WidgetActionProviderProps) {
 	const backend = useBackend();
+	const collectInputValues = useEventRelevantValues();
 
 	const getBinding = useCallback(
 		(actionId: string): ActionBinding | null => {
@@ -106,14 +108,16 @@ export function WidgetActionProvider({
 			if ("workflow" in binding) {
 				const { flowId, inputMappings } = binding.workflow;
 
+				const inputValues = collectInputValues();
 				const payload: Record<string, unknown> = {
 					_action_id: actionId,
 					_widget_instance_id: instance.instanceId,
 					_widget_id: instance.widgetId,
 					_surface_id: surfaceId,
+					_input_values: inputValues,
 				};
 
-				for (const field of action.contextFields) {
+				for (const field of action.contextSchema) {
 					const mapping = inputMappings?.[field.name];
 					if (mapping) {
 						payload[field.name] = resolveBoundValue(
@@ -176,6 +180,7 @@ export function WidgetActionProvider({
 			widgetActions,
 			getBinding,
 			onA2UIEvents,
+			collectInputValues,
 		],
 	);
 

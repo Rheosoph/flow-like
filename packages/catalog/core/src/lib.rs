@@ -12,7 +12,6 @@ use std::sync::Arc;
 pub use flow_like::flow::node::NodeLogic;
 
 pub use flow_like_catalog_macros::register_node;
-pub use inventory;
 
 mod types;
 
@@ -79,12 +78,4 @@ impl NodeConstructor {
     pub fn construct(&self) -> Arc<dyn NodeLogic> {
         (self.constructor)()
     }
-}
-
-inventory::collect!(NodeConstructor);
-
-pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
-    inventory::iter::<NodeConstructor>()
-        .map(|nc| nc.construct())
-        .collect()
 }

@@ -6,13 +6,15 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [
-    "flow-like-wasm-sdk",
+    "flow-like-wasm-sdk>=0.1.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "pydantic>=2.0",
+    "langchain-core>=0.3.0",
 ]
 build = [
     "componentize-py>=0.16",

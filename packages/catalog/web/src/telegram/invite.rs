@@ -1,6 +1,8 @@
 //! Telegram chat invite link operations
 
-use super::session::{TelegramSession, get_telegram_bot};
+use super::session::TelegramSession;
+#[cfg(feature = "execute")]
+use super::session::get_telegram_bot;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -10,6 +12,7 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "execute")]
 use teloxide::prelude::*;
 
 /// Chat invite link information
@@ -80,6 +83,7 @@ impl NodeLogic for ExportChatInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
 
@@ -94,6 +98,13 @@ impl NodeLogic for ExportChatInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -184,6 +195,7 @@ impl NodeLogic for CreateChatInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let name: Option<String> = context.evaluate_pin::<String>("name").await.ok();
@@ -243,6 +255,13 @@ impl NodeLogic for CreateChatInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -338,6 +357,7 @@ impl NodeLogic for EditChatInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let invite_link: String = context.evaluate_pin("invite_link").await?;
@@ -389,6 +409,13 @@ impl NodeLogic for EditChatInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -453,6 +480,7 @@ impl NodeLogic for RevokeChatInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let invite_link: String = context.evaluate_pin("invite_link").await?;
@@ -474,6 +502,13 @@ impl NodeLogic for RevokeChatInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -580,6 +615,7 @@ impl NodeLogic for CreateChatSubscriptionInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let name: String = context
@@ -628,6 +664,13 @@ impl NodeLogic for CreateChatSubscriptionInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 
@@ -700,6 +743,7 @@ impl NodeLogic for EditChatSubscriptionInviteLinkNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let session: TelegramSession = context.evaluate_pin("session").await?;
         let invite_link: String = context.evaluate_pin("invite_link").await?;
@@ -729,6 +773,13 @@ impl NodeLogic for EditChatSubscriptionInviteLinkNode {
         context.activate_exec_pin_ref(&exec_out).await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Telegram functionality requires the 'execute' feature"
+        ))
     }
 }
 */

@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 flow-like.workspace = true
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure", "smtp", "sendgrid"] }
+flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure", "smtp", "sendgrid", "sentry"] }
+flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true
@@ -19,7 +20,7 @@ sentry.workspace = true
 oasgen = {version="0.25.0", features = ["axum"]}
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"

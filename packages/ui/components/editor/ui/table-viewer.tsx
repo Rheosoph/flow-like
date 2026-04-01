@@ -739,14 +739,14 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 					isExpanded ? "max-h-[70vh]" : "max-h-[400px]",
 				)}
 			>
+				<DndContext
+					sensors={sensors}
+					collisionDetection={closestCenter}
+					onDragEnd={handleHeaderDragEnd}
+				>
 				<table className="w-full text-sm border-collapse">
 					{/* Sticky header */}
 					{hasHeader && (
-						<DndContext
-							sensors={sensors}
-							collisionDetection={closestCenter}
-							onDragEnd={handleHeaderDragEnd}
-						>
 							<thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm border-b border-border">
 								<SortableContext
 									items={visibleColumnIds}
@@ -766,7 +766,6 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 									</tr>
 								</SortableContext>
 							</thead>
-						</DndContext>
 					)}
 					<tbody>
 						{sortedRows.length === 0 ? (
@@ -828,6 +827,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 						)}
 					</tbody>
 				</table>
+				</DndContext>
 			</div>
 
 			{/* Expand/collapse for large tables */}
@@ -842,7 +842,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 			)}
 
 			{/* Hidden children for Slate to track elements */}
-			<div className="hidden">{children}</div>
+			<table className="hidden"><tbody>{children}</tbody></table>
 		</div>
 	);
 }

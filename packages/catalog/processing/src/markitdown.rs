@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
 use std::io::Cursor;
 
+#[cfg(feature = "execute")]
+use flow_like_model_provider::summarization::{
+    ChunkingMethod, DensificationStrategy, SummarizationConfig, SummarizationStrategy, TextChunk,
+};
+
 /// Represents a single page extracted from a document
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentPage {
@@ -139,13 +144,29 @@ async fn extracted_image_to_node_image(
     }
 
     let cursor = Cursor::new(extracted.data.as_ref());
-    let reader = ImageReader::new(cursor)
-        .with_guessed_format()
-        .map_err(|e| flow_like_types::anyhow!("Failed to guess image format: {}", e))?;
+    let mut reader = ImageReader::new(cursor);
 
-    let dynamic_image = reader
-        .decode()
-        .map_err(|e| flow_like_types::anyhow!("Failed to decode image: {}", e))?;
+    if let Some(format) = flow_like_types::image::ImageFormat::from_mime_type(&extracted.mime_type)
+    {
+        reader.set_format(format);
+    } else {
+        reader = reader
+            .with_guessed_format()
+            .map_err(|e| flow_like_types::anyhow!("Failed to guess image format: {}", e))?;
+    }
+
+    let dynamic_image = match reader.decode() {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::warn!(
+                "Skipping image '{}' (mime: {}): {}",
+                extracted.id,
+                extracted.mime_type,
+                e
+            );
+            return Ok(None);
+        }
+    };
 
     let node_image = NodeImage::new(context, dynamic_image).await;
     Ok(Some(node_image))
@@ -996,6 +1017,8 @@ async fn invoke_model_simple_standalone(
     user_prompt: &str,
 ) -> flow_like_types::Result<String> {
     use flow_like_model_provider::history::{History, HistoryMessage, Role};
+    use flow_like_model_provider::llm::LLMCallback;
+    use flow_like_model_provider::response_chunk::ResponseChunk;
 
     let model_factory = app_state.model_factory.clone();
     let model = model_factory
@@ -1014,12 +1037,16 @@ async fn invoke_model_simple_standalone(
     history.set_system_prompt(system_prompt.to_string());
     history.push_message(HistoryMessage::from_string(Role::User, user_prompt));
 
-    let response = model.invoke(&history, None).await?;
+    // Use a noop streaming callback to force the streaming code path, which is
+    // more robust across providers (avoids JsonError when providers default to streaming).
+    let callback: LLMCallback =
+        std::sync::Arc::new(move |_chunk: ResponseChunk| Box::pin(async move { Ok(()) }));
+
+    let response = model.invoke(&history, Some(callback)).await?;
 
     response
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
+        .last_message()
+        .and_then(|m| m.content.clone())
         .ok_or_else(|| flow_like_types::anyhow!("No response from model"))
 }
 
@@ -1039,10 +1066,11 @@ impl NodeLogic for SummarizeDocumentNode {
         let mut node = Node::new(
             "ai_processing_summarize_document",
             "Summarize Document",
-            "Creates an intelligent summary of document pages using AI with configurable detail levels. Handles long documents via iterative summarization.",
+            "Creates an intelligent summary of document pages using AI with configurable strategies and detail levels. Handles long documents via chunked summarization with multiple strategy options.",
             "AI/Processing",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -1107,20 +1135,83 @@ impl NodeLogic for SummarizeDocumentNode {
         .set_default_value(Some(json!(true)));
 
         node.add_input_pin(
+            "strategy",
+            "Strategy",
+            "Summarization strategy:\n\
+             • Refine — sequential, best coherence, no parallelism\n\
+             • MapReduce — parallel chunking, fast, may lose cross-chunk context\n\
+             • Hierarchical — structure-aware tree, best for headed documents\n\
+             • Hybrid — MapReduce speed + Refine coherence polish\n\
+             • SlidingWindow — fixed memory buffer, best for very long documents",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "Refine".to_string(),
+                    "MapReduce".to_string(),
+                    "Hierarchical".to_string(),
+                    "Hybrid".to_string(),
+                    "SlidingWindow".to_string(),
+                ])
+                .build(),
+        )
+        .set_default_value(Some(json!("Refine")));
+
+        node.add_input_pin(
+            "densification",
+            "Densification",
+            "Post-processing to increase information density:\n\
+             • None — use the strategy output as-is\n\
+             • ChainOfDensity — iteratively compress to optimal density",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["None".to_string(), "ChainOfDensity".to_string()])
+                .build(),
+        )
+        .set_default_value(Some(json!("None")));
+
+        node.add_input_pin(
             "max_context_tokens",
             "Max Context Tokens",
-            "Maximum tokens per summarization chunk (adjust based on model context window).",
+            "Maximum characters per summarization chunk (adjust based on model context window).",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(8000)));
 
         node.add_input_pin(
+            "chunk_overlap",
+            "Chunk Overlap %",
+            "Overlap between adjacent chunks as percentage (0-50). Prevents information loss at boundaries (default: 10).",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(10)));
+
+        node.add_input_pin(
+            "track_entities",
+            "Track Entities",
+            "Extract and track named entities across chunks to prevent information loss.",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+
+        node.add_input_pin(
             "parallel_requests",
             "Parallel Requests",
-            "Number of chunks to process in parallel. Set to 0 or chunks count to process all at once.",
+            "Number of chunks to process in parallel for MapReduce/Hybrid strategies. 0 = unlimited (default: 4).",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(4)));
+
+        node.add_input_pin(
+            "density_steps",
+            "Density Steps",
+            "Number of Chain of Density refinement steps when densification is enabled (1-5, default: 3).",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(3)));
 
         node.add_output_pin(
             "exec_out",
@@ -1151,8 +1242,13 @@ impl NodeLogic for SummarizeDocumentNode {
         let model_bit: Bit = context.evaluate_pin("model").await?;
         let detail_str: String = context.evaluate_pin("detail_level").await?;
         let include_toc: bool = context.evaluate_pin("include_toc").await?;
+        let strategy_str: String = context.evaluate_pin("strategy").await?;
+        let densification_str: String = context.evaluate_pin("densification").await?;
         let max_context_tokens: i64 = context.evaluate_pin("max_context_tokens").await?;
+        let chunk_overlap: i64 = context.evaluate_pin("chunk_overlap").await?;
+        let track_entities: bool = context.evaluate_pin("track_entities").await?;
         let parallel_requests: i64 = context.evaluate_pin("parallel_requests").await?;
+        let density_steps: i64 = context.evaluate_pin("density_steps").await?;
 
         let detail_level = match detail_str.as_str() {
             "Low" => SummaryDetailLevel::Low,
@@ -1173,131 +1269,73 @@ impl NodeLogic for SummarizeDocumentNode {
             return Ok(());
         }
 
-        let system_prompt = detail_level.system_prompt(include_toc);
-        let chunks = chunk_pages_for_context(&pages, max_context_tokens as usize);
-        let num_chunks = chunks.len();
+        let strategy = SummarizationStrategy::try_from(strategy_str.as_str()).unwrap_or_default();
+        let densification =
+            DensificationStrategy::try_from(densification_str.as_str()).unwrap_or_default();
 
-        let concurrency = if parallel_requests <= 0 {
-            num_chunks
-        } else {
-            (parallel_requests as usize).min(num_chunks)
+        let instructions = detail_level.system_prompt(include_toc);
+
+        let mut model_name = model_bit.id.clone();
+        if let Some(meta) = model_bit.meta.get("en") {
+            model_name = meta.name.clone();
+        }
+
+        let model_factory = context.app_state.model_factory.clone();
+        let model = model_factory
+            .lock()
+            .await
+            .build(&model_bit, context.app_state.clone(), context.token.clone())
+            .await?;
+
+        let chunks: Vec<TextChunk> = pages
+            .iter()
+            .map(|p| {
+                let content = format!("[Page {}]\n{}", p.page_number, p.content);
+                TextChunk::new(content, p.page_number as usize)
+                    .with_metadata(format!("Page {}", p.page_number))
+            })
+            .collect();
+
+        let config = SummarizationConfig {
+            strategy,
+            densification,
+            chunking: ChunkingMethod::Markdown,
+            chunk_size: max_context_tokens as usize,
+            chunk_overlap_percent: (chunk_overlap as u8).min(50),
+            max_iterations: 5,
+            track_entities,
+            instructions,
+            prior_summary: String::new(),
+            concurrency: parallel_requests as usize,
+            density_steps: density_steps as u32,
+            memory_budget_ratio: 0.4,
         };
 
-        let chunk_summaries: Vec<(String, Vec<u32>)> = if concurrency <= 1 {
-            // Sequential processing - no merge needed for single chunk
-            let mut results = Vec::with_capacity(num_chunks);
-            for chunk in &chunks {
-                let content = format_pages_for_prompt(chunk);
-                let page_numbers: Vec<u32> = chunk.iter().map(|p| p.page_number).collect();
-                let page_range = page_numbers
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        let result = flow_like_model_provider::summarization::summarize_chunks(
+            &chunks,
+            &config,
+            model.as_ref(),
+            &model_name,
+        )
+        .await?;
 
-                let user_prompt = format!(
-                    "Summarize the following document section (pages: {}).\n\n\
-                    Provide:\n\
-                    1. A structured summary\n\
-                    2. Key keywords (comma-separated, prefixed with 'Keywords:')\n\
-                    3. Important topics with their page numbers (if applicable)\n\n\
-                    Content:\n{}",
-                    page_range, content
-                );
+        let (summary_text, mut keywords, page_refs) = parse_summary_response(&result.summary);
 
-                let result =
-                    invoke_model_simple(context, &model_bit, &system_prompt, &user_prompt).await?;
-                results.push((result, page_numbers));
+        if !result.entities.is_empty() {
+            for entity in &result.entities {
+                if !keywords.contains(entity) {
+                    keywords.push(entity.clone());
+                }
             }
-            results
-        } else {
-            // Parallel processing
-            use futures::stream::{self, StreamExt};
-            use std::sync::Arc;
+        }
 
-            let model_bit = Arc::new(model_bit.clone());
-            let system_prompt = Arc::new(system_prompt.clone());
-            let app_state = context.app_state.clone();
-            let token = context.token.clone();
-
-            let tasks: Vec<_> = chunks
-                .iter()
-                .map(|chunk| {
-                    let content = format_pages_for_prompt(chunk);
-                    let page_numbers: Vec<u32> = chunk.iter().map(|p| p.page_number).collect();
-                    let page_range = page_numbers
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    let user_prompt = format!(
-                        "Summarize the following document section (pages: {}).\n\n\
-                        Provide:\n\
-                        1. A structured summary\n\
-                        2. Key keywords (comma-separated, prefixed with 'Keywords:')\n\
-                        3. Important topics with their page numbers (if applicable)\n\n\
-                        Content:\n{}",
-                        page_range, content
-                    );
-
-                    let model_bit = Arc::clone(&model_bit);
-                    let system_prompt = Arc::clone(&system_prompt);
-                    let app_state = app_state.clone();
-                    let token = token.clone();
-
-                    async move {
-                        let result = invoke_model_simple_standalone(
-                            &app_state,
-                            &token,
-                            &model_bit,
-                            &system_prompt,
-                            &user_prompt,
-                        )
-                        .await?;
-                        Ok::<_, flow_like_types::Error>((result, page_numbers))
-                    }
-                })
-                .collect();
-
-            stream::iter(tasks)
-                .buffer_unordered(concurrency)
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        let final_summary = if chunk_summaries.len() == 1 {
-            chunk_summaries[0].0.clone()
-        } else {
-            let combined_summaries = chunk_summaries
-                .iter()
-                .enumerate()
-                .map(|(i, (s, pages))| format!("[Section {} - Pages {:?}]\n{}", i + 1, pages, s))
-                .collect::<Vec<_>>()
-                .join("\n\n---\n\n");
-
-            let merge_prompt = format!(
-                "Merge these section summaries into a single coherent document summary.\n\
-                Maintain the same detail level and include all important keywords.\n\
-                If a table of contents is present, consolidate it.\n\n\
-                Section Summaries:\n{}",
-                combined_summaries
-            );
-
-            invoke_model_simple(context, &model_bit, &system_prompt, &merge_prompt).await?
-        };
-
-        let (summary_text, keywords, page_refs) = parse_summary_response(&final_summary);
-
-        let result = DocumentSummary {
+        let doc_summary = DocumentSummary {
             summary: summary_text,
             keywords,
             page_references: page_refs,
         };
 
-        context.set_pin_value("summary", json!(result)).await?;
+        context.set_pin_value("summary", json!(doc_summary)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

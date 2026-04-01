@@ -29,7 +29,8 @@ pub mod http;
 pub mod scheduler;
 
 pub use config::{
-    CronSinkConfig, HttpSinkConfig, MqttSinkConfig, RssSinkConfig, SinkConfig, WebhookSinkConfig,
+    CronSinkConfig, HttpSinkConfig, MqttSinkConfig, RssSinkConfig, ScheduledLocal, SinkConfig,
+    WebhookSinkConfig,
 };
 pub use scheduler::{ScheduleInfo, SchedulerBackend, SchedulerError, SchedulerResult};
 pub use traits::{Executor, SinkContext, SinkError, SinkResult, SinkTrait, TriggerResponse};

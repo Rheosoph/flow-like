@@ -32,7 +32,6 @@ import {
 	Package,
 	Plus,
 	Save,
-	Sparkles,
 	Trash2,
 	Zap,
 } from "lucide-react";
@@ -46,6 +45,10 @@ const MEMORY_TIERS = [
 	{ value: "standard", label: "Standard (64 MB)" },
 	{ value: "heavy", label: "Heavy (128 MB)" },
 	{ value: "intensive", label: "Intensive (256 MB)" },
+	{ value: "large", label: "Large (512 MB)" },
+	{ value: "huge", label: "Huge (1 GB)" },
+	{ value: "extreme", label: "Extreme (2 GB)" },
+	{ value: "maximum", label: "Maximum (4 GB)" },
 ];
 
 const TIMEOUT_TIERS = [
@@ -53,6 +56,8 @@ const TIMEOUT_TIERS = [
 	{ value: "standard", label: "Standard (30s)" },
 	{ value: "extended", label: "Extended (60s)" },
 	{ value: "long_running", label: "Long Running (5min)" },
+	{ value: "very_long", label: "Very Long (10min)" },
+	{ value: "maximum", label: "Maximum (30min)" },
 ];
 
 interface ManifestData {
@@ -73,6 +78,9 @@ interface ManifestData {
 			http_enabled: boolean;
 			allowed_hosts: string[];
 			websocket_enabled: boolean;
+			tcp_enabled: boolean;
+			udp_enabled: boolean;
+			dns_enabled: boolean;
 		};
 		filesystem: {
 			node_storage: boolean;
@@ -92,14 +100,6 @@ interface ManifestData {
 			required: boolean;
 		}[];
 	};
-	nodes: {
-		id: string;
-		name: string;
-		description: string;
-		category: string;
-		icon?: string;
-		oauth_providers: string[];
-	}[];
 }
 
 function createDefaultManifest(): ManifestData {
@@ -121,6 +121,9 @@ function createDefaultManifest(): ManifestData {
 				http_enabled: false,
 				allowed_hosts: [],
 				websocket_enabled: false,
+				tcp_enabled: false,
+				udp_enabled: false,
+				dns_enabled: false,
 			},
 			filesystem: {
 				node_storage: false,
@@ -135,15 +138,6 @@ function createDefaultManifest(): ManifestData {
 			models: false,
 			oauth_scopes: [],
 		},
-		nodes: [
-			{
-				id: "my_node",
-				name: "My Node",
-				description: "",
-				category: "Custom/WASM",
-				oauth_providers: [],
-			},
-		],
 	};
 }
 
@@ -363,9 +357,11 @@ function PermissionsSection({
 	data: ManifestData;
 	onChange: (d: ManifestData) => void;
 }) {
-	const p = data.permissions;
+	const p = data.permissions ?? {};
+	const net = p.network ?? { http_enabled: false, allowed_hosts: [], websocket_enabled: false, tcp_enabled: false, udp_enabled: false, dns_enabled: false };
+	const fs = p.filesystem ?? { node_storage: false, user_storage: false, upload_dir: false, cache_dir: false };
 	const updatePerm = (patch: Partial<ManifestData["permissions"]>) =>
-		onChange({ ...data, permissions: { ...p, ...patch } });
+		onChange({ ...data, permissions: { ...p, network: net, filesystem: fs, ...patch } });
 
 	return (
 		<Card>
@@ -432,14 +428,14 @@ function PermissionsSection({
 					<div className="space-y-3">
 						<PermToggle
 							label="HTTP Access"
-							checked={p.network.http_enabled}
+							checked={net.http_enabled}
 							onChange={(v) =>
 								updatePerm({
-									network: { ...p.network, http_enabled: v },
+									network: { ...net, http_enabled: v },
 								})
 							}
 						/>
-						{p.network.http_enabled && (
+						{net.http_enabled && (
 							<motion.div
 								initial={{ opacity: 0, height: 0 }}
 								animate={{ opacity: 1, height: "auto" }}
@@ -450,11 +446,11 @@ function PermissionsSection({
 									Allowed Hosts (comma-separated, empty = all)
 								</Label>
 								<Input
-									value={p.network.allowed_hosts.join(", ")}
+									value={(net.allowed_hosts ?? []).join(", ")}
 									onChange={(e) =>
 										updatePerm({
 											network: {
-												...p.network,
+												...net,
 												allowed_hosts: e.target.value
 													.split(",")
 													.map((h) => h.trim())
@@ -469,13 +465,40 @@ function PermissionsSection({
 						)}
 						<PermToggle
 							label="WebSocket"
-							checked={p.network.websocket_enabled}
+							checked={net.websocket_enabled}
 							onChange={(v) =>
 								updatePerm({
 									network: {
-										...p.network,
+										...net,
 										websocket_enabled: v,
 									},
+								})
+							}
+						/>
+						<PermToggle
+							label="TCP Sockets"
+							checked={net.tcp_enabled ?? false}
+							onChange={(v) =>
+								updatePerm({
+									network: { ...net, tcp_enabled: v },
+								})
+							}
+						/>
+						<PermToggle
+							label="UDP Sockets"
+							checked={net.udp_enabled ?? false}
+							onChange={(v) =>
+								updatePerm({
+									network: { ...net, udp_enabled: v },
+								})
+							}
+						/>
+						<PermToggle
+							label="DNS Lookups"
+							checked={net.dns_enabled ?? false}
+							onChange={(v) =>
+								updatePerm({
+									network: { ...net, dns_enabled: v },
 								})
 							}
 						/>
@@ -492,11 +515,11 @@ function PermissionsSection({
 					<div className="space-y-2">
 						<PermToggle
 							label="Node Storage"
-							checked={p.filesystem.node_storage}
+							checked={fs.node_storage}
 							onChange={(v) =>
 								updatePerm({
 									filesystem: {
-										...p.filesystem,
+										...fs,
 										node_storage: v,
 									},
 								})
@@ -504,11 +527,11 @@ function PermissionsSection({
 						/>
 						<PermToggle
 							label="User Storage"
-							checked={p.filesystem.user_storage}
+							checked={fs.user_storage}
 							onChange={(v) =>
 								updatePerm({
 									filesystem: {
-										...p.filesystem,
+										...fs,
 										user_storage: v,
 									},
 								})
@@ -516,11 +539,11 @@ function PermissionsSection({
 						/>
 						<PermToggle
 							label="Upload Directory"
-							checked={p.filesystem.upload_dir}
+							checked={fs.upload_dir}
 							onChange={(v) =>
 								updatePerm({
 									filesystem: {
-										...p.filesystem,
+										...fs,
 										upload_dir: v,
 									},
 								})
@@ -528,11 +551,11 @@ function PermissionsSection({
 						/>
 						<PermToggle
 							label="Cache Directory"
-							checked={p.filesystem.cache_dir}
+							checked={fs.cache_dir}
 							onChange={(v) =>
 								updatePerm({
 									filesystem: {
-										...p.filesystem,
+										...fs,
 										cache_dir: v,
 									},
 								})
@@ -595,145 +618,6 @@ function PermToggle({
 			<Label className="text-xs">{label}</Label>
 			<Switch checked={checked} onCheckedChange={onChange} />
 		</div>
-	);
-}
-
-function NodesSection({
-	data,
-	onChange,
-}: {
-	data: ManifestData;
-	onChange: (d: ManifestData) => void;
-}) {
-	const addNode = () =>
-		onChange({
-			...data,
-			nodes: [
-				...data.nodes,
-				{
-					id: `node_${data.nodes.length + 1}`,
-					name: `Node ${data.nodes.length + 1}`,
-					description: "",
-					category: "Custom/WASM",
-					oauth_providers: [],
-				},
-			],
-		});
-
-	const removeNode = (i: number) =>
-		onChange({ ...data, nodes: data.nodes.filter((_, idx) => idx !== i) });
-
-	const updateNode = (i: number, patch: Partial<ManifestData["nodes"][0]>) => {
-		const updated = [...data.nodes];
-		updated[i] = { ...updated[i], ...patch };
-		onChange({ ...data, nodes: updated });
-	};
-
-	return (
-		<Card>
-			<CardHeader className="pb-3">
-				<div className="flex items-center justify-between">
-					<SectionHeader
-						icon={Sparkles}
-						title="Nodes"
-						description="Define the nodes this package provides"
-					/>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={addNode}
-						className="h-7 text-xs"
-					>
-						<Plus className="h-3 w-3 mr-1" />
-						Add Node
-					</Button>
-				</div>
-			</CardHeader>
-			<CardContent>
-				<div className="space-y-4">
-					{data.nodes.map((node, i) => (
-						<div key={`node-${i}`} className="rounded-lg border p-3 space-y-3">
-							<div className="flex items-center justify-between">
-								<Badge variant="outline" className="text-xs font-mono">
-									#{i + 1}
-								</Badge>
-								{data.nodes.length > 1 && (
-									<Button
-										variant="ghost"
-										size="icon"
-										className="h-7 w-7 text-destructive"
-										onClick={() => removeNode(i)}
-									>
-										<Trash2 className="h-3 w-3" />
-									</Button>
-								)}
-							</div>
-							<div className="grid grid-cols-2 gap-3">
-								<div className="space-y-1">
-									<Label className="text-xs">ID</Label>
-									<Input
-										value={node.id}
-										onChange={(e) => updateNode(i, { id: e.target.value })}
-										className="h-8 text-xs font-mono"
-										placeholder="my_node"
-									/>
-								</div>
-								<div className="space-y-1">
-									<Label className="text-xs">Name</Label>
-									<Input
-										value={node.name}
-										onChange={(e) => updateNode(i, { name: e.target.value })}
-										className="h-8 text-xs"
-										placeholder="My Node"
-									/>
-								</div>
-							</div>
-							<div className="grid grid-cols-2 gap-3">
-								<div className="space-y-1">
-									<Label className="text-xs">Category</Label>
-									<Input
-										value={node.category}
-										onChange={(e) =>
-											updateNode(i, {
-												category: e.target.value,
-											})
-										}
-										className="h-8 text-xs"
-										placeholder="Custom/WASM"
-									/>
-								</div>
-								<div className="space-y-1">
-									<Label className="text-xs">Icon</Label>
-									<Input
-										value={node.icon ?? ""}
-										onChange={(e) =>
-											updateNode(i, {
-												icon: e.target.value || undefined,
-											})
-										}
-										className="h-8 text-xs"
-										placeholder="emoji or URL"
-									/>
-								</div>
-							</div>
-							<div className="space-y-1">
-								<Label className="text-xs">Description</Label>
-								<Input
-									value={node.description}
-									onChange={(e) =>
-										updateNode(i, {
-											description: e.target.value,
-										})
-									}
-									className="h-8 text-xs"
-									placeholder="What this node does"
-								/>
-							</div>
-						</div>
-					))}
-				</div>
-			</CardContent>
-		</Card>
 	);
 }
 
@@ -832,7 +716,7 @@ function ManifestEditorContent() {
 						variant="ghost"
 						size="icon"
 						className="rounded-full"
-						onClick={() => router.push("/developer")}
+						onClick={() => router.push("/store/packages?tab=projects")}
 					>
 						<ArrowLeft className="h-5 w-5" />
 					</Button>
@@ -921,7 +805,6 @@ function ManifestEditorContent() {
 						>
 							<IdentitySection data={data} onChange={handleChange} />
 							<PermissionsSection data={data} onChange={handleChange} />
-							<NodesSection data={data} onChange={handleChange} />
 						</motion.div>
 					)}
 

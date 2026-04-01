@@ -43,7 +43,7 @@ function resolveConnectionInfo(
 		const gcp = creds.Gcp;
 		const uri = `gs://${gcp.content_bucket}/${resp.db_path}`;
 		const opts: Record<string, string> = {};
-		if (gcp.access_token) opts.google_cloud_token = gcp.access_token;
+		if (gcp.access_token) opts.google_storage_token = gcp.access_token;
 		else if (gcp.service_account_key)
 			opts.google_service_account_key = gcp.service_account_key;
 		return { uri, storageOptions: opts };

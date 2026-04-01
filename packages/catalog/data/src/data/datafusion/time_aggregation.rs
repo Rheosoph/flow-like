@@ -3,6 +3,7 @@ use crate::data::datafusion::session::DataFusionSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
+    pin::ValueType,
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
@@ -98,6 +99,7 @@ impl NodeLogic for TimeBinAggregationNode {
             "Data/DataFusion/Aggregation",
         );
         node.add_icon("/flow/icons/clock.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -193,9 +195,10 @@ impl NodeLogic for TimeBinAggregationNode {
         node.add_output_pin(
             "results",
             "Results",
-            "Query results as JSON array",
-            VariableType::Generic,
-        );
+            "Query results as array of row structs",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "sql",
@@ -366,6 +369,7 @@ impl NodeLogic for DateTruncAggregationNode {
             "Data/DataFusion/Aggregation",
         );
         node.add_icon("/flow/icons/clock.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -438,8 +442,9 @@ impl NodeLogic for DateTruncAggregationNode {
             "results",
             "Results",
             "Aggregation results",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 
@@ -525,7 +530,8 @@ impl NodeLogic for WindowAggregationNode {
             "Apply window functions for rolling/moving aggregations over time series data.",
             "Data/DataFusion/Aggregation",
         );
-        node.add_icon("/flow/icons/chart-line.svg");
+        node.add_icon("/flow/icons/chart-network.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -610,7 +616,8 @@ impl NodeLogic for WindowAggregationNode {
         )
         .set_schema::<DataFusionSession>();
 
-        node.add_output_pin("results", "Results", "Query results", VariableType::Generic);
+        node.add_output_pin("results", "Results", "Query results", VariableType::Struct)
+            .set_value_type(ValueType::Array);
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 

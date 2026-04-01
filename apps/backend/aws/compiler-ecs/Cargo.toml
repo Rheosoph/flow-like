@@ -1,0 +1,27 @@
+[package]
+name = "aws-compiler-ecs"
+version = "0.1.0"
+edition = "2021"
+description = "Flow-Like ECS WASM Compiler (EventBridge Pipe → ECS RunTask)"
+
+[dependencies]
+flow-like-compiler.workspace = true
+flow-like-types.workspace = true
+
+mimalloc.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+sentry.workspace = true
+sentry-tracing.workspace = true
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

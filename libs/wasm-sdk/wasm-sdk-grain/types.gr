@@ -60,6 +60,26 @@ provide enum PinDirection {
 }
 
 // -----------------------------------------------------------------------
+// Value types (how data is contained)
+// -----------------------------------------------------------------------
+
+provide enum ValueType {
+  Normal,
+  ArrayType,
+  HashMap,
+  HashSet,
+}
+
+provide let valueTypeToString = (vt: ValueType) => {
+  match (vt) {
+    Normal => "Normal",
+    ArrayType => "Array",
+    HashMap => "HashMap",
+    HashSet => "HashSet",
+  }
+}
+
+// -----------------------------------------------------------------------
 // Pin definition
 // -----------------------------------------------------------------------
 
@@ -74,6 +94,10 @@ provide record PinDefinition {
   mut schema: Option<String>,
   mut validValues: Option<List<String>>,
   mut range: Option<(Number, Number)>,
+  mut step: Option<Number>,
+  mut sensitive: Option<Bool>,
+  mut enforceSchema: Option<Bool>,
+  mut enforceGenericValueType: Option<Bool>,
 }
 
 provide let inputPin = (name, friendlyName, description, dataType) => {
@@ -88,6 +112,10 @@ provide let inputPin = (name, friendlyName, description, dataType) => {
     schema: None,
     validValues: None,
     range: None,
+    step: None,
+    sensitive: None,
+    enforceSchema: None,
+    enforceGenericValueType: None,
   }
 }
 
@@ -103,6 +131,10 @@ provide let outputPin = (name, friendlyName, description, dataType) => {
     schema: None,
     validValues: None,
     range: None,
+    step: None,
+    sensitive: None,
+    enforceSchema: None,
+    enforceGenericValueType: None,
   }
 }
 
@@ -124,6 +156,22 @@ provide let withValidValues = (pin: PinDefinition, values: List<String>) => {
 
 provide let withRange = (pin: PinDefinition, min: Number, max: Number) => {
   { ...pin, range: Some((min, max)) }
+}
+
+provide let withStep = (pin: PinDefinition, step: Number) => {
+  { ...pin, step: Some(step) }
+}
+
+provide let withSensitive = (pin: PinDefinition, sensitive: Bool) => {
+  { ...pin, sensitive: Some(sensitive) }
+}
+
+provide let withEnforceSchema = (pin: PinDefinition, enforce: Bool) => {
+  { ...pin, enforceSchema: Some(enforce) }
+}
+
+provide let withEnforceGenericValueType = (pin: PinDefinition, enforce: Bool) => {
+  { ...pin, enforceGenericValueType: Some(enforce) }
 }
 
 // -----------------------------------------------------------------------
@@ -320,7 +368,29 @@ provide let pinToJson = (pin: PinDefinition) => {
     None => "",
   }
 
-  base ++ withDefault ++ withValueType ++ withSchema ++ withValidValues ++ withRange ++ "}"
+  let withStepField = match (pin.step) {
+    Some(s) => "," ++ jsonField("step", toString(s)),
+    None => "",
+  }
+
+  let withSensitiveField = match (pin.sensitive) {
+    Some(s) => "," ++ jsonField("sensitive", if (s) "true" else "false"),
+    None => "",
+  }
+
+  let withEnforceSchemaField = match (pin.enforceSchema) {
+    Some(s) => "," ++ jsonField("enforce_schema", if (s) "true" else "false"),
+    None => "",
+  }
+
+  let withEnforceGenericValueTypeField = match (pin.enforceGenericValueType) {
+    Some(s) =>
+      "," ++
+      jsonField("enforce_generic_value_type", if (s) "true" else "false"),
+    None => "",
+  }
+
+  base ++ withDefault ++ withValueType ++ withSchema ++ withValidValues ++ withRange ++ withStepField ++ withSensitiveField ++ withEnforceSchemaField ++ withEnforceGenericValueTypeField ++ "}"
 }
 
 // -----------------------------------------------------------------------

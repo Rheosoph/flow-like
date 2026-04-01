@@ -1,0 +1,411 @@
+---
+export const prerender = false;
+
+import StoreLayout from "../../layouts/StoreLayout.astro";
+import {
+	searchPackages,
+	searchApps,
+	isStoreEnabled,
+	formatCategory,
+	formatPrice,
+	type PackageSummary,
+	type AppSearchResult,
+} from "../../lib/registry";
+
+if (!isStoreEnabled()) return Astro.redirect("/");
+
+let packages: PackageSummary[] = [];
+let apps: AppSearchResult[] = [];
+
+try {
+	const [pkgRes, appRes] = await Promise.all([
+		searchPackages(12),
+		searchApps(12),
+	]);
+	packages = pkgRes.packages;
+	apps = appRes;
+} catch (e) {
+	console.error("Store fetch error:", e);
+}
+
+const jsonLd = {
+	"@context": "https://schema.org",
+	"@type": "WebPage",
+	name: "Flow-Like Store",
+	description:
+		"Browse automation packages and apps for the Flow-Like platform. Enterprise-grade workflow components, pre-built templates, and ready-to-use applications.",
+	url: "https://flow-like.com/store",
+	isPartOf: {
+		"@type": "WebSite",
+		name: "Flow-Like",
+		url: "https://flow-like.com",
+	},
+};
+---
+
+<StoreLayout
+	title="Store | Flow-Like — Packages & Apps"
+	description="Browse automation packages and apps for the Flow-Like platform. Enterprise-grade workflow components, pre-built templates, and ready-to-use applications."
+	jsonLd={jsonLd}
+>
+	<!-- Hero -->
+	<section class="relative isolate overflow-hidden">
+		<div class="absolute inset-0 -z-10">
+			<div class="absolute inset-0 bg-gradient-to-b from-primary/[0.03] via-transparent to-transparent"></div>
+			<div class="absolute top-0 left-1/4 w-96 h-96 bg-primary/[0.04] rounded-full blur-3xl"></div>
+			<div class="absolute top-12 right-1/4 w-80 h-80 bg-emerald-500/[0.04] rounded-full blur-3xl"></div>
+		</div>
+
+		<div class="max-w-7xl mx-auto px-6 pt-20 pb-16 md:pt-28 md:pb-20">
+			<div class="max-w-3xl mx-auto text-center">
+				<p class="text-[11px] font-medium tracking-[0.25em] uppercase text-muted-foreground/70 mb-4">
+					Extend your workflows
+				</p>
+				<h1 class="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1] mb-6">
+					Flow-Like Store
+				</h1>
+				<p class="text-lg md:text-xl text-muted-foreground leading-relaxed max-w-2xl mx-auto mb-10">
+					Discover packages and apps that extend your automation workflows.
+					From pre-built components to complete applications.
+				</p>
+				<div class="flex items-center justify-center gap-4">
+					<a
+						href="/store/packages"
+						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
+					>
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+						Browse Packages
+					</a>
+					<a
+						href="/store/apps"
+						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-border font-medium hover:bg-muted/50 transition-colors"
+					>
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+						Explore Apps
+					</a>
+				</div>
+			</div>
+		</div>
+
+		<!-- Divider -->
+		<div class="max-w-7xl mx-auto px-6">
+			<div class="h-px bg-gradient-to-r from-transparent via-border/60 to-transparent"></div>
+		</div>
+	</section>
+
+	<!-- Category Cards -->
+	<section class="max-w-7xl mx-auto px-6 py-16">
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+			<a
+				href="/store/packages"
+				class="group relative rounded-2xl border border-border bg-card p-8 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300 overflow-hidden"
+			>
+				<div class="absolute top-0 right-0 w-48 h-48 bg-primary/[0.03] rounded-full blur-2xl -translate-y-1/2 translate-x-1/4 group-hover:bg-primary/[0.06] transition-colors duration-300"></div>
+				<div class="relative">
+					<div class="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-5">
+						<svg class="w-6 h-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+					</div>
+					<h3 class="text-xl font-semibold mb-2 group-hover:text-primary transition-colors">
+						WASM Packages
+					</h3>
+					<p class="text-muted-foreground text-sm leading-relaxed mb-4">
+						Custom nodes, integrations, AI models, and workflow components.
+						Extend the platform with community-built modules.
+					</p>
+					<span class="inline-flex items-center gap-1.5 text-sm font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+						Browse packages
+						<svg class="w-4 h-4 translate-x-0 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+					</span>
+				</div>
+			</a>
+			<a
+				href="/store/apps"
+				class="group relative rounded-2xl border border-border bg-card p-8 hover:border-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 overflow-hidden"
+			>
+				<div class="absolute top-0 right-0 w-48 h-48 bg-emerald-500/[0.03] rounded-full blur-2xl -translate-y-1/2 translate-x-1/4 group-hover:bg-emerald-500/[0.06] transition-colors duration-300"></div>
+				<div class="relative">
+					<div class="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-5">
+						<svg class="w-6 h-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+					</div>
+					<h3 class="text-xl font-semibold mb-2 group-hover:text-emerald-500 transition-colors">
+						Applications
+					</h3>
+					<p class="text-muted-foreground text-sm leading-relaxed mb-4">
+						Pre-built automation solutions, templates, and workflows.
+						Ready to deploy in your environment.
+					</p>
+					<span class="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity">
+						Explore apps
+						<svg class="w-4 h-4 translate-x-0 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+					</span>
+				</div>
+			</a>
+		</div>
+	</section>
+
+	<!-- Featured Apps -->
+	{apps.length > 0 && (
+		<section class="max-w-7xl mx-auto px-6 pb-16">
+			<div class="flex items-center justify-between mb-8">
+				<div>
+					<h2 class="text-2xl font-semibold mb-1">Featured Apps</h2>
+					<p class="text-sm text-muted-foreground">Ready-to-use automation solutions</p>
+				</div>
+				<a
+					href="/store/apps"
+					class="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+				>
+					View all
+					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+				</a>
+			</div>
+
+			{/* Featured: first 2 apps get large cards */}
+			{apps.length >= 2 && (
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+					{apps.slice(0, 2).map(([app, meta]) => {
+						const displayName = meta?.name || app.id;
+						const displayDesc = meta?.description || "No description available";
+						const icon = meta?.icon;
+						const thumbnail = meta?.thumbnail;
+						return (
+							<a
+								href={`/store/apps/${app.id}`}
+								class="group relative block rounded-2xl border border-border bg-card overflow-hidden hover:border-foreground/20 hover:shadow-xl transition-all duration-300"
+							>
+								{thumbnail ? (
+									<div class="aspect-[2/1] w-full overflow-hidden bg-muted">
+										<img
+											src={thumbnail}
+											alt={displayName}
+											class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500"
+											loading="lazy"
+										/>
+									</div>
+								) : (
+									<div class="aspect-[2/1] w-full bg-gradient-to-br from-muted/80 to-muted/30 flex items-center justify-center">
+										<div class="w-16 h-16 rounded-2xl bg-background/80 flex items-center justify-center">
+											<svg class="w-8 h-8 text-muted-foreground/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+										</div>
+									</div>
+								)}
+								<div class="p-6">
+									<div class="flex items-center gap-3 mb-3">
+										{icon ? (
+											<img
+												src={icon}
+												alt=""
+												class="w-10 h-10 rounded-xl object-cover ring-1 ring-border"
+												loading="lazy"
+											/>
+										) : (
+											<div class="w-10 h-10 rounded-xl bg-muted flex items-center justify-center ring-1 ring-border">
+												<svg class="w-5 h-5 text-muted-foreground/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/></svg>
+											</div>
+										)}
+										<div class="min-w-0">
+											<h3 class="font-semibold text-lg truncate group-hover:text-primary transition-colors">
+												{displayName}
+											</h3>
+											<span class="text-xs text-muted-foreground">
+												{formatCategory(app.primary_category)}
+											</span>
+										</div>
+									</div>
+									<p class="text-sm text-muted-foreground line-clamp-2 mb-4">
+										{displayDesc}
+									</p>
+									<div class="flex items-center justify-between">
+										<div class="flex items-center gap-3 text-xs text-muted-foreground">
+											{app.avg_rating && app.rating_count > 0 && (
+												<span class="inline-flex items-center gap-1">
+													<span class="text-amber-500">★</span>
+													{app.avg_rating.toFixed(1)}
+												</span>
+											)}
+											{app.download_count > 0 && (
+												<span>{app.download_count.toLocaleString()} downloads</span>
+											)}
+										</div>
+										<span class="text-sm font-semibold">
+											{formatPrice(app.price)}
+										</span>
+									</div>
+								</div>
+							</a>
+						);
+					})}
+				</div>
+			)}
+
+			{/* Remaining apps in smaller grid */}
+			{apps.length > 2 && (
+				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					{apps.slice(2, 8).map(([app, meta]) => {
+						const displayName = meta?.name || app.id;
+						const displayDesc = meta?.description || "No description available";
+						const icon = meta?.icon;
+						return (
+							<a
+								href={`/store/apps/${app.id}`}
+								class="group block rounded-xl border border-border bg-card p-5 hover:border-foreground/20 hover:shadow-md transition-all duration-200"
+							>
+								<div class="flex items-center gap-3 mb-3">
+									{icon ? (
+										<img
+											src={icon}
+											alt=""
+											class="w-10 h-10 rounded-xl object-cover ring-1 ring-border shrink-0"
+											loading="lazy"
+										/>
+									) : (
+										<div class="w-10 h-10 rounded-xl bg-muted flex items-center justify-center shrink-0 ring-1 ring-border">
+											<svg class="w-5 h-5 text-muted-foreground/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/></svg>
+										</div>
+									)}
+									<div class="min-w-0">
+										<h3 class="font-semibold truncate group-hover:text-primary transition-colors">
+											{displayName}
+										</h3>
+										<span class="text-xs text-muted-foreground">
+											{formatCategory(app.primary_category)}
+										</span>
+									</div>
+								</div>
+								<p class="text-sm text-muted-foreground line-clamp-2 mb-3">
+									{displayDesc}
+								</p>
+								<div class="flex items-center justify-between text-xs text-muted-foreground">
+									<span>{app.download_count > 0 ? `${app.download_count.toLocaleString()} downloads` : formatCategory(app.secondary_category)}</span>
+									<span class="font-medium text-foreground">
+										{formatPrice(app.price)}
+									</span>
+								</div>
+							</a>
+						);
+					})}
+				</div>
+			)}
+		</section>
+	)}
+
+	<!-- Popular Packages -->
+	{packages.length > 0 && (
+		<section class="max-w-7xl mx-auto px-6 pb-16">
+			<div class="h-px bg-gradient-to-r from-transparent via-border/60 to-transparent mb-16"></div>
+			<div class="flex items-center justify-between mb-8">
+				<div>
+					<h2 class="text-2xl font-semibold mb-1">Popular Packages</h2>
+					<p class="text-sm text-muted-foreground">Community-built nodes and integrations</p>
+				</div>
+				<a
+					href="/store/packages"
+					class="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+				>
+					View all
+					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+				</a>
+			</div>
+			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+				{packages.slice(0, 8).map((pkg) => {
+					const meta = pkg.metadata;
+					const displayName = meta?.name || pkg.name;
+					const displayDesc = meta?.description || pkg.description;
+					const icon = meta?.icon;
+					return (
+						<a
+							href={`/store/packages/${pkg.id}`}
+							class="group block rounded-xl border border-border bg-card p-5 hover:border-foreground/20 hover:shadow-md transition-all duration-200"
+						>
+							<div class="flex items-start gap-3 mb-3">
+								{icon ? (
+									<img
+										src={icon}
+										alt={displayName}
+										class="w-10 h-10 rounded-lg object-cover shrink-0 ring-1 ring-border"
+										loading="lazy"
+									/>
+								) : (
+									<div class="w-10 h-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
+										<svg class="w-5 h-5 text-muted-foreground/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+									</div>
+								)}
+								<div class="min-w-0">
+									<h3 class="font-semibold truncate group-hover:text-primary transition-colors">
+										{displayName}
+									</h3>
+									<span class="text-xs text-muted-foreground">
+										v{pkg.latestVersion}
+									</span>
+								</div>
+							</div>
+							<p class="text-sm text-muted-foreground line-clamp-2 mb-3">
+								{displayDesc}
+							</p>
+							<div class="flex items-center justify-between text-xs text-muted-foreground">
+								<span>{pkg.downloadCount.toLocaleString()} downloads</span>
+								<span class="font-medium text-foreground">
+									{formatPrice(pkg.price)}
+								</span>
+							</div>
+							{pkg.verified && (
+								<span class="inline-flex items-center gap-1 mt-2 text-xs text-green-600 dark:text-green-400">
+									<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+									Verified
+								</span>
+							)}
+						</a>
+					);
+				})}
+			</div>
+		</section>
+	)}
+
+	<!-- CTA / Build Your Own -->
+	<section class="max-w-7xl mx-auto px-6 pb-20">
+		<div class="h-px bg-gradient-to-r from-transparent via-border/60 to-transparent mb-16"></div>
+		<div class="relative rounded-2xl border border-border bg-card overflow-hidden">
+			<div class="absolute inset-0 bg-gradient-to-br from-primary/[0.03] via-transparent to-emerald-500/[0.03]"></div>
+			<div class="relative p-10 md:p-14 text-center">
+				<h2 class="text-2xl md:text-3xl font-bold tracking-tight mb-4">
+					Build for the Store
+				</h2>
+				<p class="text-muted-foreground max-w-xl mx-auto mb-8 leading-relaxed">
+					Create WASM packages in any language and publish them to the Flow-Like ecosystem.
+					Reach thousands of automation engineers.
+				</p>
+				<div class="flex items-center justify-center gap-4">
+					<a
+						href="https://docs.flow-like.com"
+						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
+					>
+						Read the Docs
+					</a>
+					<a
+						href="https://github.com/TM9657/flow-like"
+						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-border font-medium hover:bg-muted/50 transition-colors"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+						View on GitHub
+					</a>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	{packages.length === 0 && apps.length === 0 && (
+		<section class="max-w-7xl mx-auto px-6 pb-20">
+			<div class="text-center py-20 rounded-2xl border border-dashed border-border">
+				<div class="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-6">
+					<svg class="w-8 h-8 text-muted-foreground/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+				</div>
+				<h3 class="text-lg font-semibold mb-2">Store Coming Soon</h3>
+				<p class="text-muted-foreground max-w-md mx-auto">
+					We're setting things up. Check back soon for packages and apps.
+				</p>
+			</div>
+		</section>
+	)}
+</StoreLayout>

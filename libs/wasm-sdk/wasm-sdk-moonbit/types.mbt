@@ -195,6 +195,10 @@ pub struct PinDefinition {
   pub schema : String?
   pub options : Array[String]?
   pub range : (Double, Double)?
+  pub step : Double?
+  pub sensitive : Bool?
+  pub enforce_schema : Bool?
+  pub enforce_generic_value_type : Bool?
 }
 
 pub fn input_pin(
@@ -214,6 +218,10 @@ pub fn input_pin(
     schema: None,
     options: None,
     range: None,
+    step: None,
+    sensitive: None,
+    enforce_schema: None,
+    enforce_generic_value_type: None,
   }
 }
 
@@ -234,6 +242,10 @@ pub fn output_pin(
     schema: None,
     options: None,
     range: None,
+    step: None,
+    sensitive: None,
+    enforce_schema: None,
+    enforce_generic_value_type: None,
   }
 }
 
@@ -255,6 +267,22 @@ pub fn PinDefinition::with_options(self : PinDefinition, opts : Array[String]) -
 
 pub fn PinDefinition::with_range(self : PinDefinition, min : Double, max : Double) -> PinDefinition {
   { ..self, range: Some((min, max)) }
+}
+
+pub fn PinDefinition::with_step(self : PinDefinition, step : Double) -> PinDefinition {
+  { ..self, step: Some(step) }
+}
+
+pub fn PinDefinition::with_sensitive(self : PinDefinition, sensitive : Bool) -> PinDefinition {
+  { ..self, sensitive: Some(sensitive) }
+}
+
+pub fn PinDefinition::with_enforce_schema(self : PinDefinition, enforce : Bool) -> PinDefinition {
+  { ..self, enforce_schema: Some(enforce) }
+}
+
+pub fn PinDefinition::with_enforce_generic_value_type(self : PinDefinition, enforce : Bool) -> PinDefinition {
+  { ..self, enforce_generic_value_type: Some(enforce) }
 }
 
 pub fn PinDefinition::to_json(self : PinDefinition) -> String {
@@ -289,6 +317,22 @@ pub fn PinDefinition::to_json(self : PinDefinition) -> String {
   }
   match self.range {
     Some((lo, hi)) => s = s + ",\"range\":[" + lo.to_string() + "," + hi.to_string() + "]"
+    None => ()
+  }
+  match self.step {
+    Some(st) => s = s + ",\"step\":" + st.to_string()
+    None => ()
+  }
+  match self.sensitive {
+    Some(sn) => s = s + ",\"sensitive\":" + sn.to_string()
+    None => ()
+  }
+  match self.enforce_schema {
+    Some(es) => s = s + ",\"enforce_schema\":" + es.to_string()
+    None => ()
+  }
+  match self.enforce_generic_value_type {
+    Some(eg) => s = s + ",\"enforce_generic_value_type\":" + eg.to_string()
     None => ()
   }
   s + "}"

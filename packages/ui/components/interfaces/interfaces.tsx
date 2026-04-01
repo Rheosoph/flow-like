@@ -4,6 +4,7 @@ import type { IHub } from "../../lib/schema/hub/hub";
 
 export interface IToolBarActions {
 	pushToolbarElements: (elements: ReactElement[]) => void;
+	pushNavElements: (elements: ReactElement[]) => void;
 }
 
 export interface ISidebarActions {
@@ -33,6 +34,8 @@ export interface IConfigInterfaceProps {
 	hub?: IHub | null;
 	/** Event ID for constructing webhook URLs */
 	eventId?: string;
+	/** Whether local execution is available (desktop app) */
+	canExecuteLocally?: boolean;
 }
 
 /** Where a sink can run */

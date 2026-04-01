@@ -1,9 +1,10 @@
 use crate::{
     ensure_permission,
-    entity::{membership, notification, sea_orm_active_enums::NotificationType},
+    entity::{membership, sea_orm_active_enums::NotificationType},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     routes::app::events::db::get_event_from_db,
     state::AppState,
 };
@@ -11,8 +12,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -83,8 +83,8 @@ pub async fn create_notification(
         return Err(ApiError::bad_request("event_id is required".to_string()));
     }
 
-    // Get event from database
-    let event = get_event_from_db(&state.db, &params.event_id).await.map_err(|e| {
+    // Get event from database (validates event belongs to this app)
+    let event = get_event_from_db(&state.db, &params.event_id, &app_id).await.map_err(|e| {
         tracing::warn!(error = %e, event_id = %params.event_id, "Failed to resolve event for notification");
         ApiError::FORBIDDEN
     })?;
@@ -162,25 +162,22 @@ pub async fn create_notification(
         }
     }
 
-    // Create the notification
-    let notification_id = create_id();
-    let notification = notification::ActiveModel {
-        id: Set(notification_id.clone()),
-        user_id: Set(target_sub),
-        app_id: Set(Some(app_id)),
-        title: Set(params.title),
-        description: Set(params.description),
-        icon: Set(params.icon),
-        link: Set(params.link),
-        r#type: Set(NotificationType::Workflow),
-        read: Set(false),
-        source_run_id: Set(params.run_id),
-        source_node_id: Set(params.node_id),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        read_at: Set(None),
-    };
-
-    notification.insert(&state.db).await?;
+    let notification_id = dispatch_notification(
+        &state,
+        DispatchNotificationInput {
+            user_id: target_sub,
+            app_id: Some(app_id),
+            title: params.title,
+            description: params.description,
+            icon: params.icon,
+            link: params.link,
+            image: None,
+            notification_type: NotificationType::Workflow,
+            source_run_id: params.run_id,
+            source_node_id: params.node_id,
+        },
+    )
+    .await?;
 
     Ok(Json(CreateNotificationResponse {
         id: notification_id,

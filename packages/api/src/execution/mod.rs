@@ -10,6 +10,7 @@ pub mod payload_storage;
 pub mod queue;
 mod sse_proxy;
 pub mod state;
+pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
@@ -35,3 +36,4 @@ pub use state::{
     ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,
     UpdateRunInput, create_state_store,
 };
+pub use wasm_resolve::resolve_wasm_packages;

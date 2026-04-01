@@ -2,6 +2,7 @@
 //!
 //! The engine is the core compilation and configuration unit for wasmtime.
 
+use crate::abi::WasmNodeDefinition;
 use crate::aot_cache::AotCache;
 use crate::error::{WasmError, WasmResult};
 use crate::limits::WasmSecurityConfig;
@@ -36,6 +37,15 @@ pub struct WasmConfig {
     pub cache_dir: Option<PathBuf>,
     /// Default security configuration
     pub default_security: WasmSecurityConfig,
+    /// Cross-compilation target triple (e.g. "x86_64-unknown-linux-gnu").
+    /// When set the engine produces artifacts for this target instead of
+    /// the host platform.  Use `Engine::precompile_module` / `precompile_component`
+    /// because `Module::new` is not available for cross targets.
+    pub target: Option<String>,
+    /// When false, the engine can only load precompiled (.cwasm) artifacts.
+    /// `Module::new` / compilation is disabled. Useful for platforms that
+    /// cannot JIT (iOS).
+    pub compiler_enabled: bool,
 }
 
 impl Default for WasmConfig {
@@ -49,6 +59,8 @@ impl Default for WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::default(),
+            target: None,
+            compiler_enabled: true,
         }
     }
 }
@@ -69,6 +81,8 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: None,
             default_security: WasmSecurityConfig::default(),
+            target: None,
+            compiler_enabled: true,
         }
     }
 
@@ -83,6 +97,8 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::default(),
+            target: None,
+            compiler_enabled: true,
         }
     }
 
@@ -97,6 +113,8 @@ impl WasmConfig {
             memory_growth: true,
             cache_dir: Some(get_cache_dir().join("wasm")),
             default_security: WasmSecurityConfig::permissive(),
+            target: None,
+            compiler_enabled: true,
         }
     }
 
@@ -115,13 +133,28 @@ impl WasmConfig {
         self
     }
 
+    /// Set a cross-compilation target triple (e.g. `"x86_64-unknown-linux-gnu"`).
+    /// The resulting engine can only precompile; `Module::new` will fail.
+    pub fn with_target(mut self, triple: impl Into<String>) -> Self {
+        self.target = Some(triple.into());
+        self
+    }
+
+    /// Disable the JIT compiler. The engine will only be able to load
+    /// precompiled (`.cwasm`) artifacts via `Module::deserialize`.
+    pub fn without_compiler(mut self) -> Self {
+        self.compiler_enabled = false;
+        self
+    }
+
     /// Build wasmtime Config from our config
     fn to_wasmtime_config(&self) -> WasmResult<Config> {
         let mut config = Config::new();
 
-        // Compilation settings
-        config.parallel_compilation(self.parallel_compilation);
-        config.cranelift_opt_level(self.opt_level);
+        if self.compiler_enabled {
+            config.parallel_compilation(self.parallel_compilation);
+            config.cranelift_opt_level(self.opt_level);
+        }
 
         // Runtime settings
         config.consume_fuel(self.fuel_metering);
@@ -133,12 +166,27 @@ impl WasmConfig {
         config.wasm_exceptions(true);
         config.wasm_function_references(true);
 
+        // Enable SIMD proposals and wide arithmetic
+        config.wasm_simd(true);
+        config.wasm_relaxed_simd(true);
+        config.wasm_wide_arithmetic(true);
+
         // Memory settings
         config.memory_init_cow(true);
 
         // Apply resource limits
         let limits = &self.default_security.limits;
         config.max_wasm_stack(limits.max_stack_depth as usize * 1024);
+
+        // Cross-compilation target
+        if let Some(ref triple) = self.target {
+            config.target(triple).map_err(|e| {
+                WasmError::compilation(format!(
+                    "Unsupported cross-compilation target '{}': {}",
+                    triple, e
+                ))
+            })?;
+        }
 
         Ok(config)
     }
@@ -159,6 +207,11 @@ pub struct WasmEngine {
     epoch_ticker: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// AOT disk cache for precompiled artifacts
     aot_cache: Option<AotCache>,
+    /// Cached node definitions (wasm_hash -> definitions)
+    definitions_cache: DashMap<String, Vec<WasmNodeDefinition>>,
+    /// Pulley fallback engine for iOS where native JIT is unavailable.
+    /// Cranelift compiles to Pulley bytecode which is interpreted at runtime.
+    pulley_engine: Option<Engine>,
 }
 
 impl WasmEngine {
@@ -171,6 +224,23 @@ impl WasmEngine {
 
         let aot_cache = config.cache_dir.as_ref().map(AotCache::new);
 
+        // On iOS, create a secondary Pulley-targeted engine as fallback.
+        // The primary engine targets the host (for deserializing native precompiled
+        // artifacts from the server). When no native artifact exists, we fall back
+        // to compiling via Cranelift→Pulley which doesn't need W+X memory pages.
+        // Android allows W+X (execmem) so Cranelift works natively there.
+        let pulley_engine = if cfg!(target_os = "ios") {
+            let mut pulley_config = config.to_wasmtime_config()?;
+            pulley_config.target("pulley64").map_err(|e| {
+                WasmError::compilation(format!("Failed to set Pulley target: {}", e))
+            })?;
+            Some(Engine::new(&pulley_config).map_err(|e| {
+                WasmError::compilation(format!("Failed to create Pulley engine: {}", e))
+            })?)
+        } else {
+            None
+        };
+
         Ok(Self {
             engine,
             config,
@@ -179,6 +249,8 @@ impl WasmEngine {
             component_cache: DashMap::new(),
             epoch_ticker: Arc::new(RwLock::new(None)),
             aot_cache,
+            definitions_cache: DashMap::new(),
+            pulley_engine,
         })
     }
 
@@ -197,6 +269,40 @@ impl WasmEngine {
         &self.config
     }
 
+    /// Whether the JIT compiler is enabled.
+    pub fn compiler_enabled(&self) -> bool {
+        self.config.compiler_enabled
+    }
+
+    /// Get a reference to the AOT disk cache, if configured.
+    pub fn aot_cache(&self) -> Option<&AotCache> {
+        self.aot_cache.as_ref()
+    }
+
+    pub fn get_cached_definitions(&self, wasm_hash: &str) -> Option<Vec<WasmNodeDefinition>> {
+        self.definitions_cache.get(wasm_hash).map(|v| v.clone())
+    }
+
+    pub fn cache_definitions(&self, wasm_hash: String, definitions: Vec<WasmNodeDefinition>) {
+        self.definitions_cache.insert(wasm_hash, definitions);
+    }
+
+    /// AOT-compile a raw `.wasm` binary into serialized bytes.
+    ///
+    /// Works for both host and cross-compilation targets.
+    /// Auto-detects whether the input is a core module or a Component Model binary.
+    pub fn precompile(&self, wasm_bytes: &[u8]) -> WasmResult<Vec<u8>> {
+        #[cfg(feature = "component-model")]
+        if crate::component::is_component_model(wasm_bytes) {
+            return self.engine.precompile_component(wasm_bytes).map_err(|e| {
+                WasmError::compilation(format!("Failed to precompile component: {}", e))
+            });
+        }
+        self.engine
+            .precompile_module(wasm_bytes)
+            .map_err(|e| WasmError::compilation(format!("Failed to precompile module: {}", e)))
+    }
+
     /// Start the epoch ticker for timeout enforcement
     pub fn start_epoch_ticker(&self) {
         let mut ticker = self.epoch_ticker.write();
@@ -205,11 +311,15 @@ impl WasmEngine {
         }
 
         let engine = self.engine.clone();
+        let pulley = self.pulley_engine.clone();
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
             loop {
                 interval.tick().await;
                 engine.increment_epoch();
+                if let Some(ref pe) = pulley {
+                    pe.increment_epoch();
+                }
             }
         });
 
@@ -233,17 +343,41 @@ impl WasmEngine {
             return Ok(cached.clone());
         }
 
-        // Try AOT disk cache before expensive Cranelift compilation
-        let module = if let Some(aot) = &self.aot_cache {
+        // 1. Try native AOT cache (server-injected or previously compiled)
+        if let Some(aot) = &self.aot_cache {
             if let Some(precompiled) = aot.load_module(&self.engine, &hash) {
-                WasmModule::from_precompiled(precompiled, hash.clone())?
-            } else {
-                let m = WasmModule::from_bytes(self, bytes, hash.clone()).await?;
-                aot.save_module(m.module(), &hash);
-                m
+                let module = Arc::new(WasmModule::from_precompiled(precompiled, hash.clone())?);
+                self.module_cache.insert(hash, module.clone());
+                return Ok(module);
             }
+        }
+
+        // 2. Pulley interpreter fallback (iOS): compile .wasm on the fly
+        if let Some(pulley_engine) = &self.pulley_engine {
+            tracing::info!(
+                hash = %hash,
+                "No native precompiled artifact — compiling with Pulley interpreter",
+            );
+
+            let module = wasmtime::Module::new(pulley_engine, bytes)
+                .map_err(|e| WasmError::compilation(format!("Pulley compilation failed: {}", e)))?;
+            let module = Arc::new(WasmModule::from_precompiled(module, hash.clone())?);
+            self.module_cache.insert(hash, module.clone());
+            return Ok(module);
+        }
+
+        // 3. Desktop/Android: compile with Cranelift (native)
+        let module = if self.config.compiler_enabled {
+            let m = WasmModule::from_bytes(self, bytes, hash.clone()).await?;
+            if let Some(aot) = &self.aot_cache {
+                aot.save_module(m.module(), &hash);
+            }
+            m
         } else {
-            WasmModule::from_bytes(self, bytes, hash.clone()).await?
+            return Err(WasmError::compilation(
+                "Compiler disabled and no precompiled artifact in AOT cache. \
+                 Ensure the precompiled .cwasm is downloaded before loading.",
+            ));
         };
 
         let module = Arc::new(module);
@@ -276,16 +410,50 @@ impl WasmEngine {
             return Ok(cached.clone());
         }
 
-        let component = if let Some(aot) = &self.aot_cache {
+        // 1. Try native AOT cache
+        if let Some(aot) = &self.aot_cache {
             if let Some(precompiled) = aot.load_component(&self.engine, &hash) {
-                WasmComponent::from_precompiled(precompiled, bytes, hash.clone())?
-            } else {
-                let c = WasmComponent::from_bytes(self, bytes, hash.clone()).await?;
-                aot.save_component(c.component(), &hash);
-                c
+                let component = Arc::new(WasmComponent::from_precompiled(
+                    precompiled,
+                    bytes,
+                    hash.clone(),
+                )?);
+                self.component_cache.insert(hash, component.clone());
+                return Ok(component);
             }
+        }
+
+        // 2. Pulley interpreter fallback (iOS): compile .wasm on the fly
+        if let Some(pulley_engine) = &self.pulley_engine {
+            tracing::info!(
+                hash = %hash,
+                "No native precompiled component — compiling with Pulley interpreter",
+            );
+
+            let component =
+                wasmtime::component::Component::new(pulley_engine, bytes).map_err(|e| {
+                    WasmError::compilation(format!("Pulley component compilation failed: {}", e))
+                })?;
+            let component = Arc::new(WasmComponent::from_precompiled(
+                component,
+                bytes,
+                hash.clone(),
+            )?);
+            self.component_cache.insert(hash, component.clone());
+            return Ok(component);
+        }
+
+        // 3. Desktop/Android: compile with Cranelift
+        let component = if self.config.compiler_enabled {
+            let c = WasmComponent::from_bytes(self, bytes, hash.clone()).await?;
+            if let Some(aot) = &self.aot_cache {
+                aot.save_component(c.component(), &hash);
+            }
+            c
         } else {
-            WasmComponent::from_bytes(self, bytes, hash.clone()).await?
+            return Err(WasmError::compilation(
+                "Compiler disabled and no precompiled component in AOT cache.",
+            ));
         };
 
         let component = Arc::new(component);

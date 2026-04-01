@@ -79,6 +79,7 @@ import {
 	useInvoke,
 	useSidebar,
 	AnimatedSidebarIcon,
+	AnimatedCodeIcon,
 } from "@tm9657/flow-like-ui";
 import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
 import {
@@ -116,6 +117,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType }
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { fetcher } from "../lib/api";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
@@ -156,107 +158,25 @@ const data = {
 			items: [],
 		},
 		{
-			title: "User Actions",
-			url: "/admin/user",
-			icon: AnimatedUsersIcon,
-			permission: true,
-			items: [
-				{
-					title: "Find",
-					url: "/admin/user",
-					permission: GlobalPermission.ReadProfile,
-				},
-				{
-					title: "Manage",
-					url: "/admin/user/edit",
-					permission: GlobalPermission.WriteProfile,
-				},
-			],
-		},
-		{
-			title: "Governance",
-			url: "/admin/governance",
+			title: "Admin",
+			url: "/admin",
 			icon: AnimatedDashboardIcon,
 			permission: true,
-			items: [
-				{
-					title: "Dashboard",
-					url: "/admin/governance",
-					permission: GlobalPermission.ReadPublishing,
-				},
-				{
-					title: "Your Requests",
-					url: "/admin/governance/requests",
-					permission: GlobalPermission.WritePublishing,
-				},
-			],
-		},
-		{
-			title: "Bits",
-			url: "/admin/bits",
-			icon: AnimatedPackageIcon,
-			permission: true,
-			items: [
-				{
-					title: "Add Bits",
-					url: "/admin/bits/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Add Profile",
-					url: "/admin/profiles/add",
-					permission: GlobalPermission.WriteBits,
-				},
-				{
-					title: "Edit Bits",
-					url: "/admin/bits/edit",
-					permission: GlobalPermission.WriteBits,
-				},
-			],
-		},
-		{
-			title: "Solutions",
-			url: "/admin/solutions",
-			icon: AnimatedSparklesIcon,
-			permission: true,
-			items: [
-				{
-					title: "Manage Requests",
-					url: "/admin/solutions",
-					permission: GlobalPermission.WriteSolutions,
-				},
-			],
-		},
-		{
-			title: "Sinks",
-			url: "/admin/sinks",
-			icon: AnimatedKeyIcon,
-			permission: true,
-			items: [
-				{
-					title: "Service Tokens",
-					url: "/admin/sinks",
-					permission: GlobalPermission.Admin,
-				},
-			],
+			items: [],
 		},
 	],
 	navDev: [
 		{
-			title: "Developer",
-			url: "/developer",
-			icon: Code2Icon,
+			title: "Package Registry",
+			url: "/store/packages",
+			icon: AnimatedPackageIcon,
 			isActive: false,
-			items: [
-				{
-					title: "My Nodes",
-					url: "/developer",
-				},
-				{
-					title: "Custom Nodes",
-					url: "/developer/installed",
-				},
-			],
+		},
+		{
+			title: "Developer Tools",
+			url: "/developer/new",
+			icon: AnimatedCodeIcon,
+			isActive: false,
 		},
 	],
 };
@@ -359,7 +279,7 @@ function IOSQuickMenuTrigger() {
 
 	return (
 		<div
-			className="md:hidden fixed left-3 z-[70]"
+			className="md:hidden fixed left-3 z-70"
 			style={{ top: "calc(var(--fl-safe-top, 0px) + 10px)" }}
 		>
 			<Button
@@ -559,6 +479,7 @@ function InnerSidebar() {
 
 function Profiles() {
 	const [createProfile, setCreateProfile] = useState<boolean>(false);
+	const auth = useAuth();
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const { isMobile } = useSidebar();
@@ -634,6 +555,34 @@ function Profiles() {
 		if (!deleteTarget) return;
 		setIsDeleting(true);
 		try {
+			// Delete from server if authenticated
+			if (auth.isAuthenticated && auth.user?.access_token) {
+				try {
+					const profile = await invoke<{ hub?: string; secure?: boolean }>(
+						"get_current_profile",
+					).catch(() => null);
+					const hubUrl = profile?.hub;
+					const baseUrl =
+						process.env.NEXT_PUBLIC_API_URL ?? hubUrl ?? "api.flow-like.com";
+					const protocol = profile?.secure === false ? "http" : "https";
+					const apiBase = (
+						baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
+					).replace(/\/+$/, "");
+
+					await tauriFetch(
+						`${apiBase}/api/v1/profile/${encodeURIComponent(deleteTarget.id)}`,
+						{
+							method: "DELETE",
+							headers: {
+								Authorization: `Bearer ${auth.user.access_token}`,
+							},
+						},
+					);
+				} catch (err) {
+					console.warn("[ProfileDelete] Server delete error:", err);
+				}
+			}
+
 			await invoke("delete_profile", { profileId: deleteTarget.id });
 			toast.success("Profile removed");
 			await profiles.refetch();
@@ -645,7 +594,7 @@ function Profiles() {
 			setIsDeleting(false);
 			setDeleteTarget(null);
 		}
-	}, [deleteTarget, profiles, invalidate, backend.userState]);
+	}, [deleteTarget, profiles, invalidate, backend.userState, auth]);
 
 	return (
 		<SidebarMenu>
@@ -922,8 +871,13 @@ function NavCollapsible({
 							if (e.button === 1) {
 								e.preventDefault();
 								try {
+									const parsed = new URL(item.url, window.location.href);
+									const resolvedUrl =
+										parsed.origin === window.location.origin
+											? `${parsed.pathname}${parsed.search}${parsed.hash}`
+											: parsed.toString();
 									const webview = new WebviewWindow(`sidebar-${createId()}`, {
-										url: item.url,
+										url: resolvedUrl,
 										title: item.title,
 										focus: true,
 										resizable: true,
@@ -952,7 +906,7 @@ function NavCollapsible({
 				<CollapsibleContent>
 					<SidebarMenuSub>
 						{item.items?.map((subItem) => (
-							<SidebarMenuSubItem key={subItem.title}>
+							<SidebarMenuSubItem key={subItem.url}>
 								<SidebarMenuSubButton asChild>
 									<Link href={subItem.url}>
 										<span
@@ -1006,14 +960,14 @@ function NavMain({
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
 								<NavCollapsible
-									key={item.title}
+									key={item.url}
 									item={item}
 									pathname={pathname}
 									sidebarOpen={open}
 									onNavigate={router.push}
 								/>
 							) : (
-								<NavFlatItem key={item.title} item={item} pathname={pathname} />
+								<NavFlatItem key={item.url} item={item} pathname={pathname} />
 							),
 						)}
 				</SidebarMenu>
@@ -1024,14 +978,14 @@ function NavMain({
 					{devItems.map((item) =>
 						item.items && item.items.length > 0 ? (
 							<NavCollapsible
-								key={item.title}
+								key={item.url}
 								item={item}
 								pathname={pathname}
 								sidebarOpen={open}
 								onNavigate={router.push}
 							/>
 						) : (
-							<NavFlatItem key={item.title} item={item} pathname={pathname} />
+							<NavFlatItem key={item.url} item={item} pathname={pathname} />
 						),
 					)}
 				</SidebarMenu>
@@ -1044,18 +998,19 @@ function NavMain({
 							.filter(
 								(item) =>
 									item.permission &&
-									typeof item.items?.find((subitem) =>
-										new GlobalPermission(
-											info.data?.permission ?? 0,
-										).hasPermission(
-											subitem.permission ?? GlobalPermission.Admin,
-										),
-									) !== "undefined",
+									(!item.items?.length ||
+										typeof item.items.find((subitem) =>
+											new GlobalPermission(
+												info.data?.permission ?? 0,
+											).hasPermission(
+												subitem.permission ?? GlobalPermission.Admin,
+											),
+										) !== "undefined"),
 							)
 							.map((item) =>
 								item.items && item.items.length > 0 ? (
 									<NavCollapsible
-										key={item.title}
+										key={item.url}
 										item={{
 											...item,
 											items: item.items?.filter((sub) =>
@@ -1071,7 +1026,7 @@ function NavMain({
 										onNavigate={router.push}
 									/>
 								) : (
-									<SidebarMenuItem key={item.title}>
+									<SidebarMenuItem key={item.url}>
 										<SidebarMenuButton
 											asChild
 											variant={pathname === item.url ? "outline" : "default"}

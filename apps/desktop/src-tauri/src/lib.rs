@@ -17,7 +17,6 @@ async fn tray_update_state() -> Result<(), String> {
 }
 
 use flow_like::{
-    flow::node::NodeLogic,
     flow_like_storage::{
         Path,
         files::store::{FlowLikeStore, local_store::LocalObjectStore},
@@ -79,9 +78,67 @@ fn harden_ios_webview_scroll(window: &tauri::WebviewWindow) {
             let _: () = objc2::msg_send![scroll_view, setAlwaysBounceHorizontal: false];
             // UIScrollViewContentInsetAdjustmentNever = 2
             let _: () = objc2::msg_send![scroll_view, setContentInsetAdjustmentBehavior: 2isize];
+
+            // Disable link previews (3D Touch peek/pop) — avoids accidental long-press pauses
+            let _: () = objc2::msg_send![wk_webview, setAllowsLinkPreview: false];
+
+            // Disable data detectors (phone numbers, addresses, etc.) — reduces layout cost
+            // on pages with lots of text content.
+            let configuration: *mut AnyObject = objc2::msg_send![wk_webview, configuration];
+            if !configuration.is_null() {
+                // WKDataDetectorTypeNone = 0
+                let _: () = objc2::msg_send![configuration, setDataDetectorTypes: 0u64];
+            }
         }
     }) {
         tracing::warn!("Failed to apply iOS webview scroll hardening: {}", err);
+    }
+}
+
+/// Tune the macOS WKWebView for performance.
+/// Must be called after the webview is fully initialised (delayed from setup).
+#[cfg(target_os = "macos")]
+fn tune_macos_webview(window: &tauri::WebviewWindow) {
+    if let Err(err) = window.with_webview(|webview| {
+        unsafe {
+            use objc2::runtime::AnyObject;
+
+            let wk_webview: *mut AnyObject = webview.inner().cast();
+            if wk_webview.is_null() {
+                return;
+            }
+
+            // Disable back-forward navigation gestures — we're a SPA
+            let _: () = objc2::msg_send![wk_webview, setAllowsBackForwardNavigationGestures: false];
+        }
+    }) {
+        tracing::warn!("Failed to tune macOS webview: {}", err);
+    }
+}
+
+/// Tune the Windows WebView2 for performance.
+#[cfg(windows)]
+fn tune_windows_webview(window: &tauri::WebviewWindow) {
+    if let Err(err) = window.with_webview(|webview| {
+        unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings6;
+
+            let controller = webview.controller();
+            let core = controller.CoreWebView2().unwrap();
+
+            // Disable swipe navigation (back-forward gesture) — we're a SPA
+            if let Ok(settings) = core.Settings() {
+                if let Ok(settings6) = settings.cast::<ICoreWebView2Settings6>() {
+                    let _ = settings6.SetIsSwipeNavigationEnabled(false);
+                }
+            }
+
+            // Use COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW when minimized
+            // (the app regains normal budget when re-focused via our event handler)
+            // Not setting this proactively; will be used via visibility change events in JS.
+        }
+    }) {
+        tracing::warn!("Failed to tune Windows webview: {}", err);
     }
 }
 
@@ -171,9 +228,14 @@ macro_rules! eprintln { ($($t:tt)*) => { tracing::error!($($t)*); } }
 pub fn run() {
     // Ensure panics are logged with backtraces in release too.
     std::panic::set_hook(Box::new(|info| {
-        eprintln!(
-            "PANIC: {info}\n{}",
-            std::backtrace::Backtrace::force_capture()
+        // Use write! instead of eprintln! to avoid a double-panic when stderr
+        // is a broken pipe (e.g. the parent process that captured output has gone away).
+        let _ = std::io::Write::write_fmt(
+            &mut std::io::stderr(),
+            format_args!(
+                "PANIC: {info}\n{}\n",
+                std::backtrace::Backtrace::force_capture()
+            ),
         );
         if let Some(location) = info.location() {
             tracing::error!(
@@ -285,6 +347,7 @@ pub fn run() {
     config.register_bits_store(build_store(settings_state.bit_dir.clone()));
 
     let user_dir = settings_state.user_dir.clone();
+    let blob_dir = settings_state.user_dir.join("blob_store");
     config.register_user_store(build_store(settings_state.user_dir.clone()));
 
     config.register_app_storage_store(build_store(project_dir.clone()));
@@ -429,13 +492,11 @@ pub fn run() {
         .manage(state::TauriFlowLikeState(state_ref.clone()))
         .manage(state::TauriRegistryState(Arc::new(Mutex::new(None))))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
-        .manage(state::TauriTrayState(Arc::new(Mutex::new(
-            tray::TrayRuntimeState::default(),
-        ))))
         .manage(state::TauriRecordingState::new())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_remote_push::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -510,6 +571,30 @@ pub fn run() {
             let refetch_handle = relay_handle.clone();
             let deep_link_handle = relay_handle.clone();
             let event_bus_handle = relay_handle.clone();
+
+            // macOS: tune WKWebView after it's fully initialised
+            #[cfg(target_os = "macos")]
+            {
+                let macos_handle = app.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    flow_like_types::tokio::time::sleep(Duration::from_millis(200)).await;
+                    if let Some(main) = macos_handle.get_webview_window("main") {
+                        tune_macos_webview(&main);
+                    }
+                });
+            }
+
+            // Windows: tune WebView2 after it's fully initialised
+            #[cfg(windows)]
+            {
+                let win_handle = app.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    flow_like_types::tokio::time::sleep(Duration::from_millis(200)).await;
+                    if let Some(main) = win_handle.get_webview_window("main") {
+                        tune_windows_webview(&main);
+                    }
+                });
+            }
 
             #[cfg(target_os = "ios")]
             {
@@ -618,6 +703,13 @@ pub fn run() {
 
                 // Load developer project WASM nodes into catalog
                 functions::developer::load_all_developer_nodes(&handle).await;
+
+                // Initialize the WASM package registry so installed packages
+                // appear in the catalog immediately (without waiting for the
+                // user to visit the store page).
+                if let Err(e) = functions::registry::registry_init(handle.clone(), None).await {
+                    tracing::warn!("Failed to initialize WASM registry at startup: {:?}", e);
+                }
 
                 let model_factory = {
                     println!("Starting GC");
@@ -766,6 +858,9 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_flow_like_dexie_blob_offload::init(Some(
+            blob_dir,
+        )))
         .invoke_handler(tauri::generate_handler![
             update,
             functions::file::get_path_meta,
@@ -773,6 +868,8 @@ pub fn run() {
             functions::ai::invoke::chat_completion,
             functions::ai::invoke::find_best_model,
             functions::system::get_system_info,
+            functions::system::list_apps_for_file,
+            functions::system::open_file_with_app,
             #[cfg(desktop)]
             tray::tray_update_state,
             #[cfg(not(desktop))]
@@ -812,9 +909,13 @@ pub fn run() {
             functions::app::create_app,
             functions::app::update_app,
             functions::app::delete_app,
+            functions::app::app_add_package,
+            functions::app::app_remove_package,
+            functions::app::app_list_packages,
             functions::app::sharing::export_app_to_file,
             functions::app::sharing::import_app_from_file,
             functions::app::tables::db_table_names,
+            functions::app::tables::db_table_names_user,
             functions::app::tables::db_schema,
             functions::app::tables::db_list,
             functions::app::tables::db_count,
@@ -839,11 +940,16 @@ pub fn run() {
             functions::bit::delete_bit,
             functions::bit::get_installed_bit,
             functions::flow::storage::storage_list,
+            functions::flow::storage::storage_user_list,
             functions::flow::storage::storage_add,
+            functions::flow::storage::storage_user_add,
             functions::flow::storage::storage_remove,
+            functions::flow::storage::storage_user_remove,
             functions::flow::storage::storage_rename,
             functions::flow::storage::storage_get,
+            functions::flow::storage::storage_user_get,
             functions::flow::storage::storage_to_fullpath,
+            functions::flow::storage::storage_user_to_fullpath,
             functions::flow::catalog::get_catalog,
             functions::flow::board::create_board_version,
             functions::flow::board::get_board_versions,
@@ -927,8 +1033,11 @@ pub fn run() {
             functions::developer::developer_scaffold_project,
             functions::developer::developer_inspect_node,
             functions::developer::developer_inspect_package,
+            functions::developer::developer_find_publish_wasm,
+            functions::developer::developer_read_manifest,
             functions::developer::developer_run_node,
             functions::developer::developer_load_into_catalog,
+            functions::developer::developer_check_staleness,
             functions::registry::registry_search_packages,
             functions::registry::registry_get_package,
             functions::registry::registry_install_package,
@@ -940,6 +1049,7 @@ pub fn run() {
             functions::registry::registry_check_for_updates,
             functions::registry::registry_load_local,
             functions::registry::registry_init,
+            functions::registry::registry_set_auth_token,
             functions::permissions::check_rpa_permissions,
             functions::permissions::request_rpa_permission,
             functions::recording::start_recording,
@@ -952,6 +1062,10 @@ pub fn run() {
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
             functions::interaction::respond_to_interaction,
+            functions::feedback::upsert_offline_feedback,
+            functions::feedback::get_offline_feedback,
+            functions::feedback::get_offline_feedback_stats,
+            functions::feedback::delete_offline_feedback,
         ]);
 
     #[cfg(desktop)]

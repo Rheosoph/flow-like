@@ -1,16 +1,12 @@
 ---
 title: TypeScript WASM Nodes
-description: Create custom WASM nodes using TypeScript
+description: Create custom WASM nodes using TypeScript with the WASM Component Model
 sidebar:
   order: 3
   badge:
-    text: Coming Soon
-    variant: caution
+    text: Component Model
+    variant: success
 ---
-
-:::caution[Coming Soon]
-Custom WASM nodes are currently in development. This template previews the planned API.
-:::
 
 TypeScript can compile to WASM using **AssemblyScript** (TypeScript-like syntax) or **Javy** (full JavaScript/TypeScript).
 

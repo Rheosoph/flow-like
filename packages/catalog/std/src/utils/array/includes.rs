@@ -56,15 +56,11 @@ impl NodeLogic for ArrayIncludesNode {
 
         let mut includes = false;
 
-        {
-            let array_in = array_in.as_ref().lock().await;
-
-            if let Some(array) = array_in.as_array() {
-                for item in array.iter() {
-                    if item == &value {
-                        includes = true;
-                        break;
-                    }
+        if let Some(array) = array_in.as_array() {
+            for item in array.iter() {
+                if item == &value {
+                    includes = true;
+                    break;
                 }
             }
         }

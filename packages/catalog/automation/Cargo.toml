@@ -26,7 +26,6 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
-inventory = "0.3"
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -37,26 +36,6 @@ uuid.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 
-# Browser automation - Selenium WebDriver client (most popular, fully async, ergonomic API)
-thirtyfour = { version = "0.36.1", optional = true }
-
-# Desktop automation - input simulation (standard cross-platform)
-enigo = { version = "0.6.1", optional = true }
-
-# Global hotkey listening and input hooks
-rdev = { workspace = true, optional = true }
-
-# Screenshot capture
-xcap = { version = "0.8.1", optional = true }
-
-# RPA automation - PyAutoGUI-like: input simulation + template matching NCC algorithm
-# "dev" feature exposes core::template_match so we can call NCC directly with our
-# own (correct) screen capture instead of rustautogui's broken macOS capture.
-rustautogui = { version = "2.5", optional = true, features = ["dev"] }
-
-# Clipboard access - cross-platform clipboard read/write
-arboard = { version = "3.5", optional = true }
-
 # LLM integration for self-healing automation
 rig-core = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
@@ -64,5 +43,17 @@ jsonschema = { workspace = true, optional = true }
 # Image encoding
 image = { workspace = true }
 
+# Desktop-only deps — not available on iOS / Android
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+thirtyfour = { version = "0.36.1", optional = true }
+enigo = { version = "0.6.1", optional = true }
+rdev = { workspace = true, optional = true }
+xcap = { version = "0.8.1", optional = true }
+rustautogui = { version = "2.5", optional = true, features = ["dev"] }
+arboard = { version = "3.5", optional = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

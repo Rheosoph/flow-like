@@ -43,6 +43,7 @@ import {
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import { TextEditor } from "../../ui/text-editor";
 
 interface InteractionProps {
 	interaction: IInteractionRequest;
@@ -1382,7 +1383,11 @@ export function Interaction({
 				</div>
 				{interaction.description && (
 					<CardDescription className="text-xs">
-						{interaction.description}
+						<TextEditor
+							initialContent={interaction.description}
+							isMarkdown={true}
+							minimal={true}
+						/>
 					</CardDescription>
 				)}
 			</CardHeader>

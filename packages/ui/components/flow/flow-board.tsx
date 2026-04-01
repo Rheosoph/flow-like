@@ -35,6 +35,7 @@ import { useMediaQuery } from "@uidotdev/usehooks";
 import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
+	Eye,
 	FileTextIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -45,7 +46,9 @@ import {
 	ShareIcon,
 	SparklesIcon,
 	SquareChevronUpIcon,
+	SquareFunctionIcon,
 	VariableIcon,
+	WaypointsIcon,
 	WifiIcon,
 	WifiOffIcon,
 	XIcon,
@@ -103,6 +106,9 @@ import { useMediaUpload } from "../../hooks/use-media-upload";
 import { usePeerUserInfo } from "../../hooks/use-peer-users";
 import { useRealtimeCollaboration } from "../../hooks/use-realtime-collaboration";
 import { useViewportManager } from "../../hooks/use-viewport-manager";
+import { useFollowMode } from "../../hooks/use-follow-mode";
+import { useRealtimeChat } from "../../hooks/use-realtime-chat";
+import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import {
 	type IGenericCommand,
 	type ILogMetadata,
@@ -156,15 +162,23 @@ import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
+import { FlowPresenceBar } from "./flow-presence-bar";
+import { FlowChat } from "./flow-chat";
 import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowRuns } from "./flow-runs";
 import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
+import { CallFunctionNode } from "./call-function-node";
 import { LayerNode } from "./layer-node";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
+import {
+	AutoLayoutDialog,
+	type LayoutStyle,
+} from "./auto-layout-dialog";
+import { computeFlowLayout } from "../../lib/flow-auto-layout";
 
 export function FlowBoard({
 	appId,
@@ -208,6 +222,7 @@ export function FlowBoard({
 	const flowPanelRef = useRef<ImperativePanelHandle>(null);
 	const logPanelRef = useRef<ImperativePanelHandle>(null);
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
+
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
@@ -218,7 +233,7 @@ export function FlowBoard({
 	const catalog: UseQueryResult<INode[]> = useInvoke(
 		backend.boardState.getCatalog,
 		backend.boardState,
-		[],
+		[appId],
 	);
 	const board = useInvoke(
 		backend.boardState.getBoard,
@@ -242,7 +257,7 @@ export function FlowBoard({
 	const [droppedPin, setDroppedPin] = useState<IPin | undefined>(undefined);
 	const [clickPosition, setClickPosition] = useState({ x: 0, y: 0 });
 	const deletingNodesRef = useRef<Set<string>>(new Set());
-	const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+	const mousePositionRef = useRef({ x: 0, y: 0 });
 	const [pinCache, setPinCache] = useState<
 		Map<string, [IPin, INode | ILayer, boolean]>
 	>(new Map());
@@ -300,6 +315,7 @@ export function FlowBoard({
 				>
 					<VariableIcon />
 				</Button>,
+
 				<Button
 					variant={"outline"}
 					size={"icon"}
@@ -379,7 +395,7 @@ export function FlowBoard({
 			left,
 			right,
 		});
-	}, [currentMetadata, currentLayer, parentRegister.boardParents, boardId]);
+	}, [currentMetadata, currentLayer, parentRegister.boardParents, boardId, updateHeader]);
 
 	const pinToNode = useCallback(
 		(pinId: string) => {
@@ -419,7 +435,7 @@ export function FlowBoard({
 	});
 
 	// Realtime collaboration
-	const { awareness, connectionStatus, peerStates, reconnect } =
+	const { awareness, connectionStatus, peerStates, reconnect, broadcastActiveNode } =
 		useRealtimeCollaboration({
 			appId,
 			boardId,
@@ -428,7 +444,7 @@ export function FlowBoard({
 			backend,
 			sub,
 			hub,
-			mousePosition,
+			mousePositionRef,
 			layerPath,
 			screenToFlowPosition,
 			commandAwarenessRef,
@@ -437,13 +453,133 @@ export function FlowBoard({
 
 	// Cache peer user info to avoid repeated API calls
 	const peerSubs = useMemo(
-		() => peerStates.map((p) => p.sub).filter((s): s is string => !!s),
+		() => [
+			...new Set(
+				peerStates.map((p) => p.sub).filter((s): s is string => !!s),
+			),
+		],
 		[peerStates],
 	);
 	const peerUsers = usePeerUserInfo(
 		peerSubs,
 		backend.userState.lookupUser.bind(backend.userState),
 	);
+
+	// Follow mode
+	const { followingSub, toggleFollow, stopFollowing } = useFollowMode({
+		awareness,
+		sub,
+		setViewport,
+		getViewport,
+	});
+
+	// Build layer name lookup for presence UI
+	const layerNames = useMemo(() => {
+		const map = new Map<string, string>();
+		if (!board.data?.layers) return map;
+		for (const [id, layer] of Object.entries(board.data.layers)) {
+			if (layer.name) map.set(id, layer.name);
+		}
+		return map;
+	}, [board.data?.layers]);
+
+	// Jump to a peer's location — navigates to their layer and follows their viewport briefly
+	// When the same user has multiple sessions, picks the one with the most recent cursor
+	const jumpToUser = useCallback(
+		(targetSub: string) => {
+			if (!awareness) return;
+			const states = awareness.getStates() as Map<number, any>;
+			let best: { state: any; ts: number } | undefined;
+			for (const [clientId, state] of states) {
+				if (clientId === awareness.clientID) continue;
+				if (state?.sub !== targetSub) continue;
+				const ts = (state?.activeNodeTs as number) ?? 0;
+				if (!best || ts > best.ts) {
+					best = { state, ts };
+				}
+			}
+
+			if (!best) return;
+			const state = best.state;
+
+			const peerLayer = (state?.layerPath as string) ?? "root";
+			const myLayer = layerPath ?? "root";
+
+			// Navigate to peer's layer if different
+			if (peerLayer !== myLayer) {
+				if (peerLayer === "root" || !peerLayer) {
+					setLayerPath(undefined);
+					setCurrentLayer(undefined);
+				} else {
+					setLayerPath(peerLayer);
+					const segments = peerLayer.split("/");
+					setCurrentLayer(segments[segments.length - 1]);
+				}
+			}
+
+			// Snap to peer's viewport
+			const vp = state?.viewport;
+			if (vp) {
+				setViewport(
+					{ x: vp.x, y: vp.y, zoom: vp.zoom },
+					{ duration: 500 },
+				);
+			} else if (state?.cursor) {
+				// Fall back to centering on peer's cursor
+				const cursor = state.cursor;
+				const currentVp = getViewport();
+				const w = typeof window !== "undefined" ? window.innerWidth : 1200;
+				const h = typeof window !== "undefined" ? window.innerHeight : 800;
+				setViewport(
+					{
+						x: -cursor.x * currentVp.zoom + w / 2,
+						y: -cursor.y * currentVp.zoom + h / 2,
+						zoom: currentVp.zoom,
+					},
+					{ duration: 500 },
+				);
+			}
+		},
+		[awareness, layerPath, setViewport, getViewport, setLayerPath, setCurrentLayer],
+	);
+
+	// Jump to a specific layer path
+	const jumpToLayer = useCallback(
+		(targetLayerPath: string) => {
+			if (targetLayerPath === "root" || !targetLayerPath) {
+				setLayerPath(undefined);
+				setCurrentLayer(undefined);
+			} else {
+				setLayerPath(targetLayerPath);
+				const segments = targetLayerPath.split("/");
+				setCurrentLayer(segments[segments.length - 1]);
+			}
+		},
+		[setLayerPath, setCurrentLayer],
+	);
+
+	// Realtime chat
+	const [chatOpen, setChatOpen] = useState(false);
+	const {
+		messages: chatMessages,
+		sendMessage,
+		unreadCount,
+		setIsOpen: setChatIsOpen,
+	} = useRealtimeChat({ awareness, sub });
+
+	// Sync chat open state for unread tracking
+	useEffect(() => {
+		setChatIsOpen(chatOpen);
+	}, [chatOpen, setChatIsOpen]);
+
+	// Execution presence
+	const executionRuns = useRunExecutionStore((state) => state.runs);
+	const { remoteExecutingNodeIds } = useExecutionPresence({
+		awareness,
+		sub,
+		runs: executionRuns,
+		boardId,
+	});
 
 	// Media upload for images/videos on the board
 	const { handleMediaPaste } = useMediaUpload({
@@ -547,6 +683,7 @@ export function FlowBoard({
 	);
 
 	const [varsOpen, setVarsOpen] = useState(false);
+
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [pagesOpen, setPagesOpen] = useState(false);
@@ -826,6 +963,14 @@ export function FlowBoard({
 					);
 					return;
 				}
+
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				toastError(
+					errorMessage || "Failed to execute board",
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+				return;
 			}
 			removeRun(runId);
 			if (!meta && !runId) {
@@ -908,6 +1053,13 @@ export function FlowBoard({
 				);
 			} catch (error) {
 				console.warn("Failed to execute board remotely", error);
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				toastError(
+					errorMessage || "Failed to execute board on server",
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+				return;
 			}
 			removeRun(runId);
 			if (!meta && !runId) {
@@ -1098,9 +1250,10 @@ export function FlowBoard({
 				toastError("Cannot change old version", <XIcon />);
 				return;
 			}
+			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
-				x: mousePosition.x,
-				y: mousePosition.y,
+				x: mp.x,
+				y: mp.y,
 			});
 
 			// Try to handle media paste first (images/videos)
@@ -1121,7 +1274,6 @@ export function FlowBoard({
 		},
 		[
 			boardId,
-			mousePosition,
 			executeCommand,
 			currentLayer,
 			version,
@@ -1132,13 +1284,14 @@ export function FlowBoard({
 	const handleCopyCB = useCallback(
 		(event?: ClipboardEvent) => {
 			if (!board.data) return;
+			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
-				x: mousePosition.x,
-				y: mousePosition.y,
+				x: mp.x,
+				y: mp.y,
 			});
 			handleCopy(nodes, board.data, currentCursorPosition, event, currentLayer);
 		},
-		[nodes, mousePosition, board.data, currentLayer],
+		[nodes, board.data, currentLayer],
 	);
 
 	const openNodeInfo = useCallback((node: INode) => {
@@ -1170,16 +1323,6 @@ export function FlowBoard({
 		[setNodes],
 	);
 
-	const placeNodeShortcut = useCallback(
-		async (node: INode) => {
-			await placeNode(node, {
-				x: mousePosition.x,
-				y: mousePosition.y,
-			});
-		},
-		[mousePosition],
-	);
-
 	const placeNode = useCallback(
 		async (node: INode, position?: { x: number; y: number }) => {
 			const location = screenToFlowPosition({
@@ -1208,6 +1351,17 @@ export function FlowBoard({
 			pinCache,
 			executeCommand,
 		],
+	);
+
+	const placeNodeShortcut = useCallback(
+		async (node: INode) => {
+			const mp = mousePositionRef.current;
+			await placeNode(node, {
+				x: mp.x,
+				y: mp.y,
+			});
+		},
+		[placeNode],
 	);
 
 	const placePlaceholder = useCallback(
@@ -1249,7 +1403,7 @@ export function FlowBoard({
 		version,
 		appId,
 		boardId,
-		mousePosition,
+		mousePositionRef,
 		placeNode,
 		undo,
 		redo,
@@ -1257,9 +1411,34 @@ export function FlowBoard({
 
 	const handleDrop = useCallback(
 		async (event: any) => {
+			const { type, screenPosition } = event.detail;
+
+			// Function layer drop -> place a CallFunction node
+			if (type === "function-layer") {
+				const layerId: string = event.detail.layerId;
+				const callFnNode = catalog.data?.find(
+					(node) => node.name === "control_call_function",
+				);
+				if (!callFnNode) return;
+
+				const layerPin = Object.values(callFnNode.pins).find(
+					(pin) => pin.name === "function_layer_id",
+				);
+				if (!layerPin) return;
+
+				layerPin.default_value = convertJsonToUint8Array(layerId);
+				callFnNode.pins[layerPin.id] = layerPin;
+
+				placeNode(callFnNode, {
+					x: screenPosition.x,
+					y: screenPosition.y,
+				});
+				return;
+			}
+
+			// Variable drop -> place a Get/Set variable node
 			const variable: IVariable = event.detail.variable;
 			const operation: "set" | "get" = event.detail.operation;
-			const screenPosition = event.detail.screenPosition;
 			const getVarNode = catalog.data?.find(
 				(node) => node.name === `variable_${operation}`,
 			);
@@ -1278,18 +1457,24 @@ export function FlowBoard({
 				y: screenPosition.y,
 			});
 		},
-		[catalog.data, clickPosition, boardId, droppedPin],
+		[catalog.data, clickPosition, boardId, droppedPin, placeNode],
 	);
 
-	useEffect(() => {
-		document.addEventListener("copy", handleCopyCB);
-		document.addEventListener("paste", handlePasteCB);
+	const handleCopyRef = useRef(handleCopyCB);
+	handleCopyRef.current = handleCopyCB;
+	const handlePasteRef = useRef(handlePasteCB);
+	handlePasteRef.current = handlePasteCB;
 
+	useEffect(() => {
+		const onCopy = (e: Event) => handleCopyRef.current(e as ClipboardEvent);
+		const onPaste = (e: Event) => handlePasteRef.current(e as ClipboardEvent);
+		document.addEventListener("copy", onCopy);
+		document.addEventListener("paste", onPaste);
 		return () => {
-			document.removeEventListener("copy", handleCopyCB);
-			document.removeEventListener("paste", handlePasteCB);
+			document.removeEventListener("copy", onCopy);
+			document.removeEventListener("paste", onPaste);
 		};
-	}, [nodes]);
+	}, []);
 
 	// Keyboard shortcut: Cmd/Ctrl+Shift+P to toggle pages panel
 	useEffect(() => {
@@ -1333,46 +1518,78 @@ export function FlowBoard({
 	}, [handleDrop]);
 
 	useEffect(() => {
-		document.addEventListener("mousemove", (event) => {
-			setMousePosition({ x: event.clientX, y: event.clientY });
-		});
-
+		const handler = (event: MouseEvent) => {
+			mousePositionRef.current = { x: event.clientX, y: event.clientY };
+		};
+		document.addEventListener("mousemove", handler);
 		return () => {
-			document.removeEventListener("mousemove", (event) => {
-				setMousePosition({ x: event.clientX, y: event.clientY });
-			});
+			document.removeEventListener("mousemove", handler);
 		};
 	}, []);
+
+	// Build O(1) lookup sets for marking unavailable nodes:
+	// - nodeNames:  built-in (non-WASM) node names
+	// - wasmNodeKeys: "package_id:node_name" keys for WASM nodes
+	const catalogLookup = useMemo(() => {
+		if (!catalog.data) return undefined;
+		const nodeNames = new Set<string>();
+		const wasmNodeKeys = new Set<string>();
+		for (const n of catalog.data) {
+			if (n.wasm?.package_id) {
+				wasmNodeKeys.add(`${n.wasm.package_id}:${n.name}`);
+			} else {
+				nodeNames.add(n.name);
+			}
+		}
+		return { nodeNames, wasmNodeKeys };
+	}, [catalog.data]);
+
+	// Refs for callbacks used in parseBoard to avoid re-running on every callback identity change
+	const executeBoardRef = useRef(executeBoard);
+	executeBoardRef.current = executeBoard;
+	const executeBoardRemoteRef = useRef(executeBoardRemote);
+	executeBoardRemoteRef.current = executeBoardRemote;
+	const executeCommandRef = useRef(executeCommand);
+	executeCommandRef.current = executeCommand;
+	const pushLayerRef = useRef(pushLayer);
+	pushLayerRef.current = pushLayer;
+	const openNodeInfoRef = useRef(openNodeInfo);
+	openNodeInfoRef.current = openNodeInfo;
+	const handleExplainNodesRef = useRef(handleExplainNodes);
+	handleExplainNodesRef.current = handleExplainNodes;
+
+	// Extract stable primitives from complex objects to avoid re-parsing on unrelated changes
+	const connectionMode = currentProfile.data?.settings?.connection_mode ?? "default";
+	const isOffline = app.data?.visibility === IAppVisibility.Offline;
+	const hasRemoteExecution = !!backend.boardState.executeBoardRemote;
 
 	useEffect(() => {
 		if (!board.data) return;
 		boardRef.current = board.data;
 
-		// Determine if app is offline (Offline visibility)
-		const isOffline = app.data?.visibility === IAppVisibility.Offline;
-
 		const parsed = parseBoard(
 			board.data,
 			appId,
 			handleCopyCB,
-			pushLayer,
-			executeBoard,
-			executeCommand,
+			(...args: Parameters<typeof pushLayer>) => pushLayerRef.current(...args),
+			(...args: Parameters<typeof executeBoard>) => executeBoardRef.current(...args),
+			(...args: Parameters<typeof executeCommand>) => executeCommandRef.current(...args),
 			selected.current,
-			currentProfile.data?.settings?.connection_mode ?? "default",
+			connectionMode,
 			nodes,
 			edges,
 			currentLayer,
 			boardRef,
 			version,
-			openNodeInfo,
-			handleExplainNodes,
-			backend.boardState.executeBoardRemote
+			(node: INode) => openNodeInfoRef.current(node),
+			(nodeIds: string[]) => handleExplainNodesRef.current(nodeIds),
+			hasRemoteExecution
 				? {
 						isOffline,
-						onRemoteExecute: executeBoardRemote,
+						onRemoteExecute: (node: INode, payload?: object) => executeBoardRemoteRef.current(node, payload),
 					}
 				: undefined,
+			catalogLookup,
 		);
 
 		setNodes(parsed.nodes);
@@ -1381,14 +1598,53 @@ export function FlowBoard({
 	}, [
 		board.data,
 		currentLayer,
-		currentProfile.data,
+		connectionMode,
 		version,
-		openNodeInfo,
-		handleExplainNodes,
-		app.data,
-		executeBoardRemote,
-		backend.boardState.executeBoardRemote,
+		isOffline,
+		hasRemoteExecution,
+		catalogLookup,
 	]);
+
+	// Apply remote execution presence indicators to nodes
+	const remoteExecRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		const prev = remoteExecRef.current;
+		const next = remoteExecutingNodeIds;
+		// Check if anything actually changed
+		if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
+		remoteExecRef.current = next;
+
+		setNodes((nds: any) => {
+			if (nds.length === 0) return nds;
+			return nds.map((node: any) => {
+				if (node.type !== "node" && node.type !== "callFunctionNode")
+					return node;
+				const isRemoteExec = next.has(node.id);
+				const wasRemoteExec = !!node.data.remoteExecuting;
+				if (isRemoteExec === wasRemoteExec) return node;
+				return {
+					...node,
+					data: { ...node.data, remoteExecuting: isRemoteExec || undefined },
+				};
+			});
+		});
+	}, [remoteExecutingNodeIds, setNodes]);
+
+	// Inject peerUsers map into node data so nodes can display avatars for remote selections
+	const peerUsersRef = useRef(peerUsers);
+	peerUsersRef.current = peerUsers;
+	useEffect(() => {
+		if (peerStates.length === 0) return;
+		setNodes((nds: any) => {
+			if (nds.length === 0) return nds;
+			return nds.map((node: any) => {
+				if (node.type !== "node" && node.type !== "callFunctionNode")
+					return node;
+				if (node.data.peerUsers === peerUsers) return node;
+				return { ...node, data: { ...node.data, peerUsers } };
+			});
+		});
+	}, [peerUsers, peerStates.length, setNodes]);
 
 	const nodeTypes = useMemo(
 		() => ({
@@ -1398,6 +1654,7 @@ export function FlowBoard({
 			uploadPlaceholderNode: UploadPlaceholderNode,
 			layerNode: LayerNode,
 			layerInnerNode: LayerInnerNode,
+			callFunctionNode: CallFunctionNode,
 			node: FlowNode,
 		}),
 		[],
@@ -1411,6 +1668,39 @@ export function FlowBoard({
 		}),
 		[],
 	);
+
+	const miniMapNodeColor = useCallback((node: Node) => {
+		if (node.type === "layerNode")
+			return "color-mix(in oklch, var(--foreground) 50%, transparent)";
+
+		if (node.type === "node") {
+			const nodeData: INode = node.data.node as INode;
+			if (nodeData.event_callback)
+				return "color-mix(in oklch, var(--primary) 80%, transparent)";
+			if (nodeData.start)
+				return "color-mix(in oklch, var(--primary) 80%, transparent)";
+			if (
+				!Object.values(nodeData.pins).find(
+					(pin) => pin.data_type === IVariableType.Execution,
+				)
+			) {
+				return "color-mix(in oklch, var(--tertiary) 80%, transparent)";
+			}
+			return "color-mix(in oklch, var(--muted) 80%, transparent)";
+		}
+		if (node.type === "commentNode") {
+			const commentData: IComment = node.data.comment as IComment;
+			let color =
+				commentData.color ??
+				"color-mix(in oklch, var(--muted) 80%, transparent)";
+
+			if (color.startsWith("#")) {
+				color = hexToRgba(color, 0.3);
+			}
+			return color;
+		}
+		return "color-mix(in oklch, var(--primary) 60%, transparent)";
+	}, []);
 
 	const onConnect = useCallback(
 		(params: any) =>
@@ -1432,11 +1722,21 @@ export function FlowBoard({
 		({ nodes: selectedNodes }) => {
 			if (!awareness) return;
 			const nodeIds = selectedNodes
-				.filter((selectedNode) => selectedNode.type === "node")
+				.filter(
+					(selectedNode) =>
+						selectedNode.type === "node" ||
+						selectedNode.type === "callFunctionNode",
+				)
 				.map((selectedNode) => selectedNode.id);
 			awareness.setLocalStateField("selection", { nodes: nodeIds });
+			// Broadcast active node when user clicks a single node
+			if (nodeIds.length === 1) {
+				broadcastActiveNode(nodeIds[0]);
+			} else {
+				broadcastActiveNode(undefined);
+			}
 		},
-		[awareness],
+		[awareness, broadcastActiveNode],
 	);
 
 	const selectNodes = useCallback(
@@ -1873,8 +2173,15 @@ export function FlowBoard({
 				pushLayer(layer);
 				return;
 			}
+			if (type === "callFunctionNode") {
+				const layerId = node?.data?.functionLayerId as string | undefined;
+				if (layerId && board.data?.layers?.[layerId]) {
+					pushLayer(board.data.layers[layerId]);
+				}
+				return;
+			}
 		},
-		[pushLayer],
+		[pushLayer, board.data?.layers],
 	);
 
 	const onCommentPlace = useCallback(async () => {
@@ -1968,6 +2275,76 @@ export function FlowBoard({
 		[catalog.data, placeNode],
 	);
 
+	const [autoLayoutDialogOpen, setAutoLayoutDialogOpen] = useState(false);
+
+	const autoLayout = useCallback(async (style: LayoutStyle = "compact") => {
+		if (typeof version !== "undefined") {
+			toastError("Cannot modify old version", <XIcon />);
+			return;
+		}
+		const boardData = board.data;
+		if (!boardData) return;
+
+		const layerNodes: INode[] = [];
+		for (const node of Object.values(boardData.nodes)) {
+			const nodeLayer = (node.layer ?? "") === "" ? undefined : node.layer;
+			if (nodeLayer === currentLayer) {
+				layerNodes.push(node);
+			}
+		}
+
+		const layerEntities: { id: string; coordinates: number[] }[] = [];
+		if (boardData.layers) {
+			for (const layer of Object.values(boardData.layers)) {
+				if (layer.type === "Function" && layer.id !== currentLayer) continue;
+				const parentLayer = (layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
+				if (parentLayer === currentLayer && layer.id !== currentLayer) {
+					layerEntities.push({ id: layer.id, coordinates: [...layer.coordinates] });
+				}
+			}
+		}
+
+		if (layerNodes.length === 0 && layerEntities.length === 0) return;
+
+		const newPositions = computeFlowLayout({
+			layerNodes,
+			layerEntities,
+			boardLayers: boardData.layers,
+			currentLayer,
+		}, style);
+
+		const commands: IGenericCommand[] = [];
+		for (const node of layerNodes) {
+			const pos = newPositions.get(node.id);
+			if (!pos) continue;
+			commands.push(
+				moveNodeCommand({
+					node_id: node.id,
+					from_coordinates: node.coordinates ?? [0, 0, 0],
+					to_coordinates: [pos[0], pos[1], 0],
+					current_layer: currentLayer,
+				}),
+			);
+		}
+		for (const entity of layerEntities) {
+			const pos = newPositions.get(entity.id);
+			if (!pos) continue;
+			commands.push(
+				moveNodeCommand({
+					node_id: entity.id,
+					from_coordinates: entity.coordinates,
+					to_coordinates: [pos[0], pos[1], 0],
+					current_layer: currentLayer,
+				}),
+			);
+		}
+
+		if (commands.length === 0) return;
+		await executeCommands(commands);
+
+		setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
+	}, [board.data, currentLayer, executeCommands, fitView, version]);
+
 	const [ghostNodes, setGhostNodes] = useState<
 		{
 			id: string;
@@ -2059,9 +2436,49 @@ export function FlowBoard({
 						</span>
 					</div>
 				)}
+				{/* Presence bar with follow mode and chat */}
+				{awareness && peerStates.length > 0 && (
+					<FlowPresenceBar
+						peers={peerStates}
+						peerUsers={peerUsers}
+						followingSub={followingSub}
+						currentLayerPath={layerPath ?? "root"}
+						layerNames={layerNames}
+						onToggleFollow={toggleFollow}
+						onJumpToUser={jumpToUser}
+						onJumpToLayer={jumpToLayer}
+						onOpenChat={() => setChatOpen((v) => !v)}
+						unreadCount={unreadCount}
+					/>
+				)}
+				{/* Follow mode indicator */}
+				{followingSub && (
+					<button
+						type="button"
+						onClick={() => stopFollowing()}
+						className="flex items-center gap-2 rounded-xl border border-blue-400/50 bg-blue-500/10 px-3 py-1.5 backdrop-blur-sm shadow-sm hover:bg-blue-500/20 transition-colors cursor-pointer"
+					>
+						<Eye className="h-3.5 w-3.5 text-blue-400" />
+						<span className="text-xs font-medium text-blue-400">
+							Following — click or press Esc to stop
+						</span>
+					</button>
+				)}
 				{/* Board activity indicator */}
 				<BoardActivityIndicator boardId={boardId} />
 			</div>
+			{/* Floating chat panel */}
+			{chatOpen && awareness && (
+				<div className="fixed right-3 top-28 z-50 sm:right-4 md:right-6 md:top-20">
+					<FlowChat
+						messages={chatMessages}
+						onSendMessage={sendMessage}
+						onClose={() => setChatOpen(false)}
+						peerUsers={peerUsers}
+						sub={sub}
+					/>
+				</div>
+			)}
 			<div className="flex items-center justify-center absolute translate-x-[-50%] mt-5 left-[50dvw] z-40">
 				{board.data && editBoard && (
 					<BoardMeta
@@ -2103,11 +2520,19 @@ export function FlowBoard({
 								toggleVars();
 							},
 						},
+
 						{
 							icon: <LayoutTemplateIcon />,
 							title: "Templates",
 							onClick: async () => {
 								setTemplateSelectorOpen(true);
+							},
+						},
+						{
+							icon: <WaypointsIcon />,
+							title: "Auto Layout",
+							onClick: async () => {
+								setAutoLayoutDialogOpen(true);
 							},
 						},
 						{
@@ -2207,7 +2632,7 @@ export function FlowBoard({
 					ref={varPanelRef}
 				>
 					{board.data && (
-						<VariablesMenu board={board.data} executeCommand={executeCommand} />
+						<VariablesMenu board={board.data} executeCommand={executeCommand} currentLayerId={currentLayer} pushLayer={pushLayer} boardRef={boardRef} />
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
@@ -2220,6 +2645,7 @@ export function FlowBoard({
 							<FlowContextMenu
 								board={board.data}
 								droppedPin={droppedPin}
+								currentLayerId={currentLayer}
 								onCommentPlace={onCommentPlace}
 								refs={board.data?.refs || {}}
 								onClose={() => setDroppedPin(undefined)}
@@ -2351,40 +2777,7 @@ export function FlowBoard({
 											zoomable
 											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
 											maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
-											nodeColor={(node) => {
-												if (node.type === "layerNode")
-													return "color-mix(in oklch, var(--foreground) 50%, transparent)";
-
-												if (node.type === "node") {
-													const nodeData: INode = node.data.node as INode;
-													if (nodeData.event_callback)
-														return "color-mix(in oklch, var(--primary) 80%, transparent)";
-													if (nodeData.start)
-														return "color-mix(in oklch, var(--primary) 80%, transparent)";
-													if (
-														!Object.values(nodeData.pins).find(
-															(pin) =>
-																pin.data_type === IVariableType.Execution,
-														)
-													) {
-														return "color-mix(in oklch, var(--tertiary) 80%, transparent)";
-													}
-													return "color-mix(in oklch, var(--muted) 80%, transparent)";
-												}
-												if (node.type === "commentNode") {
-													const commentData: IComment = node.data
-														.comment as IComment;
-													let color =
-														commentData.color ??
-														"color-mix(in oklch, var(--muted) 80%, transparent)";
-
-													if (color.startsWith("#")) {
-														color = hexToRgba(color, 0.3);
-													}
-													return color;
-												}
-												return "color-mix(in oklch, var(--primary) 60%, transparent)";
-											}}
+											nodeColor={miniMapNodeColor}
 										/>
 										<Background
 											variant={
@@ -2415,6 +2808,7 @@ export function FlowBoard({
 											currentLayerPath={layerPath ?? "root"}
 											nodes={nodes}
 											peerUsers={peerUsers}
+											onJumpToLayer={jumpToLayer}
 										/>
 									)}
 									<DragOverlay
@@ -2423,14 +2817,21 @@ export function FlowBoard({
 											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
 										}}
 									>
-										{(active?.data?.current as IVariable)?.id && (
+										{active?.data?.current?.type === "function-layer" ? (
+											<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
+												<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
+												<span className="text-sm font-medium">
+													{board.data?.layers?.[active.data.current.layerId]?.name ?? "Function"}
+												</span>
+											</div>
+										) : (active?.data?.current as IVariable)?.id ? (
 											<Variable
 												variable={active?.data?.current as IVariable}
 												preview
 												onVariableChange={() => {}}
 												onVariableDeleted={() => {}}
 											/>
-										)}
+										) : null}
 									</DragOverlay>
 								</div>
 							</FlowContextMenu>
@@ -2500,13 +2901,16 @@ export function FlowBoard({
 				<Sheet open={varsOpen} onOpenChange={setVarsOpen}>
 					<SheetContent side="bottom" className="h-[60dvh] w-full">
 						<SheetHeader>
-							<SheetTitle>Variables</SheetTitle>
+							<SheetTitle>Variables & Functions</SheetTitle>
 						</SheetHeader>
 						{board.data && (
 							<div className="h-[calc(60dvh-3.5rem)] overflow-y-auto overscroll-contain">
 								<VariablesMenu
 									board={board.data}
 									executeCommand={executeCommand}
+									currentLayerId={currentLayer}
+									pushLayer={pushLayer}
+									boardRef={boardRef}
 								/>
 							</div>
 						)}
@@ -2641,6 +3045,13 @@ export function FlowBoard({
 				packagePermissions={wasmPackagePermissions}
 				onConfirm={handleWasmConfirm}
 				onCancel={handleWasmCancel}
+			/>
+
+			{/* Auto Layout Algorithm Picker */}
+			<AutoLayoutDialog
+				open={autoLayoutDialogOpen}
+				onOpenChange={setAutoLayoutDialogOpen}
+				onSelect={(alg) => autoLayout(alg)}
 			/>
 		</div>
 	);

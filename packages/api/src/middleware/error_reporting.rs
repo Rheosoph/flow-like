@@ -123,6 +123,19 @@ pub async fn error_reporting_middleware(
         .map(sanitize_text)
         .unwrap_or_else(|| "".to_string());
 
+    // Always forward to Sentry regardless of sink choice
+    #[cfg(feature = "sentry")]
+    forward_to_sentry(
+        &report.id,
+        report.status_code,
+        &report.public_code,
+        &method,
+        &path,
+        user_id.as_deref(),
+        &summary,
+        &details,
+    );
+
     if sink == "log" {
         tracing::error!(
             error_id = %report.id,
@@ -166,4 +179,71 @@ pub async fn error_reporting_middleware(
     }
 
     response
+}
+
+#[cfg(feature = "sentry")]
+fn forward_to_sentry(
+    error_id: &str,
+    status_code: u16,
+    public_code: &str,
+    method: &str,
+    path: &str,
+    user_id: Option<&str>,
+    summary: &str,
+    details: &str,
+) {
+    use sentry::protocol::{Event, Exception, Level, Mechanism, Request, Value};
+    use std::collections::BTreeMap;
+
+    // Only forward when a Sentry client is bound (guard is alive).
+    if sentry::Hub::current().client().is_none() {
+        return;
+    }
+
+    let level = if status_code >= 500 {
+        Level::Error
+    } else {
+        Level::Warning
+    };
+
+    let mut extra: BTreeMap<String, Value> = BTreeMap::new();
+    extra.insert("error_id".into(), Value::String(error_id.to_string()));
+    extra.insert("status_code".into(), Value::Number(status_code.into()));
+    extra.insert("public_code".into(), Value::String(public_code.to_string()));
+    if !details.is_empty() {
+        extra.insert("details".into(), Value::String(details.to_string()));
+    }
+
+    let exception = Exception {
+        ty: public_code.to_string(),
+        value: Some(summary.to_string()),
+        mechanism: Some(Mechanism {
+            ty: "error_report".into(),
+            handled: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let request = Request {
+        method: Some(method.to_string()),
+        url: path.parse().ok(),
+        ..Default::default()
+    };
+
+    let user = user_id.map(|id| sentry::protocol::User {
+        id: Some(id.to_string()),
+        ..Default::default()
+    });
+
+    let event = Event {
+        level,
+        exception: vec![exception].into(),
+        request: Some(request),
+        user,
+        extra,
+        ..Default::default()
+    };
+
+    sentry::capture_event(event);
 }

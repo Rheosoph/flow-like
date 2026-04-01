@@ -869,7 +869,7 @@ export function GenericEventFormInterface({
 
 	useEffect(() => {
 		if (!toolbarRef?.current) return;
-		toolbarRef.current.pushToolbarElements(toolbarElements);
+		toolbarRef.current.pushNavElements(toolbarElements);
 	}, [toolbarElements, toolbarRef]);
 
 	const setFieldValue = useCallback((name: string, value: unknown) => {
