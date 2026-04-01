@@ -18,10 +18,15 @@ const theme: Record<string, Record<string, string>> = {
 
 const c = theme[accent] ?? theme.orange;
 
-const features = [1, 2, 3, 4, 5, 6].map((i) => ({
-  title: t(`ind.feature.${i}.title`),
-  desc: t(`ind.feature.${i}.desc`),
-}));
+const features = Array.from({ length: 12 }, (_, i) => i + 1)
+  .filter((i) => {
+    const key = `ind.feature.${i}.title`;
+    return t(key) !== key;
+  })
+  .map((i) => ({
+    title: t(`ind.feature.${i}.title`),
+    desc: t(`ind.feature.${i}.desc`),
+  }));
 ---
 
 <section class="relative py-24 sm:py-32">

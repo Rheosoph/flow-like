@@ -24,7 +24,7 @@ export const frDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Choisissez votre voie",
 
 	// Workflow Path
-	"dev.workflow.badge": "Voie 1",
+	"dev.workflow.badge": "Voie 2",
 	"dev.workflow.headline": "Composez des workflows visuellement",
 	"dev.workflow.description":
 		"Utilisez l'éditeur visuel pour glisser et connecter des nœuds pré-construits dans de puissants flux d'automatisation. Aucun code nécessaire — connectez, configurez et déployez.",
@@ -63,7 +63,7 @@ export const frDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "ou",
-	"dev.nodes.badge": "Voie 2",
+	"dev.nodes.badge": "Voie 1",
 	"dev.nodes.headline": "Écrivez des nœuds personnalisés",
 	"dev.nodes.description":
 		"Étendez le moteur avec votre propre logique. Écrivez un nœud dans n'importe quel langage pris en charge — il est compilé en WebAssembly et s'exécute dans un bac à sable avec un accès complet au SDK hôte (journalisation, stockage, HTTP, modèles d'IA, et plus encore).",

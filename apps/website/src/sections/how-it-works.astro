@@ -1,0 +1,194 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+import { Image } from "astro:assets";
+import { LuGitBranch, LuShieldCheck, LuHistory, LuBraces, LuGlobe, LuPackage } from "react-icons/lu";
+import designValidation from "../images/index/design-validation.png";
+import nodeBig from "../images/index/node-big.png";
+import libraryImg from "../images/index/library.png";
+const github = "https://github.com/TM9657/flow-like";
+---
+
+<section class="relative py-16 md:py-24" data-c1="hsl(268 84% 62% / .06)" data-c2="hsl(222 89% 60% / .06)">
+  <div class="mx-auto max-w-6xl px-4 lg:px-8">
+    <h2 class="text-3xl sm:text-4xl font-bold tracking-tight mb-16 text-center">{t("v2.how.heading")}</h2>
+
+    <!-- ───── The Canvas: 2-col image + copy ───── -->
+    <article class="hiw-reveal mb-24">
+      <div class="grid md:grid-cols-2 gap-10 items-center">
+        <!-- Image side -->
+        <div class="relative group order-2 md:order-1">
+          <div class="absolute -inset-4 rounded-2xl bg-primary/5 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
+          <Image
+            src={designValidation}
+            alt="Flow-Like canvas showing type validation on pin connections"
+            widths={[400, 700, 1000]}
+            sizes="(max-width: 768px) 92vw, 46vw"
+            format="webp"
+            quality={80}
+            class="relative rounded-xl border border-border/50 shadow-lg"
+          />
+        </div>
+        <!-- Copy side -->
+        <div class="order-1 md:order-2">
+          <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.how.canvas.title")}</h3>
+          <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+            {t("v2.how.canvas.p1")}
+          </p>
+          <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-6">
+            {t("v2.how.canvas.p2")}
+          </p>
+          <!-- Feature chips -->
+          <div class="flex flex-wrap gap-3">
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuShieldCheck className="w-3.5 h-3.5 text-primary" /> {t("v2.how.canvas.chip1")}
+            </span>
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuHistory className="w-3.5 h-3.5 text-primary" /> {t("v2.how.canvas.chip2")}
+            </span>
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuGitBranch className="w-3.5 h-3.5 text-primary" /> {t("v2.how.canvas.chip3")}
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ───── FlowPilot: cinematic split with visible video ───── -->
+    <article class="hiw-reveal mb-24">
+      <div class="grid md:grid-cols-5 gap-8 items-center">
+        <!-- Copy side — 2 cols -->
+        <div class="md:col-span-2">
+          <span class="inline-flex items-center gap-1.5 rounded-full bg-violet-500/15 px-3 py-1 text-xs font-semibold text-violet-400 mb-4">
+            <span class="size-1.5 rounded-full bg-violet-400 animate-pulse"></span>
+            {t("v2.how.pilot.badge")}
+          </span>
+          <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-5">{t("v2.how.pilot.title")}</h3>
+          <p class="text-base text-muted-foreground leading-relaxed mb-4">
+            {t("v2.how.pilot.p1")}
+          </p>
+          <p class="text-base text-muted-foreground leading-relaxed mb-6">
+            {t("v2.how.pilot.p2")}
+          </p>
+          <div class="flex flex-wrap gap-2">
+            {[t("v2.how.pilot.chip1"), t("v2.how.pilot.chip2"), t("v2.how.pilot.chip3")].map((label) => (
+              <span class="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs font-medium text-violet-300">
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <!-- Video side — 3 cols, prominent -->
+        <div class="md:col-span-3 relative group">
+          <div class="relative rounded-xl overflow-hidden border border-border/50 shadow-2xl shadow-violet-500/5">
+            <video
+              autoplay
+              muted
+              loop
+              playsinline
+              class="w-full aspect-video object-cover"
+            >
+              <source src="/process-workflow.webm" type="video/webm" />
+            </video>
+            <!-- Thin gradient at bottom so it fades into the page -->
+            <div class="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background/60 to-transparent pointer-events-none"></div>
+          </div>
+          <!-- Glow behind video -->
+          <div aria-hidden="true" class="pointer-events-none absolute -inset-8 -z-10 rounded-3xl bg-violet-500/5 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ───── For Developers: 2-col with node showcase ───── -->
+    <article class="hiw-reveal">
+      <div class="grid md:grid-cols-2 gap-10 items-center">
+        <!-- Copy side -->
+        <div>
+          <h3 class="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">{t("v2.how.dev.title")}</h3>
+          <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+            {t("v2.how.dev.p1")}
+          </p>
+          <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-6">
+            {t("v2.how.dev.p2")}
+          </p>
+          <!-- Language tags -->
+          <div class="flex flex-wrap gap-2 mb-6">
+            {["Rust", "Python", "TypeScript", "Java", "Go", "C#", "Kotlin", "C++"].map((lang) => (
+              <span class="rounded-md border border-border/60 bg-card/60 px-2.5 py-1 text-xs font-mono text-muted-foreground">
+                {lang}
+              </span>
+            ))}
+            <span class="rounded-md border border-border/40 bg-muted/30 px-2.5 py-1 text-xs font-mono text-muted-foreground/60">
+              {t("v2.how.dev.more")}
+            </span>
+          </div>
+          <!-- Feature chips -->
+          <div class="flex flex-wrap gap-3 mb-6">
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuBraces className="w-3.5 h-3.5 text-emerald-500" /> {t("v2.how.dev.chip1")}
+            </span>
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuPackage className="w-3.5 h-3.5 text-emerald-500" /> {t("v2.how.dev.chip2")}
+            </span>
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 py-1.5 text-xs font-medium">
+              <LuGlobe className="w-3.5 h-3.5 text-emerald-500" /> {t("v2.how.dev.chip3")}
+            </span>
+          </div>
+          <a href="/pitch" class="text-sm font-medium text-primary hover:text-primary/80 transition-colors">
+            {t("v2.how.dev.link")}
+          </a>
+        </div>
+        <!-- Image side: stacked node + library images -->
+        <div class="relative group" data-parallax="0.03">
+          <div class="absolute -inset-4 rounded-2xl bg-emerald-500/5 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
+          <div class="relative space-y-4">
+            <Image
+              src={nodeBig}
+              alt="Flow-Like node definition showing typed inputs and outputs"
+              widths={[400, 700]}
+              sizes="(max-width: 768px) 92vw, 44vw"
+              format="webp"
+              quality={80}
+              class="relative rounded-xl border border-border/50 shadow-lg"
+            />
+            <Image
+              src={libraryImg}
+              alt="Flow-Like node library with categorized nodes"
+              widths={[400, 700]}
+              sizes="(max-width: 768px) 92vw, 44vw"
+              format="webp"
+              quality={80}
+              class="relative rounded-xl border border-border/50 shadow-md opacity-80"
+            />
+          </div>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<style>
+  .hiw-reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s ease; }
+  .hiw-reveal.is-visible { opacity: 1; transform: translateY(0); }
+</style>
+
+<script>
+  const els = document.querySelectorAll<HTMLElement>(".hiw-reveal");
+  if (els.length) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }
+    }, { threshold: 0.15 });
+    for (const el of els) io.observe(el);
+  }
+</script>

@@ -24,7 +24,7 @@ export const esDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Elige tu camino",
 
 	// Workflow Path
-	"dev.workflow.badge": "Camino 1",
+	"dev.workflow.badge": "Camino 2",
 	"dev.workflow.headline": "Compón Flujos de Trabajo Visualmente",
 	"dev.workflow.description":
 		"Usa el editor visual para arrastrar y conectar nodos preconstruidos en potentes flujos de automatización. Sin código — solo conecta, configura y despliega.",
@@ -62,7 +62,7 @@ export const esDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "o",
-	"dev.nodes.badge": "Camino 2",
+	"dev.nodes.badge": "Camino 1",
 	"dev.nodes.headline": "Escribe Nodos Personalizados",
 	"dev.nodes.description":
 		"Extiende el motor con tu propia lógica. Escribe un nodo en cualquier lenguaje compatible — se compila a WebAssembly y se ejecuta en un sandbox con acceso completo al SDK del host (logging, almacenamiento, HTTP, modelos de IA y más).",

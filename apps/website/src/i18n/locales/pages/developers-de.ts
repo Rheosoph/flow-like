@@ -24,7 +24,7 @@ export const deDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Wählen Sie Ihren Weg",
 
 	// Workflow Path
-	"dev.workflow.badge": "Weg 1",
+	"dev.workflow.badge": "Weg 2",
 	"dev.workflow.headline": "Workflows visuell erstellen",
 	"dev.workflow.description":
 		"Nutzen Sie den visuellen Editor, um vorgefertigte Nodes per Drag & Drop zu leistungsstarken Automatisierungsabläufen zu verbinden. Kein Code nötig — einfach verbinden, konfigurieren und deployen.",
@@ -62,7 +62,7 @@ export const deDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "oder",
-	"dev.nodes.badge": "Weg 2",
+	"dev.nodes.badge": "Weg 1",
 	"dev.nodes.headline": "Eigene Nodes schreiben",
 	"dev.nodes.description":
 		"Erweitern Sie die Engine mit Ihrer eigenen Logik. Schreiben Sie einen Node in einer beliebigen unterstützten Sprache — er wird zu WebAssembly kompiliert und läuft in einer Sandbox mit vollem Zugriff auf das Host-SDK (Logging, Storage, HTTP, AI-Modelle und mehr).",

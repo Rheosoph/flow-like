@@ -64,17 +64,75 @@ export const enPitch: Record<string, string> = {
 	"pitch.diff.card6.description":
 		"Every block execution is logged. Data lineage, versioning, and compliance reporting built in.",
 
-	// ROI
-	"pitch.roi.tagline": "Impact",
-	"pitch.roi.headline": "The power of reusability",
-	"pitch.roi.stat1.value": "10x",
-	"pitch.roi.stat1.label": "Faster automation development",
-	"pitch.roi.stat2.value": "1200+",
-	"pitch.roi.stat2.label": "Pre-built blocks available",
-	"pitch.roi.stat3.value": "0",
-	"pitch.roi.stat3.label": "Lines of code required",
-	"pitch.roi.stat4.value": "∞",
-	"pitch.roi.stat4.label": "Custom blocks you can create",
+	// ROI — Act 1: What you're already paying for
+	"pitch.roi.act1.tagline": "What You're Already Paying For",
+	"pitch.roi.act1.headline": "The tools you're replacing",
+	"pitch.roi.act1.bi.category": "BI & Analytics",
+	"pitch.roi.act1.bi.names": "Tableau, Power BI, Looker",
+	"pitch.roi.act1.bi.price": "€100k–500k/yr",
+	"pitch.roi.act1.bi.replacement": "Built-in dashboards & analytics",
+	"pitch.roi.act1.ipaas.category": "Integration Platform (iPaaS)",
+	"pitch.roi.act1.ipaas.names": "MuleSoft, Boomi, Informatica",
+	"pitch.roi.act1.ipaas.price": "€150k–600k/yr",
+	"pitch.roi.act1.ipaas.replacement": "Native connectors & data flows",
+	"pitch.roi.act1.automation.category": "Workflow Automation",
+	"pitch.roi.act1.automation.names": "Zapier, Make, n8n, Power Automate",
+	"pitch.roi.act1.automation.price": "€50k–250k/yr",
+	"pitch.roi.act1.automation.replacement": "Visual flow builder & triggers",
+	"pitch.roi.act1.rpa.category": "Robotic Process Automation",
+	"pitch.roi.act1.rpa.names": "UiPath, Automation Anywhere, Blue Prism",
+	"pitch.roi.act1.rpa.price": "€200k–800k/yr",
+	"pitch.roi.act1.rpa.replacement": "Visual process automation",
+	"pitch.roi.act1.dev.category": "Custom Development",
+	"pitch.roi.act1.dev.names": "Internal dev teams, agencies, contractors",
+	"pitch.roi.act1.dev.price": "€300k–1.2M/yr",
+	"pitch.roi.act1.dev.replacement": "No-code workflow builder",
+	"pitch.roi.act1.ai.category": "AI / ML Platform",
+	"pitch.roi.act1.ai.names": "Dataiku, DataRobot, AWS SageMaker",
+	"pitch.roi.act1.ai.price": "€150k–500k/yr",
+	"pitch.roi.act1.ai.replacement": "Embedded AI & model nodes",
+	"pitch.roi.act1.compliance.category": "Compliance & GRC",
+	"pitch.roi.act1.compliance.names": "ServiceNow GRC, Archer, OneTrust",
+	"pitch.roi.act1.compliance.price": "€100k–400k/yr",
+	"pitch.roi.act1.compliance.replacement": "Built-in audit trail & lineage",
+	"pitch.roi.act1.total.label": "Total enterprise spend",
+	"pitch.roi.act1.total.old": "€1M–4.5M/yr",
+	"pitch.roi.act1.total.new": "One platform. A fraction of the cost.",
+	"pitch.roi.act1.total.sub": "All capabilities included — no per-seat, per-connector, or per-bot fees",
+
+	// ROI — Transition
+	"pitch.roi.transition.save": "Consolidation saves you money.",
+	"pitch.roi.transition.leverage": "A platform gives you leverage.",
+
+	// ROI — Act 2: What you couldn't buy at any price
+	"pitch.roi.act2.tagline": "What You Couldn't Buy at Any Price",
+	"pitch.roi.act2.headline": "Start doing things your competitors can't",
+	"pitch.roi.act2.description":
+		"A growing ecosystem of community-built flows, templates, and node packs — ready to install, customize, and ship.",
+	"pitch.roi.act2.tile1.title": "Pre-built Compliance Workflows",
+	"pitch.roi.act2.tile1.description":
+		"GDPR, SOX, ISO 27001 — audit-ready workflows out of the box.",
+	"pitch.roi.act2.tile1.author": "FlowLike Team",
+	"pitch.roi.act2.tile2.title": "AI Agent Templates",
+	"pitch.roi.act2.tile2.description":
+		"RAG pipelines, classification agents, summarizers — production-ready AI patterns.",
+	"pitch.roi.act2.tile2.author": "Community",
+	"pitch.roi.act2.tile3.title": "Industry Node Packs",
+	"pitch.roi.act2.tile3.description":
+		"Finance, healthcare, manufacturing — domain-specific logic, pre-validated.",
+	"pitch.roi.act2.tile3.author": "FlowLike Team",
+	"pitch.roi.act2.tile4.title": "Community Connectors",
+	"pitch.roi.act2.tile4.description":
+		"Hundreds of integrations maintained and tested by the open-source community.",
+	"pitch.roi.act2.tile4.author": "Open Source",
+	"pitch.roi.act2.tile5.title": "Data Pipeline Templates",
+	"pitch.roi.act2.tile5.description":
+		"ETL, CDC, streaming — battle-tested data patterns you can deploy in minutes.",
+	"pitch.roi.act2.tile5.author": "FlowLike Team",
+	"pitch.roi.act2.tile6.title": "Approval Chain Blueprints",
+	"pitch.roi.act2.tile6.description":
+		"PO approvals, change requests, escalation paths — configurable multi-level flows.",
+	"pitch.roi.act2.tile6.author": "Community",
 
 	// Use Cases
 	"pitch.usecases.tagline": "Use Cases",

@@ -69,15 +69,6 @@ export function Footer() {
 			<a href="/data-deletion">
 				<small>{t("footer.dataDeletion")}</small>
 			</a>
-			<a href="/security">
-				<small>{t("footer.security")}</small>
-			</a>
-			<a href="/dpa">
-				<small>{t("footer.dpa")}</small>
-			</a>
-			<a href="/subprocessors">
-				<small>{t("footer.subprocessors")}</small>
-			</a>
 		</footer>
 	);
 }

@@ -1,0 +1,454 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+---
+
+<section class="se-section relative isolate overflow-hidden py-24 md:py-32">
+  <!-- Background decorations -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="se-orb se-orb--blue"></div>
+    <div class="se-orb se-orb--green"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Headline -->
+    <div class="reveal se-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v3.se.headline")}
+      </h2>
+      <p class="mt-4 text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+        {t("v3.se.subheadline")}
+      </p>
+    </div>
+
+    <!-- Slider -->
+    <div class="reveal se-reveal mx-auto w-full max-w-4xl">
+      <div
+        class="se-slider relative select-none rounded-xl border border-border/40 bg-background/80 backdrop-blur-sm shadow-2xl shadow-black/10 overflow-hidden"
+        id="se-slider"
+        role="group"
+        aria-label="Before and after comparison"
+      >
+        <!-- Before layer (Tool Sprawl) -->
+        <div class="se-slider__before absolute inset-0" style="clip-path: inset(0 50% 0 0);">
+          <svg class="w-full h-full" viewBox="0 0 800 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="se-before-grad" x1="0" y1="0" x2="800" y2="500" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(0 0% 50% / 0.04)"/>
+                <stop offset="100%" stop-color="hsl(0 40% 45% / 0.06)"/>
+              </linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#se-before-grad)"/>
+
+            <!-- Title pill -->
+            <rect x="250" y="18" width="300" height="36" rx="18" fill="hsl(0 50% 50% / 0.08)" stroke="hsl(0 50% 50% / 0.2)" stroke-width="1"/>
+            <text x="400" y="41" text-anchor="middle" fill="hsl(0 50% 50% / 0.7)" font-size="13" font-family="system-ui" font-weight="600">{t("v3.se.slider.before")}</text>
+
+            <!-- Tool card: Zapier -->
+            <g transform="translate(80, 90) rotate(-4)">
+              <rect width="130" height="72" rx="10" fill="hsl(25 80% 52% / 0.07)" stroke="hsl(25 80% 52% / 0.25)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(25 80% 52% / 0.15)" stroke="hsl(25 80% 52% / 0.3)" stroke-width="1"/>
+              <path d="M24 24 L32 32 M32 24 L24 32" stroke="hsl(25 80% 52% / 0.5)" stroke-width="1.5" stroke-linecap="round"/>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">Zapier</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tool card: n8n -->
+            <g transform="translate(300, 78) rotate(3)">
+              <rect width="130" height="72" rx="10" fill="hsl(200 60% 48% / 0.07)" stroke="hsl(200 60% 48% / 0.25)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(200 60% 48% / 0.15)" stroke="hsl(200 60% 48% / 0.3)" stroke-width="1"/>
+              <path d="M22 28 A6 6 0 1 1 34 28 A6 6 0 1 1 22 28" stroke="hsl(200 60% 48% / 0.5)" stroke-width="1.2" fill="none"/>
+              <path d="M28 22 L28 28 L32 26" stroke="hsl(200 60% 48% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">n8n</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tool card: Tableau -->
+            <g transform="translate(540, 100) rotate(-2)">
+              <rect width="130" height="72" rx="10" fill="hsl(210 70% 50% / 0.07)" stroke="hsl(210 70% 50% / 0.25)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(210 70% 50% / 0.15)" stroke="hsl(210 70% 50% / 0.3)" stroke-width="1"/>
+              <rect x="22" y="30" width="4" height="10" rx="1" fill="hsl(210 70% 50% / 0.4)" transform="rotate(180 24 35)"/>
+              <rect x="28" y="26" width="4" height="14" rx="1" fill="hsl(210 70% 50% / 0.5)" transform="rotate(180 30 33)"/>
+              <rect x="34" y="22" width="4" height="18" rx="1" fill="hsl(210 70% 50% / 0.4)" transform="rotate(180 36 31)"/>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">Tableau</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tool card: Retool -->
+            <g transform="translate(60, 240) rotate(2)">
+              <rect width="130" height="72" rx="10" fill="hsl(260 50% 50% / 0.07)" stroke="hsl(260 50% 50% / 0.25)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(260 50% 50% / 0.15)" stroke="hsl(260 50% 50% / 0.3)" stroke-width="1"/>
+              <circle cx="28" cy="28" r="6" stroke="hsl(260 50% 50% / 0.5)" stroke-width="1.2" fill="none"/>
+              <path d="M32 32 L36 36" stroke="hsl(260 50% 50% / 0.5)" stroke-width="1.2" stroke-linecap="round"/>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">Retool</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tool card: LangChain -->
+            <g transform="translate(320, 260) rotate(-5)">
+              <rect width="130" height="72" rx="10" fill="hsl(160 50% 42% / 0.07)" stroke="hsl(160 50% 42% / 0.25)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(160 50% 42% / 0.15)" stroke="hsl(160 50% 42% / 0.3)" stroke-width="1"/>
+              <path d="M22 24 L28 24 L34 28 L28 32 L22 32 Z" stroke="hsl(160 50% 42% / 0.5)" stroke-width="1.2" fill="none"/>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">LangChain</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tool card: Scripts -->
+            <g transform="translate(560, 270) rotate(4)">
+              <rect width="130" height="72" rx="10" fill="hsl(0 0% 50% / 0.06)" stroke="hsl(0 0% 50% / 0.2)" stroke-width="1.5"/>
+              <rect x="14" y="14" width="28" height="28" rx="6" fill="hsl(0 0% 50% / 0.12)" stroke="hsl(0 0% 50% / 0.25)" stroke-width="1"/>
+              <text x="28" y="33" text-anchor="middle" fill="hsl(0 0% 50% / 0.5)" font-size="10" font-family="monospace">&gt;_</text>
+              <text x="56" y="30" fill="hsl(0 0% 55% / 0.7)" font-size="11" font-family="system-ui" font-weight="500">Scripts</text>
+              <text x="14" y="56" fill="hsl(0 40% 50% / 0.5)" font-size="8" font-family="system-ui">{t("v3.se.slider.label.before")}</text>
+            </g>
+
+            <!-- Tangled connection lines -->
+            <path d="M210 130 C260 160, 280 100, 300 110" stroke="hsl(0 40% 50% / 0.15)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>
+            <path d="M430 120 C480 160, 500 130, 540 140" stroke="hsl(0 40% 50% / 0.12)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>
+            <path d="M190 280 C260 290, 280 270, 320 275" stroke="hsl(0 40% 50% / 0.12)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>
+            <path d="M450 290 C500 300, 520 280, 560 285" stroke="hsl(0 40% 50% / 0.1)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>
+            <path d="M150 170 C180 210, 120 230, 100 260" stroke="hsl(0 40% 50% / 0.1)" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+            <path d="M400 155 C420 200, 380 230, 370 265" stroke="hsl(0 40% 50% / 0.1)" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+            <path d="M630 170 C640 220, 620 250, 610 270" stroke="hsl(0 40% 50% / 0.1)" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+
+            <!-- Warning badges -->
+            <g transform="translate(240, 195)">
+              <rect width="80" height="22" rx="11" fill="hsl(0 60% 50% / 0.1)" stroke="hsl(0 60% 50% / 0.25)" stroke-width="0.8"/>
+              <text x="40" y="15" text-anchor="middle" fill="hsl(0 60% 50% / 0.6)" font-size="8" font-family="system-ui">&#x26A0; data leak?</text>
+            </g>
+            <g transform="translate(480, 210)">
+              <rect width="80" height="22" rx="11" fill="hsl(0 60% 50% / 0.1)" stroke="hsl(0 60% 50% / 0.25)" stroke-width="0.8"/>
+              <text x="40" y="15" text-anchor="middle" fill="hsl(0 60% 50% / 0.6)" font-size="8" font-family="system-ui">&#x26A0; no audit</text>
+            </g>
+
+            <!-- Bottom summary -->
+            <rect x="250" y="380" width="300" height="50" rx="10" fill="hsl(0 0% 50% / 0.03)" stroke="hsl(0 40% 50% / 0.15)" stroke-width="1" stroke-dasharray="4 2"/>
+            <text x="400" y="400" text-anchor="middle" fill="hsl(0 0% 50% / 0.4)" font-size="10" font-family="system-ui">6 vendors &#x00B7; 6 logins &#x00B7; 6 bills</text>
+            <text x="400" y="418" text-anchor="middle" fill="hsl(0 40% 50% / 0.5)" font-size="10" font-family="system-ui">0 unified audit trail</text>
+          </svg>
+        </div>
+
+        <!-- After layer (Solution Engineering) -->
+        <div class="se-slider__after absolute inset-0" style="clip-path: inset(0 0 0 50%);" aria-hidden="true">
+          <svg class="w-full h-full" viewBox="0 0 800 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="se-after-grad" x1="0" y1="0" x2="800" y2="500" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="hsl(222 89% 60% / 0.05)"/>
+                <stop offset="100%" stop-color="hsl(161 50% 45% / 0.05)"/>
+              </linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#se-after-grad)"/>
+
+            <!-- Title pill -->
+            <rect x="250" y="18" width="300" height="36" rx="18" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1"/>
+            <text x="400" y="41" text-anchor="middle" fill="hsl(161 50% 45% / 0.8)" font-size="13" font-family="system-ui" font-weight="600">{t("v3.se.slider.after")}</text>
+
+            <!-- Canvas frame -->
+            <rect x="60" y="70" width="680" height="340" rx="12" fill="hsl(222 89% 60% / 0.02)" stroke="hsl(222 89% 60% / 0.15)" stroke-width="1.5"/>
+            <!-- Window chrome -->
+            <rect x="60" y="70" width="680" height="32" rx="12" fill="hsl(0 0% 50% / 0.04)"/>
+            <rect x="60" y="90" width="680" height="12" fill="hsl(0 0% 50% / 0.04)"/>
+            <circle cx="80" cy="86" r="4" fill="hsl(0 60% 55% / 0.4)"/>
+            <circle cx="94" cy="86" r="4" fill="hsl(45 80% 55% / 0.4)"/>
+            <circle cx="108" cy="86" r="4" fill="hsl(161 50% 45% / 0.4)"/>
+            <text x="140" y="90" fill="hsl(0 0% 55% / 0.4)" font-size="9" font-family="monospace">Flow-Like Studio</text>
+
+            <!-- Row 1 nodes -->
+            <rect x="100" y="130" width="110" height="56" rx="10" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.5"/>
+            <rect x="112" y="140" width="24" height="24" rx="5" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="0.8"/>
+            <circle cx="124" cy="149" r="4" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1" fill="none"/>
+            <path d="M124 145 L124 149 L127 151" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1" stroke-linecap="round" fill="none"/>
+            <text x="148" y="155" fill="hsl(222 89% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">Trigger</text>
+            <text x="112" y="176" fill="hsl(222 89% 60% / 0.4)" font-size="8" font-family="system-ui">webhook</text>
+
+            <rect x="280" y="130" width="110" height="56" rx="10" fill="hsl(280 60% 55% / 0.06)" stroke="hsl(280 60% 55% / 0.25)" stroke-width="1.5"/>
+            <rect x="292" y="140" width="24" height="24" rx="5" fill="hsl(280 60% 55% / 0.12)" stroke="hsl(280 60% 55% / 0.2)" stroke-width="0.8"/>
+            <rect x="300" y="147" width="8" height="10" rx="2" stroke="hsl(280 60% 55% / 0.5)" stroke-width="1" fill="none"/>
+            <circle cx="304" cy="145" r="2" stroke="hsl(280 60% 55% / 0.5)" stroke-width="0.8" fill="none"/>
+            <text x="328" y="155" fill="hsl(280 60% 55% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">AI Agent</text>
+            <text x="292" y="176" fill="hsl(280 60% 55% / 0.4)" font-size="8" font-family="system-ui">classify</text>
+
+            <rect x="460" y="130" width="110" height="56" rx="10" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.5"/>
+            <rect x="472" y="140" width="24" height="24" rx="5" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.8"/>
+            <path d="M480 152 L488 148 M488 148 L488 156 M488 156 L496 152" stroke="hsl(161 50% 45% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <text x="508" y="155" fill="hsl(161 50% 45% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">Pipeline</text>
+            <text x="472" y="176" fill="hsl(161 50% 45% / 0.4)" font-size="8" font-family="system-ui">transform</text>
+
+            <!-- Row 1 connections -->
+            <path d="M210 158 C240 158, 255 158, 280 158" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5" fill="none"/>
+            <path d="M390 158 C420 158, 435 158, 460 158" stroke="hsl(280 60% 55% / 0.3)" stroke-width="1.5" fill="none"/>
+
+            <!-- Row 2 nodes -->
+            <rect x="180" y="230" width="110" height="56" rx="10" fill="hsl(45 80% 50% / 0.06)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="1.5"/>
+            <rect x="192" y="240" width="24" height="24" rx="5" fill="hsl(45 80% 50% / 0.12)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.8"/>
+            <rect x="198" y="250" width="4" height="8" rx="1" fill="hsl(45 80% 50% / 0.4)"/>
+            <rect x="204" y="246" width="4" height="12" rx="1" fill="hsl(45 80% 50% / 0.5)"/>
+            <rect x="210" y="248" width="4" height="10" rx="1" fill="hsl(45 80% 50% / 0.4)"/>
+            <text x="228" y="255" fill="hsl(45 80% 50% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">Dashboard</text>
+            <text x="192" y="276" fill="hsl(45 80% 50% / 0.4)" font-size="8" font-family="system-ui">metrics</text>
+
+            <rect x="370" y="230" width="110" height="56" rx="10" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.5"/>
+            <rect x="382" y="240" width="24" height="24" rx="5" fill="hsl(222 89% 60% / 0.12)" stroke="hsl(222 89% 60% / 0.2)" stroke-width="0.8"/>
+            <rect x="390" y="246" width="12" height="14" rx="3" stroke="hsl(222 89% 60% / 0.5)" stroke-width="1" fill="none"/>
+            <text x="418" y="255" fill="hsl(222 89% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">App</text>
+            <text x="382" y="276" fill="hsl(222 89% 60% / 0.4)" font-size="8" font-family="system-ui">internal</text>
+
+            <rect x="560" y="230" width="110" height="56" rx="10" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="1.5"/>
+            <rect x="572" y="240" width="24" height="24" rx="5" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.8"/>
+            <path d="M584 256 L584 248 L588 244" stroke="hsl(161 50% 45% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <path d="M584 248 L580 244" stroke="hsl(161 50% 45% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <text x="608" y="255" fill="hsl(161 50% 45% / 0.7)" font-size="10" font-family="system-ui" font-weight="500">Deploy</text>
+            <text x="572" y="276" fill="hsl(161 50% 45% / 0.4)" font-size="8" font-family="system-ui">on-prem</text>
+
+            <!-- Row 1 to Row 2 connections -->
+            <path d="M335 186 C335 205, 235 210, 235 230" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1" stroke-dasharray="4 3" fill="none"/>
+            <path d="M335 186 C335 205, 425 210, 425 230" stroke="hsl(280 60% 55% / 0.2)" stroke-width="1" stroke-dasharray="4 3" fill="none"/>
+            <path d="M515 186 C515 205, 615 210, 615 230" stroke="hsl(161 50% 45% / 0.2)" stroke-width="1" stroke-dasharray="4 3" fill="none"/>
+
+            <!-- Row 2 connections -->
+            <path d="M290 258 C330 258, 340 258, 370 258" stroke="hsl(45 80% 50% / 0.2)" stroke-width="1.5" fill="none"/>
+            <path d="M480 258 C510 258, 530 258, 560 258" stroke="hsl(222 89% 60% / 0.2)" stroke-width="1.5" fill="none"/>
+
+            <!-- Unified status pill -->
+            <rect x="230" y="320" width="340" height="38" rx="19" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="1"/>
+            <text x="400" y="344" text-anchor="middle" fill="hsl(161 50% 45% / 0.7)" font-size="12" font-family="system-ui" font-weight="600">&#x2713; {t("v3.se.slider.label.after")}</text>
+
+            <!-- Bottom label -->
+            <rect x="250" y="430" width="300" height="36" rx="18" fill="hsl(161 50% 45% / 0.06)" stroke="hsl(161 50% 45% / 0.15)" stroke-width="1"/>
+            <text x="400" y="453" text-anchor="middle" fill="hsl(161 50% 45% / 0.6)" font-size="11" font-family="system-ui" font-weight="500">1 platform &#x00B7; full audit trail &#x00B7; governed</text>
+          </svg>
+        </div>
+
+        <!-- Spacer for aspect ratio -->
+        <div class="w-full" style="aspect-ratio: 8/5;"></div>
+
+        <!-- Draggable divider -->
+        <div class="se-slider__divider absolute top-0 bottom-0 z-20 flex items-center justify-center" style="left: 50%;" id="se-slider-divider">
+          <div class="se-slider__line absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-foreground/20"></div>
+          <button
+            class="se-slider__handle relative flex items-center justify-center w-10 h-10 rounded-full border-2 border-foreground/20 bg-background/90 backdrop-blur-sm shadow-lg cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors"
+            aria-label="Drag to compare before and after"
+            type="button"
+          >
+            <svg class="w-4 h-4 text-foreground/50" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M5 3 L2 8 L5 13"/>
+              <path d="M11 3 L14 8 L11 13"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Description + Pillars -->
+    <div class="reveal se-reveal mx-auto max-w-4xl mt-10 md:mt-14">
+      <p class="text-center text-lg sm:text-xl font-semibold text-foreground mb-8">
+        {t("v3.se.description")}
+      </p>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.5"/><path d="M5 6V4a3 3 0 0 1 6 0v2"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.infra")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.infra.desc")}</p>
+        </div>
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/><circle cx="8" cy="8" r="3"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.security")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.security.desc")}</p>
+        </div>
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l4-4 3 3 5-5"/><path d="M10 6h4v4"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.observability")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.observability.desc")}</p>
+        </div>
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h8M4 8h5M4 12h8"/><circle cx="13" cy="8" r="1.5"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.types")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.types.desc")}</p>
+        </div>
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6l4 4M10 6l-4 4"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.governance")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.governance.desc")}</p>
+        </div>
+        <div class="se-pillar rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm p-4">
+          <div class="flex items-center gap-2 mb-1.5">
+            <svg class="w-4 h-4 text-primary/70 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14V8l6-6 6 6v6"/><path d="M6 14v-4h4v4"/></svg>
+            <span class="text-sm font-semibold text-foreground">{t("v3.se.pillar.scaling")}</span>
+          </div>
+          <p class="text-xs text-muted-foreground leading-relaxed">{t("v3.se.pillar.scaling.desc")}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .se-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.4;
+  }
+  .se-orb--blue {
+    width: 500px;
+    height: 500px;
+    top: -100px;
+    right: -100px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.1), transparent 70%);
+  }
+  .se-orb--green {
+    width: 400px;
+    height: 400px;
+    bottom: -80px;
+    left: -80px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.08), transparent 70%);
+  }
+
+  .se-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .se-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .se-slider {
+    touch-action: pan-y;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: ew-resize;
+  }
+
+  .se-slider__before,
+  .se-slider__after {
+    will-change: clip-path;
+  }
+
+  .se-slider__divider {
+    will-change: left, transform;
+    touch-action: none;
+    transform: translateX(-50%);
+  }
+
+  .se-slider__handle {
+    touch-action: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .se-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .se-slider__before,
+    .se-slider__after {
+      will-change: auto;
+    }
+    .se-slider__divider {
+      will-change: auto;
+    }
+  }
+</style>
+
+<script>
+  function initSESlider() {
+    const slider = document.getElementById("se-slider");
+    const divider = document.getElementById("se-slider-divider");
+    if (!slider || !divider) return;
+
+    const afterLayer = slider.querySelector<HTMLDivElement>(".se-slider__after");
+    const beforeLayer = slider.querySelector<HTMLDivElement>(".se-slider__before");
+    if (!afterLayer || !beforeLayer) return;
+
+    let isDragging = false;
+
+    function getPercent(clientX: number): number {
+      const rect = slider!.getBoundingClientRect();
+      const raw = ((clientX - rect.left) / rect.width) * 100;
+      return Math.min(Math.max(raw, 0), 100);
+    }
+
+    function update(percent: number) {
+      divider!.style.left = `${percent}%`;
+      beforeLayer!.style.clipPath = `inset(0 ${100 - percent}% 0 0)`;
+      afterLayer!.style.clipPath = `inset(0 0 0 ${percent}%)`;
+    }
+
+    function onPointerDown(e: PointerEvent) {
+      e.preventDefault();
+      isDragging = true;
+      slider!.setPointerCapture(e.pointerId);
+      update(getPercent(e.clientX));
+    }
+
+    function onPointerMove(e: PointerEvent) {
+      if (!isDragging) return;
+      e.preventDefault();
+      update(getPercent(e.clientX));
+    }
+
+    function onPointerUp() {
+      isDragging = false;
+    }
+
+    slider.addEventListener("pointerdown", onPointerDown);
+    slider.addEventListener("pointermove", onPointerMove);
+    slider.addEventListener("pointerup", onPointerUp);
+    slider.addEventListener("pointercancel", onPointerUp);
+
+    divider.addEventListener("keydown", (e: KeyboardEvent) => {
+      const step = 2;
+      const current = parseFloat(divider!.style.left) || 50;
+      if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        update(Math.max(0, current - step));
+      } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        update(Math.min(100, current + step));
+      }
+    });
+  }
+
+  function initSEReveal() {
+    const els = document.querySelectorAll(".se-section .se-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initSEReveal();
+  initSESlider();
+</script>

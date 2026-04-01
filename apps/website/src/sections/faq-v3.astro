@@ -1,0 +1,177 @@
+---
+import { LuChevronDown } from "react-icons/lu";
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const groups = [
+  {
+    label: t("v3.faq.group.start"),
+    items: [
+      { id: "free", q: t("v3.faq.free.q"), a: t("v3.faq.free.a"), tags: t("v3.faq.free.tags") },
+      { id: "nocode", q: t("v3.faq.nocode.q"), a: t("v3.faq.nocode.a"), tags: t("v3.faq.nocode.tags") },
+      { id: "offline", q: t("v3.faq.offline.q"), a: t("v3.faq.offline.a"), tags: t("v3.faq.offline.tags") },
+    ],
+  },
+  {
+    label: t("v3.faq.group.tech"),
+    items: [
+      { id: "agents", q: t("v3.faq.agents.q"), a: t("v3.faq.agents.a"), tags: t("v3.faq.agents.tags") },
+      { id: "models", q: t("v3.faq.models.q"), a: t("v3.faq.models.a"), tags: t("v3.faq.models.tags") },
+      { id: "onprem", q: t("v3.faq.onprem.q"), a: t("v3.faq.onprem.a"), tags: t("v3.faq.onprem.tags") },
+      { id: "governance", q: t("v3.faq.governance.q"), a: t("v3.faq.governance.a"), tags: t("v3.faq.governance.tags") },
+      { id: "audit", q: t("v3.faq.audit.q"), a: t("v3.faq.audit.a"), tags: t("v3.faq.audit.tags") },
+    ],
+  },
+  {
+    label: t("v3.faq.group.compare"),
+    items: [
+      { id: "n8n", q: t("v3.faq.n8n.q"), a: t("v3.faq.n8n.a"), tags: t("v3.faq.n8n.tags") },
+      { id: "zapier", q: t("v3.faq.zapier.q"), a: t("v3.faq.zapier.a"), tags: t("v3.faq.zapier.tags") },
+      { id: "migrate", q: t("v3.faq.migrate.q"), a: t("v3.faq.migrate.a"), tags: t("v3.faq.migrate.tags") },
+    ],
+  },
+];
+---
+
+<section class="faqv3-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="faqv3-orb faqv3-orb--blue"></div>
+  </div>
+
+  <div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="faqv3-reveal mb-12 md:mb-16">
+      <span class="inline-block rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary mb-6">
+        {t("v3.faq.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v3.faq.headline")}
+      </h2>
+    </div>
+
+    <!-- Grouped accordion -->
+    {groups.map((group, gi) => (
+      <div class="faqv3-reveal mb-10 last:mb-0">
+        <h3 class="text-xs font-medium tracking-[0.2em] uppercase text-muted-foreground mb-4">
+          {group.label}
+        </h3>
+
+        <div class="divide-y divide-border/50 rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm">
+          {group.items.map((faq, i) => (
+            <details class="group" open={gi === 0 && i === 0}>
+              <summary class="flex cursor-pointer list-none items-center gap-3 px-5 py-4 text-left">
+                <span class="flex-1 text-sm font-medium text-foreground">
+                  {faq.q}
+                </span>
+
+                <span class="hidden sm:flex items-center gap-1.5 shrink-0">
+                  {faq.tags.split(",").map((tag: string) => (
+                    <span class="inline-block rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {tag.trim()}
+                    </span>
+                  ))}
+                </span>
+
+                <LuChevronDown className="w-4 h-4 text-muted-foreground shrink-0 transition-transform duration-200 group-open:rotate-180" />
+              </summary>
+
+              <div class="faqv3-content">
+                <div class="px-5 pb-4">
+                  <!-- Mobile tags -->
+                  <div class="flex sm:hidden flex-wrap gap-1.5 mb-2">
+                    {faq.tags.split(",").map((tag: string) => (
+                      <span class="inline-block rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {tag.trim()}
+                      </span>
+                    ))}
+                  </div>
+                  <p class="text-sm text-muted-foreground leading-relaxed">
+                    {faq.a}
+                  </p>
+                </div>
+              </div>
+            </details>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .faqv3-orb--blue {
+    position: absolute;
+    width: 500px;
+    height: 500px;
+    top: -100px;
+    right: -150px;
+    border-radius: 50%;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.06), transparent 70%);
+    filter: blur(80px);
+    pointer-events: none;
+  }
+
+  .faqv3-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .faqv3-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .faqv3-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.2s ease;
+  }
+  details[open] .faqv3-content {
+    grid-template-rows: 1fr;
+  }
+  .faqv3-content > * {
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .faqv3-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .faqv3-content {
+      transition: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initFaqV3Reveal() {
+    const els = document.querySelectorAll(".faqv3-section .faqv3-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+  initFaqV3Reveal();
+</script>

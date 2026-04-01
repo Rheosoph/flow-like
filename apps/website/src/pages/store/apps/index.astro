@@ -34,6 +34,8 @@ const jsonLd = {
 		url: "https://flow-like.com",
 	},
 };
+
+Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, stale-while-revalidate=3600");
 ---
 
 <StoreLayout

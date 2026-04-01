@@ -1,0 +1,98 @@
+---
+title: "Flow-Like Beta v0.1.0 — We Made It to Beta"
+description: "Flow-Like hits Beta. Custom WASM nodes in 15+ languages, RPA automation, agents with memory, user-scoped databases, and the iOS app."
+date: 2026-04-02
+tags: ["release", "beta", "beta-0-1-0", "ux", "wasm", "rpa", "agents", "ios"]
+cover: "/images/0-1-0.jpg"
+draft: false
+---
+
+After months of relentless building, tearing apart, and rebuilding — Flow-Like has officially entered Beta. This isn't just a version bump. It's the moment where the platform goes from "promising prototype" to something you can actually deploy, extend, and build a business on.
+
+A majority of planned features are now implemented. The architecture has stabilized. From here on out, expect fewer seismic shifts and more polish, performance, and predictability. We're moving to a more regular release cadence now that the heavy lifting is behind us.
+
+Thank you to everyone who's been following along, filing issues, and pushing us to get here. This one's for you.
+
+Let's talk about what's in the box.
+
+## WASM Nodes: Write Once, Run Everywhere
+
+This is the headline feature of v0.1.0 and the one we're most excited about. Flow-Like now supports custom WASM nodes written in **15 languages**: Rust, AssemblyScript, TypeScript, Python, MoonBit, Lua, Java, Kotlin, C++, C#, Nim, Zig, Swift, Go, and Grain.
+
+What does that mean in practice? You're no longer limited to the nodes we ship. If your workflow needs something custom — a proprietary data transformation, a domain-specific calculation, a connector to an internal API — you can write it in whatever language your team already knows, compile it to WASM, and drop it into Flow-Like. It runs natively on iOS, Android, browser, and desktop through our new cross-compilation platform.
+
+WASM nodes already have access to host models (via Rig or LangChain), HTTP capabilities, and the full node lifecycle. We've also shipped a **marketplace** for sharing and selling custom nodes — so if you build something useful, you can distribute it to the community or monetize it directly.
+
+We'll be honest: this is very early stage. Documentation is sparse and the developer experience will improve substantially in the next release. But the foundation is solid, the compiler pipeline works across all targets, and we've already seen some impressive community-built nodes in testing. If you're the kind of person who likes building on the bleeding edge, now is the time to jump in.
+
+## Robot Process Automation (RPA) Nodes
+
+Workflows shouldn't stop at the boundary of your application. The new RPA nodes let you automate desktop-level tasks directly from your flows — file management, system monitoring, process orchestration, and more.
+
+This is the beginning of a much larger vision for Flow-Like as a unified automation layer that bridges cloud workflows with local machine operations. More RPA capabilities are on the roadmap, but even in this initial release, you can start replacing manual desktop tasks with automated, repeatable flows.
+
+## Smarter Agents with Memory and Data Fusion
+
+Agents in Flow-Like just got significantly more capable with two key upgrades.
+
+First, we've hooked **DataFusion sessions** directly into the agent runtime. That means your agents can now execute complex filter operations — think SQL queries against data lakes, vector databases, Excel files, and CSVs — as part of their reasoning loop. An agent can now autonomously query structured data, apply filters, and make decisions based on the results, all without leaving the flow.
+
+Second, agents now have **default memory functionality**. Previous interactions, context, and state persist across invocations automatically. No more stateless agents that forget everything between runs. This alone changes what's possible — agents can now build up knowledge over time, track ongoing tasks, and maintain context across long-running processes.
+
+We've also shipped multiple **summarization strategies** under the hood: Chain of Density, Entity Tracking, Hierarchical, Map-Reduce, and Sliding Window approaches. These power the agent's ability to digest large volumes of information and produce coherent, context-aware outputs.
+
+## User-Scoped Databases
+
+Databases can now be scoped to individual users. Each user gets access to their own isolated database in the editor, along with their own file system namespace. This is a foundational change for multi-tenant applications built on Flow-Like — user data stays separated, permissions stay clean, and you don't have to build isolation yourself.
+
+Combined with the new **Dexie-Tauri adapter** for blob offloading to the native filesystem, data-heavy applications now have a clear path for handling large assets without choking the browser or bloating the database.
+
+## Tamper-Proof Audit Logging
+
+Security isn't an afterthought. Flow-Like now ships with **cryptographic audit logging** — every action on the platform is recorded in an append-only log where each entry is cryptographically chained to the previous one. Any attempt to alter, delete, or reorder log entries breaks the chain and is immediately detectable.
+
+This isn't just "we write logs to a file." It's the same class of integrity guarantee used in defense and regulated industries: a verifiable, tamper-evident trail of everything that happened, when, and by whom. Whether you're building for compliance-heavy environments, handling sensitive data, or simply want the confidence that your audit trail can be trusted — it's built in from day one, no configuration required.
+
+## New Node Catalog
+
+Beyond WASM, we've expanded the built-in node library substantially:
+
+**Connectivity and Protocols** — WebSocket, TCP, UDP, and MQTT nodes open up real-time communication, IoT integration, and low-level networking directly from your flows. Connect to message brokers, stream sensor data, or build bidirectional communication channels without writing custom middleware.
+
+**Data and Documents** — TDMS reader nodes for engineering and scientific data. Document manipulation nodes for PDF, DOCX, and PPT files. A buffered vector store with intelligent flushing for high-throughput embedding workloads.
+
+**AI and LLM** — New LLM model management with sync and upsert capabilities, plus the `BuildLMStudioNode` for local model integration. The `SummarizeNode` exposes those multiple summarization strategies we mentioned earlier directly as a composable flow element.
+
+**UI Components** — A new `StreamingTextEditor` for real-time text generation interfaces, enhanced `Iframe` components supporting both `src` and `srcdoc` properties, and improved chart data handling.
+
+## UI/UX Improvements
+
+We've put serious work into making Flow-Like feel faster and more polished across the board.
+
+**Performance** — The Workflow Editor is noticeably snappier. We've optimized rendering paths, reduced unnecessary re-renders, and improved how large flows are handled. Loading states are now present throughout the app so you're never staring at a blank screen wondering if something is happening.
+
+**Profile Sync** — Improved reliability and speed for syncing your profile, settings, and preferences across devices.
+
+**Package Management** — The registry now has proper explore and detail views with authentication, publication request tracking, version management supporting multiple installed versions, and cache invalidation. Admins get dedicated pages for profile templates and governance workflows.
+
+**Navigation** — Reworked app sidebar, better onboarding flows, runtime variables dashboard, and analytics pages.
+
+**iOS App** — It's live. Flow-Like now runs natively on iOS, and the Android build is in early testing with a release coming soon.
+
+## What's Next
+
+With Beta, the platform architecture is essentially locked in. That means upcoming releases will focus on:
+
+- **Better WASM documentation and developer experience** — templates, tutorials, and a proper SDK guide
+- **Android release** — currently in early test phase, coming very soon
+- **Expanded RPA capabilities** — more desktop automation primitives
+- **Performance hardening** — profiling and optimizing for large-scale production deployments
+- **Community and marketplace growth** — making it easier to discover, share, and sell nodes
+
+## Join the Beta
+
+Flow-Like is ready for real users building real things. Whether you're automating internal processes, building AI-powered applications, or creating entirely new workflow-driven products — this is the release to start with.
+
+**[Join the Beta](https://flow-like.com)** and come hang out with us on **[Discord](https://discord.gg/flow-like)** — we're building this thing in the open and your feedback directly shapes what comes next.
+
+Let's build something great together.

@@ -23,7 +23,7 @@ export const jaDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "パスを選択",
 
 	// Workflow Path
-	"dev.workflow.badge": "パス 1",
+	"dev.workflow.badge": "パス 2",
 	"dev.workflow.headline": "ワークフローを視覚的に構成",
 	"dev.workflow.description":
 		"ビジュアルエディタを使って、構築済みのノードをドラッグ＆接続し、強力な自動化フローを作成できます。コード不要 — 接続、設定、デプロイするだけです。",
@@ -59,7 +59,7 @@ export const jaDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "または",
-	"dev.nodes.badge": "パス 2",
+	"dev.nodes.badge": "パス 1",
 	"dev.nodes.headline": "カスタムノードの作成",
 	"dev.nodes.description":
 		"独自のロジックでエンジンを拡張できます。対応する任意の言語でノードを記述すると、WebAssemblyにコンパイルされ、ホストSDK（ロギング、ストレージ、HTTP、AIモデルなど）へのフルアクセスを持つサンドボックス環境で実行されます。",

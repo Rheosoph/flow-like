@@ -24,7 +24,7 @@ export const itDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Scegli il tuo percorso",
 
 	// Workflow Path
-	"dev.workflow.badge": "Percorso 1",
+	"dev.workflow.badge": "Percorso 2",
 	"dev.workflow.headline": "Componi Workflow Visivamente",
 	"dev.workflow.description":
 		"Usa l'editor visuale per trascinare e collegare nodi predefiniti in potenti flussi di automazione. Nessun codice necessario — collega, configura e distribuisci.",
@@ -61,7 +61,7 @@ export const itDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "oppure",
-	"dev.nodes.badge": "Percorso 2",
+	"dev.nodes.badge": "Percorso 1",
 	"dev.nodes.headline": "Scrivi Nodi Personalizzati",
 	"dev.nodes.description":
 		"Estendi il motore con la tua logica. Scrivi un nodo in qualsiasi linguaggio supportato — viene compilato in WebAssembly e viene eseguito in sandbox con accesso completo all'SDK dell'host (logging, storage, HTTP, modelli AI e altro).",

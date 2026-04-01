@@ -2,4 +2,3 @@ User-agent: *
 Allow: /
 
 Sitemap: https://flow-like.com/sitemap-index.xml
-Sitemap: https://flow-like.com/sitemap-store.xml

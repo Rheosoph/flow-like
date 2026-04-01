@@ -72,7 +72,7 @@ const dateFor = (p: any) =>
     <div class="grid gap-6 md:grid-cols-3">
       {posts.map((post) => (
         <a
-          href={`/blog/${post.slug.split("-").slice(3).join("-")}/`}
+          href={`/blog/${post.id.split("-").slice(3).join("-")}/`}
           class="group block"
         >
           <!-- Thumbnail -->

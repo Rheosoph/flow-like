@@ -35,6 +35,12 @@ export const ptFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Processos com controle de versão",
 	"ind.solution.item4.desc":
 		"Cada alteração de fluxo de trabalho é rastreada no Git. Reverta, compare e aprove mudanças antes de entrarem em produção.",
+	"ind.solution.item5.title": "Conformidade por Região",
+	"ind.solution.item5.desc":
+		"Encaminhe workflows financeiros automaticamente através de conjuntos de regras específicos por jurisdição. As regulamentações da UE, EUA e APAC são aplicadas com base na origem da transação — MiFID II, Dodd-Frank ou MAS sem alternância manual.",
+	"ind.solution.item6.title": "Biblioteca de Modelos do Setor",
+	"ind.solution.item6.desc":
+		"Comece com modelos de workflow pré-construídos e auditáveis para KYC, AML, conciliação e relatórios regulatórios. Partilhe modelos na sua organização ou adote padrões da indústria.",
 	"ind.features.tagline": "Capacidades",
 	"ind.features.headline": "Projetado para equipes financeiras",
 	"ind.feature.1.title": "Conectores ERP",
@@ -55,6 +61,12 @@ export const ptFinance: Record<string, string> = {
 	"ind.feature.6.title": "Fluxos de aprovação",
 	"ind.feature.6.desc":
 		"Encaminhe resultados para revisão com permissões baseadas em funções e assinaturas digitais.",
+	"ind.feature.7.title": "Roteamento Jurisdicional",
+	"ind.feature.7.desc":
+		"Defina regras de conformidade específicas por região e deixe os workflows aplicarem automaticamente a regulamentação correta com base na localização da entidade ou no tipo de transação.",
+	"ind.feature.8.title": "Modelos Inter-Empresariais",
+	"ind.feature.8.desc":
+		"Adote e partilhe modelos padronizados de processos financeiros entre empresas. Workflows de KYC, AML e relatórios comprovados, prontos para personalizar.",
 	"ind.cta.headline": "Pronto para automatizar suas operações financeiras?",
 	"ind.cta.description":
 		"Veja como Flow-Like pode substituir seus processos baseados em planilhas por fluxos de trabalho auditáveis e automatizados. Agende uma demo sob medida para suas operações financeiras.",

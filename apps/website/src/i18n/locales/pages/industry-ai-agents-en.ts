@@ -25,7 +25,7 @@ export const enAiAgents: Record<string, string> = {
 	"ind.solution.tagline": "The Solution",
 	"ind.solution.headline": "Visual AI orchestration",
 	"ind.solution.description":
-		"Flow-Like turns every LLM call, retriever step, and tool invocation into a visible, testable, auditable graph node.",
+		"Flow-Like is the operating system for production AI systems, turning every LLM call, retriever step, and tool invocation into a visible, testable, auditable graph node.",
 	"ind.solution.item1.title": "Visual Agent Graphs",
 	"ind.solution.item1.desc":
 		"Compose multi-agent systems by connecting LLM nodes, tool nodes, and decision nodes visually. See the full execution path.",

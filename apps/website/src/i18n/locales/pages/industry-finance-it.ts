@@ -35,6 +35,12 @@ export const itFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Processi con controllo di versione",
 	"ind.solution.item4.desc":
 		"Ogni modifica al flusso di lavoro è tracciata in Git. Ripristina, confronta e approva le modifiche prima che vadano in produzione.",
+	"ind.solution.item5.title": "Compliance per Regione",
+	"ind.solution.item5.desc":
+		"Instrada automaticamente i workflow finanziari attraverso set di regole specifici per giurisdizione. Le normative UE, US e APAC vengono applicate in base all'origine della transazione — MiFID II, Dodd-Frank o MAS senza commutazione manuale.",
+	"ind.solution.item6.title": "Libreria di Modelli di Settore",
+	"ind.solution.item6.desc":
+		"Inizia con modelli di workflow pre-costruiti e verificabili per KYC, AML, riconciliazione e reporting normativo. Condividi i modelli nella tua organizzazione o adotta gli standard del settore.",
 	"ind.features.tagline": "Funzionalità",
 	"ind.features.headline": "Progettato per i team finanziari",
 	"ind.feature.1.title": "Connettori ERP",
@@ -55,6 +61,12 @@ export const itFinance: Record<string, string> = {
 	"ind.feature.6.title": "Flussi di approvazione",
 	"ind.feature.6.desc":
 		"Indirizza i risultati per la revisione con permessi basati sui ruoli e firme digitali.",
+	"ind.feature.7.title": "Routing Giurisdizionale",
+	"ind.feature.7.desc":
+		"Definisci regole di compliance specifiche per regione e lascia che i flussi applichino automaticamente la normativa corretta in base alla posizione dell'entità o al tipo di transazione.",
+	"ind.feature.8.title": "Modelli Inter-Aziendali",
+	"ind.feature.8.desc":
+		"Adotta e condividi modelli standardizzati di processi finanziari tra aziende. Workflow KYC, AML e di reporting collaudati, pronti da personalizzare.",
 	"ind.cta.headline": "Pronto ad automatizzare le tue operazioni finanziarie?",
 	"ind.cta.description":
 		"Scopri come Flow-Like può sostituire i tuoi processi basati su fogli di calcolo con flussi di lavoro verificabili e automatizzati. Prenota una demo su misura per le tue operazioni finanziarie.",

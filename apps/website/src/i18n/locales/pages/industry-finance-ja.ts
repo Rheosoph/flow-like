@@ -35,6 +35,12 @@ export const jaFinance: Record<string, string> = {
 	"ind.solution.item4.title": "バージョン管理されたプロセス",
 	"ind.solution.item4.desc":
 		"すべてのワークフロー変更が Git で追跡されます。本番適用前にロールバック、比較、承認が可能です。",
+	"ind.solution.item5.title": "地域別コンプライアンス",
+	"ind.solution.item5.desc":
+		"金融ワークフローを管轄区域固有のルールセットに自動的にルーティング。取引発生元に基づいてEU、米国、APACの規制が適用されます — MiFID II、ドッド・フランク法、MASを手動切替なしで。",
+	"ind.solution.item6.title": "業界テンプレートライブラリ",
+	"ind.solution.item6.desc":
+		"KYC、AML、照合、規制報告用の事前構築済み・監査可能なワークフローテンプレートから開始。組織全体でテンプレートを共有するか、業界標準パターンを採用できます。",
 	"ind.features.tagline": "機能",
 	"ind.features.headline": "金融チームのために設計",
 	"ind.feature.1.title": "ERP コネクタ",
@@ -54,6 +60,12 @@ export const jaFinance: Record<string, string> = {
 	"ind.feature.6.title": "承認ワークフロー",
 	"ind.feature.6.desc":
 		"ロールベースの権限とデジタル署名で出力をレビューにルーティング。",
+	"ind.feature.7.title": "管轄ルーティング",
+	"ind.feature.7.desc":
+		"地域固有のコンプライアンスルールを定義し、エンティティの所在地や取引タイプに基づいて適切な規制を自動適用。",
+	"ind.feature.8.title": "企業間テンプレート",
+	"ind.feature.8.desc":
+		"企業間で標準化された金融プロセステンプレートを導入・共有。カスタマイズ可能な実績あるKYC、AML、レポーティングワークフロー。",
 	"ind.cta.headline": "金融業務の自動化を始めませんか？",
 	"ind.cta.description":
 		"Flow-Like がスプレッドシートベースのプロセスを監査可能な自動化ワークフローにどう置き換えるかをご覧ください。金融業務に合わせたデモをご予約ください。",

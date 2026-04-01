@@ -22,7 +22,7 @@ export const enProcessAutomation: Record<string, string> = {
     "ind.solution.tagline": "The Solution",
     "ind.solution.headline": "End-to-End Process Orchestration",
     "ind.solution.description":
-        "Flow-Like gives operations, IT, and compliance teams a single visual platform to design, execute, and continuously improve business processes across departments and systems.",
+        "Flow-Like gives operations, IT, and compliance teams the operating system for cross-system business processes: one visual platform to design, execute, and continuously improve workflows across departments and systems.",
     "ind.solution.item1.title": "Visual Process Designer",
     "ind.solution.item1.desc":
         "Drag-and-drop nodes for approvals, branching logic, system calls, and exception handling. See the entire process on one canvas — no hidden logic buried in scripts.",

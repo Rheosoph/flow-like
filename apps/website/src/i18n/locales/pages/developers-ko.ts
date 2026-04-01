@@ -22,7 +22,7 @@ export const koDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "경로를 선택하세요",
 
 	// Workflow Path
-	"dev.workflow.badge": "경로 1",
+	"dev.workflow.badge": "경로 2",
 	"dev.workflow.headline": "시각적으로 워크플로 구성하기",
 	"dev.workflow.description":
 		"비주얼 에디터를 사용하여 미리 만들어진 노드를 드래그하고 연결해 강력한 자동화 플로를 만드세요. 코드가 필요 없습니다 — 연결, 설정, 배포만 하면 됩니다.",
@@ -58,7 +58,7 @@ export const koDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "또는",
-	"dev.nodes.badge": "경로 2",
+	"dev.nodes.badge": "경로 1",
 	"dev.nodes.headline": "커스텀 노드 작성",
 	"dev.nodes.description":
 		"자체 로직으로 엔진을 확장하세요. 지원되는 언어로 노드를 작성하면 WebAssembly로 컴파일되어 호스트 SDK(로깅, 스토리지, HTTP, AI 모델 등)에 대한 전체 접근 권한으로 샌드박스 내에서 실행됩니다.",

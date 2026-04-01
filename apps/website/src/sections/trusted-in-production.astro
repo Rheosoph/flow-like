@@ -1,0 +1,133 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+import { LuShieldCheck, LuFileSearch, LuEye, LuDatabase, LuScale, LuFlag } from "react-icons/lu";
+---
+
+<section class="relative py-16 md:py-24 overflow-hidden" data-c1="hsl(222 89% 60% / .06)" data-c2="hsl(161 50% 45% / .06)">
+  <!-- Subtle bg glow -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute top-0 left-1/3 w-96 h-96 rounded-full bg-primary/5 blur-3xl"></div>
+    <div class="absolute bottom-0 right-1/4 w-80 h-80 rounded-full bg-emerald-500/5 blur-3xl"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 lg:px-8">
+    <div class="tip-reveal text-center mb-12 max-w-3xl mx-auto">
+      <h2 class="text-3xl sm:text-4xl font-bold tracking-tight mb-6">{t("v2.trust.heading")}</h2>
+      <p class="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
+        {t("v2.trust.p1")}
+      </p>
+      <p class="text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v2.trust.p2")}
+      </p>
+    </div>
+
+    <!-- Card grid with hover glow -->
+    <div class="tip-reveal grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-12">
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5">
+        <div class="absolute inset-0 rounded-2xl bg-primary/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuShieldCheck className="w-5 h-5 text-primary mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.access.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.access.desc")}
+          </p>
+        </div>
+      </div>
+
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/5">
+        <div class="absolute inset-0 rounded-2xl bg-emerald-500/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuFileSearch className="w-5 h-5 text-emerald-500 mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.audit.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.audit.desc")}
+          </p>
+        </div>
+      </div>
+
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-violet-500/30 hover:shadow-lg hover:shadow-violet-500/5">
+        <div class="absolute inset-0 rounded-2xl bg-violet-500/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuEye className="w-5 h-5 text-violet-500 mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.transparency.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.transparency.desc")}
+            <a href="/thirdparty" class="text-primary hover:text-primary/80 transition-colors ml-1">{t("v2.trust.transparency.link")}</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-amber-500/30 hover:shadow-lg hover:shadow-amber-500/5">
+        <div class="absolute inset-0 rounded-2xl bg-amber-500/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuDatabase className="w-5 h-5 text-amber-500 mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.sovereignty.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.sovereignty.desc")}
+          </p>
+        </div>
+      </div>
+
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-sky-500/30 hover:shadow-lg hover:shadow-sky-500/5">
+        <div class="absolute inset-0 rounded-2xl bg-sky-500/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuScale className="w-5 h-5 text-sky-500 mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.compliance.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.compliance.desc")}
+            <a href="mailto:security@flow-like.com" class="text-primary hover:text-primary/80 transition-colors ml-1">{t("v2.trust.compliance.link")}</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="group relative rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-6 transition-all duration-300 hover:border-rose-500/30 hover:shadow-lg hover:shadow-rose-500/5">
+        <div class="absolute inset-0 rounded-2xl bg-rose-500/3 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative">
+          <LuFlag className="w-5 h-5 text-rose-500 mb-3" />
+          <p class="text-sm font-semibold text-foreground mb-2">{t("v2.trust.gdpr.title")}</p>
+          <p class="text-sm text-muted-foreground leading-relaxed">
+            {t("v2.trust.gdpr.desc")}
+            <a href="/data-deletion" class="text-primary hover:text-primary/80 transition-colors ml-1">{t("v2.trust.gdpr.link")}</a>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trust badge pills -->
+    <div class="tip-reveal flex flex-wrap items-center justify-center gap-2">
+      {[t("v2.trust.badge.opensource"), t("v2.trust.badge.eu"), t("v2.trust.badge.sbom"), t("v2.trust.badge.prowler"), t("v2.trust.badge.gdpr")].map((badge) => (
+        <span class="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-full border border-border/40 text-muted-foreground bg-card/40 backdrop-blur-sm">
+          <span class="size-1.5 rounded-full bg-emerald-500"></span>
+          {badge}
+        </span>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .tip-reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s ease; }
+  .tip-reveal.is-visible { opacity: 1; transform: translateY(0); }
+</style>
+
+<script>
+  const els = document.querySelectorAll<HTMLElement>(".tip-reveal");
+  if (els.length) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); io.unobserve(e.target); }
+      }
+    }, { threshold: 0.15 });
+    for (const el of els) io.observe(el);
+  }
+</script>

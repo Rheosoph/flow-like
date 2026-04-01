@@ -35,6 +35,12 @@ export const svFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Versionshanterade processer",
 	"ind.solution.item4.desc":
 		"Varje arbetsflödesändring spåras i Git. Återställ, jämför och godkänn ändringar innan de går live.",
+	"ind.solution.item5.title": "Regionbaserad Compliance",
+	"ind.solution.item5.desc":
+		"Dirigera finansiella arbetsflöden genom jurisdiktionsspecifika regeluppsättningar automatiskt. EU-, US- och APAC-regleringar tillämpas baserat på transaktionens ursprung — MiFID II, Dodd-Frank eller MAS utan manuell växling.",
+	"ind.solution.item6.title": "Branschmallar",
+	"ind.solution.item6.desc":
+		"Börja med förbyggda, granskningsbara arbetsflödesmallar för KYC, AML, avstämning och regulatorisk rapportering. Dela mallar inom din organisation eller anamma branschstandarder.",
 	"ind.features.tagline": "Funktioner",
 	"ind.features.headline": "Byggt för finansteam",
 	"ind.feature.1.title": "ERP-kopplingar",
@@ -55,6 +61,12 @@ export const svFinance: Record<string, string> = {
 	"ind.feature.6.title": "Godkännandearbetsflöden",
 	"ind.feature.6.desc":
 		"Dirigera resultat för granskning med rollbaserade behörigheter och digitala signaturer.",
+	"ind.feature.7.title": "Jurisdiktionsdirigering",
+	"ind.feature.7.desc":
+		"Definiera regionspecifika complianceregler och låt arbetsflöden automatiskt tillämpa rätt reglering baserat på entitetsplats eller transaktionstyp.",
+	"ind.feature.8.title": "Företagsövergripande Mallar",
+	"ind.feature.8.desc":
+		"Adoptera och dela standardiserade finansprocessmallar mellan företag. Beprövade KYC-, AML- och rapporteringsarbetsflöden redo att anpassa.",
 	"ind.cta.headline": "Redo att automatisera dina finansiella verksamheter?",
 	"ind.cta.description":
 		"Se hur Flow-Like kan ersätta dina kalkylbladsbaserade processer med granskningsbara, automatiserade arbetsflöden. Boka en demo anpassad efter dina finansiella verksamheter.",

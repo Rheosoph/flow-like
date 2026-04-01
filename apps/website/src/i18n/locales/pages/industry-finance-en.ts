@@ -25,7 +25,7 @@ export const enFinance: Record<string, string> = {
 	"ind.solution.tagline": "The Solution",
 	"ind.solution.headline": "Auditable workflows for finance",
 	"ind.solution.description":
-		"Build reconciliation, reporting, and compliance flows visually — with every step logged, versioned, and reproducible.",
+		"Build reconciliation, reporting, and compliance flows visually. Flow-Like becomes the operating system for finance workflows: every step logged, versioned, and reproducible.",
 	"ind.solution.item1.title": "Automated Reconciliation",
 	"ind.solution.item1.desc":
 		"Match transactions across bank feeds, ERP, and payment processors automatically. Flag exceptions instantly.",
@@ -38,6 +38,12 @@ export const enFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Version-Controlled Processes",
 	"ind.solution.item4.desc":
 		"Every workflow change is tracked in git. Roll back, compare, and approve changes before they go live.",
+	"ind.solution.item5.title": "Region-Based Compliance",
+	"ind.solution.item5.desc":
+		"Route financial workflows through jurisdiction-specific rule sets automatically. EU, US, and APAC regulations are applied based on transaction origin — MiFID II, Dodd-Frank, or MAS without manual switching.",
+	"ind.solution.item6.title": "Industry Template Library",
+	"ind.solution.item6.desc":
+		"Start from pre-built, auditable workflow templates for KYC, AML, reconciliation, and regulatory reporting. Share templates across your organization or adopt industry-standard patterns.",
 
 	"ind.features.tagline": "Capabilities",
 	"ind.features.headline": "Built for finance teams",
@@ -59,6 +65,12 @@ export const enFinance: Record<string, string> = {
 	"ind.feature.6.title": "Approval Workflows",
 	"ind.feature.6.desc":
 		"Route outputs for review with role-based permissions and digital signatures.",
+	"ind.feature.7.title": "Jurisdiction Routing",
+	"ind.feature.7.desc":
+		"Define region-specific compliance rules and let flows automatically apply the correct regulation based on entity location or transaction type.",
+	"ind.feature.8.title": "Cross-Company Templates",
+	"ind.feature.8.desc":
+		"Adopt and share standardized financial process templates across companies. Industry-proven KYC, AML, and reporting workflows ready to customize.",
 
 	"ind.cta.headline": "Ready to automate your finance ops?",
 	"ind.cta.description":

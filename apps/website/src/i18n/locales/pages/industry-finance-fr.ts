@@ -35,6 +35,12 @@ export const frFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Processus versionnés",
 	"ind.solution.item4.desc":
 		"Chaque modification de workflow est suivie dans Git. Annulez, comparez et approuvez les changements avant leur mise en production.",
+	"ind.solution.item5.title": "Conformité par Région",
+	"ind.solution.item5.desc":
+		"Acheminez automatiquement les workflows financiers à travers des ensembles de règles spécifiques à chaque juridiction. Les réglementations UE, US et APAC sont appliquées selon l'origine de la transaction — MiFID II, Dodd-Frank ou MAS sans basculement manuel.",
+	"ind.solution.item6.title": "Bibliothèque de Modèles Sectoriels",
+	"ind.solution.item6.desc":
+		"Démarrez avec des modèles de workflows pré-construits et auditables pour KYC, AML, rapprochement et reporting réglementaire. Partagez les modèles au sein de votre organisation ou adoptez les standards de l'industrie.",
 	"ind.features.tagline": "Fonctionnalités",
 	"ind.features.headline": "Conçu pour les équipes financières",
 	"ind.feature.1.title": "Connecteurs ERP",
@@ -55,6 +61,12 @@ export const frFinance: Record<string, string> = {
 	"ind.feature.6.title": "Workflows d'approbation",
 	"ind.feature.6.desc":
 		"Routez les résultats pour révision avec des permissions basées sur les rôles et des signatures numériques.",
+	"ind.feature.7.title": "Routage Juridictionnel",
+	"ind.feature.7.desc":
+		"Définissez des règles de conformité spécifiques par région et laissez les workflows appliquer automatiquement la bonne réglementation selon la localisation de l'entité ou le type de transaction.",
+	"ind.feature.8.title": "Modèles Inter-Entreprises",
+	"ind.feature.8.desc":
+		"Adoptez et partagez des modèles standardisés de processus financiers entre entreprises. Des workflows KYC, AML et de reporting éprouvés, prêts à personnaliser.",
 	"ind.cta.headline": "Prêt à automatiser vos opérations financières ?",
 	"ind.cta.description":
 		"Découvrez comment Flow-Like peut remplacer vos processus basés sur des tableurs par des workflows auditables et automatisés. Réservez une démo adaptée à vos opérations financières.",

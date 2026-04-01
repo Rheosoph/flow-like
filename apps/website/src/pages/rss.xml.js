@@ -16,7 +16,7 @@ export async function GET(context) {
 		items: posts.map((p) => ({
 			title: p.data.title,
 			description: p.data.description,
-			link: "/blog/" + p.slug.split("-").slice(3).join("-") + "/",
+			link: "/blog/" + p.id.split("-").slice(3).join("-") + "/",
 			pubDate: p.data.date,
 		})),
 	});

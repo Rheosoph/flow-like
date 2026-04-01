@@ -35,6 +35,12 @@ export const esFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Procesos con control de versiones",
 	"ind.solution.item4.desc":
 		"Cada cambio en el flujo de trabajo se rastrea en Git. Revierta, compare y apruebe cambios antes de que entren en producción.",
+	"ind.solution.item5.title": "Cumplimiento por Región",
+	"ind.solution.item5.desc":
+		"Enrute flujos de trabajo financieros a través de conjuntos de reglas específicos por jurisdicción automáticamente. Las regulaciones de la UE, EE.UU. y APAC se aplican según el origen de la transacción — MiFID II, Dodd-Frank o MAS sin cambio manual.",
+	"ind.solution.item6.title": "Biblioteca de Plantillas del Sector",
+	"ind.solution.item6.desc":
+		"Comience con plantillas de flujo de trabajo preconfiguradas y auditables para KYC, AML, conciliación e informes regulatorios. Comparta plantillas en su organización o adopte patrones estándar de la industria.",
 	"ind.features.tagline": "Capacidades",
 	"ind.features.headline": "Diseñado para equipos financieros",
 	"ind.feature.1.title": "Conectores ERP",
@@ -55,6 +61,12 @@ export const esFinance: Record<string, string> = {
 	"ind.feature.6.title": "Flujos de aprobación",
 	"ind.feature.6.desc":
 		"Enrute resultados para revisión con permisos basados en roles y firmas digitales.",
+	"ind.feature.7.title": "Enrutamiento Jurisdiccional",
+	"ind.feature.7.desc":
+		"Defina reglas de cumplimiento específicas por región y deje que los flujos apliquen automáticamente la regulación correcta según la ubicación de la entidad o el tipo de transacción.",
+	"ind.feature.8.title": "Plantillas entre Empresas",
+	"ind.feature.8.desc":
+		"Adopte y comparta plantillas estandarizadas de procesos financieros entre empresas. Flujos de trabajo probados de KYC, AML y reporting listos para personalizar.",
 	"ind.cta.headline": "¿Listo para automatizar sus operaciones financieras?",
 	"ind.cta.description":
 		"Descubra cómo Flow-Like puede reemplazar sus procesos basados en hojas de cálculo con flujos de trabajo auditables y automatizados. Reserve una demo adaptada a sus operaciones financieras.",

@@ -1,37 +1,37 @@
 export const enGovDefense: Record<string, string> = {
 	"ind.meta.title": "Gov & Defense Automation | Flow-Like",
 	"ind.meta.description":
-		"Air-gapped workflow automation for classified data and sovereign infrastructure. Flow-Like runs fully on-premise with no cloud dependencies.",
+		"The operating system for defense-grade automation in sovereign, air-gapped environments. Fuse sensor, mission, and operations data into a governed common operational picture with no cloud dependencies.",
 
 	"ind.hero.tagline": "Gov & Defense",
-	"ind.hero.headline": "Sovereign",
-	"ind.hero.headline.highlight": "Automation",
+	"ind.hero.headline": "The Operating System for",
+	"ind.hero.headline.highlight": "Defense Workflows",
 	"ind.hero.description":
-		"Air-gapped, on-premise workflow automation for classified data and sovereign infrastructure. No cloud, no telemetry, full control.",
+		"Air-gapped, on-premise workflow automation for classified missions, secure back offices, and sovereign infrastructure. Fuse drone, satellite, logistics, and operator inputs into a governed common operational picture. No cloud, no telemetry, full control.",
 	"ind.hero.cta.demo": "Request a Briefing",
 	"ind.hero.cta.learn": "See how it works →",
 
 	"ind.problem.tagline": "The Challenge",
-	"ind.problem.headline": "Cloud-first automation doesn't work here",
+	"ind.problem.headline": "Disconnected systems break mission tempo",
 	"ind.problem.description":
-		"Government and defense organizations need automation that runs in classified environments — air-gapped, auditable, and under full institutional control.",
+		"Government and defense organizations need more than task automation. They need sovereign systems that can fuse ISR, logistics, and operator data into one trustworthy picture while keeping decisions reviewable and under institutional control.",
 	"ind.problem.item1":
-		"Cloud-based automation tools are non-starters for classified or ITAR-controlled environments.",
+		"Cloud-based automation tools are non-starters for classified, export-controlled, or disconnected environments.",
 	"ind.problem.item2":
-		"Legacy systems require manual data transcription between security domains and classification levels.",
+		"Analysts still stitch together drone feeds, satellite imagery, logistics systems, and field reports by hand across security domains.",
 	"ind.problem.item3":
-		"Every process must be auditable, reproducible, and explainable to oversight and compliance bodies.",
+		"Every recommendation, handoff, and action must be auditable, reproducible, and explainable to operators, leadership, and oversight bodies.",
 
 	"ind.solution.tagline": "The Solution",
-	"ind.solution.headline": "Air-gapped, sovereign, auditable",
+	"ind.solution.headline": "Fuse the picture. Keep humans in control.",
 	"ind.solution.description":
-		"Flow-Like runs entirely on your infrastructure. No cloud callbacks, no telemetry, no data exfiltration paths. Full source available.",
-	"ind.solution.item1.title": "Air-Gap Native",
+		"Flow-Like gives you the operating system for defense workflows: unify multi-source data, route it through governed automations, and present one common operational picture without surrendering control to cloud platforms or black-box tooling.",
+	"ind.solution.item1.title": "Common Operational Picture",
 	"ind.solution.item1.desc":
-		"Deploy in fully disconnected environments. Flow-Like has zero cloud dependencies — not even for updates or licensing.",
-	"ind.solution.item2.title": "Full Audit & Compliance",
+		"Fuse drone, satellite, logistics, sensor, and analyst inputs into one governed workflow layer so teams see the same operational state instead of chasing fragmented dashboards.",
+	"ind.solution.item2.title": "Human-in-the-Loop Decisions",
 	"ind.solution.item2.desc":
-		"Every workflow execution is cryptographically logged. Meet NIST 800-53, FedRAMP, or NATO requirements.",
+		"Route detections, recommendations, and workflow outcomes to analysts or operators for approval before downstream action. Faster decisions without removing accountability.",
 	"ind.solution.item3.title": "Source Available",
 	"ind.solution.item3.desc":
 		"Review, audit, and compile the entire codebase in-house. No black boxes, no trust-us licensing.",
@@ -43,7 +43,7 @@ export const enGovDefense: Record<string, string> = {
 	"ind.features.headline": "Built for sovereign environments",
 	"ind.feature.1.title": "Cross-Domain Guards",
 	"ind.feature.1.desc":
-		"Build automated data flow guards between classification levels with policy-based filtering.",
+		"Build automated data flow guards between classification levels with policy-based filtering, review steps, and release controls.",
 	"ind.feature.2.title": "SBOM & Supply Chain",
 	"ind.feature.2.desc":
 		"Full software bill of materials. Every dependency is auditable and reproducible.",
@@ -55,14 +55,14 @@ export const enGovDefense: Record<string, string> = {
 		"Fine-grained permissions integrated with Active Directory, LDAP, or PKI infrastructure.",
 	"ind.feature.5.title": "Offline AI",
 	"ind.feature.5.desc":
-		"Run local LLMs and ML models within workflows — no cloud API calls, no data leakage.",
+		"Run local LLMs and ML models within workflows for triage, summarization, and analyst support — no cloud API calls, no data leakage.",
 	"ind.feature.6.title": "Certificate-Based Auth",
 	"ind.feature.6.desc":
 		"Mutual TLS, smart card auth, and CAC/PIV integration for zero-trust environments.",
 
 	"ind.cta.headline": "Ready for sovereign automation?",
 	"ind.cta.description":
-		"Schedule a briefing with our team. We'll show you how Flow-Like meets your security, compliance, and air-gap requirements.",
+		"Schedule a briefing with our team. We'll show you how Flow-Like supports sovereign command, coordination, and back-office workflows with the controls government and defense environments require.",
 	"ind.cta.demo": "Request Briefing",
 	"ind.cta.download": "Download Studio",
 };

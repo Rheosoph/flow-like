@@ -1,0 +1,235 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+---
+
+<section class="proto-section relative isolate overflow-hidden py-24 md:py-32">
+  <!-- Background orbs -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="proto-orb proto-orb--indigo"></div>
+    <div class="proto-orb proto-orb--green"></div>
+  </div>
+
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="proto-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-primary mb-6">
+        {t("v3.proto.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight mb-4">
+        {t("v3.proto.headline")}
+      </h2>
+      <p class="text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v3.proto.description")}
+      </p>
+    </div>
+
+    <!-- Film strip -->
+    <div class="proto-reveal proto-strip-wrap relative" id="proto-strip-wrap">
+      <div class="proto-strip flex gap-6 md:gap-0 md:items-stretch overflow-x-auto pb-4 md:pb-0 snap-x snap-mandatory md:snap-none md:overflow-visible md:grid md:grid-cols-[1fr_auto_1fr_auto_1fr]" id="proto-strip">
+
+        <!-- Stage 1: EXPLORE -->
+        <div class="proto-panel snap-center min-w-[280px] md:min-w-0 flex flex-col rounded-xl border border-border/40 bg-background/80 backdrop-blur-sm shadow-lg overflow-hidden">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-amber-500/5">
+            <span class="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500/10 text-amber-600 text-xs font-bold">1</span>
+            <span class="text-xs font-bold uppercase tracking-wider text-amber-600">{t("v3.proto.stage1.title")}</span>
+          </div>
+          <div class="flex-1 p-2">
+            <img src="/images/product/PlaceholdersForPrototyping.webp" alt="Flow-Like prototyping with placeholder nodes" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          </div>
+          <div class="px-4 py-3 border-t border-border/20">
+            <p class="text-xs text-muted-foreground">{t("v3.proto.stage1.desc")}</p>
+          </div>
+        </div>
+
+        <!-- Arrow 1→2 -->
+        <div class="hidden md:flex items-center justify-center px-2" aria-hidden="true">
+          <div class="proto-arrow relative w-12 h-12 flex items-center justify-center">
+            <svg class="w-8 h-3" viewBox="0 0 32 12" fill="none">
+              <path d="M0 6 L24 6" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5"/>
+              <path d="M20 2 L28 6 L20 10" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+            <div class="proto-arrow__dot absolute w-2 h-2 rounded-full bg-primary/60 shadow-[0_0_8px_oklch(0.66_0.22_26/0.4)]"></div>
+          </div>
+        </div>
+
+        <!-- Stage 2: REFINE -->
+        <div class="proto-panel snap-center min-w-[280px] md:min-w-0 flex flex-col rounded-xl border border-border/40 bg-background/80 backdrop-blur-sm shadow-lg overflow-hidden">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-indigo-500/5">
+            <span class="flex items-center justify-center w-6 h-6 rounded-md bg-indigo-500/10 text-indigo-500 text-xs font-bold">2</span>
+            <span class="text-xs font-bold uppercase tracking-wider text-indigo-500">{t("v3.proto.stage2.title")}</span>
+          </div>
+          <div class="flex-1 p-2">
+            <img src="/images/product/FlowWithLayers.webp" alt="Flow-Like refined workflow with layers" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          </div>
+          <div class="px-4 py-3 border-t border-border/20">
+            <p class="text-xs text-muted-foreground">{t("v3.proto.stage2.desc")}</p>
+          </div>
+        </div>
+
+        <!-- Arrow 2→3 -->
+        <div class="hidden md:flex items-center justify-center px-2" aria-hidden="true">
+          <div class="proto-arrow relative w-12 h-12 flex items-center justify-center">
+            <svg class="w-8 h-3" viewBox="0 0 32 12" fill="none">
+              <path d="M0 6 L24 6" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5"/>
+              <path d="M20 2 L28 6 L20 10" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+            <div class="proto-arrow__dot proto-arrow__dot--delayed absolute w-2 h-2 rounded-full bg-primary/60 shadow-[0_0_8px_oklch(0.66_0.22_26/0.4)]"></div>
+          </div>
+        </div>
+
+        <!-- Stage 3: DEPLOYED -->
+        <div class="proto-panel snap-center min-w-[280px] md:min-w-0 flex flex-col rounded-xl border border-border/40 bg-background/80 backdrop-blur-sm shadow-lg overflow-hidden">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-emerald-500/5">
+            <span class="flex items-center justify-center w-6 h-6 rounded-md bg-emerald-500/10 text-emerald-500 text-xs font-bold">3</span>
+            <span class="text-xs font-bold uppercase tracking-wider text-emerald-600">{t("v3.proto.stage3.title")}</span>
+            <!-- LIVE pulse badge -->
+            <span class="proto-live-badge ml-auto inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+              <span class="proto-live-dot relative flex h-1.5 w-1.5">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+              </span>
+              LIVE
+            </span>
+          </div>
+          <div class="flex-1 p-2">
+            <img src="/images/product/RunsAndLogs.webp" alt="Flow-Like deployed workflow runs and logs" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          </div>
+          <div class="px-4 py-3 border-t border-border/20">
+            <p class="text-xs text-muted-foreground">{t("v3.proto.stage3.desc")}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile scroll hint -->
+      <div class="proto-scroll-hint flex md:hidden items-center justify-center gap-1.5 mt-3 text-xs text-muted-foreground/60">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M3 8 L13 8 M10 5 L13 8 L10 11"/>
+        </svg>
+        <span>Scroll to explore</span>
+      </div>
+    </div>
+
+    <!-- Statement -->
+    <div class="proto-reveal mx-auto max-w-3xl text-center mt-12 md:mt-16">
+      <p class="text-base sm:text-lg md:text-xl text-muted-foreground leading-relaxed font-medium italic">
+        "{t("v3.proto.statement")}"
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .proto-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+  }
+  .proto-orb--indigo {
+    width: 450px;
+    height: 450px;
+    top: -80px;
+    left: -100px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.1), transparent 70%);
+  }
+  .proto-orb--green {
+    width: 400px;
+    height: 400px;
+    bottom: -60px;
+    right: -80px;
+    background: radial-gradient(circle, hsl(161 50% 45% / 0.08), transparent 70%);
+  }
+
+  .proto-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .proto-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Arrow traveling dot */
+  .proto-arrow__dot {
+    animation: proto-dot-travel 2.8s ease-in-out infinite;
+  }
+  .proto-arrow__dot--delayed {
+    animation-delay: 0.6s;
+  }
+
+  @keyframes proto-dot-travel {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-14px);
+    }
+    15% {
+      opacity: 1;
+    }
+    85% {
+      opacity: 1;
+    }
+    95% {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+  }
+
+  /* Mobile scroll strip */
+  .proto-strip-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+  .proto-strip::-webkit-scrollbar {
+    display: none;
+  }
+  .proto-strip {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .proto-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .proto-arrow__dot,
+    .proto-arrow__dot--delayed {
+      animation: none !important;
+      opacity: 0 !important;
+    }
+  }
+</style>
+
+<script>
+  function initProtoReveal() {
+    const els = document.querySelectorAll(".proto-section .proto-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initProtoReveal();
+</script>

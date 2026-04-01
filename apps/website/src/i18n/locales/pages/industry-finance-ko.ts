@@ -35,6 +35,12 @@ export const koFinance: Record<string, string> = {
 	"ind.solution.item4.title": "버전 관리 프로세스",
 	"ind.solution.item4.desc":
 		"모든 워크플로 변경 사항이 Git에서 추적됩니다. 적용 전에 롤백, 비교, 승인하세요.",
+	"ind.solution.item5.title": "지역 기반 컴플라이언스",
+	"ind.solution.item5.desc":
+		"금융 워크플로우를 관할권별 규칙 세트를 통해 자동으로 라우팅합니다. 거래 출처에 따라 EU, 미국, APAC 규정이 적용됩니다 — MiFID II, 도드-프랭크법, MAS를 수동 전환 없이.",
+	"ind.solution.item6.title": "산업 템플릿 라이브러리",
+	"ind.solution.item6.desc":
+		"KYC, AML, 조정 및 규제 보고를 위한 사전 구축된 감사 가능한 워크플로우 템플릿으로 시작하세요. 조직 전체에서 템플릿을 공유하거나 업계 표준 패턴을 채택할 수 있습니다.",
 	"ind.features.tagline": "기능",
 	"ind.features.headline": "금융팀을 위해 설계",
 	"ind.feature.1.title": "ERP 커넥터",
@@ -55,6 +61,12 @@ export const koFinance: Record<string, string> = {
 	"ind.feature.6.title": "승인 워크플로",
 	"ind.feature.6.desc":
 		"역할 기반 권한과 디지털 서명으로 결과를 검토에 라우팅합니다.",
+	"ind.feature.7.title": "관할권 라우팅",
+	"ind.feature.7.desc":
+		"지역별 컴플라이언스 규칙을 정의하고 워크플로우가 엔터티 위치 또는 거래 유형에 따라 올바른 규정을 자동으로 적용하게 합니다.",
+	"ind.feature.8.title": "기업 간 템플릿",
+	"ind.feature.8.desc":
+		"기업 간 표준화된 금융 프로세스 템플릿을 도입하고 공유하세요. 맞춤화할 수 있는 검증된 KYC, AML 및 보고 워크플로우.",
 	"ind.cta.headline": "금융 운영을 자동화할 준비가 되셨나요?",
 	"ind.cta.description":
 		"Flow-Like가 스프레드시트 기반 프로세스를 감사 가능하고 자동화된 워크플로로 어떻게 대체할 수 있는지 확인하세요. 금융 운영에 맞춘 데모를 예약하세요.",

@@ -34,6 +34,12 @@ export const zhFinance: Record<string, string> = {
 	"ind.solution.item4.title": "版本控制流程",
 	"ind.solution.item4.desc":
 		"每个工作流变更都在 Git 中跟踪。在上线前回滚、比较和审批变更。",
+	"ind.solution.item5.title": "基于地区的合规路由",
+	"ind.solution.item5.desc":
+		"自动将金融工作流通过特定司法管辖区的规则集进行路由。根据交易来源自动应用欧盟、美国和亚太地区法规 — MiFID II、多德-弗兰克法案或MAS，无需手动切换。",
+	"ind.solution.item6.title": "行业模板库",
+	"ind.solution.item6.desc":
+		"从预构建的、可审计的KYC、AML、对账和监管报告工作流模板开始。在组织内共享模板或采用行业标准模式。",
 	"ind.features.tagline": "功能",
 	"ind.features.headline": "专为金融团队打造",
 	"ind.feature.1.title": "ERP 连接器",
@@ -49,6 +55,12 @@ export const zhFinance: Record<string, string> = {
 	"ind.feature.5.desc": "在工作流中处理 FX 转换、三角套算和汇率查询。",
 	"ind.feature.6.title": "审批工作流",
 	"ind.feature.6.desc": "通过基于角色的权限和数字签名将结果路由进行审核。",
+	"ind.feature.7.title": "司法管辖路由",
+	"ind.feature.7.desc":
+		"定义特定地区的合规规则，让工作流根据实体位置或交易类型自动应用正确的法规。",
+	"ind.feature.8.title": "跨公司模板",
+	"ind.feature.8.desc":
+		"跨公司采用和共享标准化金融流程模板。经过验证的KYC、AML和报告工作流，随时可自定义。",
 	"ind.cta.headline": "准备好自动化您的金融运营了吗？",
 	"ind.cta.description":
 		"了解 Flow-Like 如何用可审计的自动化工作流取代基于电子表格的流程。预约一次针对您金融运营的演示。",

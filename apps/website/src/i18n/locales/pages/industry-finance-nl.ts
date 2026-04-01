@@ -35,6 +35,12 @@ export const nlFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Versiebeheerde processen",
 	"ind.solution.item4.desc":
 		"Elke workflowwijziging wordt bijgehouden in Git. Draai terug, vergelijk en keur wijzigingen goed voordat ze live gaan.",
+	"ind.solution.item5.title": "Regio-gebaseerde Compliance",
+	"ind.solution.item5.desc":
+		"Routeer financiële workflows automatisch door jurisdictie-specifieke regelsets. EU-, VS- en APAC-regelgeving wordt toegepast op basis van transactieherkomst — MiFID II, Dodd-Frank of MAS zonder handmatig schakelen.",
+	"ind.solution.item6.title": "Sector Sjabloonbibliotheek",
+	"ind.solution.item6.desc":
+		"Begin met voorgebouwde, auditeerbare workflow-sjablonen voor KYC, AML, afstemming en regelgevende rapportage. Deel sjablonen binnen uw organisatie of neem industriestandaard patronen over.",
 	"ind.features.tagline": "Mogelijkheden",
 	"ind.features.headline": "Gebouwd voor financiële teams",
 	"ind.feature.1.title": "ERP-connectoren",
@@ -55,6 +61,12 @@ export const nlFinance: Record<string, string> = {
 	"ind.feature.6.title": "Goedkeuringsworkflows",
 	"ind.feature.6.desc":
 		"Routeer resultaten voor review met rolgebaseerde rechten en digitale handtekeningen.",
+	"ind.feature.7.title": "Jurisdictie Routing",
+	"ind.feature.7.desc":
+		"Definieer regiospecifieke complianceregels en laat workflows automatisch de juiste regelgeving toepassen op basis van entiteitslocatie of transactietype.",
+	"ind.feature.8.title": "Bedrijfsoverstijgende Sjablonen",
+	"ind.feature.8.desc":
+		"Adopteer en deel gestandaardiseerde sjablonen voor financiële processen tussen bedrijven. Beproefde KYC-, AML- en rapportageworkflows klaar om aan te passen.",
 	"ind.cta.headline": "Klaar om uw financiële operaties te automatiseren?",
 	"ind.cta.description":
 		"Ontdek hoe Flow-Like uw spreadsheetgebaseerde processen kan vervangen door controleerbare, geautomatiseerde workflows. Boek een demo op maat van uw financiële operaties.",

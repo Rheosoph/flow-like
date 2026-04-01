@@ -47,6 +47,9 @@ export default defineConfig({
 		define: {
 			"process.env": {},
 		},
+		resolve: {
+			dedupe: ["react", "react-dom"],
+		},
 		ssr: {
 			noExternal: [
 				"katex",
@@ -60,9 +63,28 @@ export default defineConfig({
 				"react-tweet",
 			],
 		},
-		plugins: [tailwindcss()],
+		plugins: [
+			tailwindcss(),
+			{
+				name: "force-react-ssr-optimize",
+				configEnvironment(name, options) {
+					if (name === "ssr" || name === "prerender") {
+						return {
+							optimizeDeps: {
+								include: [
+									"react",
+									"react/jsx-runtime",
+									"react/jsx-dev-runtime",
+									"react-dom",
+									"react-dom/server",
+								],
+							},
+						};
+					}
+				},
+			},
+		],
 	},
-	output: "static",
 	markdown: {
 		syntaxHighlight: "shiki",
 		shikiConfig: {

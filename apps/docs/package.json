@@ -12,13 +12,13 @@
 		"astro": "astro"
 	},
 	"dependencies": {
-		"@astrojs/react": "4.3.0",
-		"@astrojs/starlight": "0.35.1",
-		"@astrojs/starlight-tailwind": "^4.0.1",
+		"@astrojs/react": "5.0.1",
+		"@astrojs/starlight": "0.38.2",
+		"@astrojs/starlight-tailwind": "^5.0.0",
 		"@tailwindcss/vite": "^4.1.12",
 		"@tm9657/flow-like-ui": "workspace:*",
 		"@types/lodash-es": "^4.17.12",
-		"astro": "5.16.3",
+		"astro": "6.0.8",
 		"lodash-es": "^4.17.21",
 		"sharp": "^0.34.3",
 		"tailwind-merge": "^3.3.1",

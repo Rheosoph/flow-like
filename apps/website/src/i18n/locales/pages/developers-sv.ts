@@ -23,7 +23,7 @@ export const svDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Välj din väg",
 
 	// Workflow Path
-	"dev.workflow.badge": "Väg 1",
+	"dev.workflow.badge": "Väg 2",
 	"dev.workflow.headline": "Skapa Arbetsflöden Visuellt",
 	"dev.workflow.description":
 		"Använd den visuella editorn för att dra och koppla färdiga noder till kraftfulla automationsflöden. Ingen kod behövs — koppla, konfigurera och driftsätt.",
@@ -60,7 +60,7 @@ export const svDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "eller",
-	"dev.nodes.badge": "Väg 2",
+	"dev.nodes.badge": "Väg 1",
 	"dev.nodes.headline": "Skriv Egna Noder",
 	"dev.nodes.description":
 		"Utöka motorn med din egen logik. Skriv en nod i valfritt språk som stöds — den kompileras till WebAssembly och körs i en sandlåda med full tillgång till värd-SDK:t (loggning, lagring, HTTP, AI-modeller och mer).",

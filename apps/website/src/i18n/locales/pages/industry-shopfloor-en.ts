@@ -25,7 +25,7 @@ export const enShopfloor: Record<string, string> = {
 	"ind.solution.tagline": "The Solution",
 	"ind.solution.headline": "Visual workflows for industrial data",
 	"ind.solution.description":
-		"Flow-Like lets your engineers build production-grade data pipelines by connecting pre-built nodes — no code, full traceability.",
+		"Flow-Like is the operating system for industrial data flows, letting your engineers build production-grade pipelines with pre-built nodes — no code, full traceability.",
 	"ind.solution.item1.title": "Protocol-Native Connectors",
 	"ind.solution.item1.desc":
 		"Built-in nodes for OPC-UA, MQTT, Modbus, S7, and REST. Connect any machine in minutes, not months.",

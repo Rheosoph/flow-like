@@ -24,7 +24,7 @@ export const ptDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Escolha o seu caminho",
 
 	// Workflow Path
-	"dev.workflow.badge": "Caminho 1",
+	"dev.workflow.badge": "Caminho 2",
 	"dev.workflow.headline": "Componha Fluxos de Trabalho Visualmente",
 	"dev.workflow.description":
 		"Use o editor visual para arrastar e conectar nós pré-construídos em fluxos de automação poderosos. Sem necessidade de código — basta conectar, configurar e implementar.",
@@ -62,7 +62,7 @@ export const ptDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "ou",
-	"dev.nodes.badge": "Caminho 2",
+	"dev.nodes.badge": "Caminho 1",
 	"dev.nodes.headline": "Escreva Nós Personalizados",
 	"dev.nodes.description":
 		"Estenda o motor com a sua própria lógica. Escreva um nó em qualquer linguagem suportada — é compilado para WebAssembly e executado em sandbox com acesso total ao SDK do host (logging, armazenamento, HTTP, modelos de IA e mais).",

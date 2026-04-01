@@ -19,6 +19,6 @@ const { t } = Astro.props;
     <p class="text-muted-foreground text-center mb-12 max-w-xl mx-auto">
       {t("24h.form.description")}
     </p>
-    <SolutionForm client:load />
+    <SolutionForm client:only="react" />
   </div>
 </section>

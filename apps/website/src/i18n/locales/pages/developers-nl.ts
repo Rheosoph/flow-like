@@ -23,7 +23,7 @@ export const nlDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Kies je pad",
 
 	// Workflow Path
-	"dev.workflow.badge": "Pad 1",
+	"dev.workflow.badge": "Pad 2",
 	"dev.workflow.headline": "Stel Workflows Visueel Samen",
 	"dev.workflow.description":
 		"Gebruik de visuele editor om kant-en-klare nodes te slepen en te verbinden tot krachtige automatiseringsflows. Geen code nodig — gewoon verbinden, configureren en deployen.",
@@ -60,7 +60,7 @@ export const nlDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "of",
-	"dev.nodes.badge": "Pad 2",
+	"dev.nodes.badge": "Pad 1",
 	"dev.nodes.headline": "Schrijf Aangepaste Nodes",
 	"dev.nodes.description":
 		"Breid de engine uit met je eigen logica. Schrijf een node in een ondersteunde taal — deze compileert naar WebAssembly en draait in een sandbox met volledige toegang tot de host SDK (logging, opslag, HTTP, AI-modellen en meer).",

@@ -25,7 +25,7 @@ export const enOffice: Record<string, string> = {
 	"ind.solution.tagline": "The Solution",
 	"ind.solution.headline": "Visual automation for every team",
 	"ind.solution.description":
-		"Build document pipelines, approval flows, and cross-team processes visually. Anyone can understand them, IT can govern them.",
+		"Build document pipelines, approval flows, and cross-team processes visually. Flow-Like becomes the operating system for office workflows: anyone can understand them, IT can govern them.",
 	"ind.solution.item1.title": "Document Processing",
 	"ind.solution.item1.desc":
 		"Extract data from PDFs, invoices, and forms using AI nodes. Route extracted data into your systems automatically.",

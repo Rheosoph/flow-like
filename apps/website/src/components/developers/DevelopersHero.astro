@@ -48,20 +48,20 @@ const { t } = Astro.props;
       <svg class="hidden md:block absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 800 420" fill="none" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs>
           <linearGradient id="line-left" x1="400" y1="0" x2="160" y2="200" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.6" />
-            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
-          </linearGradient>
-          <linearGradient id="line-right" x1="400" y1="0" x2="640" y2="200" gradientUnits="userSpaceOnUse">
             <stop offset="0%" stop-color="rgb(139 92 246)" stop-opacity="0.6" />
             <stop offset="100%" stop-color="rgb(139 92 246)" stop-opacity="0.15" />
           </linearGradient>
-          <linearGradient id="line-merge-left" x1="160" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
-            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.5" />
+          <linearGradient id="line-right" x1="400" y1="0" x2="640" y2="200" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.6" />
+            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
           </linearGradient>
-          <linearGradient id="line-merge-right" x1="640" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+          <linearGradient id="line-merge-left" x1="160" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
             <stop offset="0%" stop-color="rgb(139 92 246)" stop-opacity="0.15" />
             <stop offset="100%" stop-color="rgb(139 92 246)" stop-opacity="0.5" />
+          </linearGradient>
+          <linearGradient id="line-merge-right" x1="640" y1="320" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="rgb(244 63 94)" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.5" />
           </linearGradient>
           <filter id="glow">
             <feGaussianBlur stdDeviation="3" result="coloredBlur" />
@@ -82,10 +82,10 @@ const { t } = Astro.props;
         <path d="M 600 320 C 600 370, 400 350, 400 395" stroke="url(#line-merge-right)" stroke-width="2" stroke-dasharray="6 4" filter="url(#glow)" class="path-draw path-draw-delay-3" />
 
         <!-- Animated dots traveling along paths -->
-        <circle r="3" fill="rgb(244 63 94)" opacity="0.8" filter="url(#glow)">
+        <circle r="3" fill="rgb(139 92 246)" opacity="0.8" filter="url(#glow)">
           <animateMotion dur="3s" repeatCount="indefinite" path="M 400 30 C 400 100, 200 80, 200 170" />
         </circle>
-        <circle r="3" fill="rgb(139 92 246)" opacity="0.8" filter="url(#glow)">
+        <circle r="3" fill="rgb(244 63 94)" opacity="0.8" filter="url(#glow)">
           <animateMotion dur="3s" repeatCount="indefinite" path="M 400 30 C 400 100, 600 80, 600 170" begin="0.3s" />
         </circle>
       </svg>
@@ -105,48 +105,7 @@ const { t } = Astro.props;
 
       <!-- Two path cards -->
       <div class="grid md:grid-cols-2 gap-6 md:gap-10 relative z-10">
-        <!-- Path 1: Visual Workflows -->
-        <a href="#workflow-path" class="group relative">
-          <div class="absolute -inset-px rounded-3xl bg-gradient-to-b from-rose-500/30 to-rose-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-sm"></div>
-          <div class="relative flex flex-col items-center gap-5 p-8 md:p-10 rounded-3xl border border-rose-500/20 bg-card/50 backdrop-blur-md hover:border-rose-500/40 transition-all duration-500 group-hover:translate-y-[-2px] group-hover:shadow-[0_20px_60px_-15px_rgba(244,63,94,0.25)]">
-            <!-- Path number badge -->
-            <div class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-rose-600 text-white text-xs font-bold tracking-wider uppercase">
-              {t("dev.workflow.badge")}
-            </div>
-
-            <!-- Icon with animated ring -->
-            <div class="relative mt-2">
-              <div class="absolute inset-0 rounded-2xl bg-rose-500/20 animate-ping-slow"></div>
-              <div class="relative p-4 rounded-2xl bg-gradient-to-br from-rose-500/20 to-rose-500/5 border border-rose-500/20 group-hover:from-rose-500/30 group-hover:to-rose-500/10 transition-colors">
-                <LuWorkflow className="w-8 h-8 text-rose-500" />
-              </div>
-            </div>
-
-            <!-- Content -->
-            <div class="text-center">
-              <h3 class="text-xl font-bold mb-2 text-foreground">{t("dev.hero.card.workflows.title")}</h3>
-              <p class="text-sm text-muted-foreground leading-relaxed">{t("dev.hero.card.workflows.description")}</p>
-            </div>
-
-            <!-- Mini feature pills -->
-            <div class="flex flex-wrap justify-center gap-2 mt-1">
-              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
-                <LuMousePointerClick className="w-3 h-3" />
-                Drag & Drop
-              </span>
-              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
-                Type-Safe
-              </span>
-            </div>
-
-            <!-- Arrow hint -->
-            <div class="text-rose-500/50 group-hover:text-rose-500 transition-colors text-xs font-medium tracking-wide uppercase mt-1">
-              ↓ Explore
-            </div>
-          </div>
-        </a>
-
-        <!-- Path 2: Custom Nodes -->
+        <!-- Path 1: Custom Nodes -->
         <a href="#custom-nodes-path" class="group relative">
           <div class="absolute -inset-px rounded-3xl bg-gradient-to-b from-violet-500/30 to-violet-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-sm"></div>
           <div class="relative flex flex-col items-center gap-5 p-8 md:p-10 rounded-3xl border border-violet-500/20 bg-card/50 backdrop-blur-md hover:border-violet-500/40 transition-all duration-500 group-hover:translate-y-[-2px] group-hover:shadow-[0_20px_60px_-15px_rgba(139,92,246,0.25)]">
@@ -157,7 +116,7 @@ const { t } = Astro.props;
 
             <!-- Icon with animated ring -->
             <div class="relative mt-2">
-              <div class="absolute inset-0 rounded-2xl bg-violet-500/20 animate-ping-slow animation-delay-1000"></div>
+              <div class="absolute inset-0 rounded-2xl bg-violet-500/20 animate-ping-slow"></div>
               <div class="relative p-4 rounded-2xl bg-gradient-to-br from-violet-500/20 to-violet-500/5 border border-violet-500/20 group-hover:from-violet-500/30 group-hover:to-violet-500/10 transition-colors">
                 <LuCode className="w-8 h-8 text-violet-500" />
               </div>
@@ -182,6 +141,47 @@ const { t } = Astro.props;
 
             <!-- Arrow hint -->
             <div class="text-violet-500/50 group-hover:text-violet-500 transition-colors text-xs font-medium tracking-wide uppercase mt-1">
+              ↓ Explore
+            </div>
+          </div>
+        </a>
+
+        <!-- Path 2: Visual Workflows -->
+        <a href="#workflow-path" class="group relative">
+          <div class="absolute -inset-px rounded-3xl bg-gradient-to-b from-rose-500/30 to-rose-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 blur-sm"></div>
+          <div class="relative flex flex-col items-center gap-5 p-8 md:p-10 rounded-3xl border border-rose-500/20 bg-card/50 backdrop-blur-md hover:border-rose-500/40 transition-all duration-500 group-hover:translate-y-[-2px] group-hover:shadow-[0_20px_60px_-15px_rgba(244,63,94,0.25)]">
+            <!-- Path number badge -->
+            <div class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-rose-600 text-white text-xs font-bold tracking-wider uppercase">
+              {t("dev.workflow.badge")}
+            </div>
+
+            <!-- Icon with animated ring -->
+            <div class="relative mt-2">
+              <div class="absolute inset-0 rounded-2xl bg-rose-500/20 animate-ping-slow animation-delay-1000"></div>
+              <div class="relative p-4 rounded-2xl bg-gradient-to-br from-rose-500/20 to-rose-500/5 border border-rose-500/20 group-hover:from-rose-500/30 group-hover:to-rose-500/10 transition-colors">
+                <LuWorkflow className="w-8 h-8 text-rose-500" />
+              </div>
+            </div>
+
+            <!-- Content -->
+            <div class="text-center">
+              <h3 class="text-xl font-bold mb-2 text-foreground">{t("dev.hero.card.workflows.title")}</h3>
+              <p class="text-sm text-muted-foreground leading-relaxed">{t("dev.hero.card.workflows.description")}</p>
+            </div>
+
+            <!-- Mini feature pills -->
+            <div class="flex flex-wrap justify-center gap-2 mt-1">
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                <LuMousePointerClick className="w-3 h-3" />
+                Drag & Drop
+              </span>
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/5 border border-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                Type-Safe
+              </span>
+            </div>
+
+            <!-- Arrow hint -->
+            <div class="text-rose-500/50 group-hover:text-rose-500 transition-colors text-xs font-medium tracking-wide uppercase mt-1">
               ↓ Explore
             </div>
           </div>

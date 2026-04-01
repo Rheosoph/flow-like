@@ -25,7 +25,7 @@ export const enIot: Record<string, string> = {
 	"ind.solution.tagline": "The Solution",
 	"ind.solution.headline": "One platform for the entire sensor pipeline",
 	"ind.solution.description":
-		"Flow-Like gives your team a visual canvas to build production-grade IoT pipelines — from edge ingestion to cloud analytics — without writing glue code.",
+		"Flow-Like is the operating system for sensor pipelines, giving your team a visual canvas to build production-grade IoT flows from edge ingestion to analytics without writing glue code.",
 	"ind.solution.item1.title": "Multi-Protocol Ingestion",
 	"ind.solution.item1.desc":
 		"Subscribe to MQTT topics, poll OPC-UA tags, or read Modbus registers with drag-and-drop nodes. Add new sources in minutes.",

@@ -1,0 +1,98 @@
+---
+import { getCollection } from "astro:content";
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const posts = (
+  await getCollection("blog", ({ data }) =>
+    import.meta.env.PROD ? !data.draft : true,
+  )
+)
+  .filter((p) => !p.data.draft)
+  .sort((a, b) => b.data.date.getTime() - a.data.date.getTime())
+  .slice(0, 6);
+
+const dateFor = (p: any) =>
+  p.data?.date
+    ? new Date(p.data.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : "";
+---
+
+<section class="blog-belt relative py-24 md:py-32 overflow-hidden">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <!-- Header row -->
+    <div class="flex items-end justify-between mb-10">
+      <div>
+        <span class="inline-block rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium tracking-wide text-primary mb-3">
+          {t("v3.blog.label")}
+        </span>
+        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">
+          {t("v3.blog.headline")}
+        </h2>
+      </div>
+      <a
+        href="/blog/"
+        class="hidden sm:inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {t("v3.blog.viewall")}
+      </a>
+    </div>
+
+    <!-- Horizontal scroll strip -->
+    <div class="blog-belt__track -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 overflow-x-auto overscroll-x-contain pb-4">
+      <div class="flex gap-5" style="min-width: max-content;">
+        {posts.map((post) => (
+          <a
+            href={`/blog/${post.id.split("-").slice(3).join("-")}/`}
+            class="blog-belt__card group flex-shrink-0 w-[80vw] sm:w-[48vw] lg:w-[calc((100vw-8rem)/3)] max-w-sm rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-5 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5 hover:-translate-y-0.5"
+          >
+            <time class="block text-xs font-medium tracking-wide text-primary/70 mb-3">
+              {dateFor(post)}
+            </time>
+            <h3 class="text-base font-semibold leading-snug line-clamp-2 mb-2 group-hover:text-primary transition-colors">
+              {post.data.title}
+            </h3>
+            <p class="text-sm text-muted-foreground leading-relaxed line-clamp-2 mb-4">
+              {post.data.description ?? ""}
+            </p>
+            <span class="text-sm font-medium text-primary/80 group-hover:text-primary transition-colors">
+              Read →
+            </span>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <!-- Mobile "View all" fallback -->
+    <div class="mt-6 text-center sm:hidden">
+      <a
+        href="/blog/"
+        class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {t("v3.blog.viewall")}
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .blog-belt__track {
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .blog-belt__track::-webkit-scrollbar {
+    display: none;
+  }
+  .blog-belt__card {
+    scroll-snap-align: start;
+  }
+</style>

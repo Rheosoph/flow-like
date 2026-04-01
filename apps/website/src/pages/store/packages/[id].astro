@@ -106,6 +106,8 @@ const jsonLd = {
 		url: "https://flow-like.com",
 	},
 };
+
+Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, stale-while-revalidate=3600");
 ---
 
 <StoreLayout
@@ -150,7 +152,7 @@ const jsonLd = {
 						</h1>
 						{rawDesc ? (
 							<div class="text-muted-foreground mb-3">
-								<TextEditor client:load initialContent={rawDesc} isMarkdown={contentIsMarkdown(rawDesc)} minimal />
+								<TextEditor client:only="react" initialContent={rawDesc} isMarkdown={contentIsMarkdown(rawDesc)} minimal />
 							</div>
 						) : (
 							<p class="text-muted-foreground mb-3">{displayDesc}</p>
@@ -229,7 +231,7 @@ const jsonLd = {
 					<section>
 						<h2 class="text-xl font-semibold mb-4">About</h2>
 						<div class="prose prose-neutral dark:prose-invert max-w-none text-sm leading-relaxed">
-							<TextEditor client:load initialContent={meta.long_description} isMarkdown={contentIsMarkdown(meta.long_description)} minimal />
+							<TextEditor client:only="react" initialContent={meta.long_description} isMarkdown={contentIsMarkdown(meta.long_description)} minimal />
 						</div>
 						{/* Hidden plain text for SEO crawlers */}
 						<div class="sr-only">{longDescPlain}</div>
@@ -240,7 +242,7 @@ const jsonLd = {
 					<section>
 						<h2 class="text-xl font-semibold mb-3">Use Case</h2>
 						<div class="text-muted-foreground">
-							<TextEditor client:load initialContent={meta.use_case} isMarkdown={contentIsMarkdown(meta.use_case)} minimal />
+							<TextEditor client:only="react" initialContent={meta.use_case} isMarkdown={contentIsMarkdown(meta.use_case)} minimal />
 						</div>
 					</section>
 				)}
@@ -249,7 +251,7 @@ const jsonLd = {
 					<section>
 						<h2 class="text-xl font-semibold mb-3">Release Notes</h2>
 						<div class="text-sm text-muted-foreground">
-							<TextEditor client:load initialContent={latestVersion.release_notes} isMarkdown={contentIsMarkdown(latestVersion.release_notes)} minimal />
+							<TextEditor client:only="react" initialContent={latestVersion.release_notes} isMarkdown={contentIsMarkdown(latestVersion.release_notes)} minimal />
 						</div>
 					</section>
 				)}

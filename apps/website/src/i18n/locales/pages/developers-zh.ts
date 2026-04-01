@@ -22,7 +22,7 @@ export const zhDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "选择你的路径",
 
 	// Workflow Path
-	"dev.workflow.badge": "路径一",
+	"dev.workflow.badge": "路径二",
 	"dev.workflow.headline": "可视化编排工作流",
 	"dev.workflow.description":
 		"使用可视化编辑器拖拽并连接预构建节点，创建强大的自动化流程。无需编写代码——只需连接、配置并部署。",
@@ -58,7 +58,7 @@ export const zhDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "或",
-	"dev.nodes.badge": "路径二",
+	"dev.nodes.badge": "路径一",
 	"dev.nodes.headline": "编写自定义节点",
 	"dev.nodes.description":
 		"用你自己的逻辑扩展引擎。使用任何支持的语言编写节点——它会被编译为 WebAssembly，在沙箱中运行，并拥有对宿主 SDK 的完整访问权限（日志、存储、HTTP、AI 模型等）。",

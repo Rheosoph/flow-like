@@ -235,20 +235,9 @@ export async function getAppMeta(
 
 export function formatCategory(cat?: string): string {
 	if (!cat) return "Other";
-
-	const normalizedCategory = cat
+	return cat
 		.replace(/_/g, " ")
-		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	if (!normalizedCategory) return "Other";
-
-	return normalizedCategory
-		.split(" ")
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-		.join(" ");
+		.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function formatPrice(price?: number): string {

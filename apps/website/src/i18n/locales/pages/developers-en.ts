@@ -23,7 +23,7 @@ export const enDevelopers: Record<string, string> = {
 	"dev.pathpicker.label": "Choose your path",
 
 	// Workflow Path
-	"dev.workflow.badge": "Path 1",
+	"dev.workflow.badge": "Path 2",
 	"dev.workflow.headline": "Compose Workflows Visually",
 	"dev.workflow.description":
 		"Use the visual editor to drag and connect pre-built nodes into powerful automation flows. No code needed — just connect, configure, and deploy.",
@@ -60,7 +60,7 @@ export const enDevelopers: Record<string, string> = {
 
 	// Custom Nodes Path
 	"dev.nodes.divider": "or",
-	"dev.nodes.badge": "Path 2",
+	"dev.nodes.badge": "Path 1",
 	"dev.nodes.headline": "Write Custom Nodes",
 	"dev.nodes.description":
 		"Extend the engine with your own logic. Write a node in any supported language — it compiles to WebAssembly and runs sandboxed with full access to the host SDK (logging, storage, HTTP, AI models, and more).",

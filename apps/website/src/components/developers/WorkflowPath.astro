@@ -20,6 +20,15 @@ const { t } = Astro.props;
 ---
 
 <section id="workflow-path" class="relative py-24 overflow-hidden scroll-mt-20">
+  <!-- Divider -->
+  <div class="max-w-5xl mx-auto px-4 mb-20">
+    <div class="flex items-center gap-4">
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
+      <span class="text-xs font-medium text-muted-foreground uppercase tracking-widest">{t("dev.nodes.divider")}</span>
+      <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
+    </div>
+  </div>
+
   <!-- Background glow -->
   <div aria-hidden="true" class="pointer-events-none absolute inset-0">
     <div class="absolute -top-32 left-1/4 w-[600px] h-[600px] rounded-full blur-[140px] opacity-30 bg-rose-500/20"></div>

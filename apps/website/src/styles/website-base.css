@@ -4,22 +4,30 @@
  * are now guarded by [data-desktop-app] in global.css, so the website
  * never receives them.  These rules just set sensible scroll defaults.
  */
-html,
+html {
+	height: auto;
+	min-height: 100%;
+	margin: 0;
+	width: 100%;
+	max-width: 100%;
+	overflow-x: clip;
+	overflow-y: auto;
+	overscroll-behavior-x: none;
+}
+
 body {
 	height: auto;
 	min-height: 100%;
 	margin: 0;
 	width: 100%;
-	max-width: 100vw;
-}
-
-body {
-	overflow-y: auto;
+	max-width: 100%;
+	overflow-x: clip;
+	overflow-y: visible;
 	-webkit-overflow-scrolling: touch;
 	touch-action: pan-y;
 }
 
 main {
-	max-width: 100vw;
+	max-width: 100%;
 	overflow-x: clip;
 }

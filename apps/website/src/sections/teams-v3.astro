@@ -1,0 +1,438 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+---
+
+<section class="teams-section relative isolate overflow-hidden py-24 md:py-32">
+  <!-- Background orbs -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="teams-orb teams-orb--purple"></div>
+    <div class="teams-orb teams-orb--blue"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="reveal teams-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary mb-4">
+        {t("v3.teams.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v3.teams.headline")}
+      </h2>
+      <p class="mt-4 text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+        {t("v3.teams.description")}
+      </p>
+    </div>
+
+    <!-- Tab strip -->
+    <div class="reveal teams-reveal mx-auto max-w-4xl">
+      <div class="teams-tabs flex items-center justify-center gap-1 rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-1 mb-6 w-fit mx-auto" role="tablist" aria-label="Team perspective switcher">
+        <button class="teams-tab is-active" role="tab" aria-selected="true" aria-controls="teams-panel-business" data-tab="business" type="button">
+          {t("v3.teams.tab.business")}
+        </button>
+        <button class="teams-tab" role="tab" aria-selected="false" aria-controls="teams-panel-engineering" data-tab="engineering" type="button">
+          {t("v3.teams.tab.engineering")}
+        </button>
+        <button class="teams-tab" role="tab" aria-selected="false" aria-controls="teams-panel-design" data-tab="design" type="button">
+          {t("v3.teams.tab.design")}
+        </button>
+      </div>
+
+      <!-- Canvas -->
+      <div class="teams-canvas relative rounded-xl border border-border/40 bg-[hsl(220_15%_8%)] shadow-2xl shadow-black/20 overflow-hidden" style="aspect-ratio: 16/9;">
+        <svg class="teams-canvas__svg absolute inset-0 w-full h-full" viewBox="0 0 960 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Grid -->
+          <defs>
+            <pattern id="teams-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="hsl(220 15% 18%)" stroke-width="0.5"/>
+            </pattern>
+          </defs>
+          <rect width="960" height="540" fill="url(#teams-grid)"/>
+
+          <!-- ═══════════════ SHARED NODES (always visible) ═══════════════ -->
+
+          <!-- Edge: Intake → Classify -->
+          <path d="M235 195 C280 195, 310 195, 350 195" stroke="hsl(220 15% 30%)" stroke-width="1.5" fill="none"/>
+          <!-- Edge: Classify → Transform -->
+          <path d="M500 195 C540 195, 560 195, 600 195" stroke="hsl(220 15% 30%)" stroke-width="1.5" fill="none"/>
+          <!-- Edge: Classify → Approve -->
+          <path d="M425 220 C425 270, 275 280, 275 310" stroke="hsl(220 15% 30%)" stroke-width="1.5" fill="none"/>
+          <!-- Edge: Transform → Dashboard -->
+          <path d="M700 220 C700 270, 700 290, 700 310" stroke="hsl(220 15% 30%)" stroke-width="1.5" fill="none"/>
+
+          <!-- Node 1: Intake (x:110 y:170) -->
+          <g class="teams-node" data-node="intake">
+            <rect x="110" y="170" width="125" height="50" rx="10" fill="hsl(222 50% 55% / 0.08)" stroke="hsl(222 50% 55% / 0.3)" stroke-width="1.5"/>
+            <rect x="122" y="182" width="26" height="26" rx="6" fill="hsl(222 50% 55% / 0.12)" stroke="hsl(222 50% 55% / 0.25)" stroke-width="0.8"/>
+            <circle cx="135" cy="192" r="5" stroke="hsl(222 50% 55% / 0.5)" stroke-width="1" fill="none"/>
+            <path d="M135 188 L135 192 L138 194" stroke="hsl(222 50% 55% / 0.5)" stroke-width="1" stroke-linecap="round" fill="none"/>
+            <text x="158" y="199" fill="hsl(220 15% 70%)" font-size="11" font-family="system-ui" font-weight="500">Intake</text>
+          </g>
+
+          <!-- Node 2: Classify (AI Agent) (x:350 y:170) -->
+          <g class="teams-node" data-node="classify">
+            <rect x="350" y="170" width="150" height="50" rx="10" fill="hsl(280 50% 55% / 0.08)" stroke="hsl(280 50% 55% / 0.3)" stroke-width="1.5"/>
+            <rect x="362" y="182" width="26" height="26" rx="6" fill="hsl(280 50% 55% / 0.12)" stroke="hsl(280 50% 55% / 0.25)" stroke-width="0.8"/>
+            <circle cx="375" cy="192" r="5" stroke="hsl(280 50% 55% / 0.5)" stroke-width="1" fill="none"/>
+            <path d="M372 189 L378 195 M372 195 L378 189" stroke="hsl(280 50% 55% / 0.5)" stroke-width="0.8" stroke-linecap="round"/>
+            <text x="398" y="199" fill="hsl(220 15% 70%)" font-size="11" font-family="system-ui" font-weight="500">AI Classify</text>
+          </g>
+
+          <!-- Node 3: Transform (x:600 y:170) -->
+          <g class="teams-node" data-node="transform">
+            <rect x="600" y="170" width="140" height="50" rx="10" fill="hsl(161 50% 45% / 0.08)" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5"/>
+            <rect x="612" y="182" width="26" height="26" rx="6" fill="hsl(161 50% 45% / 0.12)" stroke="hsl(161 50% 45% / 0.25)" stroke-width="0.8"/>
+            <path d="M621 192 L629 188 M629 188 L629 196 M629 196 L637 192" stroke="hsl(161 50% 45% / 0.5)" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+            <text x="648" y="199" fill="hsl(220 15% 70%)" font-size="11" font-family="system-ui" font-weight="500">Transform</text>
+          </g>
+
+          <!-- Node 4: Approve (x:210 y:310) -->
+          <g class="teams-node" data-node="approve">
+            <rect x="210" y="310" width="130" height="50" rx="10" fill="hsl(45 80% 50% / 0.08)" stroke="hsl(45 80% 50% / 0.3)" stroke-width="1.5"/>
+            <rect x="222" y="322" width="26" height="26" rx="6" fill="hsl(45 80% 50% / 0.12)" stroke="hsl(45 80% 50% / 0.25)" stroke-width="0.8"/>
+            <path d="M231 335 L237 341 L243 329" stroke="hsl(45 80% 50% / 0.5)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <text x="258" y="339" fill="hsl(220 15% 70%)" font-size="11" font-family="system-ui" font-weight="500">Approve</text>
+          </g>
+
+          <!-- Node 5: Dashboard (x:635 y:310) -->
+          <g class="teams-node" data-node="dashboard">
+            <rect x="635" y="310" width="130" height="50" rx="10" fill="hsl(200 60% 50% / 0.08)" stroke="hsl(200 60% 50% / 0.3)" stroke-width="1.5"/>
+            <rect x="647" y="322" width="26" height="26" rx="6" fill="hsl(200 60% 50% / 0.12)" stroke="hsl(200 60% 50% / 0.25)" stroke-width="0.8"/>
+            <rect x="653" y="332" width="4" height="10" rx="1" fill="hsl(200 60% 50% / 0.4)"/>
+            <rect x="659" y="328" width="4" height="14" rx="1" fill="hsl(200 60% 50% / 0.5)"/>
+            <rect x="665" y="330" width="4" height="12" rx="1" fill="hsl(200 60% 50% / 0.4)"/>
+            <text x="683" y="339" fill="hsl(220 15% 70%)" font-size="11" font-family="system-ui" font-weight="500">Dashboard</text>
+          </g>
+        </svg>
+
+        <!-- ═══════════════ BUSINESS OVERLAY ═══════════════ -->
+        <div class="teams-overlay is-active" id="teams-panel-business" role="tabpanel" data-panel="business">
+          <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Plain-language labels -->
+            <text x="172" y="162" fill="hsl(220 15% 55%)" font-size="9" font-family="system-ui" font-style="italic">receives customer emails</text>
+            <text x="425" y="162" fill="hsl(220 15% 55%)" font-size="9" font-family="system-ui" font-style="italic">sorts by urgency &amp; topic</text>
+            <text x="670" y="162" fill="hsl(220 15% 55%)" font-size="9" font-family="system-ui" font-style="italic">cleans &amp; enriches data</text>
+            <text x="275" y="302" fill="hsl(220 15% 55%)" font-size="9" font-family="system-ui" font-style="italic">manager sign-off</text>
+            <text x="700" y="302" fill="hsl(220 15% 55%)" font-size="9" font-family="system-ui" font-style="italic">live report</text>
+
+            <!-- Approval gate highlight -->
+            <rect x="206" y="306" width="138" height="58" rx="12" fill="none" stroke="hsl(120 50% 50% / 0.35)" stroke-width="2" stroke-dasharray="5 3"/>
+            <rect x="210" y="364" width="80" height="20" rx="10" fill="hsl(120 50% 50% / 0.12)" stroke="hsl(120 50% 50% / 0.3)" stroke-width="0.8"/>
+            <text x="250" y="378" text-anchor="middle" fill="hsl(120 50% 50% / 0.7)" font-size="8" font-family="system-ui" font-weight="600">APPROVED</text>
+
+            <!-- Sticky note annotation -->
+            <g transform="translate(440, 280)">
+              <rect width="160" height="50" rx="4" fill="hsl(50 90% 65% / 0.12)" stroke="hsl(50 90% 65% / 0.3)" stroke-width="1"/>
+              <rect width="160" height="8" rx="4" fill="hsl(50 90% 65% / 0.15)"/>
+              <text x="10" y="26" fill="hsl(50 90% 65% / 0.8)" font-size="9" font-family="system-ui">"Looks good — approved</text>
+              <text x="10" y="40" fill="hsl(50 90% 65% / 0.8)" font-size="9" font-family="system-ui">by Sarah"</text>
+            </g>
+
+            <!-- FlowPilot chat bubble -->
+            <g transform="translate(60, 430)">
+              <rect width="280" height="44" rx="10" fill="hsl(222 89% 60% / 0.08)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1"/>
+              <circle cx="22" cy="22" r="10" fill="hsl(222 89% 60% / 0.15)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="0.8"/>
+              <text x="22" y="27" text-anchor="middle" fill="hsl(222 89% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">FP</text>
+              <text x="42" y="27" fill="hsl(222 89% 60% / 0.7)" font-size="9.5" font-family="system-ui">{t("v3.teams.flowpilot.business")}</text>
+            </g>
+          </svg>
+        </div>
+
+        <!-- ═══════════════ ENGINEERING OVERLAY ═══════════════ -->
+        <div class="teams-overlay" id="teams-panel-engineering" role="tabpanel" data-panel="engineering" aria-hidden="true">
+          <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Type annotations on edges -->
+            <rect x="255" y="180" width="80" height="18" rx="4" fill="hsl(280 50% 55% / 0.1)" stroke="hsl(280 50% 55% / 0.2)" stroke-width="0.8"/>
+            <text x="295" y="193" text-anchor="middle" fill="hsl(280 50% 55% / 0.65)" font-size="8" font-family="monospace">Vec&lt;Email&gt;</text>
+
+            <rect x="520" y="180" width="70" height="18" rx="4" fill="hsl(161 50% 45% / 0.1)" stroke="hsl(161 50% 45% / 0.2)" stroke-width="0.8"/>
+            <text x="555" y="193" text-anchor="middle" fill="hsl(161 50% 45% / 0.65)" font-size="8" font-family="monospace">Result&lt;f64&gt;</text>
+
+            <rect x="320" y="260" width="100" height="18" rx="4" fill="hsl(45 80% 50% / 0.1)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.8"/>
+            <text x="370" y="273" text-anchor="middle" fill="hsl(45 80% 50% / 0.65)" font-size="8" font-family="monospace">ApprovalReq</text>
+
+            <!-- Code inspector panel -->
+            <g transform="translate(760, 100)">
+              <rect width="180" height="280" rx="8" fill="hsl(220 15% 10%)" stroke="hsl(220 15% 25%)" stroke-width="1"/>
+              <!-- Panel header -->
+              <rect width="180" height="28" rx="8" fill="hsl(220 15% 13%)"/>
+              <rect y="20" width="180" height="8" fill="hsl(220 15% 13%)"/>
+              <text x="12" y="18" fill="hsl(220 15% 50%)" font-size="9" font-family="monospace" font-weight="600">classify.rs</text>
+              <!-- Code lines -->
+              <text x="12" y="48" fill="hsl(280 50% 65% / 0.7)" font-size="8" font-family="monospace">pub async fn classify(</text>
+              <text x="12" y="62" fill="hsl(220 15% 50%)" font-size="8" font-family="monospace">  input: Vec&lt;Email&gt;,</text>
+              <text x="12" y="76" fill="hsl(220 15% 50%)" font-size="8" font-family="monospace">  model: &amp;LlmProvider,</text>
+              <text x="12" y="90" fill="hsl(280 50% 65% / 0.7)" font-size="8" font-family="monospace">) -&gt; Result&lt;Sorted&gt; {</text>
+              <text x="12" y="108" fill="hsl(220 15% 40%)" font-size="8" font-family="monospace">  let embeddings =</text>
+              <text x="12" y="122" fill="hsl(220 15% 40%)" font-size="8" font-family="monospace">    model.embed(&amp;input)</text>
+              <text x="12" y="136" fill="hsl(220 15% 40%)" font-size="8" font-family="monospace">    .await?;</text>
+              <text x="12" y="154" fill="hsl(220 15% 40%)" font-size="8" font-family="monospace">  let clusters =</text>
+              <text x="12" y="168" fill="hsl(220 15% 40%)" font-size="8" font-family="monospace">    kmeans(embeddings, 5);</text>
+              <text x="12" y="186" fill="hsl(161 50% 55% / 0.7)" font-size="8" font-family="monospace">  Ok(Sorted::new(clusters))</text>
+              <text x="12" y="200" fill="hsl(280 50% 65% / 0.7)" font-size="8" font-family="monospace">}</text>
+            </g>
+
+            <!-- Docker / K8s badges -->
+            <g transform="translate(760, 400)">
+              <rect width="76" height="22" rx="6" fill="hsl(200 70% 50% / 0.1)" stroke="hsl(200 70% 50% / 0.3)" stroke-width="0.8"/>
+              <text x="38" y="15" text-anchor="middle" fill="hsl(200 70% 50% / 0.7)" font-size="8" font-family="system-ui" font-weight="600">Docker</text>
+            </g>
+            <g transform="translate(845, 400)">
+              <rect width="76" height="22" rx="6" fill="hsl(222 89% 60% / 0.1)" stroke="hsl(222 89% 60% / 0.3)" stroke-width="0.8"/>
+              <text x="38" y="15" text-anchor="middle" fill="hsl(222 89% 60% / 0.7)" font-size="8" font-family="system-ui" font-weight="600">K8s</text>
+            </g>
+
+            <!-- FlowPilot chat bubble -->
+            <g transform="translate(60, 430)">
+              <rect width="340" height="44" rx="10" fill="hsl(280 50% 55% / 0.08)" stroke="hsl(280 50% 55% / 0.25)" stroke-width="1"/>
+              <circle cx="22" cy="22" r="10" fill="hsl(280 50% 55% / 0.15)" stroke="hsl(280 50% 55% / 0.3)" stroke-width="0.8"/>
+              <text x="22" y="27" text-anchor="middle" fill="hsl(280 50% 55% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">FP</text>
+              <text x="42" y="27" fill="hsl(280 50% 55% / 0.7)" font-size="9" font-family="system-ui">{t("v3.teams.flowpilot.engineering")}</text>
+            </g>
+          </svg>
+        </div>
+
+        <!-- ═══════════════ DESIGN OVERLAY ═══════════════ -->
+        <div class="teams-overlay" id="teams-panel-design" role="tabpanel" data-panel="design" aria-hidden="true">
+          <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Binding annotations -->
+            <path d="M765 335 L760 335" stroke="hsl(200 60% 50% / 0.3)" stroke-width="1" stroke-dasharray="3 2" fill="none"/>
+            <text x="700" y="375" fill="hsl(200 60% 50% / 0.5)" font-size="8" font-family="monospace">→ bound to output</text>
+
+            <!-- UI preview panel -->
+            <g transform="translate(760, 100)">
+              <rect width="180" height="210" rx="8" fill="hsl(220 15% 10%)" stroke="hsl(220 15% 25%)" stroke-width="1"/>
+              <!-- Window chrome -->
+              <rect width="180" height="28" rx="8" fill="hsl(220 15% 13%)"/>
+              <rect y="20" width="180" height="8" fill="hsl(220 15% 13%)"/>
+              <circle cx="14" cy="14" r="3.5" fill="hsl(0 60% 55% / 0.4)"/>
+              <circle cx="26" cy="14" r="3.5" fill="hsl(45 80% 55% / 0.4)"/>
+              <circle cx="38" cy="14" r="3.5" fill="hsl(161 50% 45% / 0.4)"/>
+              <text x="56" y="18" fill="hsl(220 15% 45%)" font-size="8" font-family="monospace">Preview</text>
+              <!-- Mini bar chart -->
+              <rect x="16" y="44" width="148" height="16" rx="3" fill="hsl(220 15% 15%)"/>
+              <text x="24" y="55" fill="hsl(220 15% 50%)" font-size="8" font-family="system-ui">Monthly Reports</text>
+              <rect x="16" y="70" width="20" height="50" rx="3" fill="hsl(222 89% 60% / 0.2)"/>
+              <rect x="42" y="55" width="20" height="65" rx="3" fill="hsl(222 89% 60% / 0.3)"/>
+              <rect x="68" y="62" width="20" height="58" rx="3" fill="hsl(222 89% 60% / 0.25)"/>
+              <rect x="94" y="45" width="20" height="75" rx="3" fill="hsl(161 50% 45% / 0.3)"/>
+              <rect x="120" y="50" width="20" height="70" rx="3" fill="hsl(161 50% 45% / 0.25)"/>
+              <!-- Mini KPI row -->
+              <rect x="16" y="132" width="44" height="30" rx="4" fill="hsl(220 15% 15%)"/>
+              <text x="38" y="146" text-anchor="middle" fill="hsl(161 50% 55% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">94%</text>
+              <text x="38" y="157" text-anchor="middle" fill="hsl(220 15% 40%)" font-size="6" font-family="system-ui">SLA met</text>
+              <rect x="68" y="132" width="44" height="30" rx="4" fill="hsl(220 15% 15%)"/>
+              <text x="90" y="146" text-anchor="middle" fill="hsl(222 89% 60% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">1.2k</text>
+              <text x="90" y="157" text-anchor="middle" fill="hsl(220 15% 40%)" font-size="6" font-family="system-ui">processed</text>
+              <rect x="120" y="132" width="44" height="30" rx="4" fill="hsl(220 15% 15%)"/>
+              <text x="142" y="146" text-anchor="middle" fill="hsl(45 80% 55% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">3</text>
+              <text x="142" y="157" text-anchor="middle" fill="hsl(220 15% 40%)" font-size="6" font-family="system-ui">pending</text>
+              <!-- Mini table -->
+              <rect x="16" y="172" width="148" height="28" rx="3" fill="hsl(220 15% 15%)"/>
+              <text x="24" y="184" fill="hsl(220 15% 40%)" font-size="7" font-family="monospace">ID    Status   Time</text>
+              <text x="24" y="194" fill="hsl(220 15% 35%)" font-size="6.5" font-family="monospace">#401  done     1.3s</text>
+            </g>
+
+            <!-- Design tokens strip -->
+            <g transform="translate(760, 330)">
+              <rect width="180" height="48" rx="8" fill="hsl(220 15% 10%)" stroke="hsl(220 15% 25%)" stroke-width="1"/>
+              <text x="12" y="16" fill="hsl(220 15% 45%)" font-size="8" font-family="system-ui" font-weight="600">Design Tokens</text>
+              <!-- Color swatches -->
+              <circle cx="20" cy="34" r="8" fill="hsl(222 89% 60%)"/>
+              <circle cx="42" cy="34" r="8" fill="hsl(161 50% 45%)"/>
+              <circle cx="64" cy="34" r="8" fill="hsl(280 50% 55%)"/>
+              <circle cx="86" cy="34" r="8" fill="hsl(45 80% 50%)"/>
+              <circle cx="108" cy="34" r="8" fill="hsl(200 60% 50%)"/>
+              <circle cx="130" cy="34" r="8" fill="hsl(220 15% 30%)"/>
+            </g>
+
+            <!-- Component inspector badge -->
+            <g transform="translate(760, 395)">
+              <rect width="180" height="28" rx="8" fill="hsl(220 15% 10%)" stroke="hsl(220 15% 25%)" stroke-width="1"/>
+              <text x="12" y="18" fill="hsl(220 15% 45%)" font-size="8" font-family="system-ui">&lt;BarChart /&gt; — bound to Transform</text>
+            </g>
+
+            <!-- FlowPilot chat bubble -->
+            <g transform="translate(60, 430)">
+              <rect width="300" height="44" rx="10" fill="hsl(200 60% 50% / 0.08)" stroke="hsl(200 60% 50% / 0.25)" stroke-width="1"/>
+              <circle cx="22" cy="22" r="10" fill="hsl(200 60% 50% / 0.15)" stroke="hsl(200 60% 50% / 0.3)" stroke-width="0.8"/>
+              <text x="22" y="27" text-anchor="middle" fill="hsl(200 60% 50% / 0.7)" font-size="10" font-family="system-ui" font-weight="700">FP</text>
+              <text x="42" y="27" fill="hsl(200 60% 50% / 0.7)" font-size="9.5" font-family="system-ui">{t("v3.teams.flowpilot.design")}</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Description cards -->
+    <div class="reveal teams-reveal grid grid-cols-1 md:grid-cols-3 gap-6 mt-10 md:mt-14 mx-auto max-w-4xl">
+      <div class="teams-card rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-6">
+        <div class="flex items-center gap-2 mb-3">
+          <h3 class="text-sm font-semibold">{t("v3.teams.business.title")}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground leading-relaxed">{t("v3.teams.business.desc")}</p>
+      </div>
+      <div class="teams-card rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-6">
+        <div class="flex items-center gap-2 mb-3">
+          <h3 class="text-sm font-semibold">{t("v3.teams.engineering.title")}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground leading-relaxed">{t("v3.teams.engineering.desc")}</p>
+      </div>
+      <div class="teams-card rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm p-6">
+        <div class="flex items-center gap-2 mb-3">
+          <h3 class="text-sm font-semibold">{t("v3.teams.design.title")}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground leading-relaxed">{t("v3.teams.design.desc")}</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .teams-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.35;
+  }
+  .teams-orb--purple {
+    width: 500px;
+    height: 500px;
+    top: -120px;
+    left: -100px;
+    background: radial-gradient(circle, hsl(280 50% 55% / 0.1), transparent 70%);
+  }
+  .teams-orb--blue {
+    width: 400px;
+    height: 400px;
+    bottom: -80px;
+    right: -80px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.08), transparent 70%);
+  }
+
+  .teams-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .teams-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .teams-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(220 15% 55%);
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    transition: color 0.2s, background 0.2s, border-color 0.2s;
+    white-space: nowrap;
+  }
+  .teams-tab:hover {
+    color: hsl(220 15% 80%);
+    background: hsl(220 15% 50% / 0.06);
+  }
+  .teams-tab.is-active {
+    color: hsl(222 89% 70%);
+    background: hsl(222 89% 60% / 0.1);
+    border-color: hsl(222 89% 60% / 0.2);
+  }
+  .teams-tab__icon {
+    font-size: 0.875rem;
+  }
+
+  .teams-overlay {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+  }
+  .teams-overlay.is-active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .teams-card {
+    transition: border-color 0.2s;
+  }
+  .teams-card:hover {
+    border-color: hsl(222 89% 60% / 0.25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .teams-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .teams-overlay {
+      transition: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initTeamsTabs() {
+    const tabs = document.querySelectorAll<HTMLButtonElement>(".teams-tab");
+    const panels = document.querySelectorAll<HTMLDivElement>(".teams-overlay");
+    if (!tabs.length || !panels.length) return;
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const target = tab.dataset.tab;
+        if (!target) return;
+
+        tabs.forEach((t) => {
+          const isActive = t.dataset.tab === target;
+          t.classList.toggle("is-active", isActive);
+          t.setAttribute("aria-selected", String(isActive));
+        });
+
+        panels.forEach((p) => {
+          const isActive = p.dataset.panel === target;
+          p.classList.toggle("is-active", isActive);
+          p.setAttribute("aria-hidden", String(!isActive));
+        });
+      });
+    });
+  }
+
+  function initTeamsReveal() {
+    const els = document.querySelectorAll(".teams-section .teams-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initTeamsReveal();
+  initTeamsTabs();
+</script>

@@ -35,6 +35,12 @@ export const deFinance: Record<string, string> = {
 	"ind.solution.item4.title": "Versionskontrollierte Prozesse",
 	"ind.solution.item4.desc":
 		"Jede Workflow-Änderung wird in Git nachverfolgt. Änderungen zurücksetzen, vergleichen und genehmigen, bevor sie live gehen.",
+	"ind.solution.item5.title": "Regionsbasierte Compliance",
+	"ind.solution.item5.desc":
+		"Leiten Sie Finanz-Workflows automatisch durch jurisdiktionsspezifische Regelsätze. EU-, US- und APAC-Vorschriften werden basierend auf dem Transaktionsursprung angewendet — MiFID II, Dodd-Frank oder MAS ohne manuelles Umschalten.",
+	"ind.solution.item6.title": "Branchen-Vorlagenbibliothek",
+	"ind.solution.item6.desc":
+		"Starten Sie mit vorgefertigten, auditierbaren Workflow-Vorlagen für KYC, AML, Abstimmung und regulatorische Berichterstattung. Teilen Sie Vorlagen innerhalb Ihrer Organisation oder übernehmen Sie Branchenstandards.",
 	"ind.features.tagline": "Funktionen",
 	"ind.features.headline": "Entwickelt für Finanzteams",
 	"ind.feature.1.title": "ERP-Konnektoren",
@@ -55,6 +61,12 @@ export const deFinance: Record<string, string> = {
 	"ind.feature.6.title": "Genehmigungsworkflows",
 	"ind.feature.6.desc":
 		"Leiten Sie Ergebnisse zur Prüfung mit rollenbasierten Berechtigungen und digitalen Signaturen weiter.",
+	"ind.feature.7.title": "Jurisdiktions-Routing",
+	"ind.feature.7.desc":
+		"Definieren Sie regionsspezifische Compliance-Regeln und lassen Sie Workflows automatisch die richtige Regulierung basierend auf Standort oder Transaktionstyp anwenden.",
+	"ind.feature.8.title": "Unternehmensübergreifende Vorlagen",
+	"ind.feature.8.desc":
+		"Übernehmen und teilen Sie standardisierte Finanzprozess-Vorlagen zwischen Unternehmen. Branchenerprobte KYC-, AML- und Reporting-Workflows zur individuellen Anpassung.",
 	"ind.cta.headline": "Bereit, Ihre Finanzprozesse zu automatisieren?",
 	"ind.cta.description":
 		"Erfahren Sie, wie Flow-Like Ihre tabellenbasierten Prozesse durch prüfbare, automatisierte Workflows ersetzen kann. Buchen Sie eine Demo, die auf Ihre Finanzoperationen zugeschnitten ist.",

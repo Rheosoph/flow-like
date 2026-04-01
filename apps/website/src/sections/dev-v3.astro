@@ -1,0 +1,436 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const codeBlocks: Record<string, string> = {
+  rust: `<span class="text-zinc-500">// Define a custom node in Rust — 15 lines</span>
+<span class="text-purple-400">use</span> flow_like::prelude::*;
+
+<span class="text-purple-400">#[derive(</span><span class="text-blue-400">Node</span><span class="text-purple-400">)]</span>
+<span class="text-purple-400">pub struct</span> <span class="text-blue-400">SentimentAnalyzer</span> {
+    <span class="text-purple-400">#[input]</span>  text: <span class="text-blue-400">String</span>,
+    <span class="text-purple-400">#[output]</span> score: <span class="text-blue-400">f64</span>,
+    <span class="text-purple-400">#[output]</span> label: <span class="text-blue-400">String</span>,
+}
+
+<span class="text-purple-400">impl</span> <span class="text-blue-400">Execute</span> <span class="text-purple-400">for</span> <span class="text-blue-400">SentimentAnalyzer</span> {
+    <span class="text-purple-400">async fn</span> <span class="text-yellow-400">run</span>(&amp;self, ctx: &amp;<span class="text-blue-400">Context</span>) -&gt; <span class="text-blue-400">Result</span>&lt;()&gt; {
+        <span class="text-purple-400">let</span> result = ctx.<span class="text-yellow-400">analyze</span>(&amp;self.text).await?;
+        self.score.<span class="text-yellow-400">set</span>(result.score);
+        self.label.<span class="text-yellow-400">set</span>(result.label);
+        <span class="text-blue-400">Ok</span>(())
+    }
+}`,
+  python: `<span class="text-zinc-500"># Define a custom node in Python — 12 lines</span>
+<span class="text-purple-400">from</span> flow_like <span class="text-purple-400">import</span> <span class="text-blue-400">Node</span>, <span class="text-blue-400">Input</span>, <span class="text-blue-400">Output</span>, <span class="text-blue-400">Context</span>
+
+<span class="text-purple-400">class</span> <span class="text-blue-400">SentimentAnalyzer</span>(<span class="text-blue-400">Node</span>):
+    text: <span class="text-blue-400">Input</span>[<span class="text-blue-400">str</span>]
+    score: <span class="text-blue-400">Output</span>[<span class="text-blue-400">float</span>]
+    label: <span class="text-blue-400">Output</span>[<span class="text-blue-400">str</span>]
+
+    <span class="text-purple-400">async def</span> <span class="text-yellow-400">run</span>(self, ctx: <span class="text-blue-400">Context</span>):
+        result = <span class="text-purple-400">await</span> ctx.<span class="text-yellow-400">analyze</span>(self.text)
+        self.score.<span class="text-yellow-400">set</span>(result.score)
+        self.label.<span class="text-yellow-400">set</span>(result.label)`,
+  typescript: `<span class="text-zinc-500">// Define a custom node in TypeScript — 14 lines</span>
+<span class="text-purple-400">import</span> { <span class="text-blue-400">Node</span>, <span class="text-blue-400">Input</span>, <span class="text-blue-400">Output</span>, <span class="text-blue-400">Context</span> } <span class="text-purple-400">from</span> <span class="text-emerald-400">'@flow-like/sdk'</span>;
+
+<span class="text-purple-400">export class</span> <span class="text-blue-400">SentimentAnalyzer</span> <span class="text-purple-400">extends</span> <span class="text-blue-400">Node</span> {
+  <span class="text-purple-400">@Input</span>() text: <span class="text-blue-400">string</span>;
+  <span class="text-purple-400">@Output</span>() score: <span class="text-blue-400">number</span>;
+  <span class="text-purple-400">@Output</span>() label: <span class="text-blue-400">string</span>;
+
+  <span class="text-purple-400">async</span> <span class="text-yellow-400">run</span>(ctx: <span class="text-blue-400">Context</span>): <span class="text-blue-400">Promise</span>&lt;<span class="text-blue-400">void</span>&gt; {
+    <span class="text-purple-400">const</span> result = <span class="text-purple-400">await</span> ctx.<span class="text-yellow-400">analyze</span>(this.text);
+    this.score.<span class="text-yellow-400">set</span>(result.score);
+    this.label.<span class="text-yellow-400">set</span>(result.label);
+  }
+}`,
+  go: `<span class="text-zinc-500">// Define a custom node in Go — 20 lines</span>
+<span class="text-purple-400">package</span> nodes
+
+<span class="text-purple-400">import</span> <span class="text-emerald-400">"github.com/tm9657/flow-like-sdk-go"</span>
+
+<span class="text-purple-400">type</span> <span class="text-blue-400">SentimentAnalyzer</span> <span class="text-purple-400">struct</span> {
+    Text  flowlike.<span class="text-blue-400">Input</span>[<span class="text-blue-400">string</span>]
+    Score flowlike.<span class="text-blue-400">Output</span>[<span class="text-blue-400">float64</span>]
+    Label flowlike.<span class="text-blue-400">Output</span>[<span class="text-blue-400">string</span>]
+}
+
+<span class="text-purple-400">func</span> (n *<span class="text-blue-400">SentimentAnalyzer</span>) <span class="text-yellow-400">Run</span>(ctx *flowlike.<span class="text-blue-400">Context</span>) <span class="text-blue-400">error</span> {
+    result, err := ctx.<span class="text-yellow-400">Analyze</span>(n.Text.<span class="text-yellow-400">Get</span>())
+    <span class="text-purple-400">if</span> err != <span class="text-purple-400">nil</span> { <span class="text-purple-400">return</span> err }
+    n.Score.<span class="text-yellow-400">Set</span>(result.Score)
+    n.Label.<span class="text-yellow-400">Set</span>(result.Label)
+    <span class="text-purple-400">return</span> <span class="text-purple-400">nil</span>
+}`,
+};
+---
+
+<section class="dev-section relative isolate overflow-hidden py-24 md:py-32">
+  <!-- Background -->
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="dev-orb dev-orb--blue"></div>
+    <div class="dev-orb dev-orb--purple"></div>
+  </div>
+
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="reveal dev-reveal mx-auto max-w-3xl text-center mb-10 md:mb-14">
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-3.5 py-1 text-xs font-medium text-primary mb-4">
+        {t("v3.dev.label")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v3.dev.headline")}
+      </h2>
+    </div>
+
+    <!-- Editor panel -->
+    <div class="reveal dev-reveal mx-auto w-full max-w-6xl" id="dev-editor">
+      <div class="rounded-xl border border-border/40 bg-zinc-950 shadow-2xl shadow-black/30 overflow-hidden">
+        <!-- Tab strip -->
+        <div class="flex items-center gap-0 border-b border-white/[0.06] bg-zinc-900/80 px-2 overflow-x-auto" role="tablist" aria-label="Language tabs">
+          <button class="dev-tab is-active" data-lang="rust" role="tab" aria-selected="true" type="button">
+            <span class="dev-tab__dot bg-orange-400"></span>Rust
+          </button>
+          <button class="dev-tab" data-lang="python" role="tab" aria-selected="false" type="button">
+            <span class="dev-tab__dot bg-sky-400"></span>Python
+          </button>
+          <button class="dev-tab" data-lang="typescript" role="tab" aria-selected="false" type="button">
+            <span class="dev-tab__dot bg-blue-400"></span>TypeScript
+          </button>
+          <button class="dev-tab" data-lang="go" role="tab" aria-selected="false" type="button">
+            <span class="dev-tab__dot bg-cyan-400"></span>Go
+          </button>
+          <button class="dev-tab dev-tab--more" id="dev-more-btn" role="tab" aria-selected="false" type="button">
+            More…
+          </button>
+          <!-- Expanded language pills (hidden by default) -->
+          <div class="dev-more-langs hidden flex-wrap gap-1 py-1.5 ml-1" id="dev-more-langs">
+            <span class="dev-lang-pill">Java</span>
+            <span class="dev-lang-pill">C#</span>
+            <span class="dev-lang-pill">Kotlin</span>
+            <span class="dev-lang-pill">C++</span>
+            <span class="dev-lang-pill">Swift</span>
+            <span class="dev-lang-pill">Zig</span>
+            <span class="dev-lang-pill">Nim</span>
+            <span class="dev-lang-pill">Lua</span>
+          </div>
+        </div>
+
+        <!-- Editor body -->
+        <div class="flex flex-col lg:flex-row min-h-[420px]">
+          <!-- Code pane (left 60%) -->
+          <div class="lg:w-[60%] w-full border-b lg:border-b-0 lg:border-r border-white/[0.06] relative">
+            <!-- Line numbers gutter + code -->
+            <div class="p-4 sm:p-5 font-mono text-[13px] leading-relaxed overflow-x-auto">
+
+              {Object.entries(codeBlocks).map(([lang, html]) => (
+                <div class={`dev-code ${lang === 'rust' ? 'is-active' : 'hidden'}`} data-lang={lang}>
+                  <pre class="whitespace-pre" set:html={html} />
+                </div>
+              ))}
+
+            </div>
+          </div>
+
+          <!-- Output + Canvas pane (right 40%) -->
+          <div class="lg:w-[40%] w-full flex flex-col">
+            <!-- Terminal output -->
+            <div class="flex-1 border-b border-white/[0.06] p-4 sm:p-5">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Terminal</span>
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              </div>
+              <div class="font-mono text-[12px] leading-relaxed text-zinc-400" id="dev-terminal">
+                <div class="dev-term-line" data-delay="0"><span class="text-zinc-600">$</span> flow-like build --node SentimentAnalyzer</div>
+                <div class="dev-term-line opacity-0" data-delay="400"><span class="text-emerald-400">[ok]</span> Compiled to WASM (1.2 KB)</div>
+                <div class="dev-term-line opacity-0" data-delay="800"><span class="text-emerald-400">[ok]</span> Type-checked inputs &amp; outputs</div>
+                <div class="dev-term-line opacity-0" data-delay="1200"><span class="text-emerald-400">[ok]</span> Sandboxed &amp; published to registry</div>
+                <div class="dev-term-line opacity-0" data-delay="1600"><span class="text-zinc-600">$</span> <span class="dev-cursor">_</span></div>
+              </div>
+            </div>
+
+            <!-- Canvas preview -->
+            <div class="flex-1 p-4 sm:p-5 flex items-center justify-center">
+              <svg class="w-full max-w-[280px]" viewBox="0 0 280 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Node body -->
+                <rect x="40" y="10" width="200" height="120" rx="12" fill="hsl(222 89% 60% / 0.06)" stroke="hsl(222 89% 60% / 0.25)" stroke-width="1.5"/>
+                <!-- Header -->
+                <rect x="40" y="10" width="200" height="32" rx="12" fill="hsl(222 89% 60% / 0.1)"/>
+                <rect x="40" y="30" width="200" height="12" fill="hsl(222 89% 60% / 0.1)"/>
+                <text x="140" y="32" text-anchor="middle" fill="hsl(222 89% 60% / 0.8)" font-size="11" font-family="system-ui" font-weight="600">SentimentAnalyzer</text>
+
+                <!-- Input pin: text -->
+                <circle cx="40" cy="64" r="5" fill="hsl(222 89% 60% / 0.15)" stroke="hsl(222 89% 60% / 0.4)" stroke-width="1.2"/>
+                <text x="54" y="68" fill="hsl(0 0% 60%)" font-size="9" font-family="monospace">text</text>
+                <!-- Wire in -->
+                <path d="M4 64 C20 64, 28 64, 35 64" stroke="hsl(222 89% 60% / 0.3)" stroke-width="1.5" stroke-dasharray="3 2" fill="none"/>
+
+                <!-- Output pin: score -->
+                <circle cx="240" cy="56" r="5" fill="hsl(161 50% 45% / 0.15)" stroke="hsl(161 50% 45% / 0.4)" stroke-width="1.2"/>
+                <text x="226" y="60" text-anchor="end" fill="hsl(0 0% 60%)" font-size="9" font-family="monospace">score</text>
+                <!-- Wire out -->
+                <path d="M245 56 C258 56, 264 56, 276 56" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5" stroke-dasharray="3 2" fill="none"/>
+
+                <!-- Output pin: label -->
+                <circle cx="240" cy="80" r="5" fill="hsl(161 50% 45% / 0.15)" stroke="hsl(161 50% 45% / 0.4)" stroke-width="1.2"/>
+                <text x="226" y="84" text-anchor="end" fill="hsl(0 0% 60%)" font-size="9" font-family="monospace">label</text>
+                <!-- Wire out -->
+                <path d="M245 80 C258 80, 264 80, 276 80" stroke="hsl(161 50% 45% / 0.3)" stroke-width="1.5" stroke-dasharray="3 2" fill="none"/>
+
+                <!-- Type badges -->
+                <rect x="58" y="74" width="36" height="14" rx="3" fill="hsl(280 60% 55% / 0.1)" stroke="hsl(280 60% 55% / 0.2)" stroke-width="0.6"/>
+                <text x="76" y="84" text-anchor="middle" fill="hsl(280 60% 55% / 0.5)" font-size="7" font-family="monospace">String</text>
+
+                <rect x="166" y="98" width="28" height="14" rx="3" fill="hsl(45 80% 50% / 0.1)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.6"/>
+                <text x="180" y="108" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="7" font-family="monospace">f64</text>
+
+                <rect x="198" y="98" width="36" height="14" rx="3" fill="hsl(45 80% 50% / 0.1)" stroke="hsl(45 80% 50% / 0.2)" stroke-width="0.6"/>
+                <text x="216" y="108" text-anchor="middle" fill="hsl(45 80% 50% / 0.5)" font-size="7" font-family="monospace">String</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature strip -->
+    <div class="reveal dev-reveal mt-10 md:mt-14 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
+      <div class="dev-feature-card">
+        <span class="font-semibold text-sm">{t("v3.dev.feature.rust")}</span>
+        <span class="text-xs text-muted-foreground">{t("v3.dev.feature.rust.desc")}</span>
+      </div>
+      <div class="dev-feature-card">
+        <span class="font-semibold text-sm">{t("v3.dev.feature.langs")}</span>
+        <span class="text-xs text-muted-foreground">{t("v3.dev.feature.langs.desc")}</span>
+      </div>
+      <div class="dev-feature-card">
+        <span class="font-semibold text-sm">{t("v3.dev.feature.nodes")}</span>
+        <span class="text-xs text-muted-foreground">{t("v3.dev.feature.nodes.desc")}</span>
+      </div>
+      <div class="dev-feature-card">
+        <span class="font-semibold text-sm">{t("v3.dev.feature.open")}</span>
+        <span class="text-xs text-muted-foreground">{t("v3.dev.feature.open.desc")}</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .dev-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.35;
+  }
+  .dev-orb--blue {
+    width: 500px;
+    height: 500px;
+    top: -120px;
+    left: -100px;
+    background: radial-gradient(circle, hsl(222 89% 60% / 0.12), transparent 70%);
+  }
+  .dev-orb--purple {
+    width: 400px;
+    height: 400px;
+    bottom: -80px;
+    right: -60px;
+    background: radial-gradient(circle, hsl(280 60% 55% / 0.08), transparent 70%);
+  }
+
+  .dev-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .dev-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Tabs */
+  .dev-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: hsl(0 0% 50%);
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .dev-tab:hover {
+    color: hsl(0 0% 75%);
+  }
+  .dev-tab.is-active {
+    color: hsl(0 0% 90%);
+    border-bottom-color: hsl(222 89% 60%);
+  }
+  .dev-tab__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: none;
+  }
+  .dev-tab.is-active .dev-tab__dot {
+    display: block;
+  }
+  .dev-tab--more {
+    color: hsl(0 0% 40%);
+    font-size: 12px;
+  }
+  .dev-tab--more:hover {
+    color: hsl(0 0% 60%);
+  }
+
+  .dev-lang-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: hsl(0 0% 50%);
+    background: hsl(0 0% 100% / 0.04);
+    border-radius: 9999px;
+    border: 1px solid hsl(0 0% 100% / 0.06);
+  }
+
+  /* Feature cards */
+  .dev-feature-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
+    background: color-mix(in oklch, var(--background) 60%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Terminal typing */
+  .dev-cursor {
+    animation: dev-blink 1s step-end infinite;
+  }
+  @keyframes dev-blink {
+    50% { opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dev-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .dev-term-line {
+      opacity: 1 !important;
+    }
+    .dev-cursor {
+      animation: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initDevEditor() {
+    const tabs = document.querySelectorAll<HTMLButtonElement>("#dev-editor .dev-tab[data-lang]");
+    const codeBlocks = document.querySelectorAll<HTMLDivElement>("#dev-editor .dev-code");
+    const moreBtn = document.getElementById("dev-more-btn");
+    const moreLangs = document.getElementById("dev-more-langs");
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const lang = tab.dataset.lang;
+
+        tabs.forEach((t) => {
+          t.classList.remove("is-active");
+          t.setAttribute("aria-selected", "false");
+        });
+        tab.classList.add("is-active");
+        tab.setAttribute("aria-selected", "true");
+
+        codeBlocks.forEach((block) => {
+          if (block.dataset.lang === lang) {
+            block.classList.remove("hidden");
+            block.classList.add("is-active");
+          } else {
+            block.classList.add("hidden");
+            block.classList.remove("is-active");
+          }
+        });
+      });
+    });
+
+    if (moreBtn && moreLangs) {
+      moreBtn.addEventListener("click", () => {
+        moreLangs.classList.toggle("hidden");
+        moreLangs.classList.toggle("flex");
+      });
+    }
+  }
+
+  function initDevTerminal() {
+    const terminal = document.getElementById("dev-terminal");
+    if (!terminal) return;
+
+    const lines = terminal.querySelectorAll<HTMLDivElement>(".dev-term-line");
+    let animated = false;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            lines.forEach((line) => {
+              const delay = parseInt(line.dataset.delay || "0", 10);
+              setTimeout(() => {
+                line.style.transition = "opacity 0.3s ease";
+                line.style.opacity = "1";
+              }, delay);
+            });
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.3 },
+    );
+    observer.observe(terminal);
+  }
+
+  function initDevReveal() {
+    const els = document.querySelectorAll(".dev-section .dev-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initDevReveal();
+  initDevEditor();
+  initDevTerminal();
+</script>
