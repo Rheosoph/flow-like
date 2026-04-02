@@ -95,8 +95,15 @@ tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.9.0"
 xcap = "0.8.1"
 arboard = "3.6.1"
-rdev.workspace = true
 enigo = "0.6.1"
+
+[target."cfg(any(target_os = \"macos\", windows))".dependencies]
+rdev.workspace = true
+
+[target."cfg(target_os = \"linux\")".dependencies]
+rdev = { workspace = true, features = ["x11", "wayland"] }
+atspi = { version = "0.25", features = ["zbus"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
@@ -105,7 +112,7 @@ core-graphics = "0.25"
 objc2 = "0.6.3"
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.61", features = [
     "Win32_UI_Accessibility",
     "Win32_Foundation",
     "Win32_System_Com",
@@ -113,10 +120,6 @@ windows = { version = "0.58", features = [
     "Win32_System_Variant",
 ] }
 webview2-com = "0.38"
-
-[target."cfg(target_os = \"linux\")".dependencies]
-atspi = "0.25"
-zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target."cfg(target_os = \"ios\")".dependencies]
 objc2 = "0.6.3"

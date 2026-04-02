@@ -47,11 +47,20 @@ export class WebBitState implements IBitState {
 	}
 
 	async addBit(bit: IBit, profile: ISettingsProfile): Promise<void> {
-		await apiPost("profile/bits/add", { bit_id: bit.id }, this.backend.auth);
+		const profileId = profile.hub_profile.id;
+		if (!profileId) return;
+		const currentBits = profile.hub_profile.bits ?? [];
+		if (currentBits.some((id) => id.split(":").pop() === bit.id)) return;
+		const updatedBits = [...currentBits, bit.id];
+		await apiPost(`profile/${profileId}`, { bit_ids: updatedBits }, this.backend.auth);
 	}
 
 	async removeBit(bit: IBit, profile: ISettingsProfile): Promise<void> {
-		await apiPost("profile/bits/remove", { bit_id: bit.id }, this.backend.auth);
+		const profileId = profile.hub_profile.id;
+		if (!profileId) return;
+		const currentBits = profile.hub_profile.bits ?? [];
+		const updatedBits = currentBits.filter((id) => id.split(":").pop() !== bit.id);
+		await apiPost(`profile/${profileId}`, { bit_ids: updatedBits }, this.backend.auth);
 	}
 
 	async getPackSize(bits: IBit[]): Promise<number> {

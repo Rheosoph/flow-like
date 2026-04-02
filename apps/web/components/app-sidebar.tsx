@@ -148,7 +148,7 @@ const data = {
 	],
 	navDev: [
 		{
-			title: "Packages",
+			title: "Package Registry",
 			url: "/store/packages",
 			icon: AnimatedPackageIcon,
 			isActive: false,
@@ -222,7 +222,7 @@ function InnerSidebar() {
 				<SpotlightTrigger />
 			</SidebarHeader>
 			<SidebarContent>
-				<NavMain items={data.navMain} />
+				<NavMain items={data.navMain} devItems={data.navDev} />
 				<Shortcuts />
 				<Flows />
 			</SidebarContent>
@@ -808,8 +808,10 @@ function NavCollapsible({
 
 function NavMain({
 	items,
+	devItems,
 }: Readonly<{
 	items: INavItem[];
+	devItems: INavItem[];
 }>) {
 	const backend = useBackend();
 	const router = useRouter();
@@ -837,6 +839,24 @@ function NavMain({
 								<NavFlatItem key={item.title} item={item} pathname={pathname} />
 							),
 						)}
+				</SidebarMenu>
+			</SidebarGroup>
+			<SidebarGroup>
+				<SidebarGroupLabel>Development</SidebarGroupLabel>
+				<SidebarMenu>
+					{devItems.map((item) =>
+						item.items && item.items.length > 0 ? (
+							<NavCollapsible
+								key={item.title}
+								item={item}
+								pathname={pathname}
+								sidebarOpen={open}
+								onNavigate={router.push}
+							/>
+						) : (
+							<NavFlatItem key={item.title} item={item} pathname={pathname} />
+						),
+					)}
 				</SidebarMenu>
 			</SidebarGroup>
 			{(info.data?.permission ?? 0) > 0 && (

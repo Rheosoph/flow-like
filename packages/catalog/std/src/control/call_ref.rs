@@ -83,18 +83,47 @@ impl NodeLogic for CallReferenceNode {
 
         let node_ref = reference_function.node.clone();
 
+        // Look up the function's layer for proper variable isolation and override handling
+        let board = context.get_board().await?;
+        let layer_id = {
+            let guard = reference_function.node.lock().await;
+            guard.layer.clone()
+        };
+        let function_variables = layer_id
+            .as_ref()
+            .and_then(|id| board.layers.get(id))
+            .map(|layer| layer.variables.clone())
+            .unwrap_or_default();
+
+        let mut sub_context = context
+            .create_function_context(reference_function, &function_variables)
+            .await;
+        sub_context.delegated = true;
+
+        // Inject values into the override map for layer input pins
+        if let Some(layer) = layer_id.as_ref().and_then(|id| board.layers.get(id)) {
+            for (pin_id, pin) in &layer.pins {
+                if pin.pin_type != PinType::Input || pin.data_type == VariableType::Execution {
+                    continue;
+                }
+                if let Some(value) = content_pins.get(&pin.name) {
+                    sub_context.override_pin_value(pin_id, value.clone());
+                }
+            }
+        }
+
+        // Also set on the referenced node's output pins (shared storage + overrides)
         for (_id, pin) in reference_function.pins.iter() {
             if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
                 continue;
             }
 
             if let Some(value) = content_pins.get(&pin.name) {
+                sub_context.override_pin_value(&pin.id, value.clone());
                 pin.set_value(value.clone()).await;
             }
         }
 
-        let mut sub_context = context.create_sub_context(reference_function).await;
-        sub_context.delegated = true;
         let run = InternalNode::trigger(&mut sub_context, &mut None, true).await;
         sub_context.end_trace();
         context.push_sub_context(&mut sub_context);

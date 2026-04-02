@@ -2,6 +2,23 @@
 
 use flow_like_types::Value;
 
+pub fn has_csv_table_data(value: &Value) -> bool {
+    match value {
+        Value::Object(obj) => {
+            let has_headers = obj
+                .get("headers")
+                .and_then(|headers| headers.as_array())
+                .is_some_and(|headers| !headers.is_empty());
+            let has_rows = obj
+                .get("rows")
+                .and_then(|rows| rows.as_array())
+                .is_some_and(|rows| !rows.is_empty());
+            has_headers || has_rows
+        }
+        _ => false,
+    }
+}
+
 /// Extract headers and rows from a CSVTable JSON value (from DataFusion queries)
 pub fn extract_from_csv_table(
     value: &Value,
@@ -126,7 +143,7 @@ pub async fn get_chart_data(
 ) -> flow_like_types::Result<(Vec<String>, Vec<Vec<String>>)> {
     // Try to get data from CSVTable first, then fall back to CSV text
     if let Ok(table_value) = context.evaluate_pin::<Value>("table").await
-        && !table_value.is_null()
+        && has_csv_table_data(&table_value)
     {
         return extract_from_csv_table(&table_value);
     }

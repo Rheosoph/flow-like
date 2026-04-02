@@ -24,40 +24,42 @@ pub async fn capture_region(
 ) -> Result<String, TauriFunctionError> {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        use xcap::Monitor;
+        // Scope Monitor usage (non-Send) before any .await
+        let (cropped, crop_width, crop_height, scale) = {
+            use xcap::Monitor;
 
-        let monitors = Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            let monitors =
+                Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-        let monitor = find_monitor_at(x, y, &monitors)
-            .ok_or_else(|| TauriFunctionError::new("No monitor found at coordinates"))?;
+            let monitor = find_monitor_at(x, y, &monitors)
+                .ok_or_else(|| TauriFunctionError::new("No monitor found at coordinates"))?;
 
-        let screenshot = monitor
-            .capture_image()
-            .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            let screenshot = monitor
+                .capture_image()
+                .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-        // On HiDPI displays (e.g. macOS Retina), capture_image() returns a
-        // physical-resolution image but monitor x/y/width/height are logical.
-        // Scale logical coordinates to physical pixels for correct cropping.
-        let scale = monitor.scale_factor().unwrap_or(1.0);
+            let scale = monitor.scale_factor().unwrap_or(1.0);
+            let monitor_x = monitor.x().unwrap_or(0);
+            let monitor_y = monitor.y().unwrap_or(0);
 
-        let monitor_x = monitor.x().unwrap_or(0);
-        let monitor_y = monitor.y().unwrap_or(0);
+            let rel_x = ((x - monitor_x) as f32 * scale) as i32;
+            let rel_y = ((y - monitor_y) as f32 * scale) as i32;
+            let scaled_half = (region_size as f32 * scale / 2.0) as i32;
+            let scaled_region = (region_size as f32 * scale) as u32;
 
-        let rel_x = ((x - monitor_x) as f32 * scale) as i32;
-        let rel_y = ((y - monitor_y) as f32 * scale) as i32;
-        let scaled_half = (region_size as f32 * scale / 2.0) as i32;
-        let scaled_region = (region_size as f32 * scale) as u32;
+            let rx = (rel_x - scaled_half).max(0) as u32;
+            let ry = (rel_y - scaled_half).max(0) as u32;
 
-        let rx = (rel_x - scaled_half).max(0) as u32;
-        let ry = (rel_y - scaled_half).max(0) as u32;
+            let max_width = screenshot.width().saturating_sub(rx);
+            let max_height = screenshot.height().saturating_sub(ry);
+            let crop_width = scaled_region.min(max_width);
+            let crop_height = scaled_region.min(max_height);
 
-        let max_width = screenshot.width().saturating_sub(rx);
-        let max_height = screenshot.height().saturating_sub(ry);
-        let crop_width = scaled_region.min(max_width);
-        let crop_height = scaled_region.min(max_height);
+            let dynamic_img = DynamicImage::ImageRgba8(screenshot);
+            let cropped = dynamic_img.crop_imm(rx, ry, crop_width, crop_height);
 
-        let dynamic_img = DynamicImage::ImageRgba8(screenshot);
-        let cropped = dynamic_img.crop_imm(rx, ry, crop_width, crop_height);
+            (cropped, crop_width, crop_height, scale)
+        };
 
         tracing::debug!(
             "Screenshot capture: click=({}, {}), scale={}, cropped={}x{} (physical pixels)",
@@ -107,18 +109,22 @@ pub async fn capture_region(
 pub async fn capture_full_screen(store: &FlowLikeStore) -> Result<String, TauriFunctionError> {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        use xcap::Monitor;
+        // Scope Monitor usage (non-Send) before any .await
+        let screenshot = {
+            use xcap::Monitor;
 
-        let monitors = Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            let monitors =
+                Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-        let primary = monitors
-            .into_iter()
-            .find(|m| m.is_primary().unwrap_or(false))
-            .ok_or_else(|| TauriFunctionError::new("No primary monitor found"))?;
+            let primary = monitors
+                .into_iter()
+                .find(|m| m.is_primary().unwrap_or(false))
+                .ok_or_else(|| TauriFunctionError::new("No primary monitor found"))?;
 
-        let screenshot = primary
-            .capture_image()
-            .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            primary
+                .capture_image()
+                .map_err(|e| TauriFunctionError::new(&e.to_string()))?
+        };
 
         let artifact_id = flow_like_types::create_id();
         let path = Path::from(format!("recordings/screenshots/{}.png", artifact_id));

@@ -21,9 +21,13 @@ pub struct CopyPasteCommand {
     pub original_layers: Vec<Layer>,
     #[serde(default)]
     pub original_variables: Vec<Variable>,
+    #[serde(default)]
+    pub original_refs: HashMap<String, String>,
     pub new_comments: Vec<Comment>,
     pub new_nodes: Vec<Node>,
     pub new_layers: Vec<Layer>,
+    #[serde(default)]
+    pub added_refs: Vec<String>,
     pub current_layer: Option<String>,
     pub old_mouse: Option<(f32, f32, f32)>,
     pub offset: (f32, f32, f32),
@@ -41,12 +45,14 @@ impl CopyPasteCommand {
             original_comments: comments,
             original_layers: layers,
             original_variables: vec![],
+            original_refs: HashMap::new(),
             old_mouse: None,
             current_layer: None,
             offset,
             new_nodes: vec![],
             new_comments: vec![],
             new_layers: vec![],
+            added_refs: vec![],
         }
     }
 }
@@ -374,6 +380,15 @@ impl Command for CopyPasteCommand {
             self.new_layers.push(new_layer);
         }
 
+        // Restore referenced schemas/refs that don't already exist in the board
+        self.added_refs.clear();
+        for (key, value) in &self.original_refs {
+            if !board.refs.contains_key(key) {
+                board.refs.insert(key.clone(), value.clone());
+                self.added_refs.push(key.clone());
+            }
+        }
+
         Ok(())
     }
 
@@ -393,6 +408,11 @@ impl Command for CopyPasteCommand {
         for layer in self.new_layers.iter() {
             board.layers.remove(&layer.id);
         }
+
+        for ref_key in &self.added_refs {
+            board.refs.remove(ref_key);
+        }
+        self.added_refs.clear();
 
         Ok(())
     }
