@@ -171,7 +171,7 @@ const alternateLinks = [
   <body class="bg-background text-foreground antialiased selection:bg-primary/30">
     <main id="content" class="w-full max-w-full overflow-x-clip">
       <AmbientGlow />
-      <Header client:load/>
+      <Header client:only="react"/>
       <HeroV3 lang={lang} />
 
       <SoftSeam />
@@ -218,6 +218,6 @@ const alternateLinks = [
       <CtaV3 lang={lang} />
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>

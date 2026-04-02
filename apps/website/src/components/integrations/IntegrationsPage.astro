@@ -105,7 +105,7 @@ const customFeatures = [
   <body
     class="bg-background text-foreground antialiased overflow-x-hidden max-w-full"
   >
-    <Header client:load />
+    <Header client:only="react" />
 
     <main class="pt-16">
       <!-- HERO -->
@@ -756,7 +756,7 @@ const customFeatures = [
       </section>
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
 
     <script>
       const revealEls = document.querySelectorAll(".int-reveal");

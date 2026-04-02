@@ -111,7 +111,7 @@ const complianceCards = [
   <body
     class="bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground overflow-x-hidden max-w-full"
   >
-    <Header client:load />
+    <Header client:only="react" />
 
     <main class="pt-16">
       <AmbientGlow />
@@ -337,7 +337,7 @@ const complianceCards = [
       </section>
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
 
     <script>
       const els = document.querySelectorAll<HTMLElement>(".sec-reveal");

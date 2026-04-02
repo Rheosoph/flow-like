@@ -69,7 +69,7 @@ const cover = "/og.png";
     <PostHog />
   </head>
   <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
-    <Header client:load />
+    <Header client:only="react" />
 
     <main class="pt-16">
       <Hero t={t} />
@@ -82,6 +82,6 @@ const cover = "/og.png";
       <CTA t={t} />
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>

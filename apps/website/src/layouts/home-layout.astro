@@ -215,7 +215,7 @@ const alternateLinks = Object.keys(languages).map(l => ({
   >
     <main id="content" class="w-full max-w-[100vw] overflow-x-clip pt-16">
       <AmbientGlow />
-      <Header client:load/>
+      <Header client:only="react"/>
 
       <!-- Language-specific hero -->
       <slot name="hero" />
@@ -287,6 +287,6 @@ const alternateLinks = Object.keys(languages).map(l => ({
       </slot>
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>

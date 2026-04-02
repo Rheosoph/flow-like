@@ -85,7 +85,7 @@ const cover = "/og.png";
     </style>
   </head>
   <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
-    <Header client:load />
+    <Header client:only="react" />
 
     <main class="pt-16">
       <BiHero t={t} />
@@ -99,6 +99,6 @@ const cover = "/og.png";
       <BiFAQ t={t} />
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>
