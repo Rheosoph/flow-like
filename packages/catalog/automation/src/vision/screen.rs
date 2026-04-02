@@ -96,15 +96,16 @@ impl NodeLogic for ScreenshotToFileNode {
         let file_path: Option<FlowPath> = context.evaluate_pin("file_path").await.ok();
         let _monitor: i64 = context.evaluate_pin("monitor").await?;
 
-        // Use xcap to capture screenshot (consistent with other vision nodes)
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = monitors
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-        let screenshot = monitor
-            .capture_image()
-            .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+        let screenshot = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+            let monitor = monitors
+                .first()
+                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+            monitor
+                .capture_image()
+                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
+        };
 
         let success = if let Some(path) = file_path {
             let runtime = path.to_runtime(context).await?;
@@ -230,18 +231,20 @@ impl NodeLogic for ScreenshotRegionNode {
         let height: i64 = context.evaluate_pin("height").await?;
         let file_path: Option<FlowPath> = context.evaluate_pin("file_path").await.ok();
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = monitors
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-        let full_image = monitor
-            .capture_image()
-            .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+        let cropped_image = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+            let monitor = monitors
+                .first()
+                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+            let full_image = monitor
+                .capture_image()
+                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-        let cropped =
-            image::imageops::crop_imm(&full_image, x as u32, y as u32, width as u32, height as u32);
-        let cropped_image = cropped.to_image();
+            let cropped =
+                image::imageops::crop_imm(&full_image, x as u32, y as u32, width as u32, height as u32);
+            cropped.to_image()
+        };
 
         let success = if let Some(path) = file_path {
             let runtime = path.to_runtime(context).await?;
@@ -354,23 +357,23 @@ impl NodeLogic for GetPixelColorNode {
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = monitors
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-        let image = monitor
-            .capture_image()
-            .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+        let (r, g, b) = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+            let monitor = monitors
+                .first()
+                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+            let image = monitor
+                .capture_image()
+                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-        if x < 0 || y < 0 || (x as u32) >= image.width() || (y as u32) >= image.height() {
-            return Err(flow_like_types::anyhow!("Pixel position out of bounds"));
-        }
+            if x < 0 || y < 0 || (x as u32) >= image.width() || (y as u32) >= image.height() {
+                return Err(flow_like_types::anyhow!("Pixel position out of bounds"));
+            }
 
-        let pixel = image.get_pixel(x as u32, y as u32);
-        let r = pixel[0];
-        let g = pixel[1];
-        let b = pixel[2];
+            let pixel = image.get_pixel(x as u32, y as u32);
+            (pixel[0], pixel[1], pixel[2])
+        };
 
         let hex = format!("#{:02X}{:02X}{:02X}", r, g, b);
 

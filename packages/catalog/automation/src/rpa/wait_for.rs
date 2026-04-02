@@ -277,7 +277,7 @@ impl NodeLogic for WaitForColorNode {
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
 
         loop {
-            {
+            let color_matches = {
                 let monitors = Monitor::all()
                     .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
                 let monitor = monitors
@@ -293,15 +293,17 @@ impl NodeLogic for WaitForColorNode {
                     let g = pixel[1] as i64;
                     let b = pixel[2] as i64;
 
-                    let matches = (r - target_r).abs() <= tolerance
+                    (r - target_r).abs() <= tolerance
                         && (g - target_g).abs() <= tolerance
-                        && (b - target_b).abs() <= tolerance;
-
-                    if matches {
-                        context.activate_exec_pin("exec_found").await?;
-                        return Ok(());
-                    }
+                        && (b - target_b).abs() <= tolerance
+                } else {
+                    false
                 }
+            };
+
+            if color_matches {
+                context.activate_exec_pin("exec_found").await?;
+                return Ok(());
             }
 
             if start.elapsed() >= timeout {

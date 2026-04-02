@@ -108,29 +108,32 @@ impl NodeLogic for ComputerListDisplaysNode {
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+        let (displays, primary_index) = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
-        let mut displays = Vec::new();
-        let mut primary_index: i64 = 0;
+            let mut displays = Vec::new();
+            let mut primary_index: i64 = 0;
 
-        for (i, monitor) in monitors.iter().enumerate() {
-            let is_primary = monitor.is_primary().unwrap_or(false);
-            if is_primary {
-                primary_index = i as i64;
+            for (i, monitor) in monitors.iter().enumerate() {
+                let is_primary = monitor.is_primary().unwrap_or(false);
+                if is_primary {
+                    primary_index = i as i64;
+                }
+
+                displays.push(DisplayInfo {
+                    id: monitor.id().unwrap_or(0),
+                    name: monitor.name().unwrap_or_default(),
+                    x: monitor.x().unwrap_or(0),
+                    y: monitor.y().unwrap_or(0),
+                    width: monitor.width().unwrap_or(0),
+                    height: monitor.height().unwrap_or(0),
+                    is_primary,
+                    scale_factor: monitor.scale_factor().unwrap_or(1.0),
+                });
             }
-
-            displays.push(DisplayInfo {
-                id: monitor.id().unwrap_or(0),
-                name: monitor.name().unwrap_or_default(),
-                x: monitor.x().unwrap_or(0),
-                y: monitor.y().unwrap_or(0),
-                width: monitor.width().unwrap_or(0),
-                height: monitor.height().unwrap_or(0),
-                is_primary,
-                scale_factor: monitor.scale_factor().unwrap_or(1.0),
-            });
-        }
+            (displays, primary_index)
+        };
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("displays", json!(displays)).await?;
@@ -247,22 +250,24 @@ impl NodeLogic for ComputerGetDisplayNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let index: i64 = context.evaluate_pin("index").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+        let display = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
-        let monitor = monitors
-            .get(index as usize)
-            .ok_or_else(|| flow_like_types::anyhow!("Display index {} not found", index))?;
+            let monitor = monitors
+                .get(index as usize)
+                .ok_or_else(|| flow_like_types::anyhow!("Display index {} not found", index))?;
 
-        let display = DisplayInfo {
-            id: monitor.id().unwrap_or(0),
-            name: monitor.name().unwrap_or_default(),
-            x: monitor.x().unwrap_or(0),
-            y: monitor.y().unwrap_or(0),
-            width: monitor.width().unwrap_or(0),
-            height: monitor.height().unwrap_or(0),
-            is_primary: monitor.is_primary().unwrap_or(false),
-            scale_factor: monitor.scale_factor().unwrap_or(1.0),
+            DisplayInfo {
+                id: monitor.id().unwrap_or(0),
+                name: monitor.name().unwrap_or_default(),
+                x: monitor.x().unwrap_or(0),
+                y: monitor.y().unwrap_or(0),
+                width: monitor.width().unwrap_or(0),
+                height: monitor.height().unwrap_or(0),
+                is_primary: monitor.is_primary().unwrap_or(false),
+                scale_factor: monitor.scale_factor().unwrap_or(1.0),
+            }
         };
 
         context.set_pin_value("session_out", json!(session)).await?;
@@ -371,24 +376,26 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+        let display = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
-        let monitor = monitors
-            .iter()
-            .find(|m| m.is_primary().unwrap_or(false))
-            .or_else(|| monitors.first())
-            .ok_or_else(|| flow_like_types::anyhow!("No displays found"))?;
+            let monitor = monitors
+                .iter()
+                .find(|m| m.is_primary().unwrap_or(false))
+                .or_else(|| monitors.first())
+                .ok_or_else(|| flow_like_types::anyhow!("No displays found"))?;
 
-        let display = DisplayInfo {
-            id: monitor.id().unwrap_or(0),
-            name: monitor.name().unwrap_or_default(),
-            x: monitor.x().unwrap_or(0),
-            y: monitor.y().unwrap_or(0),
-            width: monitor.width().unwrap_or(0),
-            height: monitor.height().unwrap_or(0),
-            is_primary: monitor.is_primary().unwrap_or(false),
-            scale_factor: monitor.scale_factor().unwrap_or(1.0),
+            DisplayInfo {
+                id: monitor.id().unwrap_or(0),
+                name: monitor.name().unwrap_or_default(),
+                x: monitor.x().unwrap_or(0),
+                y: monitor.y().unwrap_or(0),
+                width: monitor.width().unwrap_or(0),
+                height: monitor.height().unwrap_or(0),
+                is_primary: monitor.is_primary().unwrap_or(false),
+                scale_factor: monitor.scale_factor().unwrap_or(1.0),
+            }
         };
 
         context.set_pin_value("session_out", json!(session)).await?;
