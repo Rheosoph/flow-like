@@ -57,7 +57,7 @@ const cover = "/og.png";
     <PostHog />
   </head>
   <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
-    <Header client:load />
+    <Header client:only="react" />
 
     <main class="pt-16">
       <AmbientGlow />
@@ -67,6 +67,6 @@ const cover = "/og.png";
       <DevelopersCTA {t} />
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>

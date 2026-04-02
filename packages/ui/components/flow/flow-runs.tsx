@@ -353,19 +353,9 @@ const FlowRunsComponent = ({
 											executeBoard(node, parseUint8ArrayToJson(run.payload));
 										}}
 										className="flex flex-row gap-2 items-center"
-										disabled={
-											run.is_remote &&
-											(!run.payload || run.payload.length === 0)
-										}
 									>
 										<RefreshCcwIcon className="w-4 h-4" />
 										Re-Run
-										{run.is_remote &&
-											(!run.payload || run.payload.length === 0) && (
-												<span className="text-xs text-muted-foreground">
-													(no payload)
-												</span>
-											)}
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>

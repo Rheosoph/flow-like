@@ -136,6 +136,7 @@ export function DataProvider({
 			if ("literalString" in boundValue) return boundValue.literalString;
 			if ("literalNumber" in boundValue) return boundValue.literalNumber;
 			if ("literalBool" in boundValue) return boundValue.literalBool;
+			if ("literalOptions" in boundValue) return boundValue.literalOptions;
 			if ("literalJson" in boundValue) {
 				try {
 					return JSON.parse(boundValue.literalJson as string);
@@ -194,6 +195,7 @@ const defaultContextValue: DataContextValue = {
 		if ("literalString" in boundValue) return boundValue.literalString;
 		if ("literalNumber" in boundValue) return boundValue.literalNumber;
 		if ("literalBool" in boundValue) return boundValue.literalBool;
+		if ("literalOptions" in boundValue) return boundValue.literalOptions;
 		if ("literalJson" in boundValue) {
 			try {
 				return JSON.parse(boundValue.literalJson as string);

@@ -122,6 +122,7 @@ fn tune_windows_webview(window: &tauri::WebviewWindow) {
     if let Err(err) = window.with_webview(|webview| {
         unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings6;
+            use windows::core::Interface;
 
             let controller = webview.controller();
             let core = controller.CoreWebView2().unwrap();

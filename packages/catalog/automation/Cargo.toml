@@ -47,10 +47,15 @@ image = { workspace = true }
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 thirtyfour = { version = "0.36.1", optional = true }
 enigo = { version = "0.6.1", optional = true }
-rdev = { workspace = true, optional = true }
 xcap = { version = "0.8.1", optional = true }
 rustautogui = { version = "2.5", optional = true, features = ["dev"] }
 arboard = { version = "3.5", optional = true }
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+rdev = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rdev = { workspace = true, optional = true, features = ["x11", "wayland"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

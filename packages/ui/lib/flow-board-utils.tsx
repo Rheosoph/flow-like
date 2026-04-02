@@ -927,6 +927,21 @@ export function handleCopy(
 		referencedVarIds.has(v.id),
 	);
 
+	// Collect board refs used by variables and pins so schemas survive paste
+	const referencedRefs: Record<string, string> = {};
+	for (const v of selectedVariables) {
+		if (v.schema && board.refs[v.schema]) {
+			referencedRefs[v.schema] = board.refs[v.schema];
+		}
+	}
+	for (const node of selectedNodes) {
+		for (const pin of Object.values(node.pins)) {
+			if (pin.schema && board.refs[pin.schema]) {
+				referencedRefs[pin.schema] = board.refs[pin.schema];
+			}
+		}
+	}
+
 	try {
 		navigator.clipboard.writeText(
 			JSON.stringify(
@@ -936,6 +951,7 @@ export function handleCopy(
 					cursorPosition,
 					layers: Array.from(foundLayer.values()),
 					variables: selectedVariables,
+					refs: referencedRefs,
 				},
 				null,
 				2,
@@ -979,12 +995,14 @@ export async function handlePaste(
 		const comments: any[] = data.comments;
 		const layers: ILayer[] = data.layers ?? [];
 		const variables: IVariable[] = data.variables ?? [];
+		const refs: Record<string, string> = data.refs ?? {};
 
 		const command = copyPasteCommand({
 			original_comments: comments,
 			original_nodes: nodes,
 			original_layers: layers,
 			original_variables: variables,
+			original_refs: refs,
 			new_comments: [],
 			new_nodes: [],
 			new_layers: [],

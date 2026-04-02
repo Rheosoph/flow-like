@@ -10,6 +10,7 @@ export interface ICopyPaste {
 	original_comments: IComment[];
 	original_layers: ILayer[];
 	original_nodes: INode[];
+	original_refs?: { [key: string]: string };
 	original_variables?: IVariable[];
 	[property: string]: any;
 }

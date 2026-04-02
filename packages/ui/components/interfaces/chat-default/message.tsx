@@ -292,6 +292,7 @@ const FeedbackDialog = ({
 
 const MessageActions = ({
 	isUser,
+	hasFooterContent,
 	rating,
 	gaveMoreFeedback,
 	onThumbsUp,
@@ -304,6 +305,7 @@ const MessageActions = ({
 	onFileClick,
 }: {
 	isUser: boolean;
+	hasFooterContent: boolean;
 	rating: number;
 	gaveMoreFeedback: boolean;
 	onThumbsUp: () => void;
@@ -317,8 +319,12 @@ const MessageActions = ({
 }) => (
 	<div
 		className={cn(
-			"flex flex-row items-center gap-3 h-6 w-full mt-2",
-			isUser ? "justify-end px-2 pt-2" : "justify-start",
+			"flex flex-row items-center gap-3 h-6 w-full",
+			isUser
+				? "justify-end px-2 pt-2 mt-2"
+				: hasFooterContent
+					? "justify-start mt-2"
+					: "justify-start mt-0.5",
 		)}
 	>
 		{!isUser && (
@@ -659,6 +665,9 @@ export const MessageComponent = memo(function MessageComponent({
 		);
 	}, [message.ratingSettings]);
 
+	const hasUsageStats = !isUser && Boolean(message.usage_stats?.length);
+	const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
+
 	return (
 		<>
 			<div
@@ -737,14 +746,13 @@ export const MessageComponent = memo(function MessageComponent({
 						onFileClick={handleFileClick}
 						onFullscreen={setFullscreenFile}
 					/>
-					{!isUser &&
-						message.usage_stats &&
-						message.usage_stats.length > 0 && (
+					{hasUsageStats && (
 							<UsageStats stats={message.usage_stats} className="mt-1" />
 						)}
 					{!loading && (
 						<MessageActions
 							isUser={isUser}
+							hasFooterContent={hasFooterContent}
 							rating={message.rating ?? 0}
 							gaveMoreFeedback={gaveMoreFeedback}
 							onThumbsUp={() => upsertFeedback(1)}

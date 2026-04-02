@@ -65,24 +65,6 @@ export default defineConfig({
 		},
 		plugins: [
 			tailwindcss(),
-			{
-				name: "force-react-ssr-optimize",
-				configEnvironment(name, options) {
-					if (name === "ssr" || name === "prerender") {
-						return {
-							optimizeDeps: {
-								include: [
-									"react",
-									"react/jsx-runtime",
-									"react/jsx-dev-runtime",
-									"react-dom",
-									"react-dom/server",
-								],
-							},
-						};
-					}
-				},
-			},
 		],
 	},
 	markdown: {

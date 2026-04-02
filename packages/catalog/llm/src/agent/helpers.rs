@@ -812,8 +812,52 @@ pub async fn execute_tool_call(
             .collect(),
     );
 
-    // Set values on the referenced function's OUTPUT pins using sanitized tool names,
-    // while still accepting the original pin names for backward compatibility.
+    // Look up the function's layer to get proper variable isolation and layer
+    // pin overrides — mirroring how CallFunctionNode invokes functions.
+    let board = context.get_board().await?;
+    let layer_id = {
+        let node_guard = referenced_node.node.lock().await;
+        node_guard.layer.clone()
+    };
+    let function_variables = layer_id
+        .as_ref()
+        .and_then(|id| board.layers.get(id))
+        .map(|layer| layer.variables.clone())
+        .unwrap_or_default();
+
+    // Use create_function_context to get a fresh override map and isolated
+    // local variables, matching the behaviour of CallFunctionNode.
+    let mut sub_context = context
+        .create_function_context(referenced_node, &function_variables)
+        .await;
+    sub_context.delegated = true;
+
+    // Inject values into the override map for layer input pins so that
+    // evaluate_pin_value finds them when tracing the dependency chain
+    // through relay (layer) pins.
+    if let Some(layer) = layer_id.as_ref().and_then(|id| board.layers.get(id)) {
+        for (pin_id, pin) in &layer.pins {
+            if pin.pin_type != PinType::Input || pin.data_type == VariableType::Execution {
+                continue;
+            }
+
+            let sanitized_name = argument_names
+                .get(&pin.name)
+                .cloned()
+                .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
+
+            if let Some(value) = args_obj
+                .get(&sanitized_name)
+                .or_else(|| args_obj.get(&pin.name))
+            {
+                sub_context.override_pin_value(pin_id, value.clone());
+            }
+        }
+    }
+
+    // Also set values on the referenced function's OUTPUT pins (shared storage
+    // + override map) so that both override-aware and non-override code paths
+    // resolve correctly regardless of old/new layer format.
     for (_id, pin) in referenced_node.pins.iter() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
@@ -828,13 +872,10 @@ pub async fn execute_tool_call(
             .get(&sanitized_name)
             .or_else(|| args_obj.get(&pin.name))
         {
+            sub_context.override_pin_value(&pin.id, value.clone());
             pin.set_value(value.clone()).await;
         }
     }
-
-    // Create a sub-context with the referenced node
-    let mut sub_context = context.create_sub_context(referenced_node).await;
-    sub_context.delegated = true;
 
     let run = InternalNode::trigger(&mut sub_context, &mut None, true).await;
 

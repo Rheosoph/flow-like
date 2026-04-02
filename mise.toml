@@ -386,6 +386,28 @@ run = "cargo clippy && cargo fmt --check && bunx biome check"
 description = "Run all benchmarks"
 run = "cargo bench"
 
+# ── Cross-platform cargo check ───────────────
+
+[tasks."check:desktop"]
+description = "Cargo check desktop app on macOS (native) + Linux + Windows (Docker)"
+run = "./tools/check-desktop.sh all"
+
+[tasks."check:desktop:macos"]
+description = "Cargo check desktop app on macOS (native)"
+run = "./tools/check-desktop.sh macos"
+
+[tasks."check:desktop:linux"]
+description = "Cargo check desktop app on Linux (Docker)"
+run = "./tools/check-desktop.sh linux"
+
+[tasks."check:desktop:windows"]
+description = "Cargo check desktop app cross-compiled for Windows (Docker + MinGW)"
+run = "./tools/check-desktop.sh windows"
+
+[tasks."check:desktop:clean"]
+description = "Remove the Linux Docker check image"
+run = "./tools/check-desktop.sh clean"
+
 [tasks."bench:flows"]
 description = "Run flow benchmarks"
 run = "cargo bench -p flow-like-catalog --bench flow_bench"

@@ -302,6 +302,7 @@ export function A2UITable({
 	);
 
 	const headers = columns.map((col) => {
+		if (typeof col.header === "string") return col.header;
 		if (typeof col.header === "object" && "literalString" in col.header) {
 			return col.header.literalString;
 		}
@@ -338,6 +339,7 @@ export function A2UITable({
 
 	const getAccessor = (col: TableColumn): string => {
 		if (!col.accessor) return col.id;
+		if (typeof col.accessor === "string") return col.accessor;
 		if (typeof col.accessor === "object" && "literalString" in col.accessor) {
 			return col.accessor.literalString;
 		}
@@ -539,6 +541,7 @@ export function A2UITable({
 	const getColumnAlign = (colIdx: number): string | undefined => {
 		const col = columns[colIdx];
 		if (!col?.align) return undefined;
+		if (typeof col.align === "string") return col.align;
 		if (typeof col.align === "object" && "literalString" in col.align) {
 			return col.align.literalString;
 		}

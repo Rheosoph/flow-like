@@ -72,10 +72,10 @@ const fullImage = image.startsWith("http") ? image : new URL(image, site).toStri
 		)}
 	</head>
 	<body class="bg-background text-foreground min-h-screen flex flex-col">
-		<Header client:load />
+		<Header client:only="react" />
 		<main class="flex-1">
 			<slot />
 		</main>
-		<BlogFooter client:load />
+		<BlogFooter client:only="react" />
 	</body>
 </html>

@@ -48,7 +48,7 @@ const desc = description ?? "Legal information for Flow-Like";
 		<PostHog />
 	</head>
 	<body class="min-h-screen bg-background text-foreground overflow-y-auto overflow-x-hidden pt-16">
-		<Header client:load/>
+		<Header client:only="react"/>
 
 		<main class="relative">
 			<!-- Hero section -->
@@ -71,7 +71,7 @@ const desc = description ?? "Legal information for Flow-Like";
 			</div>
 		</main>
 
-		<BlogFooter client:load />
+		<BlogFooter client:only="react" />
 	</body>
 </html>
 

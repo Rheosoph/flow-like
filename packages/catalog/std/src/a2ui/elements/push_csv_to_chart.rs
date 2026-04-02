@@ -1,4 +1,6 @@
-use super::chart_data_utils::{clean_field_name, extract_from_csv_table, parse_csv_text};
+use super::chart_data_utils::{
+    clean_field_name, extract_from_csv_table, has_csv_table_data, parse_csv_text,
+};
 use super::element_utils::extract_element_id;
 use flow_like::flow::{
     board::Board,
@@ -238,7 +240,7 @@ impl NodeLogic for PushCsvToChart {
             "CSV" => {
                 let (headers, rows) =
                     if let Ok(table_value) = context.evaluate_pin::<Value>("table").await {
-                        if !table_value.is_null() {
+                        if has_csv_table_data(&table_value) {
                             extract_from_csv_table(&table_value)?
                         } else {
                             read_csv_input(context).await?

@@ -203,7 +203,7 @@ const ldWebPage = {
   >
     <main id="content" class="w-full max-w-full overflow-x-clip">
       <AmbientGlow />
-      <Header client:load/>
+      <Header client:only="react"/>
       <HeroV3 />
 
       <SoftSeam />
@@ -250,6 +250,6 @@ const ldWebPage = {
       <CtaV3 />
     </main>
 
-    <BlogFooter client:load />
+    <BlogFooter client:only="react" />
   </body>
 </html>

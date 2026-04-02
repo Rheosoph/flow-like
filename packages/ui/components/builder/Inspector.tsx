@@ -2349,9 +2349,11 @@ function TableEditor({
 		const newRow: Record<string, string> = {};
 		for (const col of columns) {
 			const accessor =
-				col.accessor && "literalString" in col.accessor
-					? col.accessor.literalString
-					: col.id;
+				typeof col.accessor === "string"
+					? col.accessor
+					: col.accessor && typeof col.accessor === "object" && "literalString" in col.accessor
+						? col.accessor.literalString
+						: col.id;
 			newRow[accessor] = "";
 		}
 		updateProp("data", { literalJson: JSON.stringify([...data, newRow]) });
@@ -2378,7 +2380,8 @@ function TableEditor({
 
 	// Get accessor string from column
 	const getAccessor = (col: TableColumn): string => {
-		if (col.accessor && "literalString" in col.accessor) {
+		if (typeof col.accessor === "string") return col.accessor;
+		if (col.accessor && typeof col.accessor === "object" && "literalString" in col.accessor) {
 			return col.accessor.literalString;
 		}
 		return col.id;
@@ -2386,7 +2389,8 @@ function TableEditor({
 
 	// Get header string from column
 	const getHeader = (col: TableColumn): string => {
-		if (col.header && "literalString" in col.header) {
+		if (typeof col.header === "string") return col.header;
+		if (col.header && typeof col.header === "object" && "literalString" in col.header) {
 			return col.header.literalString;
 		}
 		return col.id;
@@ -2479,9 +2483,9 @@ function TableEditor({
 								<Label className="text-xs">Sortable</Label>
 								<Switch
 									checked={
-										col.sortable && "literalBool" in col.sortable
+										col.sortable && typeof col.sortable === "object" && "literalBool" in col.sortable
 											? col.sortable.literalBool
-											: false
+											: typeof col.sortable === "boolean" ? col.sortable : false
 									}
 									onCheckedChange={(v) =>
 										updateColumn(idx, { sortable: { literalBool: v } })
