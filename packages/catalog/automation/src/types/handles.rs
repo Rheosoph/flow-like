@@ -94,8 +94,34 @@ pub struct AutomationSession {
 }
 
 #[cfg(feature = "execute")]
+pub struct SendSyncRustAutoGui(pub rustautogui::RustAutoGui);
+
+// SAFETY: RustAutoGui contains raw pointers (HDC, HBITMAP on Windows) that are
+// effectively owned resources. All access is protected behind a Mutex, ensuring
+// only one thread accesses the GUI at a time.
+#[cfg(feature = "execute")]
+unsafe impl Send for SendSyncRustAutoGui {}
+#[cfg(feature = "execute")]
+unsafe impl Sync for SendSyncRustAutoGui {}
+
+#[cfg(feature = "execute")]
+impl std::ops::Deref for SendSyncRustAutoGui {
+    type Target = rustautogui::RustAutoGui;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(feature = "execute")]
+impl std::ops::DerefMut for SendSyncRustAutoGui {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[cfg(feature = "execute")]
 pub struct AutomationSessionWrapper {
-    pub autogui: Arc<flow_like_types::sync::Mutex<rustautogui::RustAutoGui>>,
+    pub autogui: Arc<flow_like_types::sync::Mutex<SendSyncRustAutoGui>>,
     pub browser_driver: Option<Arc<thirtyfour::WebDriver>>,
     pub current_window_handle: Option<thirtyfour::WindowHandle>,
 }
@@ -132,7 +158,7 @@ impl AutomationSession {
             .map_err(|e| flow_like_types::anyhow!("Failed to create RustAutoGui: {}", e))?;
 
         let wrapper = AutomationSessionWrapper {
-            autogui: Arc::new(flow_like_types::sync::Mutex::new(autogui)),
+            autogui: Arc::new(flow_like_types::sync::Mutex::new(SendSyncRustAutoGui(autogui))),
             browser_driver: None,
             current_window_handle: None,
         };
@@ -168,7 +194,7 @@ impl AutomationSession {
     pub async fn get_autogui(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<Arc<flow_like_types::sync::Mutex<rustautogui::RustAutoGui>>> {
+    ) -> flow_like_types::Result<Arc<flow_like_types::sync::Mutex<SendSyncRustAutoGui>>> {
         let cache = ctx.cache.read().await;
         let wrapper = cache
             .get(&self.session_ref)

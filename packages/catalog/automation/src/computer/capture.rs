@@ -152,43 +152,45 @@ impl NodeLogic for ComputerScreenshotNode {
         let region_width: i64 = context.evaluate_pin("region_width").await?;
         let region_height: i64 = context.evaluate_pin("region_height").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+        let image = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
-        let image = match capture_type.as_str() {
-            "display" => {
-                let monitor = monitors.get(display_index as usize).ok_or_else(|| {
-                    flow_like_types::anyhow!("Display index {} not found", display_index)
-                })?;
-                monitor
-                    .capture_image()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to capture display: {}", e))?
-            }
-            "region" => {
-                let monitor = monitors
-                    .first()
-                    .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                let full_image = monitor
-                    .capture_image()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+            match capture_type.as_str() {
+                "display" => {
+                    let monitor = monitors.get(display_index as usize).ok_or_else(|| {
+                        flow_like_types::anyhow!("Display index {} not found", display_index)
+                    })?;
+                    monitor
+                        .capture_image()
+                        .map_err(|e| flow_like_types::anyhow!("Failed to capture display: {}", e))?
+                }
+                "region" => {
+                    let monitor = monitors
+                        .first()
+                        .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+                    let full_image = monitor
+                        .capture_image()
+                        .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-                let img_w = full_image.width();
-                let img_h = full_image.height();
-                let x = (region_x.max(0) as u32).min(img_w.saturating_sub(1));
-                let y = (region_y.max(0) as u32).min(img_h.saturating_sub(1));
-                let w = (region_width.max(1) as u32).min(img_w.saturating_sub(x));
-                let h = (region_height.max(1) as u32).min(img_h.saturating_sub(y));
+                    let img_w = full_image.width();
+                    let img_h = full_image.height();
+                    let x = (region_x.max(0) as u32).min(img_w.saturating_sub(1));
+                    let y = (region_y.max(0) as u32).min(img_h.saturating_sub(1));
+                    let w = (region_width.max(1) as u32).min(img_w.saturating_sub(x));
+                    let h = (region_height.max(1) as u32).min(img_h.saturating_sub(y));
 
-                let cropped = image::imageops::crop_imm(&full_image, x, y, w, h);
-                cropped.to_image()
-            }
-            _ => {
-                let monitor = monitors
-                    .first()
-                    .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                monitor
-                    .capture_image()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
+                    let cropped = image::imageops::crop_imm(&full_image, x, y, w, h);
+                    cropped.to_image()
+                }
+                _ => {
+                    let monitor = monitors
+                        .first()
+                        .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+                    monitor
+                        .capture_image()
+                        .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
+                }
             }
         };
 

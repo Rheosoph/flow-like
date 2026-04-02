@@ -228,31 +228,34 @@ impl NodeLogic for LocateByColorNode {
         let blue: i64 = context.evaluate_pin("blue").await?;
         let tolerance: i64 = context.evaluate_pin("tolerance").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = monitors
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-        let image = monitor
-            .capture_image()
-            .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+        let found_pos = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+            let monitor = monitors
+                .first()
+                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+            let image = monitor
+                .capture_image()
+                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-        let mut found_pos: Option<(u32, u32)> = None;
-        'outer: for y in 0..image.height() {
-            for x in 0..image.width() {
-                let pixel = image.get_pixel(x, y);
-                let r = pixel[0] as i64;
-                let g = pixel[1] as i64;
-                let b = pixel[2] as i64;
-                if (r - red).abs() <= tolerance
-                    && (g - green).abs() <= tolerance
-                    && (b - blue).abs() <= tolerance
-                {
-                    found_pos = Some((x, y));
-                    break 'outer;
+            let mut found: Option<(u32, u32)> = None;
+            'outer: for y in 0..image.height() {
+                for x in 0..image.width() {
+                    let pixel = image.get_pixel(x, y);
+                    let r = pixel[0] as i64;
+                    let g = pixel[1] as i64;
+                    let b = pixel[2] as i64;
+                    if (r - red).abs() <= tolerance
+                        && (g - green).abs() <= tolerance
+                        && (b - blue).abs() <= tolerance
+                    {
+                        found = Some((x, y));
+                        break 'outer;
+                    }
                 }
             }
-        }
+            found
+        };
 
         match found_pos {
             Some((x, y)) => {

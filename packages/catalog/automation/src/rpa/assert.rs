@@ -245,16 +245,16 @@ impl NodeLogic for AssertColorAtPositionNode {
         let target_b: i64 = context.evaluate_pin("blue").await?;
         let tolerance: i64 = context.evaluate_pin("tolerance").await?;
 
-        let monitors = Monitor::all()
-            .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = monitors
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-        let image = monitor
-            .capture_image()
-            .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+        let passed = {
+            let monitors = Monitor::all()
+                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
+            let monitor = monitors
+                .first()
+                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
+            let image = monitor
+                .capture_image()
+                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-        let passed =
             if x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() {
                 let pixel = image.get_pixel(x as u32, y as u32);
                 let r = pixel[0] as i64;
@@ -265,7 +265,8 @@ impl NodeLogic for AssertColorAtPositionNode {
                     && (b - target_b).abs() <= tolerance
             } else {
                 false
-            };
+            }
+        };
 
         context.set_pin_value("passed", json!(passed)).await?;
 
