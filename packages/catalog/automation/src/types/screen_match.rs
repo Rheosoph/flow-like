@@ -72,7 +72,7 @@ pub fn screen_dimensions() -> (u32, u32) {
 /// segmented NCC algorithm.
 ///
 /// Returns a list of `(x, y, confidence)` matches above the given precision.
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(windows)))]
 pub fn find_template_in_image(
     screen: &GrayImage,
     template: &GrayImage,
@@ -103,6 +103,35 @@ pub fn find_template_in_image(
     };
 
     segmented_ncc::fast_ncc_template_match(screen, precision, &data, &false)
+}
+
+#[cfg(all(feature = "execute", windows))]
+pub fn find_template_in_image(
+    _screen: &GrayImage,
+    template: &GrayImage,
+    precision: f32,
+) -> Vec<(u32, u32, f32)> {
+    let mut gui = match rustautogui::RustAutoGui::new(false) {
+        Ok(gui) => gui,
+        Err(err) => {
+            tracing::warn!("Failed to initialize RustAutoGui for template matching: {}", err);
+            return Vec::new();
+        }
+    };
+
+    if let Err(err) = gui.prepare_template_from_imagebuffer(
+        template.clone(),
+        None,
+        rustautogui::MatchMode::Segmented,
+    ) {
+        tracing::warn!("Failed to prepare template image: {}", err);
+        return Vec::new();
+    }
+
+    gui.find_image_on_screen(precision)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// High-level: capture screen, find template, return matches.
@@ -154,7 +183,7 @@ pub struct TemplateMatchResult {
 
 /// Full diagnostic template matching: try at requested confidence, then
 /// retry at 0.01 to report the best achievable score for debugging.
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(windows)))]
 pub fn try_template_match(
     template_bytes: &[u8],
     min_confidence: f32,
@@ -265,12 +294,48 @@ pub fn try_template_match(
     })
 }
 
+#[cfg(all(feature = "execute", windows))]
+pub fn try_template_match(
+    template_bytes: &[u8],
+    min_confidence: f32,
+) -> Option<TemplateMatchResult> {
+    let gray_template = to_grayscale(template_bytes)?;
+    let template_dims = gray_template.dimensions();
+
+    let screen_capture_png = capture_screen_png();
+    let gray_screen = capture_screen_grayscale()?;
+    let screen_dims = gray_screen.dimensions();
+
+    let matches = find_template_in_image(&gray_screen, &gray_template, min_confidence);
+    if let Some(best_match) = matches.first().copied() {
+        return Some(TemplateMatchResult {
+            best_match: Some(best_match),
+            template_dims,
+            screen_dims,
+            gray_template,
+            screen_capture_png,
+        });
+    }
+
+    let best = find_template_in_image(&gray_screen, &gray_template, 0.01)
+        .into_iter()
+        .next();
+
+    Some(TemplateMatchResult {
+        best_match: best,
+        template_dims,
+        screen_dims,
+        gray_template,
+        screen_capture_png,
+    })
+}
+
 /// Adjust match coordinates from physical (Retina) to logical screen points.
 ///
 /// xcap captures at physical resolution (e.g. 2880×1800 on a 2× Retina)
 /// but mouse coordinates use logical resolution (1440×900). We need to
 /// scale the match position down by the display scale factor.
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(windows)))]
 pub fn physical_to_logical(x: u32, y: u32) -> (i32, i32) {
     let (phys_w, phys_h) = xcap::Monitor::all()
         .ok()
@@ -288,4 +353,9 @@ pub fn physical_to_logical(x: u32, y: u32) -> (i32, i32) {
     let scale_y = logical_h as f64 / phys_h as f64;
 
     ((x as f64 * scale_x) as i32, (y as f64 * scale_y) as i32)
+}
+
+#[cfg(all(feature = "execute", windows))]
+pub fn physical_to_logical(x: u32, y: u32) -> (i32, i32) {
+    (x as i32, y as i32)
 }

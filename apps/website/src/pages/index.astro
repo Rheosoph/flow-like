@@ -3,8 +3,6 @@ import "@tm9657/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { Header } from "../components/header";
 import LanguageDetect from "../components/language-detect.astro";
-
-import AmbientGlow from "../components/ambient-glow.astro";
 import SoftSeam from "../components/soft-seam.astro";
 
 import HeroV3 from "../sections/hero-v3.astro";
@@ -202,7 +200,6 @@ const ldWebPage = {
             bg-[radial-gradient(var(--muted)_1px,transparent_1px)] [background-size:16px_16px]"
   >
     <main id="content" class="w-full max-w-full overflow-x-clip">
-      <AmbientGlow />
       <Header client:only="react"/>
       <HeroV3 />
 

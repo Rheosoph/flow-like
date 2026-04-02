@@ -53,16 +53,9 @@ const trustPills = [
           <stop offset="50%" stop-color="hsl(12 80% 55% / 0.5)" />
           <stop offset="100%" stop-color="hsl(350 65% 50% / 0.8)" />
         </linearGradient>
-
-        <filter id="glow-wave" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="12" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
       </defs>
-      <g id="strands-group" filter="url(#glow-wave)"></g>
+      <g id="strands-group"></g>
     </svg>
-
-    <div class="hero-grain"></div>
   </div>
 
   <div class="hero-content">
@@ -133,21 +126,7 @@ const trustPills = [
       </div>
 
       <div class="hero-tilt" id="hero-tilt">
-        <div class="hero-float hero-float--a" aria-hidden="true">
-          <span class="hero-float__value">42</span>
-          <span class="hero-float__label">active nodes</span>
-        </div>
-        <div class="hero-float hero-float--b" aria-hidden="true">
-          <span class="hero-float__value">12ms</span>
-          <span class="hero-float__label">avg latency</span>
-        </div>
-        <div class="hero-float hero-float--c" aria-hidden="true">
-          <span class="hero-float__value">99.9%</span>
-          <span class="hero-float__label">uptime</span>
-        </div>
-
         <div class="hero-frame">
-          <div class="hero-frame__glow"></div>
           <div class="hero-frame__card">
             <div class="hero-chrome">
               <span class="hero-chrome__dot hero-chrome__dot--r"></span>
@@ -433,20 +412,7 @@ const trustPills = [
   .hero-wave-bg {
     width: 100%;
     height: 100%;
-    opacity: 0.85;
-  }
-
-  /* ═════════════════════════════════════════════
-     Background: Grain
-     ═════════════════════════════════════════════ */
-  .hero-grain {
-    position: absolute;
-    inset: 0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
-    opacity: 0.5;
-    mix-blend-mode: overlay;
-    pointer-events: none;
-    z-index: 2;
+    opacity: 0.78;
   }
 
   /* ═════════════════════════════════════════════
@@ -852,74 +818,6 @@ const trustPills = [
     will-change: transform;
   }
 
-  /* Floating metric cards */
-  .hero-float {
-    position: absolute;
-    z-index: 30;
-    display: none;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 0.75rem 1rem;
-    border-radius: 0.75rem;
-    border: 1px solid hsl(0 0% 100% / 0.15);
-    background: color-mix(in oklch, var(--background) 70%, transparent);
-    backdrop-filter: blur(16px);
-    box-shadow:
-      0 8px 32px hsl(0 0% 0% / 0.08),
-      0 0 0 1px hsl(0 0% 100% / 0.05) inset;
-    transform: translateZ(40px);
-  }
-
-  @media (min-width: 1024px) {
-    .hero-float { display: flex; }
-  }
-
-  .hero-float__value {
-    font-size: 1.25rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: var(--foreground);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .hero-float__label {
-    font-size: 0.625rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted-foreground);
-    margin-top: 0.125rem;
-  }
-
-  .hero-float--a {
-    top: 8%;
-    left: -80px;
-    animation: float-bob 7s ease-in-out infinite;
-  }
-
-  .hero-float--a .hero-float__value { color: var(--primary); }
-
-  .hero-float--b {
-    top: 45%;
-    right: -90px;
-    animation: float-bob 8s ease-in-out 0.8s infinite;
-  }
-
-  .hero-float--b .hero-float__value { color: hsl(25 90% 55%); }
-
-  .hero-float--c {
-    bottom: 12%;
-    left: -65px;
-    animation: float-bob 6.5s ease-in-out 1.5s infinite;
-  }
-
-  .hero-float--c .hero-float__value { color: hsl(350 65% 50%); }
-
-  @keyframes float-bob {
-    0%, 100% { transform: translateZ(40px) translateY(0); }
-    50% { transform: translateZ(40px) translateY(-12px); }
-  }
-
   /* ═════════════════════════════════════════════
      Frame (Lean & Professional)
      ═════════════════════════════════════════════ */
@@ -934,25 +832,6 @@ const trustPills = [
 
   @media (min-width: 1024px) {
     .hero-frame { width: 65vw; max-width: 1000px; }
-  }
-
-  /* Deep, soft ambient glow */
-  .hero-frame__glow {
-    position: absolute;
-    inset: 0;
-    border-radius: 16px;
-    z-index: -1;
-    /* Rich, diffused multi-layered shadow using your brand colors */
-    box-shadow:
-      0 20px 80px -20px hsl(12 80% 55% / 0.15),
-      0 40px 120px -30px hsl(350 65% 50% / 0.15);
-    animation: frame-breathe 6s ease-in-out infinite alternate;
-  }
-
-  /* Extremely subtle, slow pulse for a living feel */
-  @keyframes frame-breathe {
-    0% { opacity: 0.6; transform: translateY(0); }
-    100% { opacity: 1; transform: translateY(-2px); }
   }
 
   .hero-frame__card {
@@ -1053,9 +932,7 @@ const trustPills = [
     .hero-reveal.is-visible { animation: none !important; }
     .hero-btn-primary__bg,
     .hero-btn-primary__shimmer,
-    .hero-badge__live::after,
-    .hero-frame__glow,
-    .hero-float {
+    .hero-badge__live::after {
       animation: none !important;
     }
     .hero-panel { transition: none !important; }
@@ -1064,6 +941,22 @@ const trustPills = [
 </style>
 
 <script>
+  interface StrandPoint {
+    baseX: number;
+    baseY: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    phase: number;
+    speed: number;
+  }
+
+  interface Strand {
+    el: SVGPathElement;
+    points: StrandPoint[];
+  }
+
   function initHero() {
     const section = document.getElementById("hero-section");
     if (!section) return;
@@ -1150,7 +1043,9 @@ const trustPills = [
   }
 
   function initInteractiveWaves() {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     if (!matchMedia("(pointer: fine)").matches) return;
+
     const section = document.getElementById("hero-section");
     const group = document.getElementById("strands-group");
     const svgBg = document.getElementById("wave-wrap");
@@ -1172,15 +1067,27 @@ const trustPills = [
 
     const svgWidth = 1440;
     const svgHeight = 900;
-    const numStrands = 10;
-    const pointsPerStrand = 24;
+    const numStrands = 7;
+    const pointsPerStrand = 18;
     const pullRadius = 250;
     const stiffness = 0.05;
     const damping = 0.85;
+    let svgBounds = svgBg.getBoundingClientRect();
+    let frameId: number | null = null;
+    let isPageVisible = document.visibilityState === "visible";
+    let isSectionVisible = true;
+
+    const updateSvgBounds = () => {
+      svgBounds = svgBg.getBoundingClientRect();
+    };
+
+    updateSvgBounds();
+    window.addEventListener("resize", updateSvgBounds, { passive: true });
+    window.addEventListener("scroll", updateSvgBounds, { passive: true });
 
     // Helper to generate a U-shape looping under the Trust Pills
     function createStrands() {
-      const strands = [];
+      const strands: Strand[] = [];
       const gradients = ["grad-w1", "grad-w2", "grad-w3"];
 
       for (let i = 0; i < numStrands; i++) {
@@ -1200,7 +1107,7 @@ const trustPills = [
         // Quadratic bezier calculation
         const controlY = 2 * dipY - 0.5 * startY - 0.5 * endY;
 
-        const points = [];
+        const points: StrandPoint[] = [];
         for (let j = 0; j < pointsPerStrand; j++) {
           const t = j / (pointsPerStrand - 1);
           const baseX = -100 + t * (svgWidth + 200); // Stretch off screen
@@ -1225,7 +1132,7 @@ const trustPills = [
     const strands = createStrands();
 
     // Quadratic bezier curve builder for path segments
-    function generateSmoothPath(points: any[]) {
+    function generateSmoothPath(points: StrandPoint[]) {
       let d = `M ${points[0].x} ${points[0].y}`;
       for (let i = 0; i < points.length - 1; i++) {
         const xc = (points[i].x + points[i + 1].x) / 2;
@@ -1236,21 +1143,34 @@ const trustPills = [
       return d;
     }
 
+    function syncWaveLoop() {
+      const shouldAnimate = isPageVisible && isSectionVisible;
+      if (shouldAnimate && frameId === null) {
+        frameId = requestAnimationFrame(renderWaves);
+      }
+      if (!shouldAnimate && frameId !== null) {
+        cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+    }
+
     function renderWaves() {
+      frameId = null;
+      if (!isPageVisible || !isSectionVisible) return;
+
       const time = Date.now() * 0.001;
-      const bounds = svgBg!.getBoundingClientRect();
 
       // Localize mouse to SVG internal viewBox mapping
-      const localMouseX = (mouseX - bounds.left) * (svgWidth / bounds.width);
-      const localMouseY = (mouseY - bounds.top) * (svgHeight / bounds.height);
+      const localMouseX = (mouseX - svgBounds.left) * (svgWidth / svgBounds.width);
+      const localMouseY = (mouseY - svgBounds.top) * (svgHeight / svgBounds.height);
 
       strands.forEach((strand) => {
-        strand.points.forEach((p: any, j: number) => {
+        strand.points.forEach((point, j) => {
           // Less movement near the anchors, high movement at the dip
           const edgeFactor = Math.sin((j / (pointsPerStrand - 1)) * Math.PI);
 
-          const waveX = p.baseX + Math.sin(time * p.speed + p.phase + j * 0.2) * 20 * edgeFactor;
-          const waveY = p.baseY + Math.cos(time * p.speed + p.phase + j * 0.2) * 30 * edgeFactor;
+          const waveX = point.baseX + Math.sin(time * point.speed + point.phase + j * 0.2) * 20 * edgeFactor;
+          const waveY = point.baseY + Math.cos(time * point.speed + point.phase + j * 0.2) * 30 * edgeFactor;
 
           let targetX = waveX;
           let targetY = waveY;
@@ -1260,28 +1180,47 @@ const trustPills = [
           const dy = waveY - localMouseY;
           const dist = Math.sqrt(dx * dx + dy * dy);
 
-          if (dist < pullRadius) {
+          if (dist > 0 && dist < pullRadius) {
             const force = Math.pow((pullRadius - dist) / pullRadius, 2);
             targetX += (dx / dist) * force * 120 * edgeFactor;
             targetY += (dy / dist) * force * 120 * edgeFactor;
           }
 
           // Spring physics
-          p.vx += (targetX - p.x) * stiffness;
-          p.vx *= damping;
-          p.x += p.vx;
+          point.vx += (targetX - point.x) * stiffness;
+          point.vx *= damping;
+          point.x += point.vx;
 
-          p.vy += (targetY - p.y) * stiffness;
-          p.vy *= damping;
-          p.y += p.vy;
+          point.vy += (targetY - point.y) * stiffness;
+          point.vy *= damping;
+          point.y += point.vy;
         });
         strand.el.setAttribute("d", generateSmoothPath(strand.points));
       });
 
-      requestAnimationFrame(renderWaves);
+      frameId = requestAnimationFrame(renderWaves);
     }
 
-    requestAnimationFrame(renderWaves);
+    if ("IntersectionObserver" in window) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          isSectionVisible = entries.some((entry) => entry.isIntersecting);
+          if (isSectionVisible) updateSvgBounds();
+          syncWaveLoop();
+        },
+        { threshold: 0 },
+      );
+
+      observer.observe(section);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      isPageVisible = document.visibilityState === "visible";
+      if (isPageVisible) updateSvgBounds();
+      syncWaveLoop();
+    });
+
+    syncWaveLoop();
   }
 
   function initReveal() {
