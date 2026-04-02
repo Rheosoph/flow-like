@@ -665,7 +665,8 @@ export const MessageComponent = memo(function MessageComponent({
 		);
 	}, [message.ratingSettings]);
 
-	const hasUsageStats = !isUser && Boolean(message.usage_stats?.length);
+	const usageStats = !isUser ? (message.usage_stats ?? []) : [];
+	const hasUsageStats = usageStats.length > 0;
 	const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
 
 	return (
@@ -747,8 +748,8 @@ export const MessageComponent = memo(function MessageComponent({
 						onFullscreen={setFullscreenFile}
 					/>
 					{hasUsageStats && (
-							<UsageStats stats={message.usage_stats} className="mt-1" />
-						)}
+						<UsageStats stats={usageStats} className="mt-1" />
+					)}
 					{!loading && (
 						<MessageActions
 							isUser={isUser}
