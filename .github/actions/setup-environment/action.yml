@@ -28,7 +28,7 @@ runs:
     - name: Install and cache dependencies
       uses: awalsh128/cache-apt-pkgs-action@latest
       with:
-        packages: libgtk-3-dev libclang-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev pkg-config protobuf-compiler webkit2gtk-4.1 libglib2.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
+        packages: libgtk-3-dev libclang-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev pkg-config protobuf-compiler webkit2gtk-4.1 libglib2.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libudev-dev
         version: 1.0
 
     - name: Cache Bun dependencies
