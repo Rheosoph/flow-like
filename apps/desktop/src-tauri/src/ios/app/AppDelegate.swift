@@ -1,6 +1,7 @@
 import UIKit
 import Tauri
 import UserNotifications
+import AppTrackingTransparency
 import tauri_plugin_remote_push
 
 class AppDelegate: TauriAppDelegate {
@@ -11,6 +12,17 @@ class AppDelegate: TauriAppDelegate {
     PushNotificationPlugin.configureFirebaseAppIfAvailable()
     UNUserNotificationCenter.current().delegate = self
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func applicationDidBecomeActive(_ application: UIApplication) {
+    super.applicationDidBecomeActive(application)
+    requestTrackingAuthorization()
+  }
+
+  private func requestTrackingAuthorization() {
+    if #available(iOS 14, *) {
+      ATTrackingManager.requestTrackingAuthorization { _ in }
+    }
   }
 
   override func application(

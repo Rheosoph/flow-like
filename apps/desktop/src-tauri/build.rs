@@ -182,12 +182,61 @@ fn ensure_ios_associated_domain(domain: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_ios_tracking_usage_description(description: &str) -> Result<(), String> {
+    let key = "NSUserTrackingUsageDescription";
+    let mut plist_paths = vec![PathBuf::from("Info.plist")];
+
+    if let Ok(entries) = fs::read_dir("gen/apple") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            if !dir_name.ends_with("_iOS") {
+                continue;
+            }
+
+            let plist_path = path.join("Info.plist");
+            if plist_path.exists() {
+                plist_paths.push(plist_path);
+            }
+        }
+    }
+
+    for plist_path in plist_paths {
+        let mut value = plist::Value::from_file(&plist_path)
+            .map_err(|e| format!("{}: failed to parse plist: {e}", plist_path.display()))?;
+
+        let root = value.as_dictionary_mut().ok_or_else(|| {
+            format!(
+                "{}: expected root dictionary in plist",
+                plist_path.display()
+            )
+        })?;
+
+        if !root.contains_key(key) {
+            root.insert(
+                key.to_string(),
+                plist::Value::String(description.to_string()),
+            );
+            value
+                .to_file_xml(&plist_path)
+                .map_err(|e| format!("{}: failed to write plist: {e}", plist_path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     // Link against system zlib on iOS (needed by flate2 with zlib feature)
     if target_os == "ios" {
         println!("cargo:rustc-link-lib=z");
+        println!("cargo:rustc-link-lib=framework=AppTrackingTransparency");
     }
 
     if target_os == "android" {
@@ -224,6 +273,11 @@ fn main() {
         }
         if let Err(err) = ensure_ios_associated_domain(&app_link_domain) {
             println!("cargo:warning=failed to enforce iOS associated domains: {err}");
+        }
+        if let Err(err) = ensure_ios_tracking_usage_description(
+            "Flow Like uses this to improve your experience and deliver relevant content. You can change this anytime in Settings.",
+        ) {
+            println!("cargo:warning=failed to enforce iOS tracking usage description: {err}");
         }
     }
 }
