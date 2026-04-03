@@ -14,7 +14,7 @@
 				{
 					"id": "featured-2",
 					"type": "app",
-					"appId": "tzo2wf3phvijkpklyoo5krol"
+					"appId": "zncx14b7fxkx4jm2e3s76cnd"
 				}
 			],
 			{
@@ -70,14 +70,25 @@
 		"size": "medium",
 		"items": [
 			{
-				"id": "release-008",
+				"id": "release-010",
 				"type": "static",
-				"title": "Alpha v0.0.8 — UI Builder & BI",
-				"description": "Build dashboards, query data lakes, create WASM nodes, and more in our biggest release yet",
+				"title": "Beta v0.1.0 — We Made It to Beta",
+				"description": "Custom WASM nodes in 15+ languages, RPA automation, agents with memory, user-scoped databases, and the iOS app",
 				"badge": "Latest Release",
 				"icon": "/base-logo.svg",
 				"gradient": "from-violet-500 to-fuchsia-600",
 				"image": "https://cdn.flow-like.com/swimlanes/wasm-nodes.jpg",
+				"link": "https://flow-like.com/blog/beta-0-1-0/"
+			},
+			{
+				"id": "release-008",
+				"type": "static",
+				"title": "Alpha v0.0.8 — UI Builder & BI",
+				"description": "Build dashboards, query data lakes, create WASM nodes, and more in our biggest release yet",
+				"badge": "Release",
+				"icon": "/base-logo.svg",
+				"gradient": "from-sky-500 to-indigo-600",
+				"image": "https://cdn.flow-like.com/swimlanes/0-7.jpg",
 				"link": "https://flow-like.com/blog/alpha-0-0-8/"
 			},
 			{
@@ -87,20 +98,9 @@
 				"description": "Deploy anywhere with Helm charts, connect any S3-compatible storage, and enjoy major UX upgrades",
 				"badge": "Release",
 				"icon": "/base-logo.svg",
-				"gradient": "from-sky-500 to-indigo-600",
-				"image": "https://cdn.flow-like.com/swimlanes/0-7.jpg",
-				"link": "https://flow-like.com/blog/alpha-0-0-7/"
-			},
-			{
-				"id": "release-006",
-				"type": "static",
-				"title": "Alpha v0.0.6 — FlowPilot & Agents",
-				"description": "Meet FlowPilot, the new agent interface, real-time collaboration, and massive integrations",
-				"badge": "Release",
-				"icon": "/base-logo.svg",
 				"gradient": "from-amber-500 to-orange-600",
 				"image": "https://cdn.flow-like.com/swimlanes/0-6.jpg",
-				"link": "https://flow-like.com/blog/alpha-0-0-6/"
+				"link": "https://flow-like.com/blog/alpha-0-0-7/"
 			}
 		],
 		"viewAllLink": "https://flow-like.com/blog/"

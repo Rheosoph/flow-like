@@ -179,8 +179,8 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C link-arg=/STACK:8388608' || '' }}
         with:
-          tagName: alpha-v__VERSION__
-          releaseName: "Flow Like - Alpha v__VERSION__"
+          tagName: beta-v__VERSION__
+          releaseName: "Flow Like - Beta v__VERSION__"
           releaseBody: ""
           releaseDraft: true
           prerelease: true

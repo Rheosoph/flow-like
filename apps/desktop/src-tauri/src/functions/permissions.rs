@@ -129,6 +129,35 @@ mod other {
     }
 }
 
+/// Returns the ATT authorization status string on iOS.
+/// Possible values: "not_determined", "restricted", "denied", "authorized".
+/// On non-iOS platforms, always returns "authorized".
+#[tauri::command(async)]
+pub async fn get_tracking_authorization_status(
+    _handler: AppHandle,
+) -> Result<String, TauriFunctionError> {
+    #[cfg(target_os = "ios")]
+    {
+        let status: u32 = unsafe {
+            let cls = objc2::runtime::AnyClass::get(c"ATTrackingManager")
+                .ok_or_else(|| TauriFunctionError::new("ATTrackingManager class not found"))?;
+            objc2::msg_send![cls, trackingAuthorizationStatus]
+        };
+        let status_str = match status {
+            0 => "not_determined",
+            1 => "restricted",
+            2 => "denied",
+            3 => "authorized",
+            _ => "not_determined",
+        };
+        Ok(status_str.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        Ok("authorized".to_string())
+    }
+}
+
 #[tauri::command(async)]
 pub async fn check_rpa_permissions(
     _handler: AppHandle,

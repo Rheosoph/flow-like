@@ -28,7 +28,10 @@
   <!-- Hardened Runtime options -->
   <!-- Load third-party sidecars/plugins (not signed by your Team ID) -->
   <key>com.apple.security.cs.disable-library-validation</key><true/>
-  <!-- Safer alternative to unsigned executable memory (for JIT-capable runtimes) -->
+  <!-- Wasmtime uses dual-mapping (memfd-backed) code memory for thread-safe W^X,
+       not MAP_JIT. File-backed executable pages require this broader entitlement. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <!-- MAP_JIT support (kept for any future direct JIT use) -->
   <key>com.apple.security.cs.allow-jit</key><true/>
 
   <!-- Optional: make spawned helper tools inherit your sandbox (use only if needed) -->
