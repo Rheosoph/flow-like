@@ -3,9 +3,9 @@ use std::sync::Arc;
 #[cfg(feature = "local-ml")]
 use fastembed::TokenizerFiles;
 use text_splitter::ChunkSizer;
-use tokenizers::{
-    AddedToken, Encoding, PaddingParams, PaddingStrategy, Tokenizer, TruncationParams,
-};
+use tokenizers::{Encoding, Tokenizer};
+#[cfg(feature = "local-ml")]
+use tokenizers::{AddedToken, PaddingParams, PaddingStrategy, TruncationParams};
 
 #[derive(Clone)]
 pub struct TokenizerSizer(Arc<Tokenizer>);

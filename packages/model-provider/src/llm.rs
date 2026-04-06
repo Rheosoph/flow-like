@@ -5,8 +5,6 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use rig::client::FinalCompletionResponse;
 #[allow(deprecated)]
 pub use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
-#[allow(deprecated)]
-use rig::completion::CompletionModelDyn;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionRequestBuilder,
     CompletionResponse, Message, Usage as RigUsage,
@@ -69,6 +67,24 @@ pub fn extract_headers(params: &HashMap<String, Value>) -> HeaderMap {
         }
     }
     headers
+}
+
+pub fn merge_additional_params(base: Option<Value>, extra: Option<Value>) -> Option<Value> {
+    match (base, extra) {
+        (None, None) => None,
+        (Some(base), None) => Some(base),
+        (None, Some(extra)) => Some(extra),
+        (Some(mut base), Some(extra)) => {
+            if let (Some(base_obj), Some(extra_obj)) = (base.as_object_mut(), extra.as_object()) {
+                for (key, value) in extra_obj {
+                    base_obj.insert(key.clone(), value.clone());
+                }
+                Some(base)
+            } else {
+                Some(extra)
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -264,6 +280,7 @@ impl CompletionModel for DynamicCompletionModel {
             let response = model.completion(request).await?;
             Ok(CompletionResponse {
                 choice: response.choice,
+                message_id: response.message_id,
                 usage: response.usage,
                 raw_response: DynamicResponse,
             })
@@ -344,12 +361,12 @@ async fn invoke_with_stream<'a>(
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;
             }
-            StreamedAssistantContent::ToolCall(tool_call) => {
+            StreamedAssistantContent::ToolCall { tool_call, internal_call_id: _ } => {
                 let chunk = ResponseChunk::from_tool_call(&tool_call, model_name);
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;
             }
-            StreamedAssistantContent::ToolCallDelta { id, content } => {
+            StreamedAssistantContent::ToolCallDelta { id, content, internal_call_id: _ } => {
                 let delta_str = match content {
                     ToolCallDeltaContent::Name(name) => name,
                     ToolCallDeltaContent::Delta(delta) => delta,
@@ -359,8 +376,18 @@ async fn invoke_with_stream<'a>(
                 callback(chunk).await?;
             }
             StreamedAssistantContent::Reasoning(reasoning) => {
-                // Join the reasoning vec into a single string
-                let reasoning_text = reasoning.reasoning.join("\n");
+                let reasoning_text = reasoning
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        rig::message::ReasoningContent::Text { text, .. } => {
+                            Some(text.as_str())
+                        }
+                        rig::message::ReasoningContent::Summary(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let chunk = ResponseChunk::from_reasoning(&reasoning_text, model_name);
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;

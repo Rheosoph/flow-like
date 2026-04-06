@@ -372,7 +372,7 @@ impl NodeLogic for CallFunctionNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         let layer_pin = match node.get_pin_by_name("function_layer_id") {

@@ -16,6 +16,7 @@ pub mod set_seed;
 pub mod set_stop;
 pub mod set_stream;
 pub mod set_system;
+pub mod set_thinking;
 pub mod set_temperature;
 pub mod set_top_p;
 pub mod set_user;

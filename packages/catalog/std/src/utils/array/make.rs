@@ -47,7 +47,7 @@ impl NodeLogic for MakeArrayNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let _ = node.match_type("array_out", board, Some(ValueType::Array), None);
     }
 }

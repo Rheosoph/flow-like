@@ -153,7 +153,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 )
             };
 
-            let db = db.execute().await?;
+            let db = context.app_state.with_lance_session(db).execute().await?;
             let mut lance_store = LanceDBVectorStore::from_connection(db, table).await;
             if let Some(opts) = &context
                 .app_state

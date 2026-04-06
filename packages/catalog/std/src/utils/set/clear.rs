@@ -53,9 +53,9 @@ impl NodeLogic for ClearSetNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("set_in", board.clone(), Some(ValueType::HashSet), None);
-        let _ = node.match_type("set_out", board.clone(), Some(ValueType::HashSet), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("set_in", board, Some(ValueType::HashSet), None);
+        let _ = node.match_type("set_out", board, Some(ValueType::HashSet), None);
         node.harmonize_type(vec!["set_in", "set_out"], true);
     }
 }

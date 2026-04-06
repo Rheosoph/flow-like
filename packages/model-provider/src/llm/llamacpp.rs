@@ -9,7 +9,7 @@ pub use client::{CompletionModel, LlamaCppClient};
 
 pub struct LlamaCppModel {
     client: LlamaCppClient,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
     port: u16,
 }
@@ -23,7 +23,7 @@ impl LlamaCppModel {
 
         Ok(LlamaCppModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
             port,
         })

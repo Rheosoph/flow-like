@@ -15,7 +15,7 @@ use flow_like_types::{async_trait, json, json::from_slice};
 #[cfg(feature = "execute")]
 use rmcp::{
     ServiceExt,
-    model::{ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParam, Tool},
+    model::{ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParams, Tool},
     transport::StreamableHttpClientTransport,
 };
 use std::{collections::HashSet, sync::Arc};
@@ -64,7 +64,7 @@ impl NodeLogic for RegisterMcpToolsNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
 
         if !read_pin_string(node, "mode")
@@ -92,7 +92,7 @@ impl NodeLogic for RegisterMcpToolsNode {
     }
 
     #[cfg(not(feature = "execute"))]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         cleanup_tool_pins(node, &HashSet::new());
     }
@@ -258,12 +258,14 @@ async fn refresh_manual_tool_pins(node: &mut Node, uri: &str) -> Result<(), Stri
 #[cfg(feature = "execute")]
 async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
     let client_info = ClientInfo {
+        meta: None,
         protocol_version: Default::default(),
         capabilities: ClientCapabilities::default(),
         client_info: Implementation {
             name: "Flow-Like".to_string(),
             version: "alpha".to_string(),
             title: None,
+            description: None,
             icons: None,
             website_url: Some("https://flow-like.com".to_string()),
         },
@@ -276,7 +278,7 @@ async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
         .map_err(|error| format!("Failed to connect to MCP server: {}", error))?;
 
     let mut tools = Vec::new();
-    let mut cursor: Option<PaginatedRequestParam> = None;
+    let mut cursor: Option<PaginatedRequestParams> = None;
 
     loop {
         let response = client
@@ -287,7 +289,8 @@ async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
         tools.extend(response.tools);
 
         if let Some(next_cursor) = response.next_cursor {
-            cursor = Some(PaginatedRequestParam {
+            cursor = Some(PaginatedRequestParams {
+                meta: None,
                 cursor: Some(next_cursor),
             });
         } else {

@@ -75,20 +75,7 @@ impl Command for ConnectPinsCommand {
         board: &mut Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        connect_pins(
-            board,
-            &self.from_node,
-            &self.from_pin,
-            &self.to_node,
-            &self.to_pin,
-        )?;
-
-        let from_entity = find_node_or_layer(board, &self.from_node)?;
-        let to_entity = find_node_or_layer(board, &self.to_node)?;
-        upsert_node_or_layer(board, from_entity);
-        upsert_node_or_layer(board, to_entity);
-
-        Ok(())
+        connect_pins(board, &self.from_node, &self.from_pin, &self.to_node, &self.to_pin)
     }
 
     async fn undo(
@@ -96,20 +83,7 @@ impl Command for ConnectPinsCommand {
         board: &mut Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        disconnect_pins(
-            board,
-            &self.from_node,
-            &self.from_pin,
-            &self.to_node,
-            &self.to_pin,
-        )?;
-
-        let from_entity = find_node_or_layer(board, &self.from_node)?;
-        let to_entity = find_node_or_layer(board, &self.to_node)?;
-        upsert_node_or_layer(board, from_entity);
-        upsert_node_or_layer(board, to_entity);
-
-        Ok(())
+        disconnect_pins(board, &self.from_node, &self.from_pin, &self.to_node, &self.to_pin)
     }
 }
 

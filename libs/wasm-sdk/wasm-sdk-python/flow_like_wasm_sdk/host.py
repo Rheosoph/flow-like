@@ -81,6 +81,9 @@ class HostBridge:
     def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
         return None
 
+    def llm_prompt_stream(self, bit_json: str, request_json: str) -> str | None:
+        return None
+
     def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
         return None
 
@@ -198,6 +201,9 @@ class MockHostBridge(HostBridge):
 
     def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
         return '{"role": "assistant", "content": "Mock LLM response"}'
+
+    def llm_prompt_stream(self, bit_json: str, request_json: str) -> str | None:
+        return '{"role": "assistant", "content": "Mock LLM streaming response", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}'
 
     def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
         import json as _json

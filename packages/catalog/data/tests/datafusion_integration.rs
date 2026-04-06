@@ -12,8 +12,11 @@
 //! ```
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
+use flow_like_storage::datafusion::arrow::array::ArrayRef;
 use flow_like_storage::datafusion::arrow::array::{Float64Array, Int32Array, StringArray};
 use flow_like_storage::datafusion::arrow::datatypes::{DataType, Field, Schema};
 use flow_like_storage::datafusion::arrow::record_batch::RecordBatch;
@@ -23,6 +26,7 @@ use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetForm
 use flow_like_storage::datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use flow_like_storage::datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext, col, lit};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::files::store::local_store::LocalObjectStore;
@@ -727,6 +731,67 @@ mod session_persistence_tests {
             .unwrap();
         let batches = df.collect().await.unwrap();
         assert!(!batches.is_empty());
+
+        store.as_generic().delete(&users_path).await.ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_parallel_queries_same_session_overlap() {
+        let (store, store_url) = create_test_store();
+        let users_path = test_data::create_users_parquet(&store).await;
+
+        let ctx = Arc::new(SessionContext::new());
+        register_parquet_from_store(&ctx, &store, &store_url, &users_path, "users").await;
+
+        let active_calls = Arc::new(AtomicUsize::new(0));
+        let max_parallel_calls = Arc::new(AtomicUsize::new(0));
+
+        let udf_active_calls = active_calls.clone();
+        let udf_max_parallel_calls = max_parallel_calls.clone();
+        let slow_identity = create_udf(
+            "slow_identity",
+            vec![DataType::Utf8],
+            DataType::Utf8,
+            Volatility::Immutable,
+            Arc::new(move |args: &[ColumnarValue]| {
+                let current = udf_active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                udf_max_parallel_calls.fetch_max(current, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(150));
+
+                let result = match &args[0] {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+                    }
+                    ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(value.clone())),
+                };
+
+                udf_active_calls.fetch_sub(1, Ordering::SeqCst);
+                result
+            }),
+        );
+        ctx.register_udf(slow_identity);
+
+        let query = "SELECT slow_identity(name) FROM users LIMIT 1";
+        let task_one = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                ctx.sql(query).await.unwrap().collect().await.unwrap();
+            })
+        };
+        let task_two = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                ctx.sql(query).await.unwrap().collect().await.unwrap();
+            })
+        };
+
+        task_one.await.unwrap();
+        task_two.await.unwrap();
+
+        assert!(
+            max_parallel_calls.load(Ordering::SeqCst) >= 2,
+            "shared SessionContext queries did not overlap"
+        );
 
         store.as_generic().delete(&users_path).await.ok();
     }

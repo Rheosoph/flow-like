@@ -57,18 +57,27 @@ impl Command for UpsertPinCommand {
             self.pin.schema = Some(normalized);
         }
 
+        let pin_exists_on_node = match board.nodes.get(&self.node_id) {
+            Some(node) => node.pins.contains_key(&self.pin.id),
+            None => return Err(flow_like_types::anyhow!("Node not found".to_string())),
+        };
+
+        let pin_id_conflicts = !pin_exists_on_node && board.get_pin_by_id(&self.pin.id).is_some();
+
         let node = match board.nodes.get_mut(&self.node_id) {
             Some(node) => node,
             None => return Err(flow_like_types::anyhow!("Node not found".to_string())),
         };
 
-        if node.pins.contains_key(&self.pin.id) {
+        if pin_exists_on_node {
             self.old_pin = node.pins.insert(self.pin.id.clone(), self.pin.clone());
             return Ok(());
         }
 
         let mut pin = self.pin.clone();
-        pin.id = create_id();
+        if pin_id_conflicts {
+            pin.id = create_id();
+        }
 
         let num_pins = node
             .pins

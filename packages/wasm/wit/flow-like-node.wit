@@ -57,6 +57,10 @@ interface models {
     embed-text-document: func(model-json: string, texts-json: string) -> option<string>;
     embed-image: func(model-json: string, image-data: list<u8>) -> option<string>;
     llm-prompt: func(bit-json: string, messages-json: string, do-stream: bool) -> option<string>;
+    /// ABI v2: Streaming LLM prompt. Streams chunks via streaming::emit("llm_chunk", chunk_json)
+    /// during execution. Returns final response JSON with usage and message_id.
+    /// request-json is always an object: {messages, tools?, temperature?, max_tokens?, ...}
+    llm-prompt-stream: func(bit-json: string, request-json: string) -> option<string>;
 }
 
 interface auth {

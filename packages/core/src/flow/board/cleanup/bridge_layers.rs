@@ -44,6 +44,8 @@ struct BridgePlan {
 pub struct BridgeLayersCleanup {
     /// Set of all layer IDs
     all_layers: HashSet<String>,
+    /// Maps a layer ID to its parent layer ID, if any
+    layer_parents: HashMap<String, Option<String>>,
     /// Set of pin IDs that are layer boundary pins (already bridge pins)
     layer_pin_ids: HashSet<String>,
     /// Maps pin ID to the layer it belongs to (None if not in a layer)
@@ -59,10 +61,17 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
     {
         Self {
             all_layers: HashSet::with_capacity(10),
+            layer_parents: HashMap::with_capacity(10),
             layer_pin_ids: HashSet::with_capacity(50),
             pin_layer: HashMap::with_capacity((board.nodes.len() + board.layers.len()) * 4),
             bridge_plans: HashMap::with_capacity(10),
         }
+    }
+
+    fn initial_layer_iteration(&mut self, layer: &Layer) {
+        self.all_layers.insert(layer.id.clone());
+        self.layer_parents
+            .insert(layer.id.clone(), layer.parent_id.clone());
     }
 
     fn initial_pin_iteration(&mut self, pin: &Pin, parent: NodeOrLayerRef) {
@@ -100,17 +109,16 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
 
         // Collect all outgoing connections (connected_to) that cross layer boundaries
         // These are connections from this internal pin to pins outside the layer
-        // Skip connections that already go through layer pins (already bridged)
+        // Skip connections that already go through boundary pins within this scope
         pin.connected_to.iter().for_each(|connected_to| {
-            // If connected to a layer pin, it's already bridged
-            if self.layer_pin_ids.contains(connected_to) {
+            if self.is_existing_boundary_for_scope(connected_to, &layer_id) {
                 return;
             }
             // Skip orphaned pins (deleted nodes) - they won't be in pin_layer
             let Some(connected_layer) = self.pin_layer.get(connected_to) else {
                 return;
             };
-            if *connected_layer != Some(layer_id.clone()) {
+            if !self.is_pin_within_layer_scope(connected_layer.as_ref(), &layer_id) {
                 let key = (layer_id.clone(), pin.id.clone());
                 let plan = self.bridge_plans.entry(key).or_default();
                 plan.outside_connected_to.insert(connected_to.clone());
@@ -119,26 +127,21 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
 
         // Collect all incoming connections (depends_on) that cross layer boundaries
         // These are connections from pins outside the layer to this internal pin
-        // Skip connections that already go through layer pins (already bridged)
+        // Skip connections that already go through boundary pins within this scope
         pin.depends_on.iter().for_each(|depends_on| {
-            // If depends on a layer pin, it's already bridged
-            if self.layer_pin_ids.contains(depends_on) {
+            if self.is_existing_boundary_for_scope(depends_on, &layer_id) {
                 return;
             }
             // Skip orphaned pins (deleted nodes) - they won't be in pin_layer
             let Some(depends_on_layer) = self.pin_layer.get(depends_on) else {
                 return;
             };
-            if *depends_on_layer != Some(layer_id.clone()) {
+            if !self.is_pin_within_layer_scope(depends_on_layer.as_ref(), &layer_id) {
                 let key = (layer_id.clone(), pin.id.clone());
                 let plan = self.bridge_plans.entry(key).or_default();
                 plan.outside_depends_on.insert(depends_on.clone());
             }
         });
-    }
-
-    fn initial_layer_iteration(&mut self, layer: &Layer) {
-        self.all_layers.insert(layer.id.clone());
     }
 
     fn post_process(&mut self, board: &mut Board, pin_lookup: &PinLookup) {
@@ -322,6 +325,33 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
     }
 }
 
+impl BridgeLayersCleanup {
+    fn is_existing_boundary_for_scope(&self, pin_id: &str, layer_id: &str) -> bool {
+        if !self.layer_pin_ids.contains(pin_id) {
+            return false;
+        }
+
+        self.pin_layer
+            .get(pin_id)
+            .map(|pin_layer| self.is_pin_within_layer_scope(pin_layer.as_ref(), layer_id))
+            .unwrap_or(true)
+    }
+
+    fn is_pin_within_layer_scope(&self, pin_layer: Option<&String>, layer_id: &str) -> bool {
+        let mut current_layer = pin_layer.cloned();
+
+        while let Some(current) = current_layer {
+            if current == layer_id {
+                return true;
+            }
+
+            current_layer = self.layer_parents.get(&current).cloned().flatten();
+        }
+
+        false
+    }
+}
+
 /// Helper function to get a mutable reference to a pin from the board
 /// Uses the pin_lookup to determine if the pin belongs to a node or layer,
 /// then retrieves it from the appropriate collection
@@ -342,5 +372,325 @@ fn get_pin_mut<'a>(
                 .and_then(|l| l.pins.get_mut(&pin_meta.id)),
         },
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::{BTreeSet, HashMap}, sync::Arc, time::SystemTime};
+
+    use flow_like_storage::object_store::path::Path;
+
+    use crate::{
+        flow::{
+            board::{
+                cleanup::BoardCleanupLogic, Board, ExecutionMode, ExecutionStage, Layer,
+                LayerType,
+            },
+            execution::LogLevel,
+            node::Node,
+            pin::{Pin, PinType, ValueType},
+            variable::VariableType,
+        },
+    };
+
+    use super::BridgeLayersCleanup;
+
+    fn test_board() -> Board {
+        Board {
+            id: "board".to_string(),
+            name: "Board".to_string(),
+            description: String::new(),
+            nodes: HashMap::new(),
+            variables: HashMap::new(),
+            comments: HashMap::new(),
+            viewport: (0.0, 0.0, 1.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: HashMap::new(),
+            layers: HashMap::new(),
+            page_ids: Vec::new(),
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: Path::from("/test"),
+            logic_nodes: HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    #[test]
+    fn child_layer_bridges_do_not_create_parent_layer_pins() {
+        let mut board = test_board();
+
+        let layer_a = Layer::new("layer-a".to_string(), "A".to_string(), LayerType::Collapsed);
+        let mut layer_b = Layer::new("layer-b".to_string(), "B".to_string(), LayerType::Collapsed);
+        layer_b.parent_id = Some(layer_a.id.clone());
+
+        board.layers.insert(layer_a.id.clone(), layer_a.clone());
+        board.layers.insert(layer_b.id.clone(), layer_b.clone());
+
+        let mut parent_source = Node::new("source", "Source", "", "test");
+        parent_source.id = "parent-source".to_string();
+        parent_source.layer = Some(layer_a.id.clone());
+        let parent_source_pin = parent_source
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        let mut child_node = Node::new("child", "Child", "", "test");
+        child_node.id = "child-node".to_string();
+        child_node.layer = Some(layer_b.id.clone());
+        let child_in_pin = child_node
+            .add_input_pin("in", "In", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+        let child_out_pin = child_node
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        let mut parent_sink = Node::new("sink", "Sink", "", "test");
+        parent_sink.id = "parent-sink".to_string();
+        parent_sink.layer = Some(layer_a.id.clone());
+        let parent_sink_pin = parent_sink
+            .add_input_pin("in", "In", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        board
+            .nodes
+            .insert(parent_source.id.clone(), parent_source.clone());
+        board.nodes.insert(child_node.id.clone(), child_node.clone());
+        board.nodes.insert(parent_sink.id.clone(), parent_sink.clone());
+
+        crate::flow::board::commands::pins::connect_pins::connect_pins(
+            &mut board,
+            &parent_source.id,
+            &parent_source_pin,
+            &child_node.id,
+            &child_in_pin,
+        )
+        .unwrap();
+        crate::flow::board::commands::pins::connect_pins::connect_pins(
+            &mut board,
+            &child_node.id,
+            &child_out_pin,
+            &parent_sink.id,
+            &parent_sink_pin,
+        )
+        .unwrap();
+
+        let mut bridge_layers = BridgeLayersCleanup::init(&mut board);
+        let mut pins = HashMap::new();
+
+        for node in board.nodes.values() {
+            for pin in node.pins.values() {
+                pins.insert(
+                    pin.id.clone(),
+                    (Arc::new(pin.clone()), crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone())),
+                );
+                bridge_layers.initial_pin_iteration(pin, crate::flow::board::cleanup::NodeOrLayerRef::Node(node));
+            }
+        }
+
+        for layer in board.layers.values() {
+            bridge_layers.initial_layer_iteration(layer);
+
+            for pin in layer.pins.values() {
+                pins.insert(
+                    pin.id.clone(),
+                    (Arc::new(pin.clone()), crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone())),
+                );
+                bridge_layers.initial_pin_iteration(pin, crate::flow::board::cleanup::NodeOrLayerRef::Layer(layer));
+            }
+        }
+
+        for node in board.nodes.values_mut() {
+            for pin in node.pins.values_mut() {
+                bridge_layers.main_pin_iteration(pin, &pins);
+            }
+        }
+
+        for layer in board.layers.values_mut() {
+            for pin in layer.pins.values_mut() {
+                bridge_layers.main_pin_iteration(pin, &pins);
+            }
+        }
+
+        bridge_layers.post_process(&mut board, &pins);
+
+        let parent_layer = board.layers.get(&layer_a.id).unwrap();
+        let child_layer = board.layers.get(&layer_b.id).unwrap();
+
+        assert!(parent_layer.pins.is_empty());
+        assert_eq!(child_layer.pins.len(), 2);
+
+        let input_bridge = child_layer
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input)
+            .unwrap();
+        let output_bridge = child_layer
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Output)
+            .unwrap();
+
+        let parent_source = board.nodes.get("parent-source").unwrap();
+        let child_node = board.nodes.get("child-node").unwrap();
+        let parent_sink = board.nodes.get("parent-sink").unwrap();
+
+        assert_eq!(parent_source.pins[&parent_source_pin].connected_to.len(), 1);
+        assert!(parent_source.pins[&parent_source_pin]
+            .connected_to
+            .contains(&input_bridge.id));
+        assert_eq!(child_node.pins[&child_in_pin].depends_on.len(), 1);
+        assert!(child_node.pins[&child_in_pin]
+            .depends_on
+            .contains(&input_bridge.id));
+        assert!(input_bridge.depends_on.contains(&parent_source_pin));
+        assert!(input_bridge.connected_to.contains(&child_in_pin));
+
+        assert_eq!(child_node.pins[&child_out_pin].connected_to.len(), 1);
+        assert!(child_node.pins[&child_out_pin]
+            .connected_to
+            .contains(&output_bridge.id));
+        assert_eq!(parent_sink.pins[&parent_sink_pin].depends_on.len(), 1);
+        assert!(parent_sink.pins[&parent_sink_pin]
+            .depends_on
+            .contains(&output_bridge.id));
+        assert!(output_bridge.depends_on.contains(&child_out_pin));
+        assert!(output_bridge.connected_to.contains(&parent_sink_pin));
+    }
+
+    #[test]
+    fn ancestor_layer_boundary_pin_creates_child_exec_input_bridge() {
+        let mut board = test_board();
+
+        let mut layer_a = Layer::new("layer-a".to_string(), "A".to_string(), LayerType::Collapsed);
+        let mut layer_b = Layer::new("layer-b".to_string(), "B".to_string(), LayerType::Collapsed);
+        layer_b.parent_id = Some(layer_a.id.clone());
+
+        let parent_boundary_pin = Pin {
+            id: "layer-a-exec-in".to_string(),
+            name: "exec_in".to_string(),
+            friendly_name: "Exec In".to_string(),
+            description: String::new(),
+            pin_type: PinType::Input,
+            data_type: VariableType::Execution,
+            schema: None,
+            value_type: ValueType::Normal,
+            depends_on: BTreeSet::new(),
+            connected_to: BTreeSet::new(),
+            default_value: None,
+            index: 1,
+            options: None,
+            value: None,
+        };
+        layer_a
+            .pins
+            .insert(parent_boundary_pin.id.clone(), parent_boundary_pin.clone());
+
+        board.layers.insert(layer_a.id.clone(), layer_a.clone());
+        board.layers.insert(layer_b.id.clone(), layer_b.clone());
+
+        let mut child_node = Node::new("child", "Child", "", "test");
+        child_node.id = "child-node".to_string();
+        child_node.layer = Some(layer_b.id.clone());
+        let child_exec_in = child_node
+            .add_input_pin("exec_in", "Exec In", "", VariableType::Execution)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        board.nodes.insert(child_node.id.clone(), child_node.clone());
+
+        crate::flow::board::commands::pins::connect_pins::connect_pins(
+            &mut board,
+            &layer_a.id,
+            &parent_boundary_pin.id,
+            &child_node.id,
+            &child_exec_in,
+        )
+        .unwrap();
+
+        let mut bridge_layers = BridgeLayersCleanup::init(&mut board);
+        let mut pins = HashMap::new();
+
+        for node in board.nodes.values() {
+            for pin in node.pins.values() {
+                pins.insert(
+                    pin.id.clone(),
+                    (
+                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
+                    ),
+                );
+                bridge_layers.initial_pin_iteration(
+                    pin,
+                    crate::flow::board::cleanup::NodeOrLayerRef::Node(node),
+                );
+            }
+        }
+
+        for layer in board.layers.values() {
+            bridge_layers.initial_layer_iteration(layer);
+
+            for pin in layer.pins.values() {
+                pins.insert(
+                    pin.id.clone(),
+                    (
+                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
+                    ),
+                );
+                bridge_layers.initial_pin_iteration(
+                    pin,
+                    crate::flow::board::cleanup::NodeOrLayerRef::Layer(layer),
+                );
+            }
+        }
+
+        for node in board.nodes.values_mut() {
+            for pin in node.pins.values_mut() {
+                bridge_layers.main_pin_iteration(pin, &pins);
+            }
+        }
+
+        for layer in board.layers.values_mut() {
+            for pin in layer.pins.values_mut() {
+                bridge_layers.main_pin_iteration(pin, &pins);
+            }
+        }
+
+        bridge_layers.post_process(&mut board, &pins);
+
+        let parent_layer = board.layers.get(&layer_a.id).unwrap();
+        let child_layer = board.layers.get(&layer_b.id).unwrap();
+        let child_node = board.nodes.get("child-node").unwrap();
+
+        assert_eq!(parent_layer.pins.len(), 1);
+        assert_eq!(child_layer.pins.len(), 1);
+
+        let bridge_pin = child_layer.pins.values().next().unwrap();
+        assert_eq!(bridge_pin.pin_type, PinType::Input);
+        assert_eq!(bridge_pin.data_type, VariableType::Execution);
+        assert!(bridge_pin.depends_on.contains(&parent_boundary_pin.id));
+        assert!(bridge_pin.connected_to.contains(&child_exec_in));
+
+        let updated_parent_pin = &parent_layer.pins[&parent_boundary_pin.id];
+        assert_eq!(updated_parent_pin.connected_to.len(), 1);
+        assert!(updated_parent_pin.connected_to.contains(&bridge_pin.id));
+
+        let updated_child_pin = &child_node.pins[&child_exec_in];
+        assert_eq!(updated_child_pin.depends_on.len(), 1);
+        assert!(updated_child_pin.depends_on.contains(&bridge_pin.id));
     }
 }

@@ -142,7 +142,7 @@ impl NodeLogic for SetChartStyle {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let chart_type = node
             .get_pin_by_name("chart_type")
             .and_then(|pin| pin.default_value.clone())

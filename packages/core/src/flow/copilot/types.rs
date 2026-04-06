@@ -9,6 +9,12 @@ pub struct NodeMetadata {
     pub inputs: Vec<PinMetadata>,
     pub outputs: Vec<PinMetadata>,
     pub category: Option<String>,
+    #[serde(default)]
+    pub required_inputs: Vec<String>,
+    #[serde(default)]
+    pub companion_nodes: Vec<String>,
+    #[serde(default)]
+    pub capability_tags: Vec<String>,
 }
 
 impl NodeMetadata {
@@ -71,6 +77,8 @@ pub struct PinMetadata {
     pub description: String, // Pin description
     pub data_type: String, // e.g., "String", "Integer", "Struct", "Generic", "Execution"
     pub value_type: String, // e.g., "Normal", "Array", "HashMap", "HashSet"
+    #[serde(default)]
+    pub default_value: Option<String>,
     pub schema: Option<String>, // JSON schema for Struct types
     pub is_generic: bool, // Generic pins can connect to any type
     pub valid_values: Option<Vec<String>>, // For enum-like pins

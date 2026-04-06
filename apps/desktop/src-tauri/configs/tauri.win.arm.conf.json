@@ -6,7 +6,6 @@
             "binaries/win/arm/ggml-cpu.dll",
             "binaries/win/arm/ggml-rpc.dll",
             "binaries/win/arm/ggml.dll",
-            "binaries/win/arm/libcurl-arm64.dll",
             "binaries/win/arm/libomp140.aarch64.dll",
             "binaries/win/arm/llama.dll",
             "binaries/win/arm/mtmd.dll",

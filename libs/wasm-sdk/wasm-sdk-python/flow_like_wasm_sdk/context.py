@@ -231,13 +231,48 @@ class Context:
         messages: list[ChatMessage],
         stream: bool = False,
         tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tool_choice: Any | None = None,
+        output_schema: dict | None = None,
     ) -> str | None:
         msg_list = [m.to_dict() for m in messages]
+        payload: dict[str, Any] = {"messages": msg_list}
         if tools:
-            payload = json.dumps({"messages": msg_list, "tools": tools})
-        else:
-            payload = json.dumps(msg_list)
-        return self._host.llm_prompt(bit.to_json(), payload, stream)
+            payload["tools"] = tools
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if output_schema is not None:
+            payload["output_schema"] = output_schema
+        return self._host.llm_prompt(bit.to_json(), json.dumps(payload), stream)
+
+    def llm_prompt_stream(
+        self,
+        bit: Bit,
+        messages: list[ChatMessage],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tool_choice: Any | None = None,
+        output_schema: dict | None = None,
+    ) -> str | None:
+        msg_list = [m.to_dict() for m in messages]
+        payload: dict[str, Any] = {"messages": msg_list}
+        if tools:
+            payload["tools"] = tools
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if output_schema is not None:
+            payload["output_schema"] = output_schema
+        return self._host.llm_prompt_stream(bit.to_json(), json.dumps(payload))
 
     # ── Embedding ────────────────────────────────────────────────────
 

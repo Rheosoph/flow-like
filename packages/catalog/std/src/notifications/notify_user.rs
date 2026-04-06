@@ -130,7 +130,7 @@ impl NodeLogic for NotifyUserNode {
         Ok(())
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {
         // No type matching needed
     }
 }

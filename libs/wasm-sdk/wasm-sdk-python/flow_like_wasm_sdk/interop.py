@@ -232,16 +232,20 @@ class Bit:
     license: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def prompt(self, ctx: Context, messages: list[ChatMessage]) -> str | None:
-        """Send a completion request and return the model's response text."""
-        return ctx.llm_prompt(self, messages, stream=False)
+    def prompt(self, ctx: Context, messages: list[ChatMessage], **kwargs) -> str | None:
+        """Send a completion request and return the model's response text.
 
-    def prompt_stream(self, ctx: Context, messages: list[ChatMessage]) -> str | None:
+        Optional kwargs: temperature, max_tokens, tool_choice, output_schema, tools
+        """
+        return ctx.llm_prompt(self, messages, stream=False, **kwargs)
+
+    def prompt_stream(self, ctx: Context, messages: list[ChatMessage], **kwargs) -> str | None:
         """Stream a completion — chunks arrive via the streaming interface.
 
-        Returns the full concatenated response.
+        Uses llm_prompt_stream (ABI v2) for true host-side streaming.
+        Optional kwargs: temperature, max_tokens, tool_choice, output_schema, tools
         """
-        return ctx.llm_prompt(self, messages, stream=True)
+        return ctx.llm_prompt_stream(self, messages, **kwargs)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"id": self.id, "type": self.bit_type, "hub": self.hub}

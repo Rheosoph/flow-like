@@ -116,10 +116,13 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
 
         Ok(completion::CompletionResponse {
             choice,
+            message_id: None,
             usage: Usage {
                 input_tokens: resp.usage.prompt_tokens,
                 output_tokens: resp.usage.completion_tokens,
                 total_tokens: resp.usage.total_tokens,
+                cache_creation_input_tokens: 0,
+                cached_input_tokens: 0,
             },
             raw_response: resp,
         })
@@ -491,6 +494,12 @@ impl CompletionModel {
                     self.process_user_content(content.iter().collect::<Vec<_>>().as_slice());
                 self.build_user_message(content_parts, tool_results, has_multimodal)
             }
+            message::Message::System { content, .. } => {
+                Ok(json!({
+                    "role": "system",
+                    "content": content,
+                }))
+            }
             message::Message::Assistant { content, .. } => {
                 let mut text_parts = Vec::new();
                 let mut tool_calls = Vec::new();
@@ -548,6 +557,8 @@ impl GetTokenUsage for StreamingCompletionResponse {
             input_tokens: self.prompt_tokens,
             output_tokens: self.completion_tokens,
             total_tokens: self.total_tokens,
+            cache_creation_input_tokens: 0,
+            cached_input_tokens: 0,
         })
     }
 }
@@ -703,5 +714,485 @@ impl completion::CompletionModel for CompletionModel {
         });
 
         Ok(streaming::StreamingCompletionResponse::stream(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::tokio;
+    use rig::completion::{Chat, CompletionModel as _, Message};
+    use rig::client::CompletionClient;
+    use rig::streaming::StreamingChat;
+
+    const DEFAULT_BASE_URL: &str = "http://localhost:8080";
+
+    fn test_base_url() -> String {
+        std::env::var("LLAMACPP_TEST_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
+    }
+
+    fn test_model() -> String {
+        std::env::var("LLAMACPP_TEST_MODEL").unwrap_or_else(|_| "test".to_string())
+    }
+
+    async fn server_available() -> bool {
+        let url = format!("{}/health", test_base_url());
+        reqwest::get(&url)
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_basic_completion() {
+        if !server_available().await {
+            eprintln!("Skipping: llama-server not running at {}", test_base_url());
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client.agent(&test_model()).build();
+
+        let response: String = agent.chat("Say hello in exactly 3 words.", Vec::<Message>::new()).await.unwrap();
+        assert!(!response.is_empty(), "Expected non-empty response");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_completion_with_system_prompt() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client
+            .agent(&test_model())
+            .preamble("You are a pirate. Always respond in pirate speak.")
+            .build();
+
+        let response: String = agent.chat("What is your name?", Vec::<Message>::new()).await.unwrap();
+        assert!(!response.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_completion_with_chat_history() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client.agent(&test_model()).build();
+
+        let history = vec![
+            Message::user("My name is Alice."),
+            Message::assistant("Nice to meet you, Alice!"),
+        ];
+
+        let response: String = agent.chat("What is my name?", history).await.unwrap();
+        assert!(!response.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_streaming_completion() {
+        use futures::StreamExt;
+
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client.agent(&test_model()).build();
+
+        let mut stream = agent
+            .stream_chat("Count from 1 to 5.", Vec::<Message>::new())
+            .await;
+
+        let mut collected = String::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(content)) => {
+                    match content {
+                        rig::streaming::StreamedAssistantContent::Text(text) => {
+                            collected.push_str(&text.text);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => panic!("Stream error: {}", e),
+            }
+        }
+
+        assert!(!collected.is_empty(), "Expected streamed content");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_raw_completion_request() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let model = client.completion_model(&test_model());
+
+        let response = model
+            .completion_request("What is 2+2?")
+            .send()
+            .await
+            .unwrap();
+
+        let text = response
+            .choice
+            .iter()
+            .filter_map(|c| match c {
+                completion::AssistantContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(!text.is_empty(), "Expected text in completion response");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_completion_with_max_tokens() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let model = client.completion_model(&test_model());
+
+        let response = model
+            .completion_request("Write a very short story about a cat in 2 sentences.")
+            .max_tokens(1000)
+            .send()
+            .await
+            .unwrap();
+
+        assert!(
+            response.usage.output_tokens <= 1010,
+            "Expected max_tokens to be respected, got {}",
+            response.usage.output_tokens
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_completion_with_temperature() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let model = client.completion_model(&test_model());
+
+        let response = model
+            .completion_request("Say hi.")
+            .temperature(0.0)
+            .send()
+            .await
+            .unwrap();
+
+        let text = response
+            .choice
+            .iter()
+            .filter_map(|c| match c {
+                completion::AssistantContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(!text.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_usage_tracking() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let model = client.completion_model(&test_model());
+
+        let response = model
+            .completion_request("Hello")
+            .send()
+            .await
+            .unwrap();
+
+        assert!(response.usage.input_tokens > 0, "Expected input tokens > 0");
+        assert!(
+            response.usage.output_tokens > 0,
+            "Expected output tokens > 0"
+        );
+        assert!(
+            response.usage.total_tokens >= response.usage.input_tokens + response.usage.output_tokens,
+            "Total should be >= input + output"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_responses_api() {
+        let base_url = test_base_url();
+        let url = format!("{}/v1/responses", base_url);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&json!({
+                "model": test_model(),
+                "input": "Say hello in exactly 3 words.",
+                "max_output_tokens": 20,
+            }))
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body: Value = r.json().await.unwrap();
+                assert!(body.get("output").is_some(), "Expected 'output' field in responses API");
+            }
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                if status.as_u16() == 404 {
+                    eprintln!("Responses API not available (404) — server may be older version");
+                } else {
+                    panic!("Unexpected status {}: {}", status, body);
+                }
+            }
+            Err(e) => {
+                eprintln!("Skipping responses API test: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_responses_api_with_instructions() {
+        let base_url = test_base_url();
+        let url = format!("{}/v1/responses", base_url);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&json!({
+                "model": test_model(),
+                "instructions": "You are a pirate. Always respond in pirate speak.",
+                "input": "What is the weather like?",
+                "max_output_tokens": 50,
+            }))
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body: Value = r.json().await.unwrap();
+                assert!(body.get("output").is_some(), "Expected 'output' in response");
+            }
+            Ok(r) if r.status().as_u16() == 404 => {
+                eprintln!("Responses API not available (404)");
+            }
+            Ok(r) => panic!("Unexpected: {} {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("Skipping: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_responses_api_streaming() {
+        let base_url = test_base_url();
+        let url = format!("{}/v1/responses", base_url);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&json!({
+                "model": test_model(),
+                "input": "Count from 1 to 3.",
+                "stream": true,
+            }))
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body = r.text().await.unwrap_or_default();
+                assert!(!body.is_empty(), "Expected streamed response body");
+            }
+            Ok(r) if r.status().as_u16() == 404 => {
+                eprintln!("Responses API streaming not available (404)");
+            }
+            Ok(r) => panic!("Unexpected: {} {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("Skipping: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_health_endpoint() {
+        let base_url = test_base_url();
+        let url = format!("{}/health", base_url);
+
+        let resp = reqwest::get(&url).await;
+        match resp {
+            Ok(r) => assert!(r.status().is_success(), "Health check should succeed"),
+            Err(e) => eprintln!("Server not available: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server"]
+    async fn test_models_endpoint() {
+        let base_url = test_base_url();
+        let url = format!("{}/v1/models", base_url);
+
+        let resp = reqwest::get(&url).await;
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let body: Value = r.json().await.unwrap();
+                let data = body.get("data").and_then(|d| d.as_array());
+                assert!(data.is_some(), "Expected 'data' array");
+                assert!(!data.unwrap().is_empty(), "Expected at least one model");
+            }
+            Ok(r) => panic!("Unexpected status: {}", r.status()),
+            Err(e) => eprintln!("Skipping: {}", e),
+        }
+    }
+
+    /// Minimal 64x64 red PNG encoded as base64 for vision tests.
+    fn test_red_png_base64() -> &'static str {
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC"
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server with --mmproj"]
+    async fn test_vision_completion() {
+        if !server_available().await {
+            eprintln!("Skipping: llama-server not running at {}", test_base_url());
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let model = client.completion_model(&test_model());
+
+        let request = model
+            .completion_request(Message::User {
+                content: OneOrMany::many(vec![
+                    message::UserContent::text("What color is this image? Answer in one word."),
+                    message::UserContent::image_base64(
+                        test_red_png_base64(),
+                        Some(message::ImageMediaType::PNG),
+                        None,
+                    ),
+                ])
+                .unwrap(),
+            })
+            .max_tokens(100)
+            .send()
+            .await
+            .unwrap();
+
+        let text = request
+            .choice
+            .iter()
+            .filter_map(|c| match c {
+                completion::AssistantContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(!text.is_empty(), "Expected a response describing the image");
+        eprintln!("Vision response: {}", text);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server with --mmproj"]
+    async fn test_vision_chat() {
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client.agent(&test_model()).build();
+
+        let response: String = agent
+            .chat(
+                Message::User {
+                    content: OneOrMany::many(vec![
+                        message::UserContent::text(
+                            "Describe this image in one short sentence.",
+                        ),
+                        message::UserContent::image_base64(
+                            test_red_png_base64(),
+                            Some(message::ImageMediaType::PNG),
+                            None,
+                        ),
+                    ])
+                    .unwrap(),
+                },
+                Vec::<Message>::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(!response.is_empty(), "Expected a vision chat response");
+        eprintln!("Vision chat response: {}", response);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running llama-server with --mmproj"]
+    async fn test_vision_streaming() {
+        use futures::StreamExt;
+
+        if !server_available().await {
+            return;
+        }
+
+        let client = LlamaCppClient::new(&test_base_url());
+        let agent = client.agent(&test_model()).build();
+
+        let mut stream = agent
+            .stream_chat(
+                Message::User {
+                    content: OneOrMany::many(vec![
+                        message::UserContent::text("What do you see?"),
+                        message::UserContent::image_base64(
+                            test_red_png_base64(),
+                            Some(message::ImageMediaType::PNG),
+                            None,
+                        ),
+                    ])
+                    .unwrap(),
+                },
+                Vec::<Message>::new(),
+            )
+            .await;
+
+        let mut collected = String::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(rig::agent::MultiTurnStreamItem::StreamAssistantItem(content)) => {
+                    if let rig::streaming::StreamedAssistantContent::Text(text) = content {
+                        collected.push_str(&text.text);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => panic!("Stream error: {}", e),
+            }
+        }
+
+        assert!(!collected.is_empty(), "Expected streamed vision content");
+        eprintln!("Vision streaming response: {}", collected);
     }
 }

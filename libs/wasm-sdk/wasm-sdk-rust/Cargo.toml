@@ -1,6 +1,6 @@
 [package]
 name = "flow-like-wasm-sdk"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "SDK for building Flow-Like WASM nodes (Component Model)"
 license = "MIT"
@@ -19,7 +19,7 @@ schemars = { version = "1.2.1", features = ["preserve_order"] }
 base64 = "0.22"
 inventory = "0.3"
 flow-like-wasm-sdk-macros = "0.3.4"
-rig-core = { version = "0.29.0", default-features = false, optional = true }
+rig-core = { version = "0.34.0", default-features = false, optional = true }
 futures = { version = "0.3", optional = true }
 
 [features]

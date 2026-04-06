@@ -293,6 +293,7 @@ impl From<Page> for proto::Page {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
+            cache: value.cache,
         }
     }
 }
@@ -331,6 +332,7 @@ impl From<proto::Page> for Page {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
+            cache: proto.cache,
         }
     }
 }

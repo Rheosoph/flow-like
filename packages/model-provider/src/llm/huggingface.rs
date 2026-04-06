@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct HuggingfaceModel {
     client: rig::providers::huggingface::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -37,7 +37,7 @@ impl HuggingfaceModel {
 
         Ok(HuggingfaceModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -65,7 +65,7 @@ impl HuggingfaceModel {
         Ok(HuggingfaceModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

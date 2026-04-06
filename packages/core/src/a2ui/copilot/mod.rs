@@ -59,6 +59,7 @@ impl A2UICopilot {
         current_surface: Option<&Vec<SurfaceComponent>>,
         selected_component_ids: &[String],
         user_prompt: String,
+        current_images: Option<Vec<A2UIChatImage>>,
         history: Vec<A2UIChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -91,6 +92,29 @@ impl A2UICopilot {
                 "image/webp" | "webp" => Some(ImageMediaType::WEBP),
                 _ => None,
             }
+        };
+
+        let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
+            text: prompt.clone(),
+        })];
+
+        if let Some(images) = &current_images {
+            for img in images {
+                prompt_contents.push(UserContent::Image(Image {
+                    data: DocumentSourceKind::Base64(img.data.clone()),
+                    media_type: parse_media_type(&img.media_type),
+                    detail: Some(ImageDetail::Auto),
+                    additional_params: None,
+                }));
+            }
+        }
+
+        let prompt_message = rig::message::Message::User {
+            content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
+                OneOrMany::one(UserContent::Text(rig::message::Text {
+                    text: prompt.clone(),
+                }))
+            }),
         };
 
         // Convert chat history to rig message format
@@ -153,7 +177,7 @@ impl A2UICopilot {
 
         for _iteration in 0..max_iterations {
             let request = agent
-                .completion(prompt.clone(), current_history.clone())
+                .completion(prompt_message.clone(), current_history.clone())
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Completion error: {}", e))?;
 
@@ -179,13 +203,24 @@ impl A2UICopilot {
                         }
                         response_contents.push(AssistantContent::Text(text));
                     }
-                    StreamedAssistantContent::ToolCall(tool_call) => {
+                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
                         // Only ThinkTool calls are expected here
                         response_contents.push(AssistantContent::ToolCall(tool_call));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {}
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        let reasoning_text = reasoning.reasoning.join("\n");
+                        let reasoning_text = reasoning
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                rig::message::ReasoningContent::Text { text, .. } => {
+                                    Some(text.as_str())
+                                }
+                                rig::message::ReasoningContent::Summary(s) => Some(s.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         current_reasoning.push_str(&reasoning_text);
                         current_reasoning.push('\n');
 

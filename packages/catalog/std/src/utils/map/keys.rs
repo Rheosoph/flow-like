@@ -51,8 +51,8 @@ impl NodeLogic for KeysMapNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("map_in", board.clone(), Some(ValueType::HashMap), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("map_in", board, Some(ValueType::HashMap), None);
         let _ = node.match_type("keys", board, Some(ValueType::Array), None);
     }
 }

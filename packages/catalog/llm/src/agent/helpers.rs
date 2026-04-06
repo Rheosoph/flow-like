@@ -43,7 +43,8 @@ use rig::tools::ThinkTool;
 use rmcp::{
     ServiceExt,
     model::{
-        CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParam,
+        CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
+        PaginatedRequestParams,
     },
 };
 use std::{collections::HashMap, sync::Arc, time::Instant};
@@ -51,11 +52,29 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 
+#[cfg(feature = "execute")]
+fn flatten_reasoning(reasoning: &rig::message::Reasoning) -> String {
+    reasoning
+        .content
+        .iter()
+        .map(|content| match content {
+            rig::message::ReasoningContent::Text { text, .. } => text.clone(),
+            rig::message::ReasoningContent::Encrypted(data) => data.clone(),
+            rig::message::ReasoningContent::Redacted { data } => data.clone(),
+            rig::message::ReasoningContent::Summary(text) => text.clone(),
+            _ => String::new(),
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Estimate token count for a message using character-based heuristic.
 /// Most LLMs average ~4 characters per token for English text.
 #[cfg(feature = "execute")]
 fn estimate_message_tokens(msg: &rig::message::Message) -> usize {
     let char_count: usize = match msg {
+        rig::message::Message::System { content } => content.len(),
         rig::message::Message::User { content } => content
             .iter()
             .map(|c| match c {
@@ -78,6 +97,7 @@ fn estimate_message_tokens(msg: &rig::message::Message) -> usize {
                 AssistantContent::ToolCall(tc) => {
                     tc.function.name.len() + tc.function.arguments.to_string().len()
                 }
+                AssistantContent::Reasoning(reasoning) => flatten_reasoning(reasoning).len(),
                 _ => 50,
             })
             .sum(),
@@ -230,6 +250,11 @@ async fn summarize_history_to_budget(
     let mut conversation_text = String::new();
     for msg in old_messages {
         match msg {
+            rig::message::Message::System { content } => {
+                conversation_text.push_str("System: ");
+                conversation_text.push_str(content);
+                conversation_text.push('\n');
+            }
             rig::message::Message::User { content } => {
                 conversation_text.push_str("User: ");
                 for c in content.iter() {
@@ -280,7 +305,10 @@ async fn summarize_history_to_budget(
                 )
                 .build();
 
-            match summary_agent.completion(summary_prompt, vec![]).await {
+            match summary_agent
+                .completion(summary_prompt, Vec::<rig::completion::Message>::new())
+                .await
+            {
                 Ok(request) => match request.send().await {
                     Ok(response) => {
                         let usage = ResponseUsage::from_rig(response.usage);
@@ -1094,12 +1122,14 @@ pub async fn execute_agent_streaming(
     let mut _mcp_clients = Vec::new();
 
     let client_info = ClientInfo {
+        meta: None,
         protocol_version: Default::default(),
         capabilities: ClientCapabilities::default(),
         client_info: Implementation {
             name: "Flow-Like".to_string(),
             version: "alpha".to_string(),
             title: None,
+            description: None,
             icons: None,
             website_url: Some("https://flow-like.com".to_string()),
         },
@@ -1119,7 +1149,7 @@ pub async fn execute_agent_streaming(
 
         // Fetch all tools with pagination support
         let mut all_tools = Vec::new();
-        let mut cursor: Option<PaginatedRequestParam> = None;
+        let mut cursor: Option<PaginatedRequestParams> = None;
 
         loop {
             let list_result = client.list_tools(cursor.clone()).await;
@@ -1140,7 +1170,8 @@ pub async fn execute_agent_streaming(
 
             // Check if there are more pages
             if let Some(next_cursor) = response.next_cursor {
-                cursor = Some(PaginatedRequestParam {
+                cursor = Some(PaginatedRequestParams {
+                    meta: None,
                     cursor: Some(next_cursor),
                 });
             } else {
@@ -1339,6 +1370,7 @@ pub async fn execute_agent_streaming(
 
     {
         let prompt_role = match &prompt {
+            rig::message::Message::System { .. } => "System",
             rig::message::Message::User { .. } => "User",
             rig::message::Message::Assistant { .. } => "Assistant",
         };
@@ -1349,6 +1381,9 @@ pub async fn execute_agent_streaming(
         );
         for (i, msg) in history_msgs.iter().enumerate() {
             match msg {
+                rig::message::Message::System { .. } => {
+                    history_summary.push_str(&format!("\n  history[{}]: System", i));
+                }
                 rig::message::Message::User { content } => {
                     let tool_ids: Vec<String> = content
                         .iter()
@@ -1403,6 +1438,9 @@ pub async fn execute_agent_streaming(
 
     for msg in history_msgs {
         match &msg {
+            rig::message::Message::System { .. } => {
+                current_history.push(msg);
+            }
             rig::message::Message::User { content } => {
                 let tool_result_ids: Vec<String> = content
                     .iter()
@@ -1569,6 +1607,9 @@ pub async fn execute_agent_streaming(
             );
             for (i, msg) in current_history.iter().enumerate() {
                 match msg {
+                    rig::message::Message::System { .. } => {
+                        iter_summary.push_str(&format!("\n  current[{}]: System", i));
+                    }
                     rig::message::Message::User { content } => {
                         let ids: Vec<_> = content
                             .iter()
@@ -1650,7 +1691,7 @@ pub async fn execute_agent_streaming(
                     stream_state.emit_chunk(context, &chunk).await?;
                     response_contents.push(AssistantContent::Text(text));
                 }
-                StreamedAssistantContent::ToolCall(tool_call) => {
+                StreamedAssistantContent::ToolCall { tool_call, .. } => {
                     let chunk = ResponseChunk::from_tool_call(&tool_call, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
@@ -1658,7 +1699,7 @@ pub async fn execute_agent_streaming(
                     complete_tool_call_ids.insert(tool_call.id.clone());
                     response_contents.push(AssistantContent::ToolCall(tool_call));
                 }
-                StreamedAssistantContent::ToolCallDelta { id, content } => {
+                StreamedAssistantContent::ToolCallDelta { id, content, .. } => {
                     let entry = tool_call_deltas
                         .entry(id.clone())
                         .or_insert((String::new(), String::new()));
@@ -1678,7 +1719,7 @@ pub async fn execute_agent_streaming(
                     stream_state.emit_chunk(context, &chunk).await?;
                 }
                 StreamedAssistantContent::Reasoning(reasoning) => {
-                    let reasoning_text = reasoning.reasoning.join("\n");
+                    let reasoning_text = flatten_reasoning(&reasoning);
                     let chunk = ResponseChunk::from_reasoning(&reasoning_text, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
@@ -1799,7 +1840,8 @@ pub async fn execute_agent_streaming(
 
                     let args_map = arguments.as_object().cloned();
                     match mcp_peer
-                        .call_tool(CallToolRequestParam {
+                        .call_tool(CallToolRequestParams {
+                            meta: None,
                             name: name.clone().into(),
                             arguments: args_map,
                             task: None,
@@ -2491,6 +2533,11 @@ async fn store_evicted_to_memory(
     let mut text_parts: Vec<String> = Vec::new();
     for msg in evicted {
         match msg {
+            rig::message::Message::System { content } => {
+                if !content.is_empty() {
+                    text_parts.push(format!("[system] {}", content));
+                }
+            }
             rig::message::Message::User { content } => {
                 for c in content.iter() {
                     if let rig::message::UserContent::Text(t) = c
@@ -2653,7 +2700,7 @@ async fn run_memory_compress(
         .build();
 
     let response = summary_agent
-        .completion(prompt, vec![])
+        .completion(prompt, Vec::<rig::completion::Message>::new())
         .await
         .map_err(|e| anyhow!("Failed to create compression request: {}", e))?
         .send()

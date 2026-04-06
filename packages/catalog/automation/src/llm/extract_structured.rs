@@ -12,7 +12,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{Value, async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -257,7 +257,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(prompt, vec![])
+            .completion(prompt, Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()
@@ -300,7 +300,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         node.harmonize_type(vec!["data"], true);
 
@@ -343,7 +343,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
     }
 
     #[cfg(not(feature = "execute"))]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         node.harmonize_type(vec!["data"], true);
     }

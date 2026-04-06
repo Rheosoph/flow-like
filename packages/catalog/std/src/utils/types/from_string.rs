@@ -54,7 +54,7 @@ impl NodeLogic for FromStringNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let _ = node.match_type("value_ref", board, None, None);
     }
 }

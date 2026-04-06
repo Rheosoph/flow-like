@@ -129,6 +129,9 @@ def _make_bridge():
         def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
             return wit_models.llm_prompt(bit_json, messages_json, do_stream)
 
+        def llm_prompt_stream(self, bit_json: str, request_json: str) -> str | None:
+            return wit_models.llm_prompt_stream(bit_json, request_json)
+
         def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
             return wit_models.embed_text_query(model_json, texts_json)
 

@@ -120,6 +120,12 @@ pub mod flow_like {
             ) -> Option<String> {
                 None
             }
+            pub fn llm_prompt_stream(
+                _bit_json: &str,
+                _request_json: &str,
+            ) -> Option<String> {
+                None
+            }
         }
 
         pub mod auth {

@@ -242,53 +242,81 @@ impl Board {
 
         const MAX_PASSES: usize = 10;
         for _ in 0..MAX_PASSES {
-            let reference = Arc::new(self.clone());
             let mut changed = false;
 
-            for node in self.nodes.values_mut() {
+            let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
+            for node_id in node_ids {
+                let Some(mut node) = self.nodes.remove(&node_id) else {
+                    continue;
+                };
                 let old_hash = node.hash;
 
                 let node_logic = match self.logic_nodes.get(&node.name) {
                     Some(logic) => Arc::clone(logic),
-                    None => match registry.instantiate(node) {
+                    None => match registry.instantiate(&node) {
                         Ok(new_logic) => {
                             self.logic_nodes
                                 .insert(node.name.clone(), Arc::clone(&new_logic));
                             Arc::clone(&new_logic)
                         }
-                        Err(_) => continue,
+                        Err(_) => {
+                            self.nodes.insert(node_id, node);
+                            continue;
+                        }
                     },
                 };
-                node_logic.on_update(node, reference.clone()).await;
+                node_logic.on_update(&mut node, self).await;
 
                 node.hash();
-
                 if node.hash != old_hash {
                     changed = true;
                 }
+
+                self.nodes.insert(node_id, node);
             }
 
-            for layer in self.layers.values_mut() {
-                for node in layer.nodes.values_mut() {
+            let layer_ids: Vec<String> = self.layers.keys().cloned().collect();
+            for layer_id in layer_ids {
+                let layer_node_ids: Vec<String> = match self.layers.get(&layer_id) {
+                    Some(layer) => layer.nodes.keys().cloned().collect(),
+                    None => continue,
+                };
+
+                for node_id in layer_node_ids {
+                    let Some(mut node) = self
+                        .layers
+                        .get_mut(&layer_id)
+                        .and_then(|layer| layer.nodes.remove(&node_id))
+                    else {
+                        continue;
+                    };
                     let old_hash = node.hash;
 
                     let node_logic = match self.logic_nodes.get(&node.name) {
                         Some(logic) => Arc::clone(logic),
-                        None => match registry.instantiate(node) {
+                        None => match registry.instantiate(&node) {
                             Ok(new_logic) => {
                                 self.logic_nodes
                                     .insert(node.name.clone(), Arc::clone(&new_logic));
                                 Arc::clone(&new_logic)
                             }
-                            Err(_) => continue,
+                            Err(_) => {
+                                if let Some(layer) = self.layers.get_mut(&layer_id) {
+                                    layer.nodes.insert(node_id, node);
+                                }
+                                continue;
+                            }
                         },
                     };
-                    node_logic.on_update(node, reference.clone()).await;
+                    node_logic.on_update(&mut node, self).await;
 
                     node.hash();
-
                     if node.hash != old_hash {
                         changed = true;
+                    }
+
+                    if let Some(layer) = self.layers.get_mut(&layer_id) {
+                        layer.nodes.insert(node_id, node);
                     }
                 }
             }
@@ -311,6 +339,34 @@ impl Board {
         }
     }
 
+    async fn rollback_commands(
+        &mut self,
+        commands: &mut [GenericCommand],
+        state: Arc<FlowLikeState>,
+    ) -> Vec<String> {
+        let mut recovery_errors = Vec::new();
+        for command in commands.iter_mut().rev() {
+            if let Err(error) = command.undo(self, state.clone()).await {
+                recovery_errors.push(format!("rollback undo failed: {error}"));
+            }
+        }
+        recovery_errors
+    }
+
+    async fn reapply_commands(
+        &mut self,
+        commands: &mut [GenericCommand],
+        state: Arc<FlowLikeState>,
+    ) -> Vec<String> {
+        let mut recovery_errors = Vec::new();
+        for command in commands.iter_mut() {
+            if let Err(error) = command.execute(self, state.clone()).await {
+                recovery_errors.push(format!("rollback execute failed: {error}"));
+            }
+        }
+        recovery_errors
+    }
+
     pub async fn execute_command(
         &mut self,
         command: GenericCommand,
@@ -319,9 +375,25 @@ impl Board {
         let mut command = command;
         let cmd_json = serde_json::to_string(&command).unwrap_or_default();
         println!("[Board] execute_command: {}", cmd_json);
+        command.validate(self, state.clone()).await?;
         if let Err(e) = command.execute(self, state.clone()).await {
+            let mut recovery_errors = Vec::new();
+            if let Err(rollback_error) = command.undo(self, state.clone()).await {
+                recovery_errors.push(format!(
+                    "failed to rollback current command after execute error: {rollback_error}"
+                ));
+            }
             println!("[Board] execute_command ❌ ERROR: {:?}", e);
-            return Err(e);
+            let primary_error = e.to_string();
+            let error = if recovery_errors.is_empty() {
+                e
+            } else {
+                flow_like_types::anyhow!(
+                    "Command execution failed: {primary_error}; recovery errors: {}",
+                    recovery_errors.join(" | ")
+                )
+            };
+            return Err(error);
         }
         println!("[Board] execute_command ✓ Success");
         self.node_updates(state).await;
@@ -336,15 +408,37 @@ impl Board {
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut commands = commands;
-        println!("[Board] execute_commands: {} commands", commands.len());
-        for (i, command) in commands.iter_mut().enumerate() {
-            let cmd_json = serde_json::to_string(&command).unwrap_or_default();
-            println!("[Board]   [{}] Executing: {}", i, cmd_json);
-            let res = command.execute(self, state.clone()).await;
-            if let Err(e) = res {
-                println!("[Board]   [{}] ❌ ERROR: {:?}", i, e);
-            } else {
-                println!("[Board]   [{}] ✓ Success", i);
+        for index in 0..commands.len() {
+            if let Err(error) = commands[index].validate(self, state.clone()).await {
+                let recovery_errors = self.rollback_commands(&mut commands[..index], state.clone()).await;
+                return Err(if recovery_errors.is_empty() {
+                    error
+                } else {
+                    flow_like_types::anyhow!(
+                        "Command batch validation failed at index {index}: {error}; recovery errors: {}",
+                        recovery_errors.join(" | ")
+                    )
+                });
+            }
+
+            if let Err(error) = commands[index].execute(self, state.clone()).await {
+                let mut recovery_errors = Vec::new();
+                if let Err(rollback_error) = commands[index].undo(self, state.clone()).await {
+                    recovery_errors.push(format!(
+                        "failed to rollback current command at index {index}: {rollback_error}"
+                    ));
+                }
+                recovery_errors.extend(
+                    self.rollback_commands(&mut commands[..index], state.clone()).await,
+                );
+                return Err(if recovery_errors.is_empty() {
+                    error
+                } else {
+                    flow_like_types::anyhow!(
+                        "Command batch execution failed at index {index}: {error}; recovery errors: {}",
+                        recovery_errors.join(" | ")
+                    )
+                });
             }
         }
         self.node_updates(state).await;
@@ -359,9 +453,29 @@ impl Board {
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
         let mut commands = commands;
-        for command in commands.iter_mut().rev() {
-            command.undo(self, state.clone()).await?;
+		for index in (0..commands.len()).rev() {
+			if let Err(error) = commands[index].undo(self, state.clone()).await {
+				let mut recovery_errors = Vec::new();
+				if let Err(rollback_error) = commands[index].execute(self, state.clone()).await {
+					recovery_errors.push(format!(
+						"failed to restore current command at index {index}: {rollback_error}"
+					));
+				}
+				recovery_errors.extend(
+					self.reapply_commands(&mut commands[index + 1..], state.clone()).await,
+				);
+				return Err(if recovery_errors.is_empty() {
+					error
+				} else {
+					flow_like_types::anyhow!(
+						"Undo failed at index {index}: {error}; recovery errors: {}",
+						recovery_errors.join(" | ")
+					)
+				});
+			}
         }
+        self.node_updates(state).await;
+        self.updated_at = SystemTime::now();
         self.cleanup();
         Ok(())
     }
@@ -372,9 +486,41 @@ impl Board {
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
         let mut commands = commands;
-        for command in commands.iter_mut() {
-            command.execute(self, state.clone()).await?;
+        for index in 0..commands.len() {
+            if let Err(error) = commands[index].validate(self, state.clone()).await {
+                let recovery_errors = self.rollback_commands(&mut commands[..index], state.clone()).await;
+                return Err(if recovery_errors.is_empty() {
+                    error
+                } else {
+                    flow_like_types::anyhow!(
+                        "Redo validation failed at index {index}: {error}; recovery errors: {}",
+                        recovery_errors.join(" | ")
+                    )
+                });
+            }
+
+            if let Err(error) = commands[index].execute(self, state.clone()).await {
+                let mut recovery_errors = Vec::new();
+                if let Err(rollback_error) = commands[index].undo(self, state.clone()).await {
+                    recovery_errors.push(format!(
+                        "failed to rollback current redo command at index {index}: {rollback_error}"
+                    ));
+                }
+                recovery_errors.extend(
+                    self.rollback_commands(&mut commands[..index], state.clone()).await,
+                );
+                return Err(if recovery_errors.is_empty() {
+                    error
+                } else {
+                    flow_like_types::anyhow!(
+                        "Redo failed at index {index}: {error}; recovery errors: {}",
+                        recovery_errors.join(" | ")
+                    )
+                });
+            }
         }
+        self.node_updates(state).await;
+        self.updated_at = SystemTime::now();
         self.cleanup();
         Ok(())
     }
@@ -1170,7 +1316,7 @@ mod tests {
         object_store::{self, path::Path},
     };
     use flow_like_types::{FromProto, ToProto};
-    use flow_like_types::{Message, sync::Mutex, tokio};
+    use flow_like_types::{Message, tokio};
     use std::sync::Arc;
 
     async fn flow_state() -> Arc<crate::state::FlowLikeState> {

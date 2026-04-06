@@ -215,6 +215,10 @@ pub fn llm_prompt(bit_json: &str, messages_json: &str, do_stream: bool) -> Optio
     models::llm_prompt(bit_json, messages_json, do_stream)
 }
 
+pub fn llm_prompt_stream(bit_json: &str, request_json: &str) -> Option<String> {
+    models::llm_prompt_stream(bit_json, request_json)
+}
+
 // ============================================================================
 // Schema
 // ============================================================================

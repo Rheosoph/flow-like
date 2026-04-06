@@ -50,8 +50,8 @@ impl NodeLogic for SetGetSizeNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("set_in", board.clone(), Some(ValueType::HashSet), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("set_in", board, Some(ValueType::HashSet), None);
         node.harmonize_type(vec!["set_in"], true);
     }
 }

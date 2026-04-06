@@ -47,24 +47,43 @@ impl NodeLogic for InsertLocalDatabaseNode {
 
         node.add_output_pin(
             "exec_out",
-            "Created Database",
-            "Done Creating Database",
+            "Success",
+            "Insert succeeded",
             VariableType::Execution,
         );
+        node.add_output_pin("error", "Error", "Insert failed", VariableType::Execution);
+        node.add_output_pin(
+            "error_message",
+            "Error Message",
+            "Error details",
+            VariableType::String,
+        );
 
+        node.set_version(2);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
+
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
         let mut database = database.write().await;
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
-        database.insert(value).await?;
 
-        context.activate_exec_pin("exec_out").await?;
+        match database.insert(value).await {
+            Ok(()) => {
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Err(e) => {
+                context
+                    .set_pin_value("error_message", json!(e.to_string()))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+        }
 
         Ok(())
     }
@@ -106,23 +125,42 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
 
         node.add_output_pin(
             "exec_out",
-            "Created Database",
-            "Done Creating Database",
+            "Success",
+            "Insert succeeded",
             VariableType::Execution,
         );
+        node.add_output_pin("error", "Error", "Insert failed", VariableType::Execution);
+        node.add_output_pin(
+            "error_message",
+            "Error Message",
+            "Error details",
+            VariableType::String,
+        );
 
+        node.set_version(2);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
+
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
         let mut database = database.write().await;
         let value: Vec<Value> = context.evaluate_pin("value").await?;
-        database.insert(value).await?;
 
-        context.activate_exec_pin("exec_out").await?;
+        match database.insert(value).await {
+            Ok(()) => {
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Err(e) => {
+                context
+                    .set_pin_value("error_message", json!(e.to_string()))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+        }
 
         Ok(())
     }
@@ -181,17 +219,26 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
 
         node.add_output_pin(
             "exec_out",
-            "Created Database",
-            "Done Creating Database",
+            "Success",
+            "Insert succeeded",
             VariableType::Execution,
         );
+        node.add_output_pin("error", "Error", "Insert failed", VariableType::Execution);
+        node.add_output_pin(
+            "error_message",
+            "Error Message",
+            "Error details",
+            VariableType::String,
+        );
 
+        node.set_version(2);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
         let mut database = database.write().await;
@@ -222,6 +269,8 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         let mut records = rdr.byte_records();
         let mut chunk = Vec::with_capacity(chunk_size as usize);
 
+        let mut errors: Vec<String> = Vec::new();
+
         while let Some(element) = records.next().await {
             let record = match element {
                 Ok(record) => record,
@@ -245,6 +294,7 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
                 if let Err(e) = insert {
                     context
                         .log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
+                    errors.push(e.to_string());
                 }
                 chunk = Vec::with_capacity(chunk_size as usize);
             }
@@ -254,10 +304,19 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
             let insert = database.insert(chunk.to_owned()).await;
             if let Err(e) = insert {
                 context.log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
+                errors.push(e.to_string());
             }
         }
 
-        context.activate_exec_pin("exec_out").await?;
+        if errors.is_empty() {
+            context.activate_exec_pin("exec_out").await?;
+        } else {
+            context
+                .set_pin_value("error_message", json!(errors.join("; ")))
+                .await?;
+            context.activate_exec_pin("error").await?;
+        }
+
         Ok(())
     }
 

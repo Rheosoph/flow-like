@@ -76,8 +76,8 @@ impl NodeLogic for TryTransformNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("type_out", board.clone(), None, None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("type_out", board, None, None);
         let _ = node.match_type("type_in", board, None, None);
     }
 }

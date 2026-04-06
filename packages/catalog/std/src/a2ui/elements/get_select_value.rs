@@ -100,7 +100,7 @@ impl NodeLogic for GetSelectValue {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
     }
 }

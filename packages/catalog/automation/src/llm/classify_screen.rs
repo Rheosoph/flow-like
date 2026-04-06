@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -246,7 +246,7 @@ impl NodeLogic for LLMClassifyScreenNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(prompt, vec![])
+            .completion(prompt, Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()

@@ -59,12 +59,60 @@ impl CopyPasteCommand {
 
 #[async_trait]
 impl Command for CopyPasteCommand {
+    async fn validate(
+        &self,
+        _board: &Board,
+        state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<()> {
+        let node_registry = state.node_registry.read().await.node_registry.clone();
+        for node in &self.original_nodes {
+            if node_registry.get_node(&node.name).is_err() && node.wasm.is_some() {
+                return Err(flow_like_types::anyhow!(
+                    "External node '{}' from package '{}' is not installed. Please install the package first.",
+                    node.friendly_name,
+                    node.wasm
+                        .as_ref()
+                        .map(|w| w.package_id.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn execute(
         &mut self,
         board: &mut Board,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
+        if !self.new_comments.is_empty() || !self.new_nodes.is_empty() || !self.new_layers.is_empty()
+        {
+            for comment in &self.new_comments {
+                board.comments.insert(comment.id.clone(), comment.clone());
+            }
+
+            for node in &self.new_nodes {
+                board.nodes.insert(node.id.clone(), node.clone());
+            }
+
+            for layer in &self.new_layers {
+                board.layers.insert(layer.id.clone(), layer.clone());
+            }
+
+            self.added_refs.clear();
+            for (key, value) in &self.original_refs {
+                if !board.refs.contains_key(key) {
+                    board.refs.insert(key.clone(), value.clone());
+                    self.added_refs.push(key.clone());
+                }
+            }
+
+            return Ok(());
+        }
+
         let node_registry = state.node_registry.read().await.node_registry.clone();
+
         let mut translated_connection = HashMap::with_capacity(self.original_nodes.len());
         let mut intermediate_nodes = Vec::with_capacity(self.original_nodes.len());
         let mut intermediate_layers = Vec::with_capacity(self.original_layers.len());
@@ -177,18 +225,6 @@ impl Command for CopyPasteCommand {
         for node in self.original_nodes.iter() {
             let mut new_node = node.clone();
             let blueprint_node = node_registry.get_node(&node.name).ok();
-
-            // If the pasted node is external (has wasm metadata) but not in the registry, reject it
-            if blueprint_node.is_none() && node.wasm.is_some() {
-                return Err(flow_like_types::anyhow!(
-                    "External node '{}' from package '{}' is not installed. Please install the package first.",
-                    node.friendly_name,
-                    node.wasm
-                        .as_ref()
-                        .map(|w| w.package_id.as_str())
-                        .unwrap_or("unknown")
-                ));
-            }
 
             let blueprint_node = blueprint_node.unwrap_or(node.clone());
             let old_id = new_node.id.clone();

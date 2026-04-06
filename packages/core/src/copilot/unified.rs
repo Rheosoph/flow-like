@@ -16,6 +16,20 @@ use crate::state::FlowLikeState;
 
 use super::types::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CombinedScopeTarget {
+    Board,
+    Frontend,
+    Both,
+}
+
+#[derive(Debug, Clone)]
+struct CombinedScopePlan {
+    target: CombinedScopeTarget,
+    primary_scope: CopilotScope,
+    rationale: String,
+}
+
 /// The unified copilot that delegates to appropriate implementations
 pub struct UnifiedCopilot {
     state: Arc<FlowLikeState>,
@@ -52,6 +66,7 @@ impl UnifiedCopilot {
         selected_component_ids: &[String],
         // Common parameters
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -81,6 +96,7 @@ impl UnifiedCopilot {
                     })?,
                     selected_node_ids,
                     user_prompt,
+                    current_images,
                     history,
                     model_id,
                     token,
@@ -94,6 +110,7 @@ impl UnifiedCopilot {
                     current_surface,
                     selected_component_ids,
                     user_prompt,
+                    current_images,
                     history,
                     model_id,
                     token,
@@ -110,6 +127,7 @@ impl UnifiedCopilot {
                     current_surface,
                     selected_component_ids,
                     user_prompt,
+                    current_images,
                     history,
                     model_id,
                     token,
@@ -155,6 +173,7 @@ impl UnifiedCopilot {
         board: &Board,
         selected_node_ids: &[String],
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -192,6 +211,7 @@ impl UnifiedCopilot {
                 board,
                 selected_node_ids,
                 user_prompt,
+                current_images,
                 board_history,
                 model_id,
                 token,
@@ -226,6 +246,7 @@ impl UnifiedCopilot {
         current_surface: Option<&Vec<SurfaceComponent>>,
         selected_component_ids: &[String],
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -263,6 +284,14 @@ impl UnifiedCopilot {
                 current_surface,
                 selected_component_ids,
                 user_prompt,
+                current_images.map(|imgs| {
+                    imgs.into_iter()
+                        .map(|img| crate::a2ui::copilot::A2UIChatImage {
+                            data: img.data,
+                            media_type: img.media_type,
+                        })
+                        .collect()
+                }),
                 ui_history,
                 model_id,
                 token,
@@ -290,6 +319,7 @@ impl UnifiedCopilot {
         current_surface: Option<&Vec<SurfaceComponent>>,
         selected_component_ids: &[String],
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -299,84 +329,295 @@ impl UnifiedCopilot {
     where
         F: Fn(String) + Send + Sync + 'static + Clone,
     {
-        // Analyze the prompt to determine primary focus
-        let prompt_lower = user_prompt.to_lowercase();
-        let is_ui_focused = prompt_lower.contains("ui")
-            || prompt_lower.contains("button")
-            || prompt_lower.contains("form")
-            || prompt_lower.contains("component")
-            || prompt_lower.contains("layout")
-            || prompt_lower.contains("style")
-            || prompt_lower.contains("display");
+        let plan = self.plan_combined_scope(&user_prompt, board, current_surface);
 
-        let is_workflow_focused = prompt_lower.contains("workflow")
-            || prompt_lower.contains("node")
-            || prompt_lower.contains("connect")
-            || prompt_lower.contains("flow")
-            || prompt_lower.contains("automat");
+        if let Some(ref callback) = on_token {
+            let event = UnifiedStreamEvent::Thinking(plan.rationale.clone());
+            callback(format!(
+                "<thinking>{}</thinking>",
+                serde_json::to_string(&event).unwrap_or_default()
+            ));
+        }
 
-        // If clearly one type, delegate to that
-        if is_ui_focused && !is_workflow_focused {
-            return self
-                .delegate_to_frontend(
+        match plan.target {
+            CombinedScopeTarget::Board => {
+                let board = board.ok_or_else(|| {
+                    flow_like_types::anyhow!("Board is required for combined workflow requests")
+                })?;
+
+                self.delegate_to_board(
+                    board,
+                    selected_node_ids,
+                    user_prompt,
+                    current_images,
+                    history,
+                    model_id,
+                    token,
+                    context.and_then(|c| c.run_context),
+                    on_token,
+                )
+                .await
+            }
+            CombinedScopeTarget::Frontend => {
+                self.delegate_to_frontend(
                     current_surface,
                     selected_component_ids,
                     user_prompt,
+                    current_images,
                     history,
                     model_id,
                     token,
                     context.and_then(|c| c.action_context),
                     on_token,
                 )
-                .await;
+                .await
+            }
+            CombinedScopeTarget::Both => {
+                let primary_is_board = plan.primary_scope == CopilotScope::Board;
+                let primary_response = if primary_is_board {
+                    let board = board.ok_or_else(|| {
+                        flow_like_types::anyhow!("Board is required for combined workflow requests")
+                    })?;
+
+                    self.delegate_to_board(
+                        board,
+                        selected_node_ids,
+                        user_prompt.clone(),
+                        current_images.clone(),
+                        history.clone(),
+                        model_id.clone(),
+                        token.clone(),
+                        context.clone().and_then(|c| c.run_context),
+                        on_token.clone(),
+                    )
+                    .await?
+                } else {
+                    self.delegate_to_frontend(
+                        current_surface,
+                        selected_component_ids,
+                        user_prompt.clone(),
+                        current_images.clone(),
+                        history.clone(),
+                        model_id.clone(),
+                        token.clone(),
+                        context.clone().and_then(|c| c.action_context),
+                        on_token.clone(),
+                    )
+                    .await?
+                };
+
+                let secondary_response = if primary_is_board {
+                    self.delegate_to_frontend(
+                        current_surface,
+                        selected_component_ids,
+                        user_prompt,
+                        current_images,
+                        history,
+                        model_id,
+                        token,
+                        context.and_then(|c| c.action_context),
+                        on_token,
+                    )
+                    .await?
+                } else {
+                    let board = board.ok_or_else(|| {
+                        flow_like_types::anyhow!("Board is required for combined workflow requests")
+                    })?;
+
+                    self.delegate_to_board(
+                        board,
+                        selected_node_ids,
+                        user_prompt,
+                        current_images,
+                        history,
+                        model_id,
+                        token,
+                        context.and_then(|c| c.run_context),
+                        on_token,
+                    )
+                    .await?
+                };
+
+                Ok(Self::merge_combined_responses(primary_response, secondary_response))
+            }
+        }
+    }
+
+    fn plan_combined_scope(
+        &self,
+        user_prompt: &str,
+        board: Option<&Board>,
+        current_surface: Option<&Vec<SurfaceComponent>>,
+    ) -> CombinedScopePlan {
+        if board.is_none() || self.catalog_provider.is_none() {
+            return CombinedScopePlan {
+                target: CombinedScopeTarget::Frontend,
+                primary_scope: CopilotScope::Frontend,
+                rationale: "Only UI context is available, so FlowPilot will stay in frontend mode."
+                    .to_string(),
+            };
         }
 
-        if is_workflow_focused
-            && !is_ui_focused
-            && let Some(b) = board
-        {
-            return self
-                .delegate_to_board(
-                    b,
-                    selected_node_ids,
-                    user_prompt,
-                    history,
-                    model_id,
-                    token,
-                    context.and_then(|c| c.run_context),
-                    on_token,
-                )
-                .await;
+        let prompt = user_prompt.to_lowercase();
+        let board_score = Self::keyword_hits(
+            &prompt,
+            &[
+                "workflow",
+                "automation",
+                "node",
+                "nodes",
+                "connect",
+                "connection",
+                "flow",
+                "graph",
+                "trigger",
+                "schedule",
+                "email",
+                "webhook",
+                "pin",
+                "variable",
+                "pipeline",
+                "catalog",
+            ],
+        );
+        let ui_score = Self::keyword_hits(
+            &prompt,
+            &[
+                "ui",
+                "frontend",
+                "page",
+                "screen",
+                "component",
+                "layout",
+                "button",
+                "form",
+                "table",
+                "card",
+                "modal",
+                "dialog",
+                "dashboard",
+                "style",
+                "theme",
+                "chart",
+                "list",
+            ],
+        );
+        let integration_score = Self::keyword_hits(
+            &prompt,
+            &[
+                "trigger workflow",
+                "workflow status",
+                "show status",
+                "display result",
+                "button click",
+                "on click",
+                "on submit",
+                "submit form",
+                "wire up",
+                "hook up",
+                "connect the ui",
+                "frontend and workflow",
+                "page and workflow",
+                "dashboard for",
+            ],
+        );
+
+        if integration_score > 0 || (board_score > 0 && ui_score > 0) {
+            let primary_scope = if board_score >= ui_score {
+                CopilotScope::Board
+            } else {
+                CopilotScope::Frontend
+            };
+            let rationale = if integration_score > 0 {
+                "The request links workflow behavior with UI behavior, so FlowPilot will plan both scopes."
+            } else {
+                "The request mixes workflow and UI vocabulary, so FlowPilot will split the work across both scopes."
+            };
+
+            return CombinedScopePlan {
+                target: CombinedScopeTarget::Both,
+                primary_scope,
+                rationale: rationale.to_string(),
+            };
         }
 
-        // Default to board if available, otherwise frontend
-        if let Some(b) = board
-            && self.catalog_provider.is_some()
-        {
-            return self
-                .delegate_to_board(
-                    b,
-                    selected_node_ids,
-                    user_prompt,
-                    history,
-                    model_id,
-                    token,
-                    context.and_then(|c| c.run_context),
-                    on_token,
-                )
-                .await;
+        if ui_score > board_score && current_surface.is_some() {
+            return CombinedScopePlan {
+                target: CombinedScopeTarget::Frontend,
+                primary_scope: CopilotScope::Frontend,
+                rationale: "The request is primarily about UI structure or styling, so FlowPilot will stay in frontend mode."
+                    .to_string(),
+            };
         }
 
-        self.delegate_to_frontend(
-            current_surface,
-            selected_component_ids,
-            user_prompt,
-            history,
-            model_id,
-            token,
-            context.and_then(|c| c.action_context),
-            on_token,
-        )
-        .await
+        if ui_score > board_score {
+            return CombinedScopePlan {
+                target: CombinedScopeTarget::Frontend,
+                primary_scope: CopilotScope::Frontend,
+                rationale: "The request is primarily about UI generation, so FlowPilot will stay in frontend mode."
+                    .to_string(),
+            };
+        }
+
+        CombinedScopePlan {
+            target: CombinedScopeTarget::Board,
+            primary_scope: CopilotScope::Board,
+            rationale: "The request is primarily about workflow planning or graph edits, so FlowPilot will stay in board mode."
+                .to_string(),
+        }
+    }
+
+    fn keyword_hits(prompt: &str, keywords: &[&str]) -> usize {
+        keywords.iter().filter(|keyword| prompt.contains(**keyword)).count()
+    }
+
+    fn merge_combined_responses(
+        primary: UnifiedCopilotResponse,
+        secondary: UnifiedCopilotResponse,
+    ) -> UnifiedCopilotResponse {
+        let mut message_parts = Vec::new();
+
+        if !primary.message.trim().is_empty() {
+            message_parts.push(format!(
+                "{}: {}",
+                Self::scope_label(primary.active_scope),
+                primary.message.trim()
+            ));
+        }
+
+        if !secondary.message.trim().is_empty() {
+            message_parts.push(format!(
+                "{}: {}",
+                Self::scope_label(secondary.active_scope),
+                secondary.message.trim()
+            ));
+        }
+
+        let mut commands = primary.commands;
+        commands.extend(secondary.commands);
+
+        let mut components = primary.components;
+        components.extend(secondary.components);
+
+        let mut suggestions = primary.suggestions;
+        suggestions.extend(secondary.suggestions);
+
+        UnifiedCopilotResponse {
+            message: message_parts.join("\n\n"),
+            commands,
+            components,
+            suggestions,
+            active_scope: CopilotScope::Both,
+            canvas_settings: secondary.canvas_settings.or(primary.canvas_settings),
+            root_component_id: secondary.root_component_id.or(primary.root_component_id),
+        }
+    }
+
+    fn scope_label(scope: CopilotScope) -> &'static str {
+        match scope {
+            CopilotScope::Board => "Workflow",
+            CopilotScope::Frontend => "UI",
+            CopilotScope::Both => "FlowPilot",
+        }
     }
 }

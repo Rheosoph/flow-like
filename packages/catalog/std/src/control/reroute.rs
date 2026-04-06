@@ -35,13 +35,13 @@ impl NodeLogic for RerouteNode {
         return Ok(());
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let found_input_type = node
-            .match_type("route_in", board.clone(), None, None)
+            .match_type("route_in", board, None, None)
             .unwrap_or(VariableType::Generic);
 
         let found_output_type = node
-            .match_type("route_out", board.clone(), None, None)
+            .match_type("route_out", board, None, None)
             .unwrap_or(VariableType::Generic);
 
         let input = match node.get_pin_by_name("route_in") {

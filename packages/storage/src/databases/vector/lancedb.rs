@@ -27,7 +27,7 @@ use lancedb::{
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
-use crate::arrow_utils::value_to_batch_iterator;
+use crate::arrow_utils::{ValueBatchIterator, value_to_batch_iterator_with_fields};
 
 use super::VectorStore;
 
@@ -278,6 +278,17 @@ impl LanceDBVectorStore {
             Err(err) => Err(anyhow!(err.to_string())),
         }
     }
+
+    async fn write_batch_iterator(&self, items: Vec<Value>) -> Result<ValueBatchIterator> {
+        let fields = if let Some(table) = &self.table {
+            let schema = table.schema().await?;
+            Some(schema.fields().iter().cloned().collect())
+        } else {
+            None
+        };
+
+        value_to_batch_iterator_with_fields(items, fields)
+    }
 }
 
 pub fn record_batches_to_vec(batches: Option<Vec<RecordBatch>>) -> Result<Vec<Value>> {
@@ -463,12 +474,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
-        let items = match value_to_batch_iterator(items) {
-            Ok(items) => items,
-            Err(err) => {
-                return Err(anyhow!(err.to_string()));
-            }
-        };
+        let items = self.write_batch_iterator(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -499,12 +505,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
-        let items = match value_to_batch_iterator(items) {
-            Ok(items) => items,
-            Err(err) => {
-                return Err(anyhow!(err.to_string()));
-            }
-        };
+        let items = self.write_batch_iterator(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -639,9 +640,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::databases::vector::buffered::BufferedVectorStore;
     use flow_like_types::{
         create_id,
-        json::{from_value, to_value},
+        json::{from_value, json, to_value},
         tokio,
     };
     use serde::{Deserialize, Serialize};
@@ -657,6 +659,14 @@ mod tests {
     struct TestStruct2 {
         id: i32,
         name: String,
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+    struct NullableFieldRow {
+        id: i32,
+        name: String,
+        #[serde(default)]
+        tag: Option<String>,
     }
 
     #[tokio::test]
@@ -941,6 +951,117 @@ mod tests {
                 id: records[0].id,
                 name: records[0].name.clone()
             }
+        );
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_upsert_rejects_missing_non_nullable_fields() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice", "tag": "alpha"})],
+            "id".to_string(),
+        )
+        .await?;
+
+        let result = db
+            .upsert(vec![json!({"id": 2, "name": "Bob"})], "id".to_string())
+            .await;
+
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_upsert_nullable_option_field() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+
+        let rows_in: Vec<Value> = vec![
+            to_value(&NullableFieldRow {
+                id: 1,
+                name: "Alice".to_string(),
+                tag: Some("alpha".to_string()),
+            })?,
+            to_value(&NullableFieldRow {
+                id: 2,
+                name: "Bob".to_string(),
+                tag: None,
+            })?,
+        ];
+
+        db.upsert(rows_in, "id".to_string()).await?;
+
+        let rows: Vec<NullableFieldRow> = db
+            .list(
+                Some(vec![
+                    "id".to_string(),
+                    "name".to_string(),
+                    "tag".to_string(),
+                ]),
+                10,
+                0,
+            )
+            .await?
+            .into_iter()
+            .map(from_value)
+            .collect::<Result<_, _>>()?;
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row == &NullableFieldRow {
+            id: 1,
+            name: "Alice".to_string(),
+            tag: Some("alpha".to_string()),
+        }));
+        assert!(rows.iter().any(|row| row == &NullableFieldRow {
+            id: 2,
+            name: "Bob".to_string(),
+            tag: None,
+        }));
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_buffered_upsert_rejects_missing_fields_against_existing_table() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let inner = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let mut db = BufferedVectorStore::new(inner, 10);
+
+        // First: establish the table schema by writing a record with "tag"
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice", "tag": "alpha"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        // Now upsert a record that is MISSING the "tag" field
+        db.upsert(
+            vec![json!({"id": 2, "name": "Bob"})],
+            "id".to_string(),
+        )
+        .await?;
+
+        let result = db.flush().await;
+        assert!(
+            result.is_err(),
+            "flush should fail when records are missing fields from the established schema"
         );
 
         std::fs::remove_dir_all(&test_path).unwrap();

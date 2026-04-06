@@ -181,7 +181,7 @@ impl NodeLogic for PushContentNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let type_pin: String = node
             .get_pin_by_name("type")
             .and_then(|pin| pin.default_value.clone())
