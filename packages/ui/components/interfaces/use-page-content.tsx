@@ -81,6 +81,7 @@ export function UsePageContent({
 		backend.eventState,
 		[appId ?? ""],
 		(appId ?? "") !== "",
+		[],
 	);
 
 	const metadata = useInvoke(
@@ -88,6 +89,7 @@ export function UsePageContent({
 		backend.appState,
 		[appId ?? ""],
 		typeof appId === "string",
+		[],
 	);
 
 	// --- Computed: usable event types ---
@@ -206,12 +208,14 @@ export function UsePageContent({
 
 	// --- Pre-sync board for the active event ---
 	// On fresh installs the board file may not exist locally yet.
-	// Calling getBoard eagerly ensures it is fetched from remote and persisted
-	// before the user triggers their first execution.
+	// Calling getBoard with forceFresh ensures it is fetched from remote and
+	// persisted before the user triggers their first execution.
 	useEffect(() => {
 		const target = routeEvent ?? activeEvent;
 		if (!appId || !target?.board_id) return;
-		backend.boardState.getBoard(appId, target.board_id).catch(() => {});
+		backend.boardState
+			.getBoard(appId, target.board_id, undefined, true)
+			.catch(() => {});
 	}, [appId, routeEvent, activeEvent, backend.boardState]);
 
 	// --- Event switching ---

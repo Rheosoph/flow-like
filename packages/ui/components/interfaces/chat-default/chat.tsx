@@ -49,6 +49,7 @@ export interface IChatProps {
 	) => void | Promise<void>;
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
+	isStreamActive?: boolean;
 	activeInteractions?: IInteractionRequest[];
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
 }
@@ -71,6 +72,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			onMessageUpdate,
 			config = {},
 			sessionId,
+			isStreamActive = false,
 			activeInteractions,
 			onRespondToInteraction,
 		},
@@ -483,6 +485,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={config?.allow_voice_input ?? true}
+								sendDisabled={isSending || isStreamActive}
 								onVoiceModeToggle={
 									(config?.allow_voice_mode ?? true)
 										? () => setVoiceModeOpen(true)

@@ -50,7 +50,8 @@ async fn execute_internal(
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
-    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
     let mut version = None;
     let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await else {
         return Err(TauriFunctionError::new("App not found"));
@@ -67,7 +68,7 @@ async fn execute_internal(
         event = Some(intermediate_event);
     }
 
-    let Ok(board) = app.open_board(board_id.clone(), Some(false), version).await else {
+    let Ok(board) = app.open_board(board_id.clone(), None, version).await else {
         return Err(TauriFunctionError::new("Board not found"));
     };
 
@@ -157,7 +158,7 @@ async fn execute_internal(
         event_type,
     );
 
-    flow_like_state.register_run(&run_id, run_data);
+    shared_flow_like_state.register_run(&run_id, run_data);
 
     let run_arc = internal_run.run.clone();
 
@@ -215,7 +216,11 @@ async fn execute_internal(
             .as_ref()
             .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
         let base_path = Path::from("runs").child(app_id).child(board_id);
-        let db = db_fn(base_path.clone()).execute().await.map_err(|e| {
+        let db = flow_like_state
+            .with_lance_session(db_fn(base_path.clone()))
+            .execute()
+            .await
+            .map_err(|e| {
             flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
         })?;
         meta.flush(db, write_options.as_ref())
@@ -223,7 +228,7 @@ async fn execute_internal(
             .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
     }
 
-    let _res = flow_like_state.remove_and_cancel_run(&run_id);
+    let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
 
     Ok(meta)
 }

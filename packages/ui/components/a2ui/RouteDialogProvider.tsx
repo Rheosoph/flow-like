@@ -156,6 +156,7 @@ function RouteDialogRenderer({
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
+	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	// Load the route content when dialog opens
 	useEffect(() => {
@@ -392,6 +393,32 @@ function RouteDialogRenderer({
 		return elements;
 	}, []); // No dependencies - uses ref
 
+	// Restore cached surface when page has cache enabled
+	useEffect(() => {
+		if (!page?.cache || !appId || !page.id) return;
+		const cacheKey = `page-cache:${appId}:${page.id}`;
+		try {
+			const cached = sessionStorage.getItem(cacheKey);
+			if (cached) {
+				setCachedSurface(JSON.parse(cached) as Surface);
+			}
+		} catch {
+			// Ignore parse errors
+		}
+	}, [page?.cache, page?.id, appId]);
+
+	// Save surface to cache after onLoad completes
+	useEffect(() => {
+		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
+		const cacheKey = `page-cache:${appId}:${page.id}`;
+		try {
+			sessionStorage.setItem(cacheKey, JSON.stringify(surface));
+			setCachedSurface(null);
+		} catch {
+			// sessionStorage full or unavailable
+		}
+	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
+
 	// Execute onLoad event for dialog page
 	useEffect(() => {
 		const executeOnLoadEvent = async () => {
@@ -456,7 +483,9 @@ function RouteDialogRenderer({
 		getElementsFromSurface,
 	]);
 
-	const showLoading = isLoading || isLoadEventRunning;
+	const activeSurface = surface ?? (page?.cache ? cachedSurface : null);
+	const hasCachedContent = page?.cache && cachedSurface && !surface;
+	const showLoading = isLoading || (isLoadEventRunning && !hasCachedContent);
 
 	return (
 		<Dialog open={dialog.isOpen} onOpenChange={onOpenChange}>
@@ -473,9 +502,9 @@ function RouteDialogRenderer({
 							<p>{error}</p>
 						</div>
 					)}
-					{!showLoading && !error && surface && (
+					{!showLoading && !error && activeSurface && (
 						<A2UIRenderer
-							surface={surface}
+							surface={activeSurface}
 							widgetRefs={page?.widgetRefs}
 							appId={appId}
 							boardId={page?.boardId || routeEvent?.board_id}

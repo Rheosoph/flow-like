@@ -28,10 +28,13 @@ export class RegistryState implements IRegistryState {
 		if (this.initialized) return;
 		if (this.initPromise) return this.initPromise;
 		this.initPromise = (async () => {
-			const config = registryUrl ? { registry_url: registryUrl } : null;
-			await invoke("registry_init", { config });
-			this.initialized = true;
-			this.initPromise = null;
+			try {
+				const config = registryUrl ? { registry_url: registryUrl } : null;
+				await invoke("registry_init", { config });
+				this.initialized = true;
+			} finally {
+				this.initPromise = null;
+			}
 		})();
 		return this.initPromise;
 	}

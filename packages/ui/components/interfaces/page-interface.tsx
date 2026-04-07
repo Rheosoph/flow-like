@@ -590,6 +590,7 @@ function PageInterfaceInner({
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
+	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	const pageRoute = route || (config?.route as string);
 
@@ -785,6 +786,33 @@ function PageInterfaceInner({
 		initialSurface,
 		appId,
 	);
+
+	// Restore cached surface when page has cache enabled
+	useEffect(() => {
+		if (!page?.cache || !appId || !page.id) return;
+		const cacheKey = `page-cache:${appId}:${page.id}`;
+		try {
+			const cached = sessionStorage.getItem(cacheKey);
+			if (cached) {
+				setCachedSurface(JSON.parse(cached) as Surface);
+			}
+		} catch {
+			// Ignore parse errors
+		}
+	}, [page?.cache, page?.id, appId]);
+
+	// Save surface to cache after onLoad completes
+	useEffect(() => {
+		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
+		const cacheKey = `page-cache:${appId}:${page.id}`;
+		try {
+			sessionStorage.setItem(cacheKey, JSON.stringify(surface));
+			// Clear cachedSurface once the real surface is ready
+			setCachedSurface(null);
+		} catch {
+			// sessionStorage full or unavailable
+		}
+	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
 	// Comprehensive A2UI message handler for page events
 	const handleA2UIMessage = useCallback(
@@ -1054,7 +1082,18 @@ function PageInterfaceInner({
 		return { ...surface, canvasSettings: undefined };
 	}, [surface]);
 
-	if (isLoading || isLoadEventRunning) {
+	// When cache is enabled and we have a cached surface, use it while onLoad runs
+	const activeSurface = surface ?? (page?.cache ? cachedSurface : null);
+	const activeSurfaceForRenderer = useMemo(() => {
+		if (surfaceForRenderer) return surfaceForRenderer;
+		if (!page?.cache || !cachedSurface) return null;
+		if (!cachedSurface.canvasSettings) return cachedSurface;
+		return { ...cachedSurface, canvasSettings: undefined };
+	}, [surfaceForRenderer, page?.cache, cachedSurface]);
+
+	// Show loading skeleton only when no cached content is available
+	const hasCachedContent = page?.cache && cachedSurface && !surface;
+	if (isLoading || (isLoadEventRunning && !hasCachedContent)) {
 		return <PageLoadingSkeleton />;
 	}
 
@@ -1089,7 +1128,7 @@ function PageInterfaceInner({
 		);
 	}
 
-	if (!surface) {
+	if (!activeSurface) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
 				<p>No content to display</p>
@@ -1097,7 +1136,7 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings = surface?.canvasSettings ?? page?.canvasSettings;
+	const runtimeCanvasSettings = activeSurface?.canvasSettings ?? page?.canvasSettings;
 
 	const canvasStyle: React.CSSProperties = {
 		backgroundColor: runtimeCanvasSettings?.backgroundColor,
@@ -1131,7 +1170,7 @@ function PageInterfaceInner({
 			>
 				<DataProvider initialData={[]}>
 					<A2UIRenderer
-						surface={surfaceForRenderer!}
+						surface={activeSurfaceForRenderer!}
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}

@@ -46,6 +46,7 @@ import { MessageContent } from "./MessageContent";
 import { PendingCommandsView } from "./PendingCommandsView";
 import { PendingComponentsView } from "./PendingComponentsView";
 import { PlanStepsView } from "./PlanStepsView";
+import { buildBudgetedHistory } from "./history-budget";
 import { validateComponents, validateCanvasSettings } from "./validateComponents";
 import { ModelSelector, ProviderSelector } from "./ProviderSelector";
 import { StatusPill } from "./StatusPill";
@@ -75,8 +76,6 @@ export function FlowPilot({
 	// Provider props
 	forceProvider,
 	defaultProvider = "bits",
-	copilotServerUrl,
-	onRequestCopilotServerUrl,
 	// Board mode props
 	board,
 	selectedNodeIds = [],
@@ -299,6 +298,14 @@ export function FlowPilot({
 				const loadedMessages: CopilotMessage[] = storedMessages.map((m) => ({
 					role: m.role as "user" | "assistant",
 					content: m.content,
+					images: m.images?.map((image) => ({
+						data: image.data,
+						mediaType: image.mediaType,
+						preview: `data:${image.mediaType};base64,${image.data}`,
+					})),
+					contextNodeIds: m.contextNodeIds,
+					appliedComponents: m.appliedComponents,
+					executedCommands: m.executedCommands,
 				}));
 				setMessages(loadedMessages);
 				setCurrentConversationId(conversation.id);
@@ -385,6 +392,13 @@ export function FlowPilot({
 	// Board mode handlers
 	const handleExecuteCommands = useCallback(() => {
 		if (onExecuteCommands && pendingCommands.length > 0) {
+			const lastAssistantMessage = [...messages]
+				.reverse()
+				.find((message) => message.role === "assistant");
+			const nextExecutedCommands = [
+				...(lastAssistantMessage?.executedCommands ?? []),
+				...pendingCommands,
+			];
 			onExecuteCommands(pendingCommands);
 			setMessages((prev) => {
 				const newMessages = [...prev];
@@ -400,14 +414,26 @@ export function FlowPilot({
 				}
 				return newMessages;
 			});
+			if (currentMessageIdRef.current) {
+				void updateMessage(currentMessageIdRef.current, {
+					executedCommands: nextExecutedCommands,
+				});
+			}
 			setPendingCommands([]);
 		}
-	}, [onExecuteCommands, pendingCommands]);
+	}, [messages, onExecuteCommands, pendingCommands]);
 
 	const handleExecuteSingle = useCallback(
 		(index: number) => {
 			if (onExecuteCommands && pendingCommands[index]) {
 				const command = pendingCommands[index];
+				const lastAssistantMessage = [...messages]
+					.reverse()
+					.find((message) => message.role === "assistant");
+				const nextExecutedCommands = [
+					...(lastAssistantMessage?.executedCommands ?? []),
+					command,
+				];
 				onExecuteCommands([command]);
 				setMessages((prev) => {
 					const newMessages = [...prev];
@@ -423,10 +449,15 @@ export function FlowPilot({
 					}
 					return newMessages;
 				});
+				if (currentMessageIdRef.current) {
+					void updateMessage(currentMessageIdRef.current, {
+						executedCommands: nextExecutedCommands,
+					});
+				}
 				setPendingCommands((prev) => prev.filter((_, i) => i !== index));
 			}
 		},
-		[onExecuteCommands, pendingCommands],
+		[messages, onExecuteCommands, pendingCommands],
 	);
 
 	const handleDismissCommands = useCallback(() => {
@@ -436,6 +467,7 @@ export function FlowPilot({
 	// UI mode handlers
 	const handleApplyComponents = useCallback(() => {
 		if (pendingComponents.length > 0) {
+			const nextAppliedComponents = [...pendingComponents];
 			onApplyComponents?.(pendingComponents, pendingCanvasSettings);
 			setMessages((prev) => {
 				const newMessages = [...prev];
@@ -450,6 +482,11 @@ export function FlowPilot({
 				}
 				return newMessages;
 			});
+			if (currentMessageIdRef.current) {
+				void updateMessage(currentMessageIdRef.current, {
+					appliedComponents: nextAppliedComponents,
+				});
+			}
 			setPendingComponents([]);
 			setPendingCanvasSettings(undefined);
 			setValidationWarnings([]);
@@ -893,26 +930,21 @@ ${currentInput}`;
 ${userMsg}`;
 				}
 
-				// Build unified chat history
-				const chatHistory: UnifiedChatMessage[] = messages.map((m) => ({
-					role: m.role === "user" ? "User" : "Assistant",
-					content: m.content,
-					images: m.images?.map((img) => ({
-						data: img.data,
-						media_type: img.mediaType,
-					})),
-				}));
+				const chatHistory: UnifiedChatMessage[] = buildBudgetedHistory({
+					agentMode,
+					messages,
+					selectedNodeIds,
+					selectedComponentIds,
+					boardId: board?.id,
+					boardName: board?.name,
+					currentComponentsCount: currentComponents.length,
+					runContext,
+				});
 
-				if (currentImages.length > 0) {
-					chatHistory.push({
-						role: "User",
-						content: userMsg,
-						images: currentImages.map((img) => ({
-							data: img.data,
-							media_type: img.mediaType,
-						})),
-					});
-				}
+				const requestImages = currentImages.map((img) => ({
+					data: img.data,
+					media_type: img.mediaType,
+				}));
 
 				const backendRunContext = runContext
 					? {
@@ -937,6 +969,7 @@ ${userMsg}`;
 					selectedComponentIds,
 					userMsg,
 					chatHistory,
+					requestImages,
 					onToken,
 					effectiveModelId,
 					undefined,

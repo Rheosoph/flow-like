@@ -20,7 +20,10 @@ use utoipa::ToSchema;
 pub struct CreateNotificationParams {
     /// Event ID that triggered this execution.
     /// Used to resolve the board and verify that notifications are allowed for it.
-    pub event_id: String,
+    pub event_id: Option<String>,
+    /// Board ID for manual board executions that are not tied to an event.
+    /// Used when `event_id` is not available.
+    pub board_id: Option<String>,
     /// Target user's sub. If not provided, notifies the executing user.
     pub target_user_sub: Option<String>,
     pub title: String,
@@ -43,8 +46,8 @@ pub struct CreateNotificationResponse {
 ///
 /// Create a notification from a workflow execution.
 /// - Caller must have ExecuteEvents permission in the project
-/// - event_id is required and is used to resolve the board
-/// - The resolved board must contain a Notify User node, otherwise the request is denied
+/// - Either `event_id` or `board_id` is required to resolve the board
+/// - The resolved board must contain a notification node, otherwise the request is denied
 /// - If target_user_sub is provided, that user must be a member of the project
 /// - If target_user_sub is not provided, notifies the executing user (from JWT sub)
 #[utoipa::path(
@@ -79,29 +82,55 @@ pub async fn create_notification(
     let caller = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let caller_sub = caller.sub()?;
 
-    if params.event_id.trim().is_empty() {
-        return Err(ApiError::bad_request("event_id is required".to_string()));
-    }
+    let event_id = params
+        .event_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|event_id| !event_id.is_empty());
+    let board_id = params
+        .board_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|board_id| !board_id.is_empty());
 
-    // Get event from database (validates event belongs to this app)
-    let event = get_event_from_db(&state.db, &params.event_id, &app_id).await.map_err(|e| {
-        tracing::warn!(error = %e, event_id = %params.event_id, "Failed to resolve event for notification");
-        ApiError::FORBIDDEN
-    })?;
+    let (board, resolved_board_id, resolved_event_id) = if let Some(event_id) = event_id {
+        let event = get_event_from_db(&state.db, event_id, &app_id)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, event_id = %event_id, "Failed to resolve event for notification");
+                ApiError::FORBIDDEN
+            })?;
 
-    let board = state
-        .master_board(
-            &caller_sub,
-            &app_id,
-            &event.board_id,
-            &state,
-            event.board_version,
-        )
-        .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, board_id = %event.board_id, "Failed to resolve board for notification");
-            ApiError::FORBIDDEN
-        })?;
+        let board = state
+            .master_board(
+                &caller_sub,
+                &app_id,
+                &event.board_id,
+                &state,
+                event.board_version,
+            )
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, board_id = %event.board_id, "Failed to resolve board for notification");
+                ApiError::FORBIDDEN
+            })?;
+
+        (board, event.board_id, Some(event_id.to_string()))
+    } else if let Some(board_id) = board_id {
+        let board = state
+            .master_board(&caller_sub, &app_id, board_id, &state, None)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, board_id = %board_id, "Failed to resolve board for notification");
+                ApiError::FORBIDDEN
+            })?;
+
+        (board, board_id.to_string(), None)
+    } else {
+        return Err(ApiError::bad_request(
+            "either event_id or board_id is required".to_string(),
+        ));
+    };
 
     let allowed_notification_nodes = ["notify_user", "notify_project_user"];
 
@@ -114,8 +143,8 @@ pub async fn create_notification(
         tracing::warn!(
             caller = %caller_sub,
             app_id = %app_id,
-            event_id = %params.event_id,
-            board_id = %event.board_id,
+            event_id = ?resolved_event_id,
+            board_id = %resolved_board_id,
             "Denied notification create: board has no notification node"
         );
         return Err(ApiError::FORBIDDEN);
@@ -131,8 +160,8 @@ pub async fn create_notification(
             tracing::warn!(
                 caller = %caller_sub,
                 app_id = %app_id,
-                event_id = %params.event_id,
-                board_id = %event.board_id,
+                event_id = ?resolved_event_id,
+                board_id = %resolved_board_id,
                 source_node_id = %source_node_id,
                 "Denied notification create: source node is not a notification node"
             );

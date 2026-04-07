@@ -1053,7 +1053,6 @@ pub fn run() {
             functions::registry::registry_set_auth_token,
             functions::permissions::check_rpa_permissions,
             functions::permissions::request_rpa_permission,
-            functions::permissions::get_tracking_authorization_status,
             functions::recording::start_recording,
             functions::recording::pause_recording,
             functions::recording::resume_recording,

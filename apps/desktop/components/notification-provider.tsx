@@ -3,11 +3,19 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useBackend, useHub } from "@tm9657/flow-like-ui";
-import type { IIntercomEvent, INotificationEvent, IPushNotificationsConfig } from "@tm9657/flow-like-ui";
+import type {
+	IIntercomEvent,
+	INotificationEvent,
+	IPushNotificationsConfig,
+} from "@tm9657/flow-like-ui";
 import { useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
+import {
+	FLOW_NOTIFICATION_EVENT,
+	type FlowNotificationBatchDetail,
+} from "../lib/flow-notification-events";
 import { addLocalNotification } from "../lib/notifications-db";
 
 type NotificationPermission = "granted" | "denied" | "default";
@@ -80,7 +88,9 @@ const DEVICE_ID_FILE = "push-device-id.txt";
 
 async function loadPersistentDeviceId(): Promise<string | null> {
 	try {
-		const { readTextFile, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+		const { readTextFile, BaseDirectory } = await import(
+			"@tauri-apps/plugin-fs"
+		);
 		const id = await readTextFile(DEVICE_ID_FILE, {
 			baseDir: BaseDirectory.AppData,
 		});
@@ -190,7 +200,9 @@ function dataString(
 	key: string,
 ): string | undefined {
 	const value = data[key];
-	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+	return typeof value === "string" && value.trim().length > 0
+		? value
+		: undefined;
 }
 
 interface NotificationProviderProps {
@@ -219,6 +231,7 @@ export default function NotificationProvider({
 		description,
 		icon,
 		link,
+		appIdOverride,
 		sourceRunId,
 		sourceNodeId,
 		notificationType,
@@ -227,14 +240,17 @@ export default function NotificationProvider({
 		description?: string;
 		icon?: string;
 		link?: string;
+		appIdOverride?: string;
 		sourceRunId?: string;
 		sourceNodeId?: string;
 		notificationType?: "WORKFLOW" | "SYSTEM";
 	}) => {
 		try {
+			const notificationAppId = appIdOverride ?? appId;
+
 			await addLocalNotification({
 				userId,
-				appId,
+				appId: notificationAppId,
 				title,
 				description,
 				icon,
@@ -364,7 +380,12 @@ export default function NotificationProvider({
 			backend?.profile &&
 			canUseRemotePushForPlatform(pushConfig, platform);
 		if (!canRegister) {
-			if (auth.isAuthenticated && backend?.profile && auth.user && deviceId.current) {
+			if (
+				auth.isAuthenticated &&
+				backend?.profile &&
+				auth.user &&
+				deviceId.current
+			) {
 				void unregisterPushTarget();
 			}
 			return;
@@ -413,40 +434,52 @@ export default function NotificationProvider({
 				);
 
 				remotePushListeners.current.push(
-					await remotePushApi.current.onNotificationReceived(async (notification) => {
-						await storeNotification({
-							title: notification.title ?? "Notification",
-							description: notification.body,
-							icon: dataString(notification.data, "icon"),
-							link: dataString(notification.data, "link"),
-							sourceRunId: dataString(notification.data, "source_run_id"),
-							sourceNodeId: dataString(notification.data, "source_node_id"),
-							notificationType: (dataString(notification.data, "notification_type") as "WORKFLOW" | "SYSTEM") ?? "SYSTEM",
-						});
+					await remotePushApi.current.onNotificationReceived(
+						async (notification) => {
+							await storeNotification({
+								title: notification.title ?? "Notification",
+								description: notification.body,
+								icon: dataString(notification.data, "icon"),
+								link: dataString(notification.data, "link"),
+								appIdOverride: dataString(notification.data, "app_id") ?? appId,
+								sourceRunId: dataString(notification.data, "source_run_id"),
+								sourceNodeId: dataString(notification.data, "source_node_id"),
+								notificationType:
+									(dataString(notification.data, "notification_type") as
+										| "WORKFLOW"
+										| "SYSTEM") ?? "SYSTEM",
+							});
 
-						toast.info(notification.title ?? "Notification", {
-							description: notification.body,
-						});
-					}),
+							toast.info(notification.title ?? "Notification", {
+								description: notification.body,
+							});
+						},
+					),
 				);
 
 				remotePushListeners.current.push(
-					await remotePushApi.current.onNotificationTapped(async (notification) => {
-						await storeNotification({
-							title: notification.title ?? "Notification",
-							description: notification.body,
-							icon: dataString(notification.data, "icon"),
-							link: dataString(notification.data, "link"),
-							sourceRunId: dataString(notification.data, "source_run_id"),
-							sourceNodeId: dataString(notification.data, "source_node_id"),
-							notificationType: (dataString(notification.data, "notification_type") as "WORKFLOW" | "SYSTEM") ?? "SYSTEM",
-						});
+					await remotePushApi.current.onNotificationTapped(
+						async (notification) => {
+							await storeNotification({
+								title: notification.title ?? "Notification",
+								description: notification.body,
+								icon: dataString(notification.data, "icon"),
+								link: dataString(notification.data, "link"),
+								appIdOverride: dataString(notification.data, "app_id") ?? appId,
+								sourceRunId: dataString(notification.data, "source_run_id"),
+								sourceNodeId: dataString(notification.data, "source_node_id"),
+								notificationType:
+									(dataString(notification.data, "notification_type") as
+										| "WORKFLOW"
+										| "SYSTEM") ?? "SYSTEM",
+							});
 
-						const link = dataString(notification.data, "link");
-						if (link && typeof window !== "undefined") {
-							window.location.assign(link);
-						}
-					}),
+							const link = dataString(notification.data, "link");
+							if (link && typeof window !== "undefined") {
+								window.location.assign(link);
+							}
+						},
+					),
 				);
 			} catch (error) {
 				console.warn(
@@ -470,78 +503,126 @@ export default function NotificationProvider({
 	useEffect(() => {
 		const subscriptions: (Promise<UnlistenFn> | undefined)[] = [];
 
+		const handleNotificationBatch = async (
+			events: IIntercomEvent[],
+			persistViaApi: boolean,
+			notificationAppId?: string,
+			boardId?: string,
+		) => {
+			for (const event of events) {
+				const notification = event.payload as INotificationEvent;
+				const isCurrentUserTarget =
+					!notification.target_user_sub ||
+					notification.target_user_sub === userId;
+				const canPersistNotification =
+					Boolean(notification.event_id?.trim()) || Boolean(boardId?.trim());
+
+				if (
+					persistViaApi &&
+					notificationAppId &&
+					backend?.profile &&
+					auth.user &&
+					canPersistNotification
+				) {
+					try {
+						await fetcher<{ id: string; success: boolean }>(
+							backend.profile,
+							`apps/${notificationAppId}/notifications/create`,
+							{
+								method: "POST",
+								body: JSON.stringify({
+									event_id: notification.event_id,
+									board_id:
+										notification.event_id &&
+										notification.event_id.trim().length > 0
+											? undefined
+											: boardId,
+									target_user_sub: notification.target_user_sub,
+									title: notification.title,
+									description: notification.description,
+									icon: notification.icon,
+									link: notification.link,
+									run_id: notification.source_run_id,
+									node_id: notification.source_node_id,
+								}),
+							},
+							auth,
+						);
+					} catch (e) {
+						console.warn(
+							"[NotificationProvider] Failed to persist remote notification:",
+							e,
+						);
+					}
+				} else if (persistViaApi && !canPersistNotification) {
+					console.warn(
+						"[NotificationProvider] Skipping workflow notification persistence because neither event_id nor board_id is available.",
+					);
+				}
+
+				if (!isCurrentUserTarget) {
+					continue;
+				}
+
+				await storeNotification({
+					title: notification.title,
+					description: notification.description,
+					icon: notification.icon,
+					link: notification.link,
+					appIdOverride: notificationAppId,
+					sourceRunId: notification.source_run_id,
+					sourceNodeId: notification.source_node_id,
+				});
+
+				if (
+					notificationApi.current &&
+					permissionGranted.current &&
+					notification.show_desktop
+				) {
+					notificationApi.current.sendNotification({
+						title: notification.title,
+						body: notification.description ?? undefined,
+					});
+				} else {
+					toast.info(notification.title, {
+						description: notification.description,
+					});
+				}
+			}
+		};
+
+		const handleWindowNotification = (event: globalThis.Event) => {
+			const detail = (event as CustomEvent<FlowNotificationBatchDetail>).detail;
+			if (!detail) {
+				return;
+			}
+
+			void handleNotificationBatch(
+				detail.events,
+				detail.persistViaApi,
+				detail.appId ?? appId,
+				detail.boardId,
+			);
+		};
+
 		const unlistenFn = listen(
 			"flow_notification",
 			async (events: Event<IIntercomEvent[]>) => {
-				for (const event of events.payload) {
-					const notification = event.payload as INotificationEvent;
-
-					await storeNotification({
-						title: notification.title,
-						description: notification.description,
-						icon: notification.icon,
-						link: notification.link,
-						sourceRunId: notification.source_run_id,
-						sourceNodeId: notification.source_node_id,
-					});
-
-					// Persist notification via backend API (requires event_id)
-					if (
-						appId &&
-						backend?.profile &&
-						auth.user &&
-						notification.event_id &&
-						notification.event_id.trim().length > 0
-					) {
-						try {
-							await fetcher<{ id: string; success: boolean }>(
-								backend.profile,
-								`apps/${appId}/notifications/create`,
-								{
-									method: "POST",
-									body: JSON.stringify({
-										event_id: notification.event_id,
-										target_user_sub: notification.target_user_sub,
-										title: notification.title,
-										description: notification.description,
-										icon: notification.icon,
-										link: notification.link,
-										run_id: notification.source_run_id,
-										node_id: notification.source_node_id,
-									}),
-								},
-								auth,
-							);
-						} catch (e) {
-							console.warn(
-								"[NotificationProvider] Failed to persist remote notification:",
-								e,
-							);
-						}
-					}
-
-					// Show desktop notification if enabled
-					if (
-						notificationApi.current &&
-						permissionGranted.current &&
-						notification.show_desktop
-					) {
-						notificationApi.current.sendNotification({
-							title: notification.title,
-							body: notification.description ?? undefined,
-						});
-					} else {
-						toast.info(notification.title, {
-							description: notification.description,
-						});
-					}
-				}
+				await handleNotificationBatch(events.payload, true, appId);
 			},
 		);
 
 		subscriptions.push(unlistenFn);
+		window.addEventListener(
+			FLOW_NOTIFICATION_EVENT,
+			handleWindowNotification as EventListener,
+		);
 
 		return () => {
+			window.removeEventListener(
+				FLOW_NOTIFICATION_EVENT,
+				handleWindowNotification as EventListener,
+			);
 			(async () => {
 				for await (const subscription of subscriptions) {
 					if (subscription) subscription();

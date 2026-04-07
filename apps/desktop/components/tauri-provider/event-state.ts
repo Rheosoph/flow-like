@@ -23,6 +23,10 @@ import {
 } from "@tm9657/flow-like-ui";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
+import {
+	dispatchFlowNotificationEvent,
+	dispatchFlowNotificationEvents,
+} from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import type { TauriBackend } from "../tauri-provider";
@@ -486,6 +490,7 @@ export class EventState implements IEventState {
 			appId,
 			event.board_id,
 			(event.board_version as [number, number, number]) ?? undefined,
+			true,
 		);
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
@@ -542,6 +547,8 @@ export class EventState implements IEventState {
 					foundRunId = true;
 				}
 			}
+
+			dispatchFlowNotificationEvents(events, true, appId);
 
 			if (cb) cb(events);
 		};
@@ -630,6 +637,10 @@ export class EventState implements IEventState {
 
 				if (event.event_type === "progress") {
 					showProgressToast(event.payload as ProgressToastData);
+				}
+
+				if (event.event_type === "flow_notification") {
+					dispatchFlowNotificationEvent(event, false, appId);
 				}
 
 				if (event.event_type === "completed") {

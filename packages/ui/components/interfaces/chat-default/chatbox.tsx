@@ -48,6 +48,7 @@ interface ChatBoxProps {
 	defaultActiveTools?: string[];
 	fileUpload: boolean;
 	audioInput: boolean;
+	sendDisabled?: boolean;
 	onVoiceModeToggle?: () => void;
 }
 
@@ -76,6 +77,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			audioInput = false,
 			availableTools = ["Reason"],
 			defaultActiveTools = ["Reason"],
+			sendDisabled = false,
 			onVoiceModeToggle,
 		}: Readonly<ChatBoxProps>,
 		ref,
@@ -152,24 +154,26 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			[],
 		);
 
-		const handleSubmit = (e: React.FormEvent) => {
+		const handleSubmit = async (e: React.FormEvent) => {
 			e.preventDefault();
-			if (input.trim()) {
-				onSendMessage(
+			if (sendDisabled || !input.trim()) {
+				return;
+			}
+
+			await onSendMessage(
 					input.trim(),
 					attachedFiles,
 					activeTools,
 					recordedAudio || undefined,
-				);
-				setInput("");
-				setAttachedFiles([]);
-				setRecordedAudio(null);
-				setRecordingTime(0);
-				// Dismiss the iOS keyboard and revert any zoom
-				try {
-					chatboxRef.current?.blur();
-				} catch {}
-			}
+			);
+			setInput("");
+			setAttachedFiles([]);
+			setRecordedAudio(null);
+			setRecordingTime(0);
+			// Dismiss the iOS keyboard and revert any zoom
+			try {
+				chatboxRef.current?.blur();
+			} catch {}
 		};
 
 		useEffect(() => {
@@ -331,7 +335,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const handleKeyDown = (e: React.KeyboardEvent) => {
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
-				handleSubmit(e);
+				void handleSubmit(e);
 			}
 		};
 
@@ -760,7 +764,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													? stopTranscription
 													: startTranscription
 											}
-											disabled={isRecording}
+											disabled={isRecording || sendDisabled}
 										>
 											<AudioLines className="w-4 h-4" />
 										</Button>
@@ -797,6 +801,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											<Button
 												disabled={
 													!!recordedAudio ||
+													sendDisabled ||
 													typeof navigator?.mediaDevices?.getUserMedia !==
 														"function"
 												}
@@ -820,7 +825,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										variant="ghost"
 										className="h-8 w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
 										onClick={onVoiceModeToggle}
-										disabled={isRecording || isTranscribing}
+											disabled={isRecording || isTranscribing || sendDisabled}
 										title="Voice mode"
 									>
 										<AudioWaveform className="w-4 h-4" />
@@ -830,7 +835,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								<Button
 									type="submit"
 									size="sm"
-									disabled={!input.trim() && !recordedAudio}
+									disabled={sendDisabled || (!input.trim() && !recordedAudio)}
 									variant={
 										input.trim() || recordedAudio ? "default" : "secondary"
 									}

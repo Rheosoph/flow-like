@@ -20,6 +20,50 @@ interface BackendReasoning {
 	current_message: string;
 }
 
+function appendFallbackReasoningStep(
+	responseMessage: IMessage,
+	reasoning: string,
+) {
+	if (!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) {
+		responseMessage.plan_steps = [
+			{
+				id: "step-0",
+				title: "Thinking",
+				status: "progress",
+				reasoning,
+			},
+		];
+		responseMessage.current_step_id = "step-0";
+		return;
+	}
+
+	const currentStep =
+		responseMessage.plan_steps.find(
+			(step) => step.id === responseMessage.current_step_id,
+		) ??
+		responseMessage.plan_steps.find((step) => step.status === "progress") ??
+		responseMessage.plan_steps[responseMessage.plan_steps.length - 1];
+
+	if (!currentStep) {
+		return;
+	}
+
+	currentStep.reasoning = (currentStep.reasoning || "") + reasoning;
+	responseMessage.current_step_id = currentStep.id;
+}
+
+function hasUsageStat(
+	usageStats: IChatUsageStat[] | undefined,
+	stat: IChatUsageStat,
+): boolean {
+	if (!usageStats || usageStats.length === 0) {
+		return false;
+	}
+
+	const signature = JSON.stringify(stat);
+	return usageStats.some((existing) => JSON.stringify(existing) === signature);
+}
+
 function parseBackendPlan(reasoning: BackendReasoning): {
 	steps: IPlanStep[];
 	currentStepId: string | undefined;
@@ -113,37 +157,9 @@ export function processChatEvents(
 
 				// Extract reasoning from chunk delta
 				const delta = ev.payload.chunk?.choices?.[0]?.delta;
-				if (delta?.reasoning) {
-					// Reasoning is being streamed - we'll get it via plan updates
-					// This is for compatibility with direct reasoning in chunks
-					if (
-						!responseMessage.plan_steps ||
-						responseMessage.plan_steps.length === 0
-					) {
-						// No plan yet, create a temporary step for the reasoning
-						if (!responseMessage.plan_steps) {
-							responseMessage.plan_steps = [];
-						}
-						if (responseMessage.plan_steps.length === 0) {
-							responseMessage.plan_steps.push({
-								id: "step-0",
-								title: "Thinking",
-								status: "progress",
-								reasoning: delta.reasoning,
-							});
-							responseMessage.current_step_id = "step-0";
-						} else {
-							// Append to existing step's reasoning
-							const currentStep = responseMessage.plan_steps.find(
-								(s) => s.id === responseMessage.current_step_id,
-							);
-							if (currentStep) {
-								currentStep.reasoning =
-									(currentStep.reasoning || "") + delta.reasoning;
-							}
-						}
-						shouldUpdate = true;
-					}
+				if (delta?.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(responseMessage, delta.reasoning);
+					shouldUpdate = true;
 				}
 			}
 
@@ -274,8 +290,10 @@ export function processChatEvents(
 			if (!responseMessage.usage_stats) {
 				responseMessage.usage_stats = [];
 			}
-			responseMessage.usage_stats.push(stat);
-			shouldUpdate = true;
+			if (!hasUsageStat(responseMessage.usage_stats, stat)) {
+				responseMessage.usage_stats.push(stat);
+				shouldUpdate = true;
+			}
 		}
 	}
 

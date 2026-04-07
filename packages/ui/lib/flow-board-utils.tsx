@@ -351,6 +351,7 @@ export function parseBoard(
 	version?: [number, number, number],
 	onOpenInfo?: (node: INode) => void,
 	onExplain?: (nodeIds: string[]) => void,
+	onFilterLogs?: (nodeId: string) => void,
 	remoteBoardExecution?: {
 		isOffline: boolean;
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
@@ -460,6 +461,7 @@ export function parseBoard(
 					},
 					onOpenInfo: onOpenInfo,
 					onExplain: onExplain,
+					onFilterLogs: onFilterLogs,
 					executionMode: board.execution_mode,
 				},
 				selected: selected.has(node.id),

@@ -1,6 +1,6 @@
+import type { ILayer } from "./schema/flow/board/commands/upsert-layer";
 import type { INode, IPin } from "./schema/flow/node";
 import { IPinType, IVariableType } from "./schema/flow/node";
-import type { ILayer } from "./schema/flow/board/commands/upsert-layer";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -14,10 +14,12 @@ interface LayoutNode {
 	execInCount: number;
 	fnRefTargets: string[];
 	canBeReferencedByFns: boolean;
-	outgoingExec: Map<string, string>;
+	outgoingExec: Map<string, string[]>;
 	outgoingData: Map<string, string[]>;
 	incomingExec: Set<string>;
 	incomingData: Set<string>;
+	sortX: number;
+	sortY: number;
 }
 
 interface LayoutEntity {
@@ -46,12 +48,32 @@ interface StyleConfig {
 function getStyleConfig(style: LayoutStyle): StyleConfig {
 	switch (style) {
 		case "compact":
-			return { hGap: 320, vGap: 160, pureHGap: 280, pureVGap: 130, eventGroupGap: 300, branchSpread: 1 };
+			return {
+				hGap: 320,
+				vGap: 160,
+				pureHGap: 280,
+				pureVGap: 130,
+				eventGroupGap: 300,
+				branchSpread: 1,
+			};
 		case "expanded":
-			return { hGap: 450, vGap: 240, pureHGap: 380, pureVGap: 200, eventGroupGap: 500, branchSpread: 1.5 };
-		case "balanced":
+			return {
+				hGap: 450,
+				vGap: 240,
+				pureHGap: 380,
+				pureVGap: 200,
+				eventGroupGap: 500,
+				branchSpread: 1.5,
+			};
 		default:
-			return { hGap: 380, vGap: 190, pureHGap: 320, pureVGap: 160, eventGroupGap: 380, branchSpread: 1.2 };
+			return {
+				hGap: 380,
+				vGap: 190,
+				pureHGap: 320,
+				pureVGap: 160,
+				eventGroupGap: 380,
+				branchSpread: 1.2,
+			};
 	}
 }
 
@@ -69,11 +91,72 @@ function isInputPin(pin: IPin): boolean {
 	return pin.pin_type === IPinType.Input;
 }
 
+const DEFAULT_ENTITY_WIDTH = 300;
+const DEFAULT_NODE_HEIGHT = 88;
+const DEFAULT_NODE_WIDTH = 240;
+
 function estimateNodeHeight(node: INode): number {
 	const pins = Object.values(node.pins);
 	const inputCount = pins.filter(isInputPin).length;
 	const outputCount = pins.filter(isOutputPin).length;
-	return Math.max(inputCount, outputCount) * 15 + 28;
+	return Math.max(
+		DEFAULT_NODE_HEIGHT,
+		Math.max(inputCount, outputCount) * 15 + 28,
+	);
+}
+
+function estimateNodeWidth(node: INode, isEntity: boolean): number {
+	const pins = Object.values(node.pins);
+	const maxPins = Math.max(
+		pins.filter(isInputPin).length,
+		pins.filter(isOutputPin).length,
+	);
+	const baseWidth = isEntity ? DEFAULT_ENTITY_WIDTH : DEFAULT_NODE_WIDTH;
+	return baseWidth + Math.max(0, maxPins - 4) * 8;
+}
+
+function compareNodeIdsByPreferredPosition(
+	aId: string,
+	bId: string,
+	graph: Map<string, LayoutNode>,
+): number {
+	const a = graph.get(aId);
+	const b = graph.get(bId);
+	if (!a || !b) return aId.localeCompare(bId);
+	return a.sortY - b.sortY || a.sortX - b.sortX || a.id.localeCompare(b.id);
+}
+
+function pushUnique(values: string[], value: string) {
+	if (!values.includes(value)) {
+		values.push(value);
+	}
+}
+
+function getPureDirection(
+	nodeId: string,
+	anchorY: number,
+	graph: Map<string, LayoutNode>,
+): -1 | 1 {
+	const node = graph.get(nodeId);
+	if (!node) {
+		return -1;
+	}
+
+	return node.sortY <= anchorY ? -1 : 1;
+}
+
+function offsetPureYFromAnchor(
+	desiredY: number,
+	anchorY: number,
+	direction: -1 | 1,
+	gap: number,
+): number {
+	const bandY = anchorY + direction * gap;
+	if (direction < 0) {
+		return Math.min(desiredY, bandY);
+	}
+
+	return Math.max(desiredY, bandY);
 }
 
 // ─── Graph Building ──────────────────────────────────────────────────────────
@@ -141,6 +224,8 @@ function buildLayoutGraph(
 			outgoingData: new Map(),
 			incomingExec: new Set(),
 			incomingData: new Set(),
+			sortX: node?.coordinates?.[0] ?? 0,
+			sortY: node?.coordinates?.[1] ?? 0,
 		});
 	}
 
@@ -149,17 +234,21 @@ function buildLayoutGraph(
 			if (!isOutputPin(pin)) continue;
 			for (const targetPinId of pin.connected_to) {
 				const targetId = pinOwner.get(targetPinId);
-				if (!targetId || !allIds.has(targetId) || targetId === node.id) continue;
+				if (!targetId || !allIds.has(targetId) || targetId === node.id)
+					continue;
 
-				const layoutNode = graph.get(node.id)!;
-				const targetLayout = graph.get(targetId)!;
+				const layoutNode = graph.get(node.id);
+				const targetLayout = graph.get(targetId);
+				if (!layoutNode || !targetLayout) continue;
 
 				if (isExecPin(pin)) {
-					layoutNode.outgoingExec.set(pin.id, targetId);
+					const targets = layoutNode.outgoingExec.get(pin.id) ?? [];
+					pushUnique(targets, targetId);
+					layoutNode.outgoingExec.set(pin.id, targets);
 					targetLayout.incomingExec.add(node.id);
 				} else {
 					const existing = layoutNode.outgoingData.get(pin.id) ?? [];
-					existing.push(targetId);
+					pushUnique(existing, targetId);
 					layoutNode.outgoingData.set(pin.id, existing);
 					targetLayout.incomingData.add(node.id);
 				}
@@ -168,6 +257,80 @@ function buildLayoutGraph(
 	}
 
 	return graph;
+}
+
+function getExecTargets(
+	node: LayoutNode,
+	graph: Map<string, LayoutNode>,
+	allowedIds?: Set<string>,
+): string[] {
+	const targets = new Set<string>();
+	for (const pinTargets of node.outgoingExec.values()) {
+		for (const targetId of pinTargets) {
+			if (allowedIds && !allowedIds.has(targetId)) continue;
+			targets.add(targetId);
+		}
+	}
+	return [...targets].sort((a, b) =>
+		compareNodeIdsByPreferredPosition(a, b, graph),
+	);
+}
+
+function getDataTargets(
+	node: LayoutNode,
+	graph: Map<string, LayoutNode>,
+	allowedIds?: Set<string>,
+): string[] {
+	const targets = new Set<string>();
+	for (const pinTargets of node.outgoingData.values()) {
+		for (const targetId of pinTargets) {
+			if (allowedIds && !allowedIds.has(targetId)) continue;
+			targets.add(targetId);
+		}
+	}
+	return [...targets].sort((a, b) =>
+		compareNodeIdsByPreferredPosition(a, b, graph),
+	);
+}
+
+function buildFnRefNodeToEntityMap(
+	entities: LayoutEntity[],
+	boardLayers?: Record<string, ILayer>,
+): Map<string, string> {
+	const fnRefNodeToEntity = new Map<string, string>();
+	if (!boardLayers) {
+		return fnRefNodeToEntity;
+	}
+
+	const childLayersByParent = new Map<string, string[]>();
+	for (const layer of Object.values(boardLayers)) {
+		const parentId =
+			(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
+		if (!parentId) continue;
+		const children = childLayersByParent.get(parentId) ?? [];
+		children.push(layer.id);
+		childLayersByParent.set(parentId, children);
+	}
+
+	for (const entity of entities) {
+		const stack = [entity.id];
+		while (stack.length > 0) {
+			const layerId = stack.pop();
+			if (!layerId) continue;
+			const layer = boardLayers[layerId];
+			if (!layer) continue;
+
+			for (const nodeId of Object.keys(layer.nodes)) {
+				fnRefNodeToEntity.set(nodeId, entity.id);
+			}
+
+			for (const childId of childLayersByParent.get(layerId) ?? []) {
+				stack.push(childId);
+			}
+		}
+	}
+
+	return fnRefNodeToEntity;
 }
 
 // ─── Event Group Discovery ───────────────────────────────────────────────────
@@ -225,20 +388,32 @@ function collectPureDepsForGroup(
 
 		pureNodes.add(depId);
 		allNodes.add(depId);
-		collectPureDepsForGroup(depId, graph, pureNodes, allNodes, blockedNodes, rootId);
+		collectPureDepsForGroup(
+			depId,
+			graph,
+			pureNodes,
+			allNodes,
+			blockedNodes,
+			rootId,
+		);
 	}
 
-	for (const targets of node.outgoingData.values()) {
-		for (const targetId of targets) {
-			if (allNodes.has(targetId)) continue;
-			if (targetId !== rootId && blockedNodes.has(targetId)) continue;
-			const target = graph.get(targetId);
-			if (!target || target.isImpure) continue;
+	for (const targetId of getDataTargets(node, graph)) {
+		if (allNodes.has(targetId)) continue;
+		if (targetId !== rootId && blockedNodes.has(targetId)) continue;
+		const target = graph.get(targetId);
+		if (!target || target.isImpure) continue;
 
-			pureNodes.add(targetId);
-			allNodes.add(targetId);
-			collectPureDepsForGroup(targetId, graph, pureNodes, allNodes, blockedNodes, rootId);
-		}
+		pureNodes.add(targetId);
+		allNodes.add(targetId);
+		collectPureDepsForGroup(
+			targetId,
+			graph,
+			pureNodes,
+			allNodes,
+			blockedNodes,
+			rootId,
+		);
 	}
 }
 
@@ -254,7 +429,8 @@ function buildEventGroup(
 	const execQueue = [startNodeId];
 
 	while (execQueue.length > 0) {
-		const nodeId = execQueue.shift()!;
+		const nodeId = execQueue.shift();
+		if (!nodeId) continue;
 		if (execVisited.has(nodeId)) continue;
 		if (nodeId !== startNodeId && blockedNodes.has(nodeId)) continue;
 
@@ -264,7 +440,7 @@ function buildEventGroup(
 
 		const node = graph.get(nodeId);
 		if (!node) continue;
-		for (const targetId of node.outgoingExec.values()) {
+		for (const targetId of getExecTargets(node, graph)) {
 			if (!execVisited.has(targetId)) {
 				execQueue.push(targetId);
 			}
@@ -295,24 +471,32 @@ function discoverEventGroups(
 	fnRefNodeToEntity: Map<string, string>,
 ): EventGroup[] {
 	const groups: EventGroup[] = [];
+	const orderedNodes = [...graph.values()].sort((a, b) => {
+		if (a.isStart && !b.isStart) return -1;
+		if (!a.isStart && b.isStart) return 1;
+		return a.sortY - b.sortY || a.sortX - b.sortX || a.id.localeCompare(b.id);
+	});
 
-	const startRootIds = [...graph.values()]
-		.filter((n) => n.isStart || n.isEventCallback)
-		.sort((a, b) => {
-			if (a.isStart && !b.isStart) return -1;
-			if (!a.isStart && b.isStart) return 1;
-			return 0;
-		})
+	const startRootIds = orderedNodes
+		.filter((n) => n.isStart)
 		.map((node) => node.id);
 
 	const startRootSet = new Set(startRootIds);
 	const fnRefRootIds: string[] = [];
 	const fnRefRootSeen = new Set<string>();
 
-	for (const node of graph.values()) {
+	for (const node of orderedNodes) {
 		for (const targetId of node.fnRefTargets) {
-			const resolvedId = resolveFnRefTargetId(targetId, graph, fnRefNodeToEntity);
-			if (!resolvedId || startRootSet.has(resolvedId) || fnRefRootSeen.has(resolvedId)) {
+			const resolvedId = resolveFnRefTargetId(
+				targetId,
+				graph,
+				fnRefNodeToEntity,
+			);
+			if (
+				!resolvedId ||
+				startRootSet.has(resolvedId) ||
+				fnRefRootSeen.has(resolvedId)
+			) {
 				continue;
 			}
 			fnRefRootSeen.add(resolvedId);
@@ -336,7 +520,7 @@ function discoverEventGroups(
 
 	const unclaimed = [...graph.keys()].filter((id) => !claimed.has(id));
 	if (unclaimed.length > 0) {
-		const impure = unclaimed.filter((id) => graph.get(id)!.isImpure);
+		const impure = unclaimed.filter((id) => graph.get(id)?.isImpure);
 
 		for (const nodeId of impure) {
 			if (claimed.has(nodeId)) continue;
@@ -370,30 +554,40 @@ function computePureChainGap(
 	sinkId: string,
 	graph: Map<string, LayoutNode>,
 	pureNodes: Set<string>,
+	memo: Map<string, number>,
 ): number {
+	const cacheKey = `${sourceId}->${sinkId}`;
+	const cached = memo.get(cacheKey);
+	if (typeof cached === "number") {
+		return cached;
+	}
+
 	const source = graph.get(sourceId);
 	const sink = graph.get(sinkId);
-	if (!source || !sink) return 0;
+	if (!source || !sink) {
+		memo.set(cacheKey, 0);
+		return 0;
+	}
 
 	const depths = new Map<string, number>();
 	const queue: [string, number][] = [];
 
-	for (const targets of source.outgoingData.values()) {
-		for (const tid of targets) {
-			if (pureNodes.has(tid)) queue.push([tid, 1]);
-		}
+	for (const tid of getDataTargets(source, graph, pureNodes)) {
+		queue.push([tid, 1]);
 	}
 
 	while (queue.length > 0) {
-		const [nodeId, depth] = queue.shift()!;
-		if (depths.has(nodeId) && depths.get(nodeId)! >= depth) continue;
+		const next = queue.shift();
+		if (!next) continue;
+		const [nodeId, depth] = next;
+		const existingDepth = depths.get(nodeId);
+		if (typeof existingDepth === "number" && existingDepth >= depth) continue;
 		depths.set(nodeId, depth);
 
-		const node = graph.get(nodeId)!;
-		for (const targets of node.outgoingData.values()) {
-			for (const tid of targets) {
-				if (pureNodes.has(tid)) queue.push([tid, depth + 1]);
-			}
+		const node = graph.get(nodeId);
+		if (!node) continue;
+		for (const tid of getDataTargets(node, graph, pureNodes)) {
+			queue.push([tid, depth + 1]);
 		}
 	}
 
@@ -403,6 +597,7 @@ function computePureChainGap(
 		if (d !== undefined) maxDepth = Math.max(maxDepth, d);
 	}
 
+	memo.set(cacheKey, maxDepth);
 	return maxDepth;
 }
 
@@ -412,6 +607,235 @@ interface ExecLayoutResult {
 	execPositions: Map<string, [number, number]>;
 	inlinePurePositions: Map<string, [number, number]>;
 	placedPureIds: Set<string>;
+}
+
+function computeExecColumns(
+	group: EventGroup,
+	graph: Map<string, LayoutNode>,
+): Map<string, number> {
+	const execIds = new Set(group.execChain);
+	const predecessors = new Map<string, string[]>();
+	for (const nodeId of group.execChain) {
+		predecessors.set(nodeId, []);
+	}
+
+	for (const nodeId of group.execChain) {
+		const node = graph.get(nodeId);
+		if (!node) continue;
+		for (const targetId of getExecTargets(node, graph, execIds)) {
+			const deps = predecessors.get(targetId) ?? [];
+			deps.push(nodeId);
+			predecessors.set(targetId, deps);
+		}
+	}
+
+	const indegree = new Map<string, number>();
+	for (const nodeId of group.execChain) {
+		indegree.set(nodeId, predecessors.get(nodeId)?.length ?? 0);
+	}
+
+	const columns = new Map<string, number>();
+	const gapCache = new Map<string, number>();
+	const queue = group.execChain
+		.filter((nodeId) => (indegree.get(nodeId) ?? 0) === 0)
+		.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
+
+	if (!queue.includes(group.startNodeId)) {
+		queue.unshift(group.startNodeId);
+	}
+
+	const processed = new Set<string>();
+	while (queue.length > 0) {
+		const nodeId = queue.shift();
+		if (!nodeId) continue;
+		if (processed.has(nodeId)) continue;
+
+		const deps = predecessors.get(nodeId) ?? [];
+		let currentColumn = columns.get(nodeId) ?? 0;
+		if (deps.length > 0) {
+			currentColumn = Math.max(
+				currentColumn,
+				...deps.map((depId) => {
+					const depColumn = columns.get(depId) ?? 0;
+					return (
+						depColumn +
+						computePureChainGap(
+							depId,
+							nodeId,
+							graph,
+							group.pureNodes,
+							gapCache,
+						) +
+						1
+					);
+				}),
+			);
+		}
+		if (nodeId === group.startNodeId) {
+			currentColumn = 0;
+		}
+
+		columns.set(nodeId, currentColumn);
+		processed.add(nodeId);
+
+		const node = graph.get(nodeId);
+		if (!node) continue;
+		for (const targetId of getExecTargets(node, graph, execIds)) {
+			const nextColumn =
+				currentColumn +
+				computePureChainGap(
+					nodeId,
+					targetId,
+					graph,
+					group.pureNodes,
+					gapCache,
+				) +
+				1;
+			if ((columns.get(targetId) ?? Number.NEGATIVE_INFINITY) < nextColumn) {
+				columns.set(targetId, nextColumn);
+			}
+
+			const nextDegree = Math.max(0, (indegree.get(targetId) ?? 0) - 1);
+			indegree.set(targetId, nextDegree);
+			if (
+				nextDegree === 0 &&
+				!processed.has(targetId) &&
+				!queue.includes(targetId)
+			) {
+				queue.push(targetId);
+				queue.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
+			}
+		}
+	}
+
+	if (processed.size < group.execChain.length) {
+		const remaining = group.execChain
+			.filter((nodeId) => !processed.has(nodeId))
+			.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
+
+		for (const nodeId of remaining) {
+			const deps = predecessors.get(nodeId) ?? [];
+			const fallbackColumn = deps.reduce((maxColumn, depId) => {
+				const depColumn = columns.get(depId) ?? 0;
+				return Math.max(
+					maxColumn,
+					depColumn +
+						computePureChainGap(
+							depId,
+							nodeId,
+							graph,
+							group.pureNodes,
+							gapCache,
+						) +
+						1,
+				);
+			}, columns.get(nodeId) ?? 0);
+
+			columns.set(nodeId, nodeId === group.startNodeId ? 0 : fallbackColumn);
+		}
+	}
+
+	return columns;
+}
+
+function findNearestAvailableRow(
+	desiredRow: number,
+	usedRows: Set<number>,
+): number {
+	const baseRow = Number.isFinite(desiredRow) ? Math.round(desiredRow) : 0;
+	if (!usedRows.has(baseRow)) {
+		return baseRow;
+	}
+
+	for (let offset = 1; offset < 128; offset++) {
+		const upper = baseRow + offset;
+		if (!usedRows.has(upper)) {
+			return upper;
+		}
+
+		const lower = baseRow - offset;
+		if (!usedRows.has(lower)) {
+			return lower;
+		}
+	}
+
+	return baseRow + usedRows.size;
+}
+
+function computeExecRows(
+	group: EventGroup,
+	graph: Map<string, LayoutNode>,
+	execColumns: Map<string, number>,
+): Map<string, number> {
+	const execIds = new Set(group.execChain);
+	const predecessors = new Map<string, string[]>();
+	for (const nodeId of group.execChain) {
+		predecessors.set(nodeId, []);
+	}
+
+	for (const nodeId of group.execChain) {
+		const node = graph.get(nodeId);
+		if (!node) continue;
+		for (const targetId of getExecTargets(node, graph, execIds)) {
+			const deps = predecessors.get(targetId) ?? [];
+			deps.push(nodeId);
+			predecessors.set(targetId, deps);
+		}
+	}
+
+	const rows = new Map<string, number>();
+	const nodesByColumn = new Map<number, string[]>();
+	for (const nodeId of group.execChain) {
+		const column = execColumns.get(nodeId) ?? 0;
+		const list = nodesByColumn.get(column) ?? [];
+		list.push(nodeId);
+		nodesByColumn.set(column, list);
+	}
+
+	const sortedColumns = [...nodesByColumn.keys()].sort((a, b) => a - b);
+	for (const column of sortedColumns) {
+		const usedRows = new Set<number>();
+		const nodeIds = (nodesByColumn.get(column) ?? []).sort((a, b) => {
+			const depRowsA = (predecessors.get(a) ?? [])
+				.map((depId) => rows.get(depId))
+				.filter((value): value is number => typeof value === "number");
+			const depRowsB = (predecessors.get(b) ?? [])
+				.map((depId) => rows.get(depId))
+				.filter((value): value is number => typeof value === "number");
+			const desiredA =
+				depRowsA.length > 0
+					? depRowsA.reduce((sum, value) => sum + value, 0) / depRowsA.length
+					: 0;
+			const desiredB =
+				depRowsB.length > 0
+					? depRowsB.reduce((sum, value) => sum + value, 0) / depRowsB.length
+					: 0;
+			return (
+				desiredA - desiredB || compareNodeIdsByPreferredPosition(a, b, graph)
+			);
+		});
+
+		for (const nodeId of nodeIds) {
+			if (nodeId === group.startNodeId) {
+				rows.set(nodeId, 0);
+				usedRows.add(0);
+				continue;
+			}
+
+			const depRows = (predecessors.get(nodeId) ?? [])
+				.map((depId) => rows.get(depId))
+				.filter((value): value is number => typeof value === "number");
+			const desiredRow =
+				depRows.length > 0
+					? depRows.reduce((sum, value) => sum + value, 0) / depRows.length
+					: 0;
+			const row = findNearestAvailableRow(desiredRow, usedRows);
+			rows.set(nodeId, row);
+			usedRows.add(row);
+		}
+	}
+
+	return rows;
 }
 
 function layoutExecChain(
@@ -424,80 +848,43 @@ function layoutExecChain(
 	const execPositions = new Map<string, [number, number]>();
 	const inlinePurePositions = new Map<string, [number, number]>();
 	const placedPureIds = new Set<string>();
-	const execColumns = new Map<string, number>();
 	const groupExecIds = new Set(group.execChain);
 
 	if (group.execChain.length === 0) {
 		return { execPositions, inlinePurePositions, placedPureIds };
 	}
 
-	const placed = new Set<string>();
-	const queue: { nodeId: string; col: number; row: number }[] = [
-		{ nodeId: group.startNodeId, col: 0, row: 0 },
-	];
+	const execColumns = computeExecColumns(group, graph);
+	const execRows = computeExecRows(group, graph, execColumns);
 
-	while (queue.length > 0) {
-		const { nodeId, col, row } = queue.shift()!;
-		if (placed.has(nodeId)) continue;
-		if (!groupExecIds.has(nodeId)) continue;
-		placed.add(nodeId);
-
-		const actualRow = row;
+	for (const nodeId of group.execChain) {
+		const column = execColumns.get(nodeId) ?? 0;
+		const row = execRows.get(nodeId) ?? 0;
 		execPositions.set(nodeId, [
-			startX + col * cfg.hGap,
-			startY + actualRow * cfg.vGap,
+			startX + column * cfg.hGap,
+			startY + row * cfg.vGap,
 		]);
-		execColumns.set(nodeId, col);
-
-		const node = graph.get(nodeId)!;
-		const targets = [...node.outgoingExec.values()].filter(
-			(t) => groupExecIds.has(t) && !placed.has(t),
-		);
-
-		if (targets.length === 1) {
-			const gap = computePureChainGap(
-				nodeId,
-				targets[0],
-				graph,
-				group.pureNodes,
-			);
-			queue.push({
-				nodeId: targets[0],
-				col: col + gap + 1,
-				row: actualRow,
-			});
-		} else if (targets.length > 1) {
-			const spread = cfg.branchSpread;
-			const half = ((targets.length - 1) * spread) / 2;
-			for (let i = 0; i < targets.length; i++) {
-				const gap = computePureChainGap(
-					nodeId,
-					targets[i],
-					graph,
-					group.pureNodes,
-				);
-				const branchRow = actualRow + Math.round(i * spread - half);
-				queue.push({
-					nodeId: targets[i],
-					col: col + gap + 1,
-					row: branchRow,
-				});
-			}
-		}
 	}
 
 	// Place inline pure nodes in the gap columns between exec nodes
-	for (const [execId] of execPositions) {
-		const execNode = graph.get(execId)!;
-		const execCol = execColumns.get(execId)!;
-		const execPos = execPositions.get(execId)!;
+	const sortedExecIds = [...execPositions.keys()].sort((a, b) => {
+		const colDelta = (execColumns.get(a) ?? 0) - (execColumns.get(b) ?? 0);
+		if (colDelta !== 0) return colDelta;
+		const rowDelta = (execRows.get(a) ?? 0) - (execRows.get(b) ?? 0);
+		if (rowDelta !== 0) return rowDelta;
+		return compareNodeIdsByPreferredPosition(a, b, graph);
+	});
+
+	for (const execId of sortedExecIds) {
+		const execNode = graph.get(execId);
+		const execCol = execColumns.get(execId);
+		const execPos = execPositions.get(execId);
+		if (!execNode || typeof execCol !== "number" || !execPos) continue;
 
 		const pureQueue: [string, number][] = [];
-		for (const targets of execNode.outgoingData.values()) {
-			for (const tid of targets) {
-				if (group.pureNodes.has(tid) && !placedPureIds.has(tid)) {
-					pureQueue.push([tid, 1]);
-				}
+		for (const tid of getDataTargets(execNode, graph, group.pureNodes)) {
+			if (!placedPureIds.has(tid)) {
+				pureQueue.push([tid, 1]);
 			}
 		}
 
@@ -505,7 +892,9 @@ function layoutExecChain(
 		const visited = new Set<string>();
 
 		while (pureQueue.length > 0) {
-			const [nodeId, depth] = pureQueue.shift()!;
+			const next = pureQueue.shift();
+			if (!next) continue;
+			const [nodeId, depth] = next;
 			if (visited.has(nodeId) || placedPureIds.has(nodeId)) continue;
 			visited.add(nodeId);
 			placedPureIds.add(nodeId);
@@ -515,31 +904,38 @@ function layoutExecChain(
 			list.push(nodeId);
 			colPureNodes.set(targetCol, list);
 
-			const node = graph.get(nodeId)!;
-			for (const targets of node.outgoingData.values()) {
-				for (const tid of targets) {
-					if (
-						group.pureNodes.has(tid) &&
-						!visited.has(tid) &&
-						!placedPureIds.has(tid)
-					) {
-						pureQueue.push([tid, depth + 1]);
-					}
+			const node = graph.get(nodeId);
+			if (!node) continue;
+			for (const tid of getDataTargets(node, graph, group.pureNodes)) {
+				if (!visited.has(tid) && !placedPureIds.has(tid)) {
+					pureQueue.push([tid, depth + 1]);
 				}
 			}
 		}
 
-		for (const [col, nodeIds] of colPureNodes) {
+		for (const [col, nodeIds] of [...colPureNodes.entries()].sort(
+			(a, b) => a[0] - b[0],
+		)) {
 			const x = startX + col * cfg.hGap;
-			if (nodeIds.length === 1) {
-				inlinePurePositions.set(nodeIds[0], [x, execPos[1]]);
-			} else {
-				for (let i = 0; i < nodeIds.length; i++) {
-					const direction = i % 2 === 0 ? -1 : 1;
-					const tier = Math.floor(i / 2) + 1;
-					const y = execPos[1] + direction * tier * cfg.pureVGap;
-					inlinePurePositions.set(nodeIds[i], [x, y]);
-				}
+			const aboveNodes = nodeIds
+				.filter((nodeId) => getPureDirection(nodeId, execPos[1], graph) < 0)
+				.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
+			const belowNodes = nodeIds
+				.filter((nodeId) => getPureDirection(nodeId, execPos[1], graph) > 0)
+				.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
+
+			for (let i = 0; i < aboveNodes.length; i++) {
+				inlinePurePositions.set(aboveNodes[i], [
+					x,
+					execPos[1] - (i + 1) * cfg.pureVGap,
+				]);
+			}
+
+			for (let i = 0; i < belowNodes.length; i++) {
+				inlinePurePositions.set(belowNodes[i], [
+					x,
+					execPos[1] + (i + 1) * cfg.pureVGap,
+				]);
 			}
 		}
 	}
@@ -549,6 +945,159 @@ function layoutExecChain(
 
 // ─── Remaining Pure Node Layout ──────────────────────────────────────────────
 
+function getSpatialBucketKey(
+	x: number,
+	y: number,
+	bucketWidth: number,
+	bucketHeight: number,
+): string {
+	return `${Math.floor(x / bucketWidth)}:${Math.floor(y / bucketHeight)}`;
+}
+
+function buildSpatialIndex(
+	positions: Map<string, [number, number]>,
+	bucketWidth: number,
+	bucketHeight: number,
+): Map<string, string[]> {
+	const index = new Map<string, string[]>();
+	for (const [nodeId, [x, y]] of positions) {
+		const bucketKey = getSpatialBucketKey(x, y, bucketWidth, bucketHeight);
+		const bucket = index.get(bucketKey) ?? [];
+		bucket.push(nodeId);
+		index.set(bucketKey, bucket);
+	}
+	return index;
+}
+
+function addToSpatialIndex(
+	index: Map<string, string[]>,
+	nodeId: string,
+	x: number,
+	y: number,
+	bucketWidth: number,
+	bucketHeight: number,
+) {
+	const bucketKey = getSpatialBucketKey(x, y, bucketWidth, bucketHeight);
+	const bucket = index.get(bucketKey) ?? [];
+	bucket.push(nodeId);
+	index.set(bucketKey, bucket);
+}
+
+function getNearbySpatialIds(
+	index: Map<string, string[]>,
+	x: number,
+	y: number,
+	bucketWidth: number,
+	bucketHeight: number,
+): string[] {
+	const bucketX = Math.floor(x / bucketWidth);
+	const bucketY = Math.floor(y / bucketHeight);
+	const nearby = new Set<string>();
+
+	for (let dx = -1; dx <= 1; dx++) {
+		for (let dy = -1; dy <= 1; dy++) {
+			for (const nodeId of index.get(`${bucketX + dx}:${bucketY + dy}`) ?? []) {
+				nearby.add(nodeId);
+			}
+		}
+	}
+
+	return [...nearby];
+}
+
+function hasNearbyPosition(
+	positions: Map<string, [number, number]>,
+	index: Map<string, string[]>,
+	x: number,
+	y: number,
+	bucketWidth: number,
+	bucketHeight: number,
+	thresholdX: number,
+	thresholdY: number,
+): boolean {
+	for (const nodeId of getNearbySpatialIds(
+		index,
+		x,
+		y,
+		bucketWidth,
+		bucketHeight,
+	)) {
+		const pos = positions.get(nodeId);
+		if (!pos) continue;
+		if (
+			Math.abs(pos[0] - x) < thresholdX &&
+			Math.abs(pos[1] - y) < thresholdY
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function findOpenPureSlot(
+	positions: Map<string, [number, number]>,
+	index: Map<string, string[]>,
+	x: number,
+	y: number,
+	bucketWidth: number,
+	bucketHeight: number,
+	thresholdX: number,
+	thresholdY: number,
+	gap: number,
+	preferredDirection: -1 | 1,
+): [number, number] {
+	if (
+		!hasNearbyPosition(
+			positions,
+			index,
+			x,
+			y,
+			bucketWidth,
+			bucketHeight,
+			thresholdX,
+			thresholdY,
+		)
+	) {
+		return [x, y];
+	}
+
+	for (let attempt = 1; attempt < 40; attempt++) {
+		const preferredY = y + preferredDirection * attempt * gap;
+		if (
+			!hasNearbyPosition(
+				positions,
+				index,
+				x,
+				preferredY,
+				bucketWidth,
+				bucketHeight,
+				thresholdX,
+				thresholdY,
+			)
+		) {
+			return [x, preferredY];
+		}
+
+		const alternateY = y - preferredDirection * attempt * gap;
+		if (
+			!hasNearbyPosition(
+				positions,
+				index,
+				x,
+				alternateY,
+				bucketWidth,
+				bucketHeight,
+				thresholdX,
+				thresholdY,
+			)
+		) {
+			return [x, alternateY];
+		}
+	}
+
+	return [x, y];
+}
+
 function layoutRemainingPures(
 	group: EventGroup,
 	graph: Map<string, LayoutNode>,
@@ -557,47 +1106,93 @@ function layoutRemainingPures(
 	cfg: StyleConfig,
 ): Map<string, [number, number]> {
 	const positions = new Map<string, [number, number]>();
-	const remaining = [...group.pureNodes].filter((id) => !skip.has(id));
+	const remaining = [...group.pureNodes]
+		.filter((id) => !skip.has(id))
+		.sort((a, b) => compareNodeIdsByPreferredPosition(a, b, graph));
 	if (remaining.length === 0) return positions;
+	const remainingSet = new Set(remaining);
 
 	const pureToAnchor = new Map<string, string>();
+	const resolvedAnchors = new Map<string, null | string>();
+
+	const pickBestAnchor = (
+		pureId: string,
+		candidateIds: string[],
+	): null | string => {
+		const uniqueCandidates = [...new Set(candidateIds)].filter((candidateId) =>
+			allPlacedPositions.has(candidateId),
+		);
+		if (uniqueCandidates.length === 0) {
+			return null;
+		}
+
+		const pureNode = graph.get(pureId);
+		const sortX = pureNode?.sortX ?? 0;
+		const sortY = pureNode?.sortY ?? 0;
+
+		return uniqueCandidates.sort((a, b) => {
+			const posA = allPlacedPositions.get(a) ?? [0, 0];
+			const posB = allPlacedPositions.get(b) ?? [0, 0];
+			const scoreA = Math.abs(posA[1] - sortY) * 2 + Math.abs(posA[0] - sortX);
+			const scoreB = Math.abs(posB[1] - sortY) * 2 + Math.abs(posB[0] - sortX);
+			return scoreA - scoreB || compareNodeIdsByPreferredPosition(a, b, graph);
+		})[0];
+	};
+
+	const resolvePureAnchor = (
+		pureId: string,
+		visiting = new Set<string>(),
+	): null | string => {
+		if (resolvedAnchors.has(pureId)) {
+			return resolvedAnchors.get(pureId) ?? null;
+		}
+		if (visiting.has(pureId)) {
+			return null;
+		}
+
+		visiting.add(pureId);
+		const pureNode = graph.get(pureId);
+		if (!pureNode) {
+			resolvedAnchors.set(pureId, null);
+			visiting.delete(pureId);
+			return null;
+		}
+
+		const directCandidates = [
+			...getDataTargets(pureNode, graph).filter((targetId) =>
+				allPlacedPositions.has(targetId),
+			),
+			...[...pureNode.incomingData].filter((depId) =>
+				allPlacedPositions.has(depId),
+			),
+		];
+
+		const directAnchor = pickBestAnchor(pureId, directCandidates);
+		if (directAnchor) {
+			resolvedAnchors.set(pureId, directAnchor);
+			visiting.delete(pureId);
+			return directAnchor;
+		}
+
+		const recursiveCandidates: string[] = [];
+		for (const targetId of getDataTargets(pureNode, graph)) {
+			if (!remainingSet.has(targetId)) continue;
+			const targetAnchor = resolvePureAnchor(targetId, visiting);
+			if (targetAnchor) {
+				recursiveCandidates.push(targetAnchor);
+			}
+		}
+
+		const resolvedAnchor = pickBestAnchor(pureId, recursiveCandidates);
+		resolvedAnchors.set(pureId, resolvedAnchor);
+		visiting.delete(pureId);
+		return resolvedAnchor;
+	};
 
 	for (const pureId of remaining) {
-		const pureNode = graph.get(pureId);
-		if (!pureNode) continue;
-
-		for (const targets of pureNode.outgoingData.values()) {
-			for (const tid of targets) {
-				if (allPlacedPositions.has(tid)) {
-					pureToAnchor.set(pureId, tid);
-					break;
-				}
-			}
-			if (pureToAnchor.has(pureId)) break;
-		}
-		if (pureToAnchor.has(pureId)) continue;
-
-		for (const depId of pureNode.incomingData) {
-			if (allPlacedPositions.has(depId)) {
-				pureToAnchor.set(pureId, depId);
-				break;
-			}
-		}
-	}
-
-	// Second pass: link to already-anchored pures
-	for (const pureId of remaining) {
-		if (pureToAnchor.has(pureId)) continue;
-		const pureNode = graph.get(pureId);
-		if (!pureNode) continue;
-		for (const targets of pureNode.outgoingData.values()) {
-			for (const tid of targets) {
-				if (pureToAnchor.has(tid)) {
-					pureToAnchor.set(pureId, pureToAnchor.get(tid)!);
-					break;
-				}
-			}
-			if (pureToAnchor.has(pureId)) break;
+		const anchor = resolvePureAnchor(pureId);
+		if (anchor) {
+			pureToAnchor.set(pureId, anchor);
 		}
 	}
 
@@ -615,41 +1210,223 @@ function layoutRemainingPures(
 		}
 	}
 
+	const bucketWidth = Math.max(220, Math.round(cfg.pureHGap * 0.75));
+	const bucketHeight = Math.max(100, cfg.pureVGap);
+	const occupancy = buildSpatialIndex(
+		allPlacedPositions,
+		bucketWidth,
+		bucketHeight,
+	);
+	const placedPureLevels = new Map<string, number>();
+
+	const pureDepthMemo = new Map<string, number>();
+	const computePureDepth = (
+		pureId: string,
+		visiting = new Set<string>(),
+	): number => {
+		const cachedDepth = pureDepthMemo.get(pureId);
+		if (typeof cachedDepth === "number") {
+			return cachedDepth;
+		}
+		if (visiting.has(pureId)) {
+			return 1;
+		}
+
+		visiting.add(pureId);
+		const pureNode = graph.get(pureId);
+		const anchorId = pureToAnchor.get(pureId);
+		if (!pureNode || !anchorId) {
+			visiting.delete(pureId);
+			pureDepthMemo.set(pureId, 1);
+			return 1;
+		}
+
+		let depth = 1;
+		for (const targetId of getDataTargets(pureNode, graph)) {
+			if (targetId === anchorId) {
+				depth = Math.max(depth, 1);
+				continue;
+			}
+			if (!remainingSet.has(targetId)) {
+				continue;
+			}
+			if (pureToAnchor.get(targetId) !== anchorId) {
+				continue;
+			}
+
+			depth = Math.max(depth, computePureDepth(targetId, visiting) + 1);
+		}
+
+		visiting.delete(pureId);
+		pureDepthMemo.set(pureId, depth);
+		return depth;
+	};
+
+	const computeDesiredPureY = (pureId: string, anchorId: string): number => {
+		const pureNode = graph.get(pureId);
+		const pureDepth = placedPureLevels.get(pureId) ?? computePureDepth(pureId);
+		const candidateYs: number[] = [];
+
+		if (!pureNode) {
+			return allPlacedPositions.get(anchorId)?.[1] ?? 0;
+		}
+
+		for (const targetId of getDataTargets(pureNode, graph)) {
+			if (targetId === anchorId) {
+				const anchorPos = allPlacedPositions.get(anchorId);
+				if (anchorPos) {
+					candidateYs.push(anchorPos[1]);
+				}
+				continue;
+			}
+
+			const targetLevel = placedPureLevels.get(targetId);
+			const targetPos = allPlacedPositions.get(targetId);
+			if (
+				targetPos &&
+				typeof targetLevel === "number" &&
+				targetLevel < pureDepth
+			) {
+				candidateYs.push(targetPos[1]);
+			}
+		}
+
+		for (const depId of pureNode.incomingData) {
+			const depLevel = placedPureLevels.get(depId);
+			const depPos = allPlacedPositions.get(depId);
+			if (depPos && typeof depLevel === "number" && depLevel > pureDepth) {
+				candidateYs.push(depPos[1]);
+			}
+		}
+
+		if (candidateYs.length === 0) {
+			const anchorPos = allPlacedPositions.get(anchorId);
+			if (anchorPos) {
+				candidateYs.push(anchorPos[1]);
+			}
+		}
+
+		if (candidateYs.length === 0) {
+			return pureNode.sortY;
+		}
+
+		return (
+			candidateYs.reduce((sum, value) => sum + value, 0) / candidateYs.length
+		);
+	};
+
 	for (const [anchorId, pureIds] of byAnchor) {
 		const anchorPos = allPlacedPositions.get(anchorId);
 		if (!anchorPos) continue;
 
-		let slotIdx = 0;
+		const byDepth = new Map<number, string[]>();
 		for (const pureId of pureIds) {
-			const direction = slotIdx % 2 === 0 ? -1 : 1;
-			const tier = Math.floor(slotIdx / 2) + 1;
-			const x = anchorPos[0] - cfg.pureHGap;
-			let y = anchorPos[1] + direction * tier * cfg.pureVGap;
+			const depth = computePureDepth(pureId);
+			placedPureLevels.set(pureId, depth);
+			const nodesAtDepth = byDepth.get(depth) ?? [];
+			nodesAtDepth.push(pureId);
+			byDepth.set(depth, nodesAtDepth);
+		}
 
-			for (const [, placed] of allPlacedPositions) {
-				if (Math.abs(placed[0] - x) < 200 && Math.abs(placed[1] - y) < 80) {
-					y += direction * 80;
-				}
+		for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
+			const x = anchorPos[0] - depth * cfg.pureHGap;
+			const depthNodes = byDepth.get(depth) ?? [];
+			const aboveNodes = depthNodes
+				.filter((pureId) => getPureDirection(pureId, anchorPos[1], graph) < 0)
+				.sort((a, b) => {
+					const desiredA = computeDesiredPureY(a, anchorId);
+					const desiredB = computeDesiredPureY(b, anchorId);
+					return (
+						desiredB - desiredA ||
+						compareNodeIdsByPreferredPosition(a, b, graph)
+					);
+				});
+			const belowNodes = depthNodes
+				.filter((pureId) => getPureDirection(pureId, anchorPos[1], graph) > 0)
+				.sort((a, b) => {
+					const desiredA = computeDesiredPureY(a, anchorId);
+					const desiredB = computeDesiredPureY(b, anchorId);
+					return (
+						desiredA - desiredB ||
+						compareNodeIdsByPreferredPosition(a, b, graph)
+					);
+				});
+
+			for (const pureId of [...aboveNodes, ...belowNodes]) {
+				const direction = getPureDirection(pureId, anchorPos[1], graph);
+				const desiredY = offsetPureYFromAnchor(
+					computeDesiredPureY(pureId, anchorId),
+					anchorPos[1],
+					direction,
+					cfg.pureVGap,
+				);
+				const [slotX, slotY] = findOpenPureSlot(
+					allPlacedPositions,
+					occupancy,
+					x,
+					desiredY,
+					bucketWidth,
+					bucketHeight,
+					180,
+					90,
+					cfg.pureVGap,
+					direction,
+				);
+
+				positions.set(pureId, [slotX, slotY]);
+				allPlacedPositions.set(pureId, [slotX, slotY]);
+				addToSpatialIndex(
+					occupancy,
+					pureId,
+					slotX,
+					slotY,
+					bucketWidth,
+					bucketHeight,
+				);
 			}
-
-			positions.set(pureId, [x, y]);
-			allPlacedPositions.set(pureId, [x, y]);
-			slotIdx++;
 		}
 	}
 
 	if (orphans.length > 0) {
-		let maxY = -Infinity;
+		let minX = Number.POSITIVE_INFINITY;
+		let maxY = Number.NEGATIVE_INFINITY;
 		for (const [, pos] of allPlacedPositions) {
+			if (pos[0] < minX) minX = pos[0];
 			if (pos[1] > maxY) maxY = pos[1];
 		}
-		if (maxY === -Infinity) maxY = 0;
+		if (minX === Number.POSITIVE_INFINITY) minX = 0;
+		if (maxY === Number.NEGATIVE_INFINITY) maxY = 0;
 
 		const orphanY = maxY + cfg.vGap;
+		const orphanColumns = Math.max(1, Math.ceil(Math.sqrt(orphans.length)));
 		for (let i = 0; i < orphans.length; i++) {
 			if (positions.has(orphans[i])) continue;
-			positions.set(orphans[i], [i * cfg.pureHGap, orphanY]);
-			allPlacedPositions.set(orphans[i], [i * cfg.pureHGap, orphanY]);
+			const column = i % orphanColumns;
+			const row = Math.floor(i / orphanColumns);
+			const x = minX + column * cfg.pureHGap;
+			const y = orphanY + row * cfg.pureVGap;
+			const [slotX, slotY] = findOpenPureSlot(
+				allPlacedPositions,
+				occupancy,
+				x,
+				y,
+				bucketWidth,
+				bucketHeight,
+				180,
+				90,
+				cfg.pureVGap,
+				1,
+			);
+			positions.set(orphans[i], [slotX, slotY]);
+			allPlacedPositions.set(orphans[i], [slotX, slotY]);
+			addToSpatialIndex(
+				occupancy,
+				orphans[i],
+				slotX,
+				slotY,
+				bucketWidth,
+				bucketHeight,
+			);
 		}
 	}
 
@@ -661,33 +1438,47 @@ function layoutRemainingPures(
 function resolveOverlaps(
 	positions: Map<string, [number, number]>,
 	nodeHeights: Map<string, number>,
+	nodeWidths: Map<string, number>,
 	lockedNodeIds?: Set<string>,
 ): void {
-	const entries = [...positions.entries()].sort(
-		(a, b) => a[1][0] - b[1][0] || a[1][1] - b[1][1],
-	);
-
 	for (let pass = 0; pass < 3; pass++) {
-		for (let i = 0; i < entries.length; i++) {
-			for (let j = i + 1; j < entries.length; j++) {
-				const posA = entries[i][1];
-				const posB = entries[j][1];
+		const entries = [...positions.entries()].sort(
+			(a, b) => a[1][0] - b[1][0] || a[1][1] - b[1][1],
+		);
+		const comparedPairs = new Set<string>();
+		const spatialIndex = buildSpatialIndex(positions, 260, 140);
+
+		for (const [idA, posA] of entries) {
+			for (const idB of getNearbySpatialIds(
+				spatialIndex,
+				posA[0],
+				posA[1],
+				260,
+				140,
+			)) {
+				if (idA === idB) continue;
+				const pairKey = idA < idB ? `${idA}|${idB}` : `${idB}|${idA}`;
+				if (comparedPairs.has(pairKey)) continue;
+				comparedPairs.add(pairKey);
+
+				const posB = positions.get(idB);
+				if (!posB) continue;
 
 				const dx = Math.abs(posA[0] - posB[0]);
 				const dy = Math.abs(posA[1] - posB[1]);
-
-				const heightA = nodeHeights.get(entries[i][0]) ?? 100;
-				const heightB = nodeHeights.get(entries[j][0]) ?? 100;
+				const widthA = nodeWidths.get(idA) ?? DEFAULT_NODE_WIDTH;
+				const widthB = nodeWidths.get(idB) ?? DEFAULT_NODE_WIDTH;
+				const heightA = nodeHeights.get(idA) ?? DEFAULT_NODE_HEIGHT;
+				const heightB = nodeHeights.get(idB) ?? DEFAULT_NODE_HEIGHT;
+				const minH = Math.max(180, Math.min(widthA, widthB) - 24);
 				const minV = Math.max(heightA, heightB) + 40;
 
-				if (dx < 220 && dy < minV) {
-					const idA = entries[i][0];
-					const idB = entries[j][0];
+				if (dx < minH && dy < minV) {
 					const lockA = lockedNodeIds?.has(idA) ?? false;
 					const lockB = lockedNodeIds?.has(idB) ?? false;
 					if (lockA && lockB) continue;
 
-					const shift = minV - dy;
+					const shift = Math.max(24, minV - dy);
 					if (!lockB) {
 						posB[1] += posA[1] <= posB[1] ? shift : -shift;
 						positions.set(idB, posB);
@@ -705,23 +1496,25 @@ function computeGroupBounds(
 	positions: Map<string, [number, number]>,
 	nodeIds: Iterable<string>,
 	nodeHeights: Map<string, number>,
+	nodeWidths: Map<string, number>,
 ): GroupBounds {
-	let minX = Infinity;
-	let minY = Infinity;
-	let maxX = -Infinity;
-	let maxY = -Infinity;
+	let minX = Number.POSITIVE_INFINITY;
+	let minY = Number.POSITIVE_INFINITY;
+	let maxX = Number.NEGATIVE_INFINITY;
+	let maxY = Number.NEGATIVE_INFINITY;
 
 	for (const nodeId of nodeIds) {
 		const pos = positions.get(nodeId);
 		if (!pos) continue;
 		const height = nodeHeights.get(nodeId) ?? 100;
+		const width = nodeWidths.get(nodeId) ?? DEFAULT_NODE_WIDTH;
 		minX = Math.min(minX, pos[0]);
 		minY = Math.min(minY, pos[1]);
-		maxX = Math.max(maxX, pos[0]);
+		maxX = Math.max(maxX, pos[0] + width);
 		maxY = Math.max(maxY, pos[1] + height);
 	}
 
-	if (minX === Infinity) {
+	if (minX === Number.POSITIVE_INFINITY) {
 		return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 	}
 
@@ -753,6 +1546,7 @@ function buildGroupLayout(
 	group: EventGroup,
 	graph: Map<string, LayoutNode>,
 	nodeHeights: Map<string, number>,
+	nodeWidths: Map<string, number>,
 	cfg: StyleConfig,
 ): GroupLayout {
 	const { execPositions, inlinePurePositions, placedPureIds } = layoutExecChain(
@@ -782,11 +1576,16 @@ function buildGroupLayout(
 		positions.set(nodeId, pos);
 	}
 
-	resolveOverlaps(positions, nodeHeights, new Set(group.execChain));
+	resolveOverlaps(positions, nodeHeights, nodeWidths, new Set(group.execChain));
 
 	return {
 		positions,
-		bounds: computeGroupBounds(positions, group.allNodes, nodeHeights),
+		bounds: computeGroupBounds(
+			positions,
+			group.allNodes,
+			nodeHeights,
+			nodeWidths,
+		),
 	};
 }
 
@@ -808,7 +1607,11 @@ function buildFnRefEdges(
 			if (!node) continue;
 
 			for (const targetId of node.fnRefTargets) {
-				const resolvedId = resolveFnRefTargetId(targetId, graph, fnRefNodeToEntity);
+				const resolvedId = resolveFnRefTargetId(
+					targetId,
+					graph,
+					fnRefNodeToEntity,
+				);
 				if (!resolvedId || resolvedId === group.startNodeId) continue;
 				if (!groupByStartId.has(resolvedId)) continue;
 
@@ -843,6 +1646,7 @@ export function computeFlowLayout(
 			(e) =>
 				({
 					id: e.id,
+					coordinates: e.coordinates,
 					pins: boardLayers?.[e.id]?.pins ?? {},
 					start: false,
 					event_callback: false,
@@ -850,32 +1654,30 @@ export function computeFlowLayout(
 					category: "",
 					description: "",
 					friendly_name: "",
-					name: "",
+					name: boardLayers?.[e.id]?.name ?? e.id,
 				}) as unknown as INode,
 		),
 	];
 
 	const pinOwner = buildPinOwnerMap(layerNodes, layerEntities, boardLayers);
 	const graph = buildLayoutGraph(allNodes, layerEntities, pinOwner);
-
-	// Map node IDs inside child layers to their parent layer entity ID
-	const fnRefNodeToEntity = new Map<string, string>();
-	if (boardLayers) {
-		for (const entity of layerEntities) {
-			const layer = boardLayers[entity.id];
-			if (!layer?.nodes) continue;
-			for (const nodeId of Object.keys(layer.nodes)) {
-				fnRefNodeToEntity.set(nodeId, entity.id);
-			}
-		}
-	}
+	const fnRefNodeToEntity = buildFnRefNodeToEntityMap(
+		layerEntities,
+		boardLayers,
+	);
 
 	const eventGroups = discoverEventGroups(graph, fnRefNodeToEntity);
 	const fnRefEdges = buildFnRefEdges(eventGroups, graph, fnRefNodeToEntity);
 
 	const nodeHeights = new Map<string, number>();
-	for (const node of layerNodes) {
+	const nodeWidths = new Map<string, number>();
+	const layerEntityIds = new Set(layerEntities.map((entity) => entity.id));
+	for (const node of allNodes) {
 		nodeHeights.set(node.id, estimateNodeHeight(node));
+		nodeWidths.set(
+			node.id,
+			estimateNodeWidth(node, layerEntityIds.has(node.id)),
+		);
 	}
 
 	const allPositions = new Map<string, [number, number]>();
@@ -883,7 +1685,10 @@ export function computeFlowLayout(
 	const baseLayouts = new Map<string, GroupLayout>();
 	for (const group of eventGroups) {
 		groupById.set(group.startNodeId, group);
-		baseLayouts.set(group.startNodeId, buildGroupLayout(group, graph, nodeHeights, cfg));
+		baseLayouts.set(
+			group.startNodeId,
+			buildGroupLayout(group, graph, nodeHeights, nodeWidths, cfg),
+		);
 	}
 
 	const childrenByGroup = new Map<string, Map<string, FnRefEdge[]>>();
@@ -892,8 +1697,12 @@ export function computeFlowLayout(
 		incomingCounts.set(group.startNodeId, 0);
 	}
 	for (const edge of fnRefEdges) {
-		incomingCounts.set(edge.toGroupId, (incomingCounts.get(edge.toGroupId) ?? 0) + 1);
-		const byNode = childrenByGroup.get(edge.fromGroupId) ?? new Map<string, FnRefEdge[]>();
+		incomingCounts.set(
+			edge.toGroupId,
+			(incomingCounts.get(edge.toGroupId) ?? 0) + 1,
+		);
+		const byNode =
+			childrenByGroup.get(edge.fromGroupId) ?? new Map<string, FnRefEdge[]>();
 		const edges = byNode.get(edge.fromNodeId) ?? [];
 		edges.push(edge);
 		byNode.set(edge.fromNodeId, edges);
@@ -903,13 +1712,22 @@ export function computeFlowLayout(
 	const placedGroups = new Set<string>();
 	const activeGroups = new Set<string>();
 
-	function placeGroupSubtree(groupId: string, startX: number, startY: number): GroupBounds {
+	function placeGroupSubtree(
+		groupId: string,
+		startX: number,
+		startY: number,
+	): GroupBounds {
 		const baseLayout = baseLayouts.get(groupId);
 		if (!baseLayout) {
 			return { minX: startX, minY: startY, maxX: startX, maxY: startY };
 		}
 		if (placedGroups.has(groupId)) {
-			const placedBounds = computeGroupBounds(allPositions, groupById.get(groupId)?.allNodes ?? [], nodeHeights);
+			const placedBounds = computeGroupBounds(
+				allPositions,
+				groupById.get(groupId)?.allNodes ?? [],
+				nodeHeights,
+				nodeWidths,
+			);
 			return placedBounds;
 		}
 		if (activeGroups.has(groupId)) {
@@ -936,14 +1754,28 @@ export function computeFlowLayout(
 		const parentBottomY = translated.bounds.maxY;
 
 		if (nodeGroups) {
-			for (const [fromNodeId, edges] of nodeGroups) {
+			for (const [fromNodeId, edges] of [...nodeGroups.entries()].sort(
+				(a, b) => {
+					const posA = translated.positions.get(a[0]) ?? [0, 0];
+					const posB = translated.positions.get(b[0]) ?? [0, 0];
+					return (
+						posA[1] - posB[1] || posA[0] - posB[0] || a[0].localeCompare(b[0])
+					);
+				},
+			)) {
 				const anchorPos = translated.positions.get(fromNodeId);
 				if (!anchorPos) continue;
 
 				let threadX = anchorPos[0];
 				const threadY = parentBottomY + cfg.eventGroupGap;
-				for (const edge of edges) {
-					const childBounds = placeGroupSubtree(edge.toGroupId, threadX, threadY);
+				for (const edge of edges.sort((a, b) =>
+					compareNodeIdsByPreferredPosition(a.toGroupId, b.toGroupId, graph),
+				)) {
+					const childBounds = placeGroupSubtree(
+						edge.toGroupId,
+						threadX,
+						threadY,
+					);
 					subtreeBounds = {
 						minX: Math.min(subtreeBounds.minX, childBounds.minX),
 						minY: Math.min(subtreeBounds.minY, childBounds.minY),

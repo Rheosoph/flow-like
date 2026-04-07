@@ -99,6 +99,8 @@ export interface IPage {
 	onIntervalSeconds?: number;
 	/** Widget definitions referenced by widget instances on this page. Key is instance ID */
 	widgetRefs?: Record<string, IWidgetRef>;
+	/** When true, cache the last rendered state and show it instantly while onLoad runs */
+	cache?: boolean;
 }
 
 export interface PageListItem {

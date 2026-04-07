@@ -91,6 +91,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import {
 	usePackageStatus,
 	usePackageStatusMap,
@@ -919,12 +920,12 @@ function InstalledContent() {
 				queryKey: ["installed-package", packageId],
 			});
 		},
-		onError: (error: Error) => {
-			toast.error(`Failed to update package: ${error.message}`);
+		onError: (error: unknown) => {
+			toast.error(`Failed to update package: ${getErrorMessage(error)}`);
 		},
 		onSettled: (
 			_: void | undefined,
-			__: Error | null,
+			__: unknown,
 			{ packageId }: { packageId: string; version?: string },
 		) => {
 			setUpdatingPackages((prev) => {
@@ -948,10 +949,10 @@ function InstalledContent() {
 				queryKey: ["installed-package", packageId],
 			});
 		},
-		onError: (error: Error) => {
-			toast.error(`Failed to uninstall package: ${error.message}`);
+		onError: (error: unknown) => {
+			toast.error(`Failed to uninstall package: ${getErrorMessage(error)}`);
 		},
-		onSettled: (_: void | undefined, __: Error | null, packageId: string) => {
+		onSettled: (_: void | undefined, __: unknown, packageId: string) => {
 			setUninstallingPackages((prev) => {
 				const next = new Set(prev);
 				next.delete(packageId);
@@ -976,8 +977,8 @@ function InstalledContent() {
 			queryClient.invalidateQueries({ queryKey: ["installed-packages"] });
 			queryClient.invalidateQueries({ queryKey: ["available-updates"] });
 		},
-		onError: (error: Error) => {
-			toast.error(`Failed to update packages: ${error.message}`);
+		onError: (error: unknown) => {
+			toast.error(`Failed to update packages: ${getErrorMessage(error)}`);
 		},
 	});
 

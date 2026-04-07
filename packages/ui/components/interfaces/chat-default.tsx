@@ -384,7 +384,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const activeSubscriptions = useRef<string[]>([]);
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
+	const pendingSendSessions = useRef<Set<string>>(new Set());
 	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
+	const [isStreamActive, setIsStreamActive] = useState(false);
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
@@ -592,6 +594,23 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			setQueryParams("sessionId", newSessionId);
 		}
 	}, [sessionIdParameter, setQueryParams]);
+
+	useEffect(() => {
+		if (!sessionIdParameter) {
+			setIsStreamActive(false);
+			return;
+		}
+
+		const update = () => {
+			setIsStreamActive(
+				pendingSendSessions.current.has(sessionIdParameter) ||
+					executionEngine.isStreamActive(sessionIdParameter),
+			);
+		};
+
+		update();
+		return executionEngine.subscribeToGlobalUpdates(update);
+	}, [executionEngine, sessionIdParameter]);
 
 	// Cleanup active subscriptions and restore cached interactions on session change
 	useEffect(() => {
@@ -1019,6 +1038,19 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			audioFile?: File,
 			skipConsentCheck?: boolean,
 		) => {
+			const streamId = sessionIdParameter;
+			if (
+				pendingSendSessions.current.has(streamId) ||
+				executionEngine.isStreamActive(streamId)
+			) {
+				toast.error("Please wait for the current response to complete.");
+				return;
+			}
+
+			pendingSendSessions.current.add(streamId);
+			setIsStreamActive(true);
+
+			try {
 			const isOffline = await backend.isOffline(appId);
 			const history_elements =
 				parseUint8ArrayToJson(event.config)?.history_elements ?? 5;
@@ -1117,14 +1149,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// Refs for incremental save to access current state
 			const localStateRef = { current: tmpLocalState };
 			const globalStateRef = { current: tmpGlobalState };
-
-			const streamId = sessionIdParameter;
-
-			// Prevent sending while a stream is already active for this session
-			if (executionEngine.isStreamActive(streamId)) {
-				toast.error("Please wait for the current response to complete.");
-				return;
-			}
 
 			const subscriberId = `chat-${responseMessage.id}`;
 			activeSubscriptions.current.push(subscriberId);
@@ -1232,6 +1256,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			);
 
 			await executionPromise;
+			} finally {
+				pendingSendSessions.current.delete(streamId);
+				setIsStreamActive(
+					pendingSendSessions.current.has(streamId) ||
+						executionEngine.isStreamActive(streamId),
+				);
+			}
 		},
 		[
 			backend,
@@ -1459,6 +1490,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					onSendMessage={handleSendMessage}
 					onMessageUpdate={onMessageUpdate}
 					config={config}
+					isStreamActive={isStreamActive}
 					activeInteractions={activeInteractions}
 					onRespondToInteraction={handleRespondToInteraction}
 				/>

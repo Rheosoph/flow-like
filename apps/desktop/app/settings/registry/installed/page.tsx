@@ -14,6 +14,7 @@ import {
 	TooltipTrigger,
 	useBackend,
 } from "@tm9657/flow-like-ui";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -414,7 +415,7 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to uninstall package:", err);
-			toast.error(`Failed to uninstall: ${err}`);
+			toast.error(`Failed to uninstall: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -429,7 +430,7 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to update package:", err);
-			toast.error(`Failed to update: ${err}`);
+			toast.error(`Failed to update: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -444,7 +445,7 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to install package:", err);
-			toast.error(`Failed to install: ${err}`);
+			toast.error(`Failed to install: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -511,10 +512,10 @@ export default function InstalledPackagesPage() {
 					fetchInstalled();
 				}}
 				onInstallError={(error) =>
-					toast.error(`Failed to install: ${error.message}`)
+					toast.error(`Failed to install: ${getErrorMessage(error)}`)
 				}
 				onUninstallError={(error) =>
-					toast.error(`Failed to uninstall: ${error.message}`)
+					toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)
 				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);

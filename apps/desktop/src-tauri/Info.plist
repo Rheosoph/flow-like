@@ -17,8 +17,6 @@
 	<string>Flow Like needs Accessibility access to automate mouse clicks, keyboard input, and read UI elements in your workflows.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Flow Like needs Screen Recording access to capture screenshots for visual element matching in your automation workflows.</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Flow Like uses this to improve your experience and deliver relevant content. You can change this anytime in Settings.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
