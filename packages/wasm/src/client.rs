@@ -26,6 +26,56 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
+    fn compact_error_body(body: &str) -> Option<String> {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            for key in ["message", "error", "details"] {
+                if let Some(value) = json.get(key) {
+                    if let Some(text) = value.as_str() {
+                        return Some(Self::truncate_error_detail(text));
+                    }
+
+                    return Some(Self::truncate_error_detail(&value.to_string()));
+                }
+            }
+
+            return Some(Self::truncate_error_detail(&json.to_string()));
+        }
+
+        Some(Self::truncate_error_detail(trimmed))
+    }
+
+    fn truncate_error_detail(detail: &str) -> String {
+        const MAX_ERROR_DETAIL_CHARS: usize = 2048;
+
+        let compact = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut chars = compact.chars();
+        let truncated: String = chars.by_ref().take(MAX_ERROR_DETAIL_CHARS).collect();
+
+        if chars.next().is_some() {
+            format!("{}…", truncated)
+        } else {
+            truncated
+        }
+    }
+
+    async fn http_response_error(action: &str, response: reqwest::Response) -> anyhow::Error {
+        let status = response.status();
+        let detail = match response.text().await {
+            Ok(body) => Self::compact_error_body(&body),
+            Err(error) => Some(format!("Failed to read error response body: {}", error)),
+        };
+
+        match detail {
+            Some(detail) if !detail.is_empty() => anyhow!("{}: {}: {}", action, status, detail),
+            _ => anyhow!("{}: {}", action, status),
+        }
+    }
+
     pub fn new(config: RegistryConfig) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -152,7 +202,7 @@ impl RegistryClient {
         let response = request.send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to search registry: {}", response.status()));
+            return Err(Self::http_response_error("Failed to search registry", response).await);
         }
 
         let results: SearchResults = response.json().await?;
@@ -224,7 +274,7 @@ impl RegistryClient {
         let response = req.send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to download package: {}", response.status()));
+            return Err(Self::http_response_error("Failed to download package", response).await);
         }
 
         let download: DownloadResponse = response.json().await?;
@@ -234,10 +284,11 @@ impl RegistryClient {
             // Download from CDN/signed URL
             let wasm_response = self.http_client.get(download_url).send().await?;
             if !wasm_response.status().is_success() {
-                return Err(anyhow!(
-                    "Failed to download WASM from CDN: {}",
-                    wasm_response.status()
-                ));
+                return Err(Self::http_response_error(
+                    "Failed to download WASM from CDN",
+                    wasm_response,
+                )
+                .await);
             }
             wasm_response.bytes().await?.to_vec()
         } else if !download.wasm_base64.is_empty() {
@@ -515,14 +566,7 @@ impl RegistryClient {
         let response = self.http_client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
-            let error: serde_json::Value = response.json().await?;
-            return Err(anyhow!(
-                "Failed to publish: {}",
-                error
-                    .get("message")
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
-            ));
+            return Err(Self::http_response_error("Failed to publish", response).await);
         }
 
         let result: PublishResponse = response.json().await?;
@@ -847,10 +891,9 @@ impl RegistryClient {
     ) -> Result<()> {
         let cwasm_response = self.http_client.get(cwasm_url).send().await?;
         if !cwasm_response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to download cwasm: {}",
-                cwasm_response.status()
-            ));
+            return Err(
+                Self::http_response_error("Failed to download cwasm", cwasm_response).await,
+            );
         }
         let cwasm_bytes = cwasm_response.bytes().await?.to_vec();
 

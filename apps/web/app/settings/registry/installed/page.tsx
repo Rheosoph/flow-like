@@ -53,7 +53,7 @@ function InstalledPackageCard({
 	hasUpdate?: boolean;
 	latestVersion?: string;
 	onUninstall: (id: string) => void;
-	onUpdate: (id: string) => void;
+	onUpdate: (id: string, version?: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
@@ -107,7 +107,7 @@ function InstalledPackageCard({
 									variant="secondary"
 									onClick={(e) => {
 										e.stopPropagation();
-										onUpdate(pkg.id);
+										onUpdate(pkg.id, latestVersion);
 									}}
 									disabled={isLoading}
 								>
@@ -312,11 +312,11 @@ export default function InstalledPackagesPage() {
 		}
 	};
 
-	const handleUpdate = async (packageId: string) => {
+	const handleUpdate = async (packageId: string, version?: string) => {
 		if (!backend?.registryState) return;
 		setLoadingPackage(packageId);
 		try {
-			await backend.registryState.updatePackage(packageId);
+			await backend.registryState.updatePackage(packageId, version);
 			toast.success("Package updated");
 			await fetchInstalled();
 		} catch (err) {

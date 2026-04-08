@@ -86,7 +86,9 @@ impl Command for CopyPasteCommand {
         board: &mut Board,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        if !self.new_comments.is_empty() || !self.new_nodes.is_empty() || !self.new_layers.is_empty()
+        if !self.new_comments.is_empty()
+            || !self.new_nodes.is_empty()
+            || !self.new_layers.is_empty()
         {
             for comment in &self.new_comments {
                 board.comments.insert(comment.id.clone(), comment.clone());

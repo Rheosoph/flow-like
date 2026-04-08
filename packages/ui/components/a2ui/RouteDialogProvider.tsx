@@ -6,9 +6,14 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
+import {
+	readPageSurfaceCache,
+	writePageSurfaceCache,
+} from "../../lib/page-surface-cache";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
@@ -150,6 +155,7 @@ function RouteDialogRenderer({
 	const executionService = useExecutionServiceOptional();
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
+	const [isCacheLoading, setIsCacheLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [surface, setSurface] = useState<Surface | null>(null);
 	const [page, setPage] = useState<IPage | null>(null);
@@ -157,6 +163,31 @@ function RouteDialogRenderer({
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		if (!page?.cache || !appId || !page.id) {
+			setCachedSurface(null);
+			setIsCacheLoading(false);
+			return;
+		}
+
+		setIsCacheLoading(true);
+		void readPageSurfaceCache(appId, page)
+			.then((surface) => {
+				if (cancelled) return;
+				setCachedSurface(surface);
+			})
+			.finally(() => {
+				if (cancelled) return;
+				setIsCacheLoading(false);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [appId, page?.cache, page?.id, page?.updatedAt]);
 
 	// Load the route content when dialog opens
 	useEffect(() => {
@@ -393,30 +424,10 @@ function RouteDialogRenderer({
 		return elements;
 	}, []); // No dependencies - uses ref
 
-	// Restore cached surface when page has cache enabled
-	useEffect(() => {
-		if (!page?.cache || !appId || !page.id) return;
-		const cacheKey = `page-cache:${appId}:${page.id}`;
-		try {
-			const cached = sessionStorage.getItem(cacheKey);
-			if (cached) {
-				setCachedSurface(JSON.parse(cached) as Surface);
-			}
-		} catch {
-			// Ignore parse errors
-		}
-	}, [page?.cache, page?.id, appId]);
-
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
 		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
-		const cacheKey = `page-cache:${appId}:${page.id}`;
-		try {
-			sessionStorage.setItem(cacheKey, JSON.stringify(surface));
-			setCachedSurface(null);
-		} catch {
-			// sessionStorage full or unavailable
-		}
+		void writePageSurfaceCache(appId, page, surface);
 	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
 	// Execute onLoad event for dialog page
@@ -483,9 +494,15 @@ function RouteDialogRenderer({
 		getElementsFromSurface,
 	]);
 
-	const activeSurface = surface ?? (page?.cache ? cachedSurface : null);
-	const hasCachedContent = page?.cache && cachedSurface && !surface;
-	const showLoading = isLoading || (isLoadEventRunning && !hasCachedContent);
+	const activeSurface =
+		page?.cache && cachedSurface && isLoadEventRunning
+			? cachedSurface
+			: surface ?? cachedSurface;
+	const canRenderFromCache = Boolean(page?.cache && cachedSurface);
+	const showLoading =
+		(isLoading && !canRenderFromCache) ||
+		(Boolean(page?.cache) && isCacheLoading) ||
+		(isLoadEventRunning && !canRenderFromCache);
 
 	return (
 		<Dialog open={dialog.isOpen} onOpenChange={onOpenChange}>
@@ -495,7 +512,7 @@ function RouteDialogRenderer({
 						<DialogTitle>{dialog.title}</DialogTitle>
 					</DialogHeader>
 				)}
-				<div className="min-h-[200px]">
+				<div className="min-h-50">
 					{showLoading && <PageLoadingSkeleton className="h-48" />}
 					{error && !showLoading && (
 						<div className="flex items-center justify-center h-48 text-muted-foreground">

@@ -268,6 +268,24 @@ function createResponseMessage(
 	};
 }
 
+function cloneResponseMessageForCompletion(responseMessage: IMessage): IMessage {
+	const clonedMessage =
+		typeof structuredClone === "function"
+			? structuredClone(responseMessage)
+			: (JSON.parse(JSON.stringify(responseMessage)) as IMessage);
+
+	clonedMessage.files = [];
+	clonedMessage.inner = {
+		...clonedMessage.inner,
+		content: "",
+	};
+	clonedMessage.plan_steps = undefined;
+	clonedMessage.current_step_id = undefined;
+	clonedMessage.usage_stats = undefined;
+
+	return clonedMessage;
+}
+
 async function handleStreamCompletion(
 	responseMessage: IMessage,
 	chatRef: RefObject<IChatRef | null>,
@@ -289,43 +307,48 @@ async function handleStreamCompletion(
 		return;
 	}
 
-	const result = processChatEvents(events, {
-		intermediateResponse,
-		responseMessage,
-		attachments,
-		tmpLocalState: initialLocalState ?? null,
-		tmpGlobalState: initialGlobalState ?? null,
-		done: false,
-		appId,
-		eventId,
-		sessionId,
-	});
-
 	processedCompletedStreams.current.add(streamId);
 
-	if (result.interactions?.length && onInteractions) {
-		onInteractions(result.interactions);
+	try {
+		const result = processChatEvents(events, {
+			intermediateResponse: Response.default(),
+			responseMessage: cloneResponseMessageForCompletion(responseMessage),
+			attachments: new Map(),
+			tmpLocalState: initialLocalState ?? null,
+			tmpGlobalState: initialGlobalState ?? null,
+			done: false,
+			appId,
+			eventId,
+			sessionId,
+		});
+
+		if (result.interactions?.length && onInteractions) {
+			onInteractions(result.interactions);
+		}
+
+		if (result.tmpLocalState) {
+			await chatDb.localStage.put(result.tmpLocalState);
+		}
+
+		if (result.tmpGlobalState) {
+			await chatDb.globalState.put(result.tmpGlobalState);
+		}
+
+		// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
+		// This prevents the message from briefly disappearing
+		await chatDb.messages.put(result.responseMessage);
+
+		// Clear the streaming message AFTER writing to Dexie
+		// The useLiveQuery will pick up the new message from DB
+		chatRef.current?.clearCurrentMessageUpdate();
+
+		chatRef.current?.scrollToBottom();
+
+		executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
+	} catch (error) {
+		processedCompletedStreams.current.delete(streamId);
+		throw error;
 	}
-
-	if (result.tmpLocalState) {
-		await chatDb.localStage.put(result.tmpLocalState);
-	}
-
-	if (result.tmpGlobalState) {
-		await chatDb.globalState.put(result.tmpGlobalState);
-	}
-
-	// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
-	// This prevents the message from briefly disappearing
-	await chatDb.messages.put(result.responseMessage);
-
-	// Clear the streaming message AFTER writing to Dexie
-	// The useLiveQuery will pick up the new message from DB
-	chatRef.current?.clearCurrentMessageUpdate();
-
-	chatRef.current?.scrollToBottom();
-
-	executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
 }
 
 /**
@@ -1509,7 +1532,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							before sending:
 						</AlertDialogDescription>
 					</AlertDialogHeader>
-					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto break-words whitespace-pre-wrap">
+					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto wrap-break-word whitespace-pre-wrap">
 						{prefilledMessage}
 					</div>
 					<AlertDialogFooter>

@@ -30,6 +30,7 @@ import {
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import type { TauriBackend } from "../tauri-provider";
+import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
@@ -806,44 +807,25 @@ export class EventState implements IEventState {
 			return buildLocalPrerun();
 		}
 
-		// Online apps: fetch from API to get execution requirements
-		// The API tells us if we can execute locally (based on permissions)
-		if (this.backend.profile && this.backend.auth) {
-			let url = `apps/${appId}/events/${eventId}/prerun`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
+		return resolveLocalFirstPrerun({
+			label: "prerunEvent",
+			buildLocal: buildLocalPrerun,
+			fetchRemote:
+				this.backend.profile && this.backend.auth
+					? async () => {
+						let url = `apps/${appId}/events/${eventId}/prerun`;
+						if (version) {
+							url += `?version=${version.join("_")}`;
+						}
 
-			try {
-				const response = await fetcher<IPrerunEventResponse>(
-					this.backend.profile,
-					url,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-
-				if (response) {
-					// If we can execute locally and execution_mode is not Remote, use local board
-					// This ensures we get secrets from local board for local execution
-					if (
-						response.can_execute_locally &&
-						response.execution_mode !== IExecutionMode.Remote
-					) {
-						return buildLocalPrerun();
+						return fetcher<IPrerunEventResponse>(
+							this.backend.profile!,
+							url,
+							{ method: "GET" },
+							this.backend.auth!,
+						);
 					}
-
-					// Server execution: return API response (no secrets needed locally)
-					return response;
-				}
-			} catch (e) {
-				console.warn(
-					"[prerunEvent] API call failed, falling back to local:",
-					e,
-				);
-			}
-		}
-
-		// Fallback to local data
-		return buildLocalPrerun();
+					: undefined,
+		});
 	}
 }

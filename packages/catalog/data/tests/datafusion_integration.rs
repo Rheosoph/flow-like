@@ -12,8 +12,8 @@
 //! ```
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flow_like_storage::datafusion::arrow::array::ArrayRef;

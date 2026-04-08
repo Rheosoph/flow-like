@@ -5,6 +5,15 @@ use crate::{SecretProviderKind, SecretRef, SecretValue};
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
 
+type GetParameterSdkError =
+    aws_sdk_ssm::error::SdkError<aws_sdk_ssm::operation::get_parameter::GetParameterError>;
+type GetParametersByPathSdkError = aws_sdk_ssm::error::SdkError<
+    aws_sdk_ssm::operation::get_parameters_by_path::GetParametersByPathError,
+>;
+type GetSecretValueSdkError = aws_sdk_secretsmanager::error::SdkError<
+    aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError,
+>;
+
 pub struct AwsParameterStoreProvider {
     config: AwsParameterStoreProviderConfig,
     client: aws_sdk_ssm::Client,
@@ -76,7 +85,7 @@ impl SecretProvider for AwsParameterStoreProvider {
             let output = request
                 .send()
                 .await
-                .map_err(|error| SecretError::provider_failure(self.kind(), error.to_string()))?;
+                .map_err(|error| map_ssm_prefetch_error(self.kind(), &path, &error))?;
 
             if let Some(parameters) = output.parameters {
                 for param in parameters {
@@ -167,10 +176,51 @@ async fn load_sdk_config(region: Option<String>) -> aws_config::SdkConfig {
     loader.load().await
 }
 
-fn map_ssm_error(
+fn format_provider_operation_failure(
+    operation: &str,
+    target: Option<&str>,
+    code: Option<&str>,
+    message: Option<&str>,
+    fallback: &impl std::fmt::Display,
+) -> String {
+    let context = target.filter(|target| !target.is_empty()).map_or_else(
+        || operation.to_string(),
+        |target| format!("{operation} for {target}"),
+    );
+
+    match (
+        code.filter(|code| !code.is_empty()),
+        message.filter(|message| !message.is_empty()),
+    ) {
+        (Some(code), Some(message)) => format!("{context} failed with {code}: {message}"),
+        (Some(code), None) => format!("{context} failed with {code}"),
+        (None, Some(message)) => format!("{context} failed: {message}"),
+        (None, None) => format!("{context} failed: {fallback}"),
+    }
+}
+
+fn map_ssm_prefetch_error(
     kind: SecretProviderKind,
-    error: &aws_sdk_ssm::error::SdkError<aws_sdk_ssm::operation::get_parameter::GetParameterError>,
+    path: &str,
+    error: &GetParametersByPathSdkError,
 ) -> SecretError {
+    let message = match error.as_service_error() {
+        Some(service_error) => format_provider_operation_failure(
+            "GetParametersByPath",
+            Some(path),
+            service_error.meta().code(),
+            service_error.meta().message(),
+            error,
+        ),
+        None => {
+            format_provider_operation_failure("GetParametersByPath", Some(path), None, None, error)
+        }
+    };
+
+    SecretError::provider_failure(kind, message)
+}
+
+fn map_ssm_error(kind: SecretProviderKind, error: &GetParameterSdkError) -> SecretError {
     if let Some(service_error) = error.as_service_error()
         && (service_error.is_parameter_not_found()
             || service_error.is_parameter_version_not_found())
@@ -178,14 +228,23 @@ fn map_ssm_error(
         return SecretError::SecretNotFound(kind);
     }
 
-    SecretError::provider_failure(kind, error.to_string())
+    let message = match error.as_service_error() {
+        Some(service_error) => format_provider_operation_failure(
+            "GetParameter",
+            None,
+            service_error.meta().code(),
+            service_error.meta().message(),
+            error,
+        ),
+        None => format_provider_operation_failure("GetParameter", None, None, None, error),
+    };
+
+    SecretError::provider_failure(kind, message)
 }
 
 fn map_secrets_manager_error(
     kind: SecretProviderKind,
-    error: &aws_sdk_secretsmanager::error::SdkError<
-        aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError,
-    >,
+    error: &GetSecretValueSdkError,
 ) -> SecretError {
     if let Some(service_error) = error.as_service_error()
         && service_error.is_resource_not_found_exception()
@@ -193,7 +252,18 @@ fn map_secrets_manager_error(
         return SecretError::SecretNotFound(kind);
     }
 
-    SecretError::provider_failure(kind, error.to_string())
+    let message = match error.as_service_error() {
+        Some(service_error) => format_provider_operation_failure(
+            "GetSecretValue",
+            None,
+            service_error.meta().code(),
+            service_error.meta().message(),
+            error,
+        ),
+        None => format_provider_operation_failure("GetSecretValue", None, None, None, error),
+    };
+
+    SecretError::provider_failure(kind, message)
 }
 
 fn with_optional_prefix(prefix: &Option<String>, key: &str) -> String {
@@ -204,5 +274,39 @@ fn with_optional_prefix(prefix: &Option<String>, key: &str) -> String {
             key.trim_start_matches('/')
         ),
         _ => key.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_operation_failure_with_code_and_message() {
+        let message = format_provider_operation_failure(
+            "GetParametersByPath",
+            Some("/flow-like/dev/"),
+            Some("AccessDeniedException"),
+            Some("not authorized to perform ssm:GetParametersByPath"),
+            &"service error",
+        );
+
+        assert_eq!(
+            message,
+            "GetParametersByPath for /flow-like/dev/ failed with AccessDeniedException: not authorized to perform ssm:GetParametersByPath"
+        );
+    }
+
+    #[test]
+    fn formats_operation_failure_with_fallback_when_metadata_missing() {
+        let message = format_provider_operation_failure(
+            "GetParameter",
+            None,
+            None,
+            None,
+            &"dispatch failure",
+        );
+
+        assert_eq!(message, "GetParameter failed: dispatch failure");
     }
 }

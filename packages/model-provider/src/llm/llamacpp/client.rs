@@ -9,7 +9,12 @@ use rig::{
     streaming,
 };
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use std::{collections::HashMap, convert::TryFrom};
+
+#[derive(Clone, Debug, Default)]
+struct ToolArgumentSpec {
+    ordered_parameter_names: Vec<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct LlamaCppClient {
@@ -144,6 +149,13 @@ pub struct StreamingToolCall {
     pub function: StreamingFunction,
 }
 
+#[derive(Debug, Default)]
+struct AccumulatedToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StreamingDelta {
     #[serde(default)]
@@ -175,6 +187,966 @@ impl CompletionModel {
             client,
             model: model.to_owned(),
         }
+    }
+
+    fn tool_choice_value(tool_choice: &message::ToolChoice) -> Value {
+        match tool_choice {
+            message::ToolChoice::Auto => json!("auto"),
+            message::ToolChoice::None => json!("none"),
+            message::ToolChoice::Required => json!("required"),
+            message::ToolChoice::Specific { function_names } => {
+                let function_name = function_names.first().cloned().unwrap_or_default();
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                    }
+                })
+            }
+        }
+    }
+
+    fn enable_stream_usage(request_payload: &mut Value) {
+        let Some(obj) = request_payload.as_object_mut() else {
+            return;
+        };
+
+        match obj.get_mut("stream_options") {
+            Some(stream_options) if stream_options.is_object() => {
+                stream_options["include_usage"] = json!(true);
+            }
+            _ => {
+                obj.insert(
+                    "stream_options".to_string(),
+                    json!({ "include_usage": true }),
+                );
+            }
+        }
+    }
+
+    fn fallback_tool_calls_from_text(
+        content: &str,
+        tool_argument_specs: &HashMap<String, ToolArgumentSpec>,
+    ) -> Vec<ToolCall> {
+        if tool_argument_specs.is_empty() {
+            return Vec::new();
+        }
+
+        let normalized = Self::strip_code_fences(content);
+        let allowed_tool_names = tool_argument_specs.keys().cloned().collect::<Vec<_>>();
+
+        let mut tool_calls = Self::fallback_tool_calls_from_parenthesized_text(
+            &normalized,
+            &allowed_tool_names,
+            tool_argument_specs,
+        );
+
+        if tool_calls.is_empty() {
+            tool_calls = Self::fallback_tool_calls_from_bare_lines(
+                &normalized,
+                &allowed_tool_names,
+                tool_argument_specs,
+            );
+        }
+
+        tool_calls
+    }
+
+    fn fallback_tool_calls_from_parenthesized_text(
+        content: &str,
+        allowed_tool_names: &[String],
+        tool_argument_specs: &HashMap<String, ToolArgumentSpec>,
+    ) -> Vec<ToolCall> {
+        let mut tool_calls = Vec::new();
+        let mut search_from = 0usize;
+
+        while let Some((tool_name, open_paren)) =
+            Self::find_next_tool_invocation(content, allowed_tool_names, search_from)
+        {
+            let Some((args_str, next_index)) =
+                Self::extract_parenthesized_arguments(content, open_paren)
+            else {
+                break;
+            };
+
+            let tool_argument_spec = tool_argument_specs.get(&tool_name);
+            if let Some(arguments) = Self::parse_tool_arguments(&args_str, tool_argument_spec) {
+                let arguments =
+                    serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string());
+                tool_calls.push(ToolCall {
+                    id: format!("fallback_tool_call_{}", tool_calls.len()),
+                    r#type: "function".to_string(),
+                    function: FunctionCall {
+                        name: tool_name,
+                        arguments,
+                    },
+                });
+            }
+
+            search_from = next_index;
+        }
+
+        tool_calls
+    }
+
+    fn fallback_tool_calls_from_bare_lines(
+        content: &str,
+        allowed_tool_names: &[String],
+        tool_argument_specs: &HashMap<String, ToolArgumentSpec>,
+    ) -> Vec<ToolCall> {
+        let mut tool_calls = Vec::new();
+        let lines = content.lines().collect::<Vec<_>>();
+        let mut index = 0usize;
+
+        while index < lines.len() {
+            let line = lines[index].trim();
+            if line.is_empty() || line.starts_with("```") {
+                index += 1;
+                continue;
+            }
+
+            let Some((tool_name, inline_arguments)) =
+                Self::match_bare_tool_invocation(line, allowed_tool_names)
+            else {
+                index += 1;
+                continue;
+            };
+
+            let mut next_index = index + 1;
+            let arguments = if inline_arguments.is_empty() {
+                let mut continuation = Vec::new();
+
+                while next_index < lines.len() {
+                    let next_line = lines[next_index].trim();
+                    if next_line.is_empty() || next_line.starts_with("```") {
+                        break;
+                    }
+
+                    if Self::match_bare_tool_invocation(next_line, allowed_tool_names).is_some() {
+                        break;
+                    }
+
+                    continuation.push(next_line);
+                    next_index += 1;
+                }
+
+                continuation.join(" ")
+            } else {
+                inline_arguments
+            };
+
+            let tool_argument_spec = tool_argument_specs.get(&tool_name);
+            if let Some(parsed_arguments) =
+                Self::parse_tool_arguments(&arguments, tool_argument_spec)
+            {
+                let arguments =
+                    serde_json::to_string(&parsed_arguments).unwrap_or_else(|_| "{}".to_string());
+                tool_calls.push(ToolCall {
+                    id: format!("fallback_tool_call_{}", tool_calls.len()),
+                    r#type: "function".to_string(),
+                    function: FunctionCall {
+                        name: tool_name,
+                        arguments,
+                    },
+                });
+            }
+
+            index = next_index.max(index + 1);
+        }
+
+        tool_calls
+    }
+
+    fn match_bare_tool_invocation(
+        line: &str,
+        allowed_tool_names: &[String],
+    ) -> Option<(String, String)> {
+        for tool_name in allowed_tool_names {
+            let Some(rest) = line.strip_prefix(tool_name) else {
+                continue;
+            };
+
+            if rest
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            {
+                continue;
+            }
+
+            let arguments = rest.trim_start();
+            if arguments.starts_with('(') {
+                continue;
+            }
+
+            return Some((tool_name.clone(), arguments.to_string()));
+        }
+
+        None
+    }
+
+    fn strip_code_fences(content: &str) -> String {
+        let trimmed = content.trim();
+        if let Some(rest) = trimmed.strip_prefix("```")
+            && let Some(end) = rest.rfind("```")
+        {
+            let inner = &rest[..end];
+            let inner = inner
+                .strip_prefix("python\n")
+                .or_else(|| inner.strip_prefix("json\n"))
+                .or_else(|| inner.strip_prefix("tool_call\n"))
+                .unwrap_or(inner);
+            return inner.trim().to_string();
+        }
+
+        trimmed.to_string()
+    }
+
+    fn find_next_tool_invocation(
+        content: &str,
+        allowed_tool_names: &[String],
+        start_at: usize,
+    ) -> Option<(String, usize)> {
+        let mut best_match: Option<(usize, String, usize)> = None;
+
+        for tool_name in allowed_tool_names {
+            let mut search_index = start_at;
+
+            while search_index < content.len() {
+                let Some(relative_index) = content[search_index..].find(tool_name) else {
+                    break;
+                };
+
+                let match_index = search_index + relative_index;
+                let before = content[..match_index].chars().next_back();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    search_index = match_index + tool_name.len();
+                    continue;
+                }
+
+                let after_name = match_index + tool_name.len();
+                let mut open_paren_index = after_name;
+                while let Some(ch) = content[open_paren_index..].chars().next() {
+                    if ch.is_whitespace() {
+                        open_paren_index += ch.len_utf8();
+                        continue;
+                    }
+                    break;
+                }
+
+                if content[open_paren_index..].starts_with('(') {
+                    match &best_match {
+                        Some((best_index, _, _)) if *best_index <= match_index => {}
+                        _ => {
+                            best_match = Some((match_index, tool_name.clone(), open_paren_index));
+                        }
+                    }
+                    break;
+                }
+
+                search_index = match_index + tool_name.len();
+            }
+        }
+
+        best_match.map(|(_, tool_name, open_paren)| (tool_name, open_paren))
+    }
+
+    fn extract_parenthesized_arguments(
+        content: &str,
+        open_paren_index: usize,
+    ) -> Option<(String, usize)> {
+        let bytes = content.as_bytes();
+        if bytes.get(open_paren_index) != Some(&b'(') {
+            return None;
+        }
+
+        let mut depth = 0usize;
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+
+        for index in open_paren_index..bytes.len() {
+            let ch = bytes[index] as char;
+
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_single || in_double => {
+                    escaped = true;
+                }
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                }
+                '(' if !in_single && !in_double => {
+                    depth += 1;
+                }
+                ')' if !in_single && !in_double => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((
+                            content[open_paren_index + 1..index].trim().to_string(),
+                            index + 1,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    fn parse_tool_arguments(
+        arguments: &str,
+        tool_argument_spec: Option<&ToolArgumentSpec>,
+    ) -> Option<Value> {
+        let trimmed = arguments.trim();
+        if trimmed.is_empty() {
+            return Some(json!({}));
+        }
+
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            return Self::parse_jsonish_value(trimmed);
+        }
+
+        let parts = Self::split_tool_arguments(trimmed);
+        let mut object = serde_json::Map::new();
+        let ordered_parameter_names = tool_argument_spec
+            .map(|spec| spec.ordered_parameter_names.as_slice())
+            .unwrap_or(&[]);
+        let mut positional_index = 0usize;
+
+        for part in parts {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            let (key, value_str) =
+                if let Some(separator_index) = Self::find_top_level_separator(part) {
+                    (
+                        part[..separator_index]
+                            .trim()
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .to_string(),
+                        part[separator_index + 1..].trim().to_string(),
+                    )
+                } else {
+                    let Some(parameter_name) = ordered_parameter_names.get(positional_index) else {
+                        return None;
+                    };
+                    positional_index += 1;
+                    (parameter_name.clone(), part.to_string())
+                };
+
+            let value = Self::parse_jsonish_value(value_str.as_str())?;
+
+            if let Some(parameter_position) = ordered_parameter_names
+                .iter()
+                .position(|parameter_name| parameter_name == &key)
+            {
+                positional_index = positional_index.max(parameter_position + 1);
+            }
+
+            object.insert(key, value);
+        }
+
+        Some(Value::Object(object))
+    }
+
+    fn tool_argument_specs(
+        tools: &[completion::ToolDefinition],
+    ) -> HashMap<String, ToolArgumentSpec> {
+        tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name.clone(),
+                    ToolArgumentSpec {
+                        ordered_parameter_names: Self::ordered_parameter_names(&tool.parameters),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn ordered_parameter_names(parameters: &Value) -> Vec<String> {
+        let mut ordered_parameter_names = Vec::new();
+
+        if let Some(required_parameters) = parameters
+            .get("required")
+            .and_then(|required| required.as_array())
+        {
+            for required_parameter in required_parameters {
+                if let Some(required_parameter) = required_parameter.as_str()
+                    && !ordered_parameter_names
+                        .iter()
+                        .any(|name| name == required_parameter)
+                {
+                    ordered_parameter_names.push(required_parameter.to_string());
+                }
+            }
+        }
+
+        if let Some(properties) = parameters
+            .get("properties")
+            .and_then(|properties| properties.as_object())
+        {
+            for property_name in properties.keys() {
+                if !ordered_parameter_names
+                    .iter()
+                    .any(|name| name == property_name)
+                {
+                    ordered_parameter_names.push(property_name.clone());
+                }
+            }
+        }
+
+        ordered_parameter_names
+    }
+
+    fn find_top_level_separator(input: &str) -> Option<usize> {
+        let bytes = input.as_bytes();
+        let mut depth = 0usize;
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+
+        for (index, byte) in bytes.iter().enumerate() {
+            let ch = *byte as char;
+
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_single || in_double => escaped = true,
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                '{' | '[' | '(' if !in_single && !in_double => depth += 1,
+                '}' | ']' | ')' if !in_single && !in_double => depth = depth.saturating_sub(1),
+                '=' | ':' if !in_single && !in_double && depth == 0 => return Some(index),
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    fn split_tool_arguments(input: &str) -> Vec<String> {
+        let bytes = input.as_bytes();
+        let mut parts = Vec::new();
+        let mut start = 0usize;
+        let mut index = 0usize;
+        let mut depth = 0usize;
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+
+        while index < bytes.len() {
+            let ch = bytes[index] as char;
+
+            if escaped {
+                escaped = false;
+                index += 1;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_single || in_double => {
+                    escaped = true;
+                    index += 1;
+                    continue;
+                }
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                    index += 1;
+                    continue;
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                    index += 1;
+                    continue;
+                }
+                '{' | '[' | '(' if !in_single && !in_double => {
+                    depth += 1;
+                    index += 1;
+                    continue;
+                }
+                '}' | ']' | ')' if !in_single && !in_double => {
+                    depth = depth.saturating_sub(1);
+                    index += 1;
+                    continue;
+                }
+                ',' if !in_single && !in_double && depth == 0 => {
+                    parts.push(input[start..index].trim().to_string());
+                    start = index + 1;
+                    index += 1;
+                    continue;
+                }
+                _ => {}
+            }
+
+            if ch.is_whitespace() && !in_single && !in_double && depth == 0 {
+                let mut next_index = index;
+                while next_index < bytes.len() && (bytes[next_index] as char).is_whitespace() {
+                    next_index += 1;
+                }
+
+                if next_index < bytes.len() && Self::starts_with_argument_key(&input[next_index..])
+                {
+                    parts.push(input[start..index].trim().to_string());
+                    start = next_index;
+                    index = next_index;
+                    continue;
+                }
+            }
+
+            index += 1;
+        }
+
+        if start <= input.len() {
+            parts.push(input[start..].trim().to_string());
+        }
+
+        parts.into_iter().filter(|part| !part.is_empty()).collect()
+    }
+
+    fn starts_with_argument_key(input: &str) -> bool {
+        let trimmed = input.trim_start();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        let mut chars = trimmed.char_indices();
+        let Some((_, first_char)) = chars.next() else {
+            return false;
+        };
+
+        let key_end = if first_char == '\'' || first_char == '"' {
+            let quote = first_char;
+            let mut escaped = false;
+            let mut end = None;
+
+            for (index, ch) in trimmed.char_indices().skip(1) {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+
+                if ch == '\\' {
+                    escaped = true;
+                    continue;
+                }
+
+                if ch == quote {
+                    end = Some(index + ch.len_utf8());
+                    break;
+                }
+            }
+
+            let Some(end) = end else {
+                return false;
+            };
+            end
+        } else {
+            if !first_char.is_ascii_alphabetic() && first_char != '_' {
+                return false;
+            }
+
+            let mut end = first_char.len_utf8();
+            for (index, ch) in trimmed.char_indices().skip(1) {
+                if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                    end = index + ch.len_utf8();
+                    continue;
+                }
+                break;
+            }
+            end
+        };
+
+        trimmed[key_end..].trim_start().starts_with(['=', ':'])
+    }
+
+    fn parse_jsonish_value(input: &str) -> Option<Value> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Some(Value::Null);
+        }
+
+        match trimmed {
+            "true" | "True" => return Some(json!(true)),
+            "false" | "False" => return Some(json!(false)),
+            "null" | "None" => return Some(Value::Null),
+            _ => {}
+        }
+
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            return Some(value);
+        }
+
+        if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2 {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            return Some(json!(inner.replace("\\'", "'").replace("\\\"", "\"")));
+        }
+
+        if let Ok(value) = trimmed.parse::<i64>() {
+            return Some(json!(value));
+        }
+
+        if let Ok(value) = trimmed.parse::<f64>() {
+            return Some(json!(value));
+        }
+
+        if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+            || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        {
+            let normalized = Self::normalize_jsonish(trimmed);
+            if let Ok(value) = serde_json::from_str::<Value>(&normalized) {
+                return Some(value);
+            }
+        }
+
+        Some(json!(trimmed))
+    }
+
+    fn normalize_jsonish(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+
+        while let Some(ch) = chars.next() {
+            if escaped {
+                if in_single && ch == '"' {
+                    output.push('\\');
+                }
+                output.push(ch);
+                escaped = false;
+                continue;
+            }
+
+            if in_single {
+                match ch {
+                    '\\' => {
+                        output.push('\\');
+                        escaped = true;
+                    }
+                    '\'' => {
+                        output.push('"');
+                        in_single = false;
+                    }
+                    '"' => {
+                        output.push('\\');
+                        output.push('"');
+                    }
+                    _ => output.push(ch),
+                }
+                continue;
+            }
+
+            if in_double {
+                match ch {
+                    '\\' => {
+                        output.push('\\');
+                        escaped = true;
+                    }
+                    '"' => {
+                        output.push('"');
+                        in_double = false;
+                    }
+                    _ => output.push(ch),
+                }
+                continue;
+            }
+
+            match ch {
+                '\'' => {
+                    output.push('"');
+                    in_single = true;
+                }
+                '"' => {
+                    output.push('"');
+                    in_double = true;
+                }
+                c if c.is_ascii_alphabetic() => {
+                    let mut identifier = String::from(c);
+                    while let Some(next) = chars.peek() {
+                        if next.is_ascii_alphanumeric() || *next == '_' {
+                            identifier.push(*next);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    match identifier.as_str() {
+                        "True" => output.push_str("true"),
+                        "False" => output.push_str("false"),
+                        "None" => output.push_str("null"),
+                        _ => output.push_str(&identifier),
+                    }
+                }
+                _ => output.push(ch),
+            }
+        }
+
+        output
+    }
+
+    fn normalize_reasoning_preview(content: &str) -> String {
+        content.to_string()
+    }
+
+    fn should_preserve_canonical_messages(messages: &[Value]) -> bool {
+        messages.iter().any(|message| {
+            message.get("role").and_then(|r| r.as_str()) == Some("tool")
+                || message
+                    .get("tool_calls")
+                    .and_then(|tool_calls| tool_calls.as_array())
+                    .is_some_and(|tool_calls| !tool_calls.is_empty())
+        })
+    }
+
+    fn merge_system_into_first_user(messages: Vec<Value>) -> Vec<Value> {
+        let mut system_parts: Vec<String> = Vec::new();
+        let mut non_system: Vec<Value> = Vec::new();
+
+        for message in &messages {
+            if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
+                if role == "system" {
+                    if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+                        system_parts.push(content.to_string());
+                    }
+                } else {
+                    non_system.push(message.clone());
+                }
+            } else {
+                non_system.push(message.clone());
+            }
+        }
+
+        if !system_parts.is_empty() {
+            let system_text = system_parts.join("\n\n");
+            if let Some(first_user) = non_system
+                .iter_mut()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                let content = first_user.get("content").cloned().unwrap_or(json!(""));
+                if content.is_array() {
+                    let mut parts = vec![json!({"type": "text", "text": system_text})];
+                    parts.extend(content.as_array().unwrap().iter().cloned());
+                    first_user["content"] = json!(parts);
+                } else {
+                    let existing = content.as_str().unwrap_or_default();
+                    first_user["content"] = json!(format!("{system_text}\n\n{existing}"));
+                }
+            } else {
+                non_system.insert(0, json!({ "role": "user", "content": system_text }));
+            }
+        }
+
+        non_system
+    }
+
+    fn append_content_parts(parts: &mut Vec<Value>, content: &Value) {
+        match content {
+            Value::Null => {}
+            Value::String(text) => parts.push(json!({
+                "type": "text",
+                "text": text,
+            })),
+            Value::Array(values) => {
+                for value in values {
+                    if let Some(text) = value.as_str() {
+                        parts.push(json!({
+                            "type": "text",
+                            "text": text,
+                        }));
+                    } else {
+                        parts.push(value.clone());
+                    }
+                }
+            }
+            other => parts.push(other.clone()),
+        }
+    }
+
+    fn merge_message_content(left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Null, other) => other.clone(),
+            (other, Value::Null) => other.clone(),
+            (Value::String(left_text), Value::String(right_text)) => {
+                if left_text.is_empty() {
+                    json!(right_text)
+                } else if right_text.is_empty() {
+                    json!(left_text)
+                } else {
+                    json!(format!("{left_text}\n\n{right_text}"))
+                }
+            }
+            _ => {
+                let mut parts = Vec::new();
+                Self::append_content_parts(&mut parts, left);
+                Self::append_content_parts(&mut parts, right);
+
+                if parts.is_empty() {
+                    Value::Null
+                } else if parts.len() == 1 {
+                    parts.into_iter().next().unwrap()
+                } else {
+                    Value::Array(parts)
+                }
+            }
+        }
+    }
+
+    fn merge_message_into(target: &mut Value, source: Value) {
+        let merged_content = Self::merge_message_content(
+            target.get("content").unwrap_or(&Value::Null),
+            source.get("content").unwrap_or(&Value::Null),
+        );
+        target["content"] = merged_content;
+
+        let mut merged_tool_calls = target
+            .get("tool_calls")
+            .and_then(|tool_calls| tool_calls.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(tool_calls) = source
+            .get("tool_calls")
+            .and_then(|tool_calls| tool_calls.as_array())
+        {
+            merged_tool_calls.extend(tool_calls.iter().cloned());
+        }
+
+        if merged_tool_calls.is_empty() {
+            if let Some(target_obj) = target.as_object_mut() {
+                target_obj.remove("tool_calls");
+            }
+        } else {
+            target["tool_calls"] = Value::Array(merged_tool_calls);
+        }
+    }
+
+    fn merge_adjacent_messages(messages: Vec<Value>) -> Vec<Value> {
+        let mut merged: Vec<Value> = Vec::with_capacity(messages.len());
+
+        for message in messages {
+            let role = message
+                .get("role")
+                .and_then(|role| role.as_str())
+                .map(str::to_owned);
+
+            if let (Some(prev), Some(role)) = (merged.last_mut(), role)
+                && prev.get("role").and_then(|prev_role| prev_role.as_str()) == Some(role.as_str())
+            {
+                Self::merge_message_into(prev, message);
+                continue;
+            }
+
+            merged.push(message);
+        }
+
+        merged
+    }
+
+    fn summarize_request_messages(request: &Value) -> String {
+        request
+            .get("messages")
+            .and_then(|messages| messages.as_array())
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| {
+                        let role = message
+                            .get("role")
+                            .and_then(|role| role.as_str())
+                            .unwrap_or("unknown");
+                        let tool_count = message
+                            .get("tool_calls")
+                            .and_then(|tool_calls| tool_calls.as_array())
+                            .map(|tool_calls| tool_calls.len())
+                            .unwrap_or(0);
+                        let content_kind = match message.get("content") {
+                            Some(Value::String(_)) => Some("text"),
+                            Some(Value::Array(parts)) => Some(if parts.is_empty() {
+                                "empty-parts"
+                            } else {
+                                "parts"
+                            }),
+                            Some(Value::Null) => Some("null"),
+                            Some(_) => Some("other"),
+                            None => None,
+                        };
+
+                        match (tool_count, content_kind) {
+                            (count, Some(kind)) if count > 0 => {
+                                format!("{role}[{kind},tools={count}]")
+                            }
+                            (0, Some(kind)) => format!("{role}[{kind}]"),
+                            _ => role.to_string(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            })
+            .unwrap_or_default()
+    }
+
+    fn normalize_non_tool_messages(messages: Vec<Value>) -> Vec<Value> {
+        // Many local models (e.g. Gemma 3 via LM Studio) reject system messages
+        // entirely. Merge all system content into the first user message and
+        // guarantee strict user/assistant alternation.
+        let non_system = Self::merge_system_into_first_user(messages);
+
+        let mut normalized_messages: Vec<Value> = Vec::new();
+        let mut last_role: Option<String> = None;
+
+        for message in &non_system {
+            if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
+                if let Some(ref last) = last_role
+                    && last == role
+                {
+                    let placeholder_role = if role == "user" { "assistant" } else { "user" };
+                    normalized_messages.push(json!({
+                        "role": placeholder_role,
+                        "content": "[Placeholder message for proper alternation]",
+                    }));
+                }
+                normalized_messages.push(message.clone());
+                last_role = Some(role.to_string());
+            } else {
+                normalized_messages.push(message.clone());
+            }
+        }
+
+        if normalized_messages
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| r.as_str())
+            == Some("assistant")
+        {
+            normalized_messages.insert(
+                0,
+                json!({
+                    "role": "user",
+                    "content": "[Start of conversation]",
+                }),
+            );
+        }
+
+        normalized_messages
     }
 
     fn create_completion_request(
@@ -211,89 +1183,11 @@ impl CompletionModel {
                 messages.push(converted);
             }
         }
-
-        // Many local models (e.g. Gemma 3 via LM Studio) reject system messages
-        // entirely. Merge all system content into the first user message and
-        // guarantee strict user/assistant alternation.
-        let mut system_parts: Vec<String> = Vec::new();
-        let mut non_system: Vec<Value> = Vec::new();
-
-        for message in &messages {
-            if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
-                if role == "system" {
-                    if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
-                        system_parts.push(content.to_string());
-                    }
-                } else {
-                    non_system.push(message.clone());
-                }
-            } else {
-                non_system.push(message.clone());
-            }
-        }
-
-        // Prepend collected system content to the first user message
-        if !system_parts.is_empty() {
-            let system_text = system_parts.join("\n\n");
-            if let Some(first_user) = non_system
-                .iter_mut()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-            {
-                let content = first_user.get("content").cloned().unwrap_or(json!(""));
-                if content.is_array() {
-                    // Multimodal content — prepend system text as a text part
-                    let mut parts = vec![json!({"type": "text", "text": system_text})];
-                    parts.extend(content.as_array().unwrap().iter().cloned());
-                    first_user["content"] = json!(parts);
-                } else {
-                    let existing = content.as_str().unwrap_or_default();
-                    first_user["content"] = json!(format!("{system_text}\n\n{existing}"));
-                }
-            } else {
-                // No user message yet — insert one at the front
-                non_system.insert(0, json!({ "role": "user", "content": system_text }));
-            }
-        }
-
-        // Ensure strict user/assistant alternation
-        let mut normalized_messages: Vec<Value> = Vec::new();
-        let mut last_role: Option<String> = None;
-
-        for message in &non_system {
-            if let Some(role) = message.get("role").and_then(|r| r.as_str()) {
-                if let Some(ref last) = last_role
-                    && last == role
-                {
-                    let placeholder_role = if role == "user" { "assistant" } else { "user" };
-                    normalized_messages.push(json!({
-                        "role": placeholder_role,
-                        "content": "[Placeholder message for proper alternation]",
-                    }));
-                }
-                normalized_messages.push(message.clone());
-                last_role = Some(role.to_string());
-            } else {
-                normalized_messages.push(message.clone());
-            }
-        }
-
-        // Ensure the conversation starts with a user message
-        if normalized_messages
-            .first()
-            .and_then(|m| m.get("role"))
-            .and_then(|r| r.as_str())
-            == Some("assistant")
-        {
-            normalized_messages.insert(
-                0,
-                json!({
-                    "role": "user",
-                    "content": "[Start of conversation]",
-                }),
-            );
-        }
-
-        let messages = normalized_messages;
+        let messages = if Self::should_preserve_canonical_messages(&messages) {
+            Self::merge_adjacent_messages(Self::merge_system_into_first_user(messages))
+        } else {
+            Self::normalize_non_tool_messages(messages)
+        };
         let temperature = completion_request.temperature.unwrap_or(0.7);
 
         let mut request_payload = json!({
@@ -322,6 +1216,10 @@ impl CompletionModel {
                     }))
                     .collect::<Vec<_>>()
             );
+
+            if let Some(tool_choice) = completion_request.tool_choice.as_ref() {
+                request_payload["tool_choice"] = Self::tool_choice_value(tool_choice);
+            }
         }
 
         if let Some(extra) = completion_request.additional_params
@@ -419,11 +1317,24 @@ impl CompletionModel {
                         })
                         .collect();
 
-                    tool_results.push(json!({
-                        "role": "tool",
-                        "tool_call_id": tr.id,
-                        "content": result_texts.join(" ")
-                    }));
+                    let tool_call_id = tr.call_id.as_deref().unwrap_or(&tr.id);
+                    let tool_result_text = if result_texts.is_empty() {
+                        format!("Tool result for call {tool_call_id}: [no content]")
+                    } else {
+                        format!(
+                            "Tool result for call {tool_call_id}:\n{}",
+                            result_texts.join("\n")
+                        )
+                    };
+
+                    if has_multimodal || content.len() > 1 {
+                        tool_results.push(json!({
+                            "type": "text",
+                            "text": tool_result_text,
+                        }));
+                    } else {
+                        tool_results.push(json!(tool_result_text));
+                    }
                 }
             }
         }
@@ -437,6 +1348,10 @@ impl CompletionModel {
         tool_results: Vec<Value>,
         has_multimodal: bool,
     ) -> Result<Value, CompletionError> {
+        if !tool_results.is_empty() {
+            content_parts.extend(tool_results);
+        }
+
         if has_multimodal {
             let mut normalized_parts = Vec::new();
             for part in content_parts {
@@ -452,31 +1367,18 @@ impl CompletionModel {
             content_parts = normalized_parts;
         }
 
-        if !tool_results.is_empty() && content_parts.is_empty() {
-            return Ok(json!(tool_results));
-        }
-
-        if !tool_results.is_empty() {
-            let mut result = tool_results;
-            let content_value = if content_parts.len() == 1 && !has_multimodal {
-                content_parts.into_iter().next().unwrap()
-            } else if content_parts.is_empty() {
-                json!("")
-            } else {
-                json!(content_parts)
-            };
-
-            result.push(json!({
-                "role": "user",
-                "content": content_value,
-            }));
-            return Ok(json!(result));
-        }
-
         let content_value = if content_parts.is_empty() {
             json!("[No content]")
         } else if content_parts.len() == 1 && !has_multimodal {
             content_parts.into_iter().next().unwrap()
+        } else if !has_multimodal && content_parts.iter().all(|part| part.as_str().is_some()) {
+            json!(
+                content_parts
+                    .iter()
+                    .filter_map(|part| part.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            )
         } else {
             json!(content_parts)
         };
@@ -494,12 +1396,10 @@ impl CompletionModel {
                     self.process_user_content(content.iter().collect::<Vec<_>>().as_slice());
                 self.build_user_message(content_parts, tool_results, has_multimodal)
             }
-            message::Message::System { content, .. } => {
-                Ok(json!({
-                    "role": "system",
-                    "content": content,
-                }))
-            }
+            message::Message::System { content, .. } => Ok(json!({
+                "role": "system",
+                "content": content,
+            })),
             message::Message::Assistant { content, .. } => {
                 let mut text_parts = Vec::new();
                 let mut tool_calls = Vec::new();
@@ -576,6 +1476,7 @@ impl completion::CompletionModel for CompletionModel {
         &self,
         completion_request: CompletionRequest,
     ) -> Result<completion::CompletionResponse<Self::Response>, CompletionError> {
+        let tool_argument_specs = Self::tool_argument_specs(&completion_request.tools);
         let request = self.create_completion_request(completion_request)?;
 
         let response = self
@@ -588,17 +1489,36 @@ impl completion::CompletionModel for CompletionModel {
             .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(CompletionError::ProviderError(
-                response.text().await.unwrap_or_default(),
-            ));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            eprintln!(
+                "[LLAMACPP ERROR] completion failed: status={} sequence={} body={}",
+                status,
+                Self::summarize_request_messages(&request),
+                body
+            );
+            return Err(CompletionError::ProviderError(body));
         }
 
         let bytes = response.bytes().await.map_err(|e| {
             CompletionError::ProviderError(format!("Failed to read response: {}", e))
         })?;
 
-        let response_data: CompletionResponse = serde_json::from_slice(&bytes)
+        let mut response_data: CompletionResponse = serde_json::from_slice(&bytes)
             .map_err(|e| CompletionError::ResponseError(e.to_string()))?;
+
+        if !tool_argument_specs.is_empty()
+            && let Some(choice) = response_data.choices.first_mut()
+            && choice.message.tool_calls.is_empty()
+            && let Some(content) = choice.message.content.as_deref()
+        {
+            let fallback_tool_calls =
+                Self::fallback_tool_calls_from_text(content, &tool_argument_specs);
+            if !fallback_tool_calls.is_empty() {
+                choice.message.tool_calls = fallback_tool_calls;
+                choice.message.content = None;
+            }
+        }
 
         response_data.try_into()
     }
@@ -611,10 +1531,14 @@ impl completion::CompletionModel for CompletionModel {
         use flow_like_types::async_stream::stream;
         use flow_like_types::futures::StreamExt;
         use flow_like_types::reqwest_eventsource::{Event, RequestBuilderExt};
-        use std::collections::HashMap;
+        use std::collections::BTreeMap;
+
+        let tool_argument_specs = Self::tool_argument_specs(&completion_request.tools);
 
         let mut request = self.create_completion_request(completion_request)?;
         request["stream"] = json!(true);
+        Self::enable_stream_usage(&mut request);
+        let request_summary = Self::summarize_request_messages(&request);
 
         let builder = self
             .client
@@ -623,12 +1547,20 @@ impl completion::CompletionModel for CompletionModel {
             .json(&request);
 
         let mut event_source = builder.eventsource().map_err(|e| {
+            eprintln!(
+                "[LLAMACPP ERROR] stream failed: sequence={} error={}",
+                request_summary, e
+            );
             CompletionError::ProviderError(format!("Failed to create event source: {}", e))
         })?;
 
         let stream = Box::pin(stream! {
-            let mut tool_calls: HashMap<usize, (String, String, String)> = HashMap::new();
+            let mut tool_calls: BTreeMap<usize, AccumulatedToolCall> = BTreeMap::new();
             let mut final_usage: Option<ApiUsage> = None;
+            let mut streamed_text = String::new();
+            let mut streamed_reasoning_preview = String::new();
+            let mut buffered_text_chunks = Vec::new();
+            let should_buffer_text = !tool_argument_specs.is_empty();
 
             while let Some(event_result) = event_source.next().await {
                 match event_result {
@@ -650,28 +1582,53 @@ impl completion::CompletionModel for CompletionModel {
 
                             if let Some(content) = &delta.content
                                 && !content.is_empty() {
-                                    yield Ok(streaming::RawStreamingChoice::Message(content.clone()));
+                                    streamed_text.push_str(content);
+                                    if should_buffer_text {
+                                        buffered_text_chunks.push(content.clone());
+                                        let normalized_preview =
+                                            Self::normalize_reasoning_preview(&streamed_text);
+
+                                        if normalized_preview
+                                            .starts_with(&streamed_reasoning_preview)
+                                        {
+                                            let reasoning_delta = normalized_preview
+                                                [streamed_reasoning_preview.len()..]
+                                                .to_string();
+                                            streamed_reasoning_preview = normalized_preview;
+
+                                            if !reasoning_delta.is_empty() {
+                                                yield Ok(streaming::RawStreamingChoice::ReasoningDelta {
+                                                    id: None,
+                                                    reasoning: reasoning_delta,
+                                                });
+                                            }
+                                        } else {
+                                            streamed_reasoning_preview = normalized_preview;
+                                        }
+                                    } else {
+                                        yield Ok(streaming::RawStreamingChoice::Message(content.clone()));
+                                    }
                                 }
 
                             if !delta.tool_calls.is_empty() {
                                 for tool_call in &delta.tool_calls {
                                     let function = &tool_call.function;
 
-                                    if function.name.is_some() && function.arguments.is_empty() {
-                                        let id = tool_call.id.clone().unwrap_or_default();
-                                        tool_calls.insert(
-                                            tool_call.index,
-                                            (id, function.name.clone().unwrap(), String::new()),
-                                        );
-                                    }
-                                    else if function.name.is_none() && !function.arguments.is_empty()
-                                        && let Some((id, name, args)) = tool_calls.get(&tool_call.index) {
-                                            let new_args = format!("{}{}", args, &function.arguments);
-                                            tool_calls.insert(
-                                                tool_call.index,
-                                                (id.clone(), name.clone(), new_args),
-                                            );
+                                    let entry = tool_calls.entry(tool_call.index).or_default();
+
+                                    if let Some(id) = &tool_call.id
+                                        && !id.is_empty() {
+                                            entry.id = id.clone();
                                         }
+
+                                    if let Some(name) = &function.name
+                                        && !name.is_empty() {
+                                            entry.name.push_str(name);
+                                        }
+
+                                    if !function.arguments.is_empty() {
+                                        entry.arguments.push_str(&function.arguments);
+                                    }
                                 }
                             }
                         }
@@ -692,11 +1649,45 @@ impl completion::CompletionModel for CompletionModel {
                 }
             }
 
-            for (_, (id, name, args)) in tool_calls {
-                if let Ok(arguments) = serde_json::from_str(&args) {
-                    yield Ok(streaming::RawStreamingChoice::ToolCall(
-                        streaming::RawStreamingToolCall::new(id, name, arguments)
-                    ));
+            let mut emitted_native_tool_call = false;
+
+            for (_, tool_call) in tool_calls {
+                if tool_call.name.is_empty() {
+                    continue;
+                }
+
+                emitted_native_tool_call = true;
+
+                let arguments = if tool_call.arguments.trim().is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str(&tool_call.arguments).unwrap_or_else(|_| json!({}))
+                };
+
+                yield Ok(streaming::RawStreamingChoice::ToolCall(
+                    streaming::RawStreamingToolCall::new(tool_call.id, tool_call.name, arguments)
+                ));
+            }
+
+            if !emitted_native_tool_call {
+                let fallback_tool_calls =
+                    Self::fallback_tool_calls_from_text(&streamed_text, &tool_argument_specs);
+                if fallback_tool_calls.is_empty() {
+                    for content in buffered_text_chunks {
+                        yield Ok(streaming::RawStreamingChoice::Message(content));
+                    }
+                } else {
+                    for tool_call in fallback_tool_calls {
+                        let arguments = serde_json::from_str(&tool_call.function.arguments)
+                            .unwrap_or_else(|_| json!({}));
+                        yield Ok(streaming::RawStreamingChoice::ToolCall(
+                            streaming::RawStreamingToolCall::new(
+                                tool_call.id,
+                                tool_call.function.name,
+                                arguments,
+                            )
+                        ));
+                    }
                 }
             }
 
@@ -721,8 +1712,9 @@ impl completion::CompletionModel for CompletionModel {
 mod tests {
     use super::*;
     use flow_like_types::tokio;
-    use rig::completion::{Chat, CompletionModel as _, Message};
     use rig::client::CompletionClient;
+    use rig::completion::{Chat, CompletionModel as _, Message};
+    use rig::message::ToolChoice;
     use rig::streaming::StreamingChat;
 
     const DEFAULT_BASE_URL: &str = "http://localhost:8080";
@@ -733,6 +1725,492 @@ mod tests {
 
     fn test_model() -> String {
         std::env::var("LLAMACPP_TEST_MODEL").unwrap_or_else(|_| "test".to_string())
+    }
+
+    #[test]
+    fn test_tool_choice_value_matches_openai_payload() {
+        assert_eq!(
+            CompletionModel::tool_choice_value(&ToolChoice::Auto),
+            json!("auto")
+        );
+        assert_eq!(
+            CompletionModel::tool_choice_value(&ToolChoice::None),
+            json!("none")
+        );
+        assert_eq!(
+            CompletionModel::tool_choice_value(&ToolChoice::Required),
+            json!("required")
+        );
+        assert_eq!(
+            CompletionModel::tool_choice_value(&ToolChoice::Specific {
+                function_names: vec!["lookup_weather".to_string()],
+            }),
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn test_enable_stream_usage_preserves_existing_stream_options() {
+        let mut payload = json!({
+            "stream_options": {
+                "foo": "bar"
+            }
+        });
+
+        CompletionModel::enable_stream_usage(&mut payload);
+
+        assert_eq!(
+            payload,
+            json!({
+                "stream_options": {
+                    "foo": "bar",
+                    "include_usage": true,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_python_style_call() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "internet_search(query=\"current oil price\")",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "internet_search");
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({ "query": "current oil price" })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_code_fenced_call() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "```python\ninternet_search(query='current oil price')\n```",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({ "query": "current oil price" })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_bare_command_style_call() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "internet_search query=\"current oil price\"",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({ "query": "current oil price" })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_bare_command_style_multiple_args() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" },
+                        "units": { "type": "string" },
+                        "days": { "type": "integer" }
+                    },
+                    "required": ["location"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "lookup_weather location=\"Berlin\" units=\"celsius\" days=3",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({
+                "location": "Berlin",
+                "units": "celsius",
+                "days": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_explanatory_preamble() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "Okay, I can help you with that. I'll start by searching for the current oil price.\n\n```tool_code\ninternet_search(query=\"current oil price\")\n```",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "internet_search");
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({ "query": "current oil price" })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_ignores_unknown_tools() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    },
+                    "required": ["location"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "internet_search(query=\"current oil price\")",
+            &tool_argument_specs,
+        );
+
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_jsonish_values() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" },
+                        "options": { "type": "object" }
+                    },
+                    "required": ["location"]
+                }),
+            }]);
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "lookup_weather(location='Berlin', options={'units': 'celsius', 'days': 3, 'exact': True})",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({
+                "location": "Berlin",
+                "options": {
+                    "units": "celsius",
+                    "days": 3,
+                    "exact": true,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn test_fallback_tool_calls_from_text_parses_positional_and_named_args_using_schema_order() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "lang": { "type": "string" },
+                        "page": { "type": "integer" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+
+        let tool_calls = CompletionModel::fallback_tool_calls_from_text(
+            "internet_search(\"today oil price\", lang=\"en\", page=1)",
+            &tool_argument_specs,
+        );
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool_calls[0].function.arguments).unwrap(),
+            json!({
+                "query": "today oil price",
+                "lang": "en",
+                "page": 1,
+            })
+        );
+    }
+
+    #[test]
+    fn test_normalize_reasoning_preview_preserves_streamed_newlines() {
+        assert_eq!(
+            CompletionModel::normalize_reasoning_preview(
+                "Okay\n\ni\ncan\nhelp\nyou\nwith\nthat.\nHere\n's\na\nsearch",
+            ),
+            "Okay\n\ni\ncan\nhelp\nyou\nwith\nthat.\nHere\n's\na\nsearch"
+        );
+    }
+
+    #[test]
+    fn test_normalize_reasoning_preview_preserves_structured_markdown() {
+        assert_eq!(
+            CompletionModel::normalize_reasoning_preview(
+                "** Summary**\n- First item\n- Second item\n\n```md\n# Heading\n```"
+            ),
+            "** Summary**\n- First item\n- Second item\n\n```md\n# Heading\n```"
+        );
+    }
+
+    #[test]
+    fn test_create_completion_request_merges_system_for_non_tool_chat() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let request = CompletionRequest {
+            model: None,
+            preamble: Some("You are concise.".to_string()),
+            chat_history: OneOrMany::one(message::Message::user("Say hello")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        };
+
+        let payload = model.create_completion_request(request).unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], json!("user"));
+        assert_eq!(
+            messages[0]["content"],
+            json!("You are concise.\n\nSay hello")
+        );
+    }
+
+    #[test]
+    fn test_create_completion_request_merges_system_for_initial_tool_turn() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let request = CompletionRequest {
+            model: None,
+            preamble: Some("You are concise.".to_string()),
+            chat_history: OneOrMany::one(message::Message::user("Look up the weather")),
+            documents: Vec::new(),
+            tools: vec![completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    },
+                    "required": ["location"]
+                }),
+            }],
+            temperature: None,
+            max_tokens: None,
+            tool_choice: Some(message::ToolChoice::Auto),
+            additional_params: None,
+            output_schema: None,
+        };
+
+        let payload = model.create_completion_request(request).unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], json!("user"));
+        assert_eq!(
+            messages[0]["content"],
+            json!("You are concise.\n\nLook up the weather")
+        );
+    }
+
+    #[test]
+    fn test_create_completion_request_preserves_canonical_tool_messages() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let assistant_tool_call = message::Message::Assistant {
+            id: None,
+            content: OneOrMany::one(completion::AssistantContent::tool_call(
+                "call_weather",
+                "lookup_weather",
+                json!({ "location": "Berlin" }),
+            )),
+        };
+        let request = CompletionRequest {
+            model: None,
+            preamble: Some("You are a weather assistant.".to_string()),
+            chat_history: OneOrMany::many(vec![
+                message::Message::user("What is the weather in Berlin?"),
+                assistant_tool_call,
+                message::Message::tool_result("call_weather", "15C and sunny"),
+            ])
+            .unwrap(),
+            documents: Vec::new(),
+            tools: vec![completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    },
+                    "required": ["location"]
+                }),
+            }],
+            temperature: None,
+            max_tokens: None,
+            tool_choice: Some(message::ToolChoice::Auto),
+            additional_params: None,
+            output_schema: None,
+        };
+
+        let payload = model.create_completion_request(request).unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        assert_eq!(
+            messages,
+            &vec![
+                json!({
+                    "role": "user",
+                    "content": "You are a weather assistant.\n\nWhat is the weather in Berlin?",
+                }),
+                json!({
+                    "role": "assistant",
+                    "content": Value::Null,
+                    "tool_calls": [{
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"location\":\"Berlin\"}",
+                        }
+                    }]
+                }),
+                json!({
+                    "role": "user",
+                    "content": "Tool result for call call_weather:\n15C and sunny",
+                }),
+            ]
+        );
+        assert!(!messages.iter().any(|message| {
+            message.get("content") == Some(&json!("[Placeholder message for proper alternation]"))
+        }));
+    }
+
+    #[test]
+    fn test_create_completion_request_merges_tool_result_with_followup_prompt() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let assistant_tool_call = message::Message::Assistant {
+            id: None,
+            content: OneOrMany::one(completion::AssistantContent::tool_call(
+                "call_weather",
+                "lookup_weather",
+                json!({ "location": "Berlin" }),
+            )),
+        };
+        let request = CompletionRequest {
+            model: None,
+            preamble: Some("You are a weather assistant.".to_string()),
+            chat_history: OneOrMany::many(vec![
+                message::Message::user("What is the weather in Berlin?"),
+                assistant_tool_call,
+                message::Message::tool_result("call_weather", "15C and sunny"),
+                message::Message::user("Summarize it in one sentence."),
+            ])
+            .unwrap(),
+            documents: Vec::new(),
+            tools: vec![completion::ToolDefinition {
+                name: "lookup_weather".to_string(),
+                description: "Look up the weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    },
+                    "required": ["location"]
+                }),
+            }],
+            temperature: None,
+            max_tokens: None,
+            tool_choice: Some(message::ToolChoice::Auto),
+            additional_params: None,
+            output_schema: None,
+        };
+
+        let payload = model.create_completion_request(request).unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], json!("user"));
+        assert_eq!(messages[1]["role"], json!("assistant"));
+        assert_eq!(messages[2]["role"], json!("user"));
+        assert_eq!(
+            messages[2]["content"],
+            json!(
+                "Tool result for call call_weather:\n15C and sunny\n\nSummarize it in one sentence."
+            )
+        );
     }
 
     async fn server_available() -> bool {
@@ -754,7 +2232,10 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client.agent(&test_model()).build();
 
-        let response: String = agent.chat("Say hello in exactly 3 words.", Vec::<Message>::new()).await.unwrap();
+        let response: String = agent
+            .chat("Say hello in exactly 3 words.", Vec::<Message>::new())
+            .await
+            .unwrap();
         assert!(!response.is_empty(), "Expected non-empty response");
     }
 
@@ -771,7 +2252,10 @@ mod tests {
             .preamble("You are a pirate. Always respond in pirate speak.")
             .build();
 
-        let response: String = agent.chat("What is your name?", Vec::<Message>::new()).await.unwrap();
+        let response: String = agent
+            .chat("What is your name?", Vec::<Message>::new())
+            .await
+            .unwrap();
         assert!(!response.is_empty());
     }
 
@@ -922,11 +2406,7 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let model = client.completion_model(&test_model());
 
-        let response = model
-            .completion_request("Hello")
-            .send()
-            .await
-            .unwrap();
+        let response = model.completion_request("Hello").send().await.unwrap();
 
         assert!(response.usage.input_tokens > 0, "Expected input tokens > 0");
         assert!(
@@ -934,7 +2414,8 @@ mod tests {
             "Expected output tokens > 0"
         );
         assert!(
-            response.usage.total_tokens >= response.usage.input_tokens + response.usage.output_tokens,
+            response.usage.total_tokens
+                >= response.usage.input_tokens + response.usage.output_tokens,
             "Total should be >= input + output"
         );
     }
@@ -959,7 +2440,10 @@ mod tests {
         match resp {
             Ok(r) if r.status().is_success() => {
                 let body: Value = r.json().await.unwrap();
-                assert!(body.get("output").is_some(), "Expected 'output' field in responses API");
+                assert!(
+                    body.get("output").is_some(),
+                    "Expected 'output' field in responses API"
+                );
             }
             Ok(r) => {
                 let status = r.status();
@@ -997,12 +2481,19 @@ mod tests {
         match resp {
             Ok(r) if r.status().is_success() => {
                 let body: Value = r.json().await.unwrap();
-                assert!(body.get("output").is_some(), "Expected 'output' in response");
+                assert!(
+                    body.get("output").is_some(),
+                    "Expected 'output' in response"
+                );
             }
             Ok(r) if r.status().as_u16() == 404 => {
                 eprintln!("Responses API not available (404)");
             }
-            Ok(r) => panic!("Unexpected: {} {}", r.status(), r.text().await.unwrap_or_default()),
+            Ok(r) => panic!(
+                "Unexpected: {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ),
             Err(e) => eprintln!("Skipping: {}", e),
         }
     }
@@ -1032,7 +2523,11 @@ mod tests {
             Ok(r) if r.status().as_u16() == 404 => {
                 eprintln!("Responses API streaming not available (404)");
             }
-            Ok(r) => panic!("Unexpected: {} {}", r.status(), r.text().await.unwrap_or_default()),
+            Ok(r) => panic!(
+                "Unexpected: {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ),
             Err(e) => eprintln!("Skipping: {}", e),
         }
     }
@@ -1130,9 +2625,7 @@ mod tests {
             .chat(
                 Message::User {
                     content: OneOrMany::many(vec![
-                        message::UserContent::text(
-                            "Describe this image in one short sentence.",
-                        ),
+                        message::UserContent::text("Describe this image in one short sentence."),
                         message::UserContent::image_base64(
                             test_red_png_base64(),
                             Some(message::ImageMediaType::PNG),

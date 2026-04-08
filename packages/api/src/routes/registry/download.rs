@@ -2,7 +2,7 @@
 
 use super::types::{DownloadRequest, DownloadResponse, MetaSummary};
 use crate::entity::meta;
-use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
+use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibility};
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
@@ -42,6 +42,7 @@ pub async fn download(
         .wasm_registry
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
+    let sub = user.sub().ok();
 
     let package = wasm_package::Entity::find_by_id(&request.package_id)
         .one(&state.db)
@@ -49,12 +50,23 @@ pub async fn download(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::not_found("Package not found"))?;
 
+    if package.status != WasmPackageStatus::Active {
+        if let Some(ref user_id) = sub {
+            let access = crate::check_wasm_access!(state, user_id, &request.package_id);
+            if access.is_none() {
+                return Err(ApiError::not_found("Package not found"));
+            }
+        } else {
+            return Err(ApiError::not_found("Package not found"));
+        }
+    }
+
     let is_free_public = package.visibility == WasmPackageVisibility::Public && package.price <= 0;
 
     if !is_free_public {
-        let sub = user
-            .sub()
-            .map_err(|_| ApiError::unauthorized("Authentication required for downloads"))?;
+        let sub = sub
+            .clone()
+            .ok_or_else(|| ApiError::unauthorized("Authentication required for downloads"))?;
 
         let access = crate::check_wasm_access!(state, &sub, &request.package_id);
         if access.is_none() {
@@ -71,7 +83,11 @@ pub async fn download(
     }
 
     let (download_url, manifest, version) = registry
-        .get_wasm_url(&request.package_id, request.version.as_deref())
+        .get_wasm_url_as_viewer(
+            &request.package_id,
+            request.version.as_deref(),
+            sub.as_deref(),
+        )
         .await?;
 
     let package_id = package.id.clone();

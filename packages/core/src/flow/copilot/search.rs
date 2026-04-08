@@ -180,7 +180,10 @@ pub fn search_result_hint_lines(metadata: &NodeMetadata) -> Vec<String> {
     }
 
     if !metadata.companion_nodes.is_empty() {
-        hints.push(format!("pairs with: {}", metadata.companion_nodes.join(", ")));
+        hints.push(format!(
+            "pairs with: {}",
+            metadata.companion_nodes.join(", ")
+        ));
     }
 
     if !metadata.capability_tags.is_empty() {

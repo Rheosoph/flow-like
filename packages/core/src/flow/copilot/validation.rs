@@ -174,7 +174,10 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-from-node",
                         Some(index),
-                        format!("Source node '{}' does not exist in the current plan", from_node),
+                        format!(
+                            "Source node '{}' does not exist in the current plan",
+                            from_node
+                        ),
                     ));
                     continue;
                 };
@@ -184,7 +187,10 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-to-node",
                         Some(index),
-                        format!("Target node '{}' does not exist in the current plan", to_node),
+                        format!(
+                            "Target node '{}' does not exist in the current plan",
+                            to_node
+                        ),
                     ));
                     continue;
                 };
@@ -412,7 +418,11 @@ pub async fn validate_emit_commands(
     }
 
     EmitValidationOutcome {
-        status: if errors.is_empty() { "valid" } else { "invalid" },
+        status: if errors.is_empty() {
+            "valid"
+        } else {
+            "invalid"
+        },
         validated_command_count: args.commands.len(),
         errors,
         warnings,
@@ -426,10 +436,8 @@ pub fn render_emit_commands_result(
     let validation_json = serde_json::to_string_pretty(outcome).unwrap_or_default();
 
     if !outcome.errors.is_empty() {
-        let mut lines = vec![
-            "Validation failed. Fix these issues and call emit_commands again:"
-                .to_string(),
-        ];
+        let mut lines =
+            vec!["Validation failed. Fix these issues and call emit_commands again:".to_string()];
 
         for issue in &outcome.errors {
             lines.push(format!("- {}", issue.message));

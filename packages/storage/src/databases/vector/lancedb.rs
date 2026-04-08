@@ -1019,16 +1019,18 @@ mod tests {
             .collect::<Result<_, _>>()?;
 
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|row| row == &NullableFieldRow {
-            id: 1,
-            name: "Alice".to_string(),
-            tag: Some("alpha".to_string()),
-        }));
-        assert!(rows.iter().any(|row| row == &NullableFieldRow {
-            id: 2,
-            name: "Bob".to_string(),
-            tag: None,
-        }));
+        assert!(rows.iter().any(|row| row
+            == &NullableFieldRow {
+                id: 1,
+                name: "Alice".to_string(),
+                tag: Some("alpha".to_string()),
+            }));
+        assert!(rows.iter().any(|row| row
+            == &NullableFieldRow {
+                id: 2,
+                name: "Bob".to_string(),
+                tag: None,
+            }));
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
@@ -1052,11 +1054,8 @@ mod tests {
         db.flush().await?;
 
         // Now upsert a record that is MISSING the "tag" field
-        db.upsert(
-            vec![json!({"id": 2, "name": "Bob"})],
-            "id".to_string(),
-        )
-        .await?;
+        db.upsert(vec![json!({"id": 2, "name": "Bob"})], "id".to_string())
+            .await?;
 
         let result = db.flush().await;
         assert!(

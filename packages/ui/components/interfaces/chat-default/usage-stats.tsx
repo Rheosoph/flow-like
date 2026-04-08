@@ -636,7 +636,10 @@ export function UsageStats({
 							<ChevronRightIcon className="w-3 h-3 opacity-40" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="top" className="max-w-sm p-3">
+					<TooltipContent
+						side="top"
+						className="max-w-sm border border-border/60 bg-popover/95 p-3 text-popover-foreground shadow-xl [&>svg]:bg-popover/95 [&>svg]:fill-popover/95"
+					>
 						<div className="space-y-2 text-xs">
 							<div className="flex items-center gap-2">
 								<ZapIcon

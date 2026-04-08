@@ -221,8 +221,8 @@ async fn execute_internal(
             .execute()
             .await
             .map_err(|e| {
-            flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-        })?;
+                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+            })?;
         meta.flush(db, write_options.as_ref())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;

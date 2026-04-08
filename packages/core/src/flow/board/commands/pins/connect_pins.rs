@@ -75,7 +75,13 @@ impl Command for ConnectPinsCommand {
         board: &mut Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        connect_pins(board, &self.from_node, &self.from_pin, &self.to_node, &self.to_pin)
+        connect_pins(
+            board,
+            &self.from_node,
+            &self.from_pin,
+            &self.to_node,
+            &self.to_pin,
+        )
     }
 
     async fn undo(
@@ -83,7 +89,13 @@ impl Command for ConnectPinsCommand {
         board: &mut Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        disconnect_pins(board, &self.from_node, &self.from_pin, &self.to_node, &self.to_pin)
+        disconnect_pins(
+            board,
+            &self.from_node,
+            &self.from_pin,
+            &self.to_node,
+            &self.to_pin,
+        )
     }
 }
 

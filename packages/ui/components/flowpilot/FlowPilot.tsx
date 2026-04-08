@@ -1393,7 +1393,7 @@ ${userMsg}`;
 						onPaste={handlePaste}
 						placeholder={placeholderText}
 						className={cn(
-							"flex-1 min-h-10 max-h-[120px] text-sm py-2.5 px-3 rounded-lg bg-background/80 border border-border/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50 resize-none",
+							"flex-1 min-h-10 max-h-30 text-sm py-2.5 px-3 rounded-lg bg-background/80 border border-border/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50 resize-none",
 							captureScreenshot ? "pr-18" : "pr-12",
 						)}
 						disabled={loading}
@@ -1435,7 +1435,7 @@ ${userMsg}`;
 										<ChevronDownIcon className="w-3 h-3" />
 									</Button>
 								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end" className="min-w-[180px]">
+								<DropdownMenuContent align="end" className="min-w-45">
 									<DropdownMenuItem
 										onClick={() => handleSubmit(false)}
 										disabled={loading}
@@ -1750,7 +1750,7 @@ const EmptyState = memo(function EmptyState({
 			<p className="text-sm font-medium text-foreground mt-3 mb-1">
 				How can I help?
 			</p>
-			<p className="text-xs text-muted-foreground max-w-[200px]">
+			<p className="text-xs text-muted-foreground max-w-50">
 				{description}
 			</p>
 			<div className="flex flex-wrap gap-2 justify-center pt-4">

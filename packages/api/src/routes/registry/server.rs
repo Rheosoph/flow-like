@@ -1377,6 +1377,40 @@ impl ServerRegistry {
         Ok((download_url, entry.manifest, version_str))
     }
 
+    /// Get download URL for a package using viewer-aware package resolution.
+    ///
+    /// The caller is responsible for enforcing access control and deciding
+    /// whether non-active packages should be reachable for the provided viewer.
+    pub async fn get_wasm_url_as_viewer(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        viewer_sub: Option<&str>,
+    ) -> flow_like_types::Result<(String, PackageManifest, String)> {
+        let Some(entry) = self.get_package_as_viewer(package_id, viewer_sub).await? else {
+            return Err(flow_like_types::anyhow!(
+                "Package not found: {}",
+                package_id
+            ));
+        };
+
+        let version_str = if let Some(v) = version {
+            entry
+                .get_version(v)
+                .map(|v| v.version.clone())
+                .ok_or_else(|| flow_like_types::anyhow!("Version not found: {}", v))?
+        } else {
+            entry
+                .latest_version()
+                .map(|v| v.version.clone())
+                .unwrap_or_else(|| entry.manifest.version.clone())
+        };
+
+        let download_url = self.get_download_url(package_id, &version_str).await?;
+
+        Ok((download_url, entry.manifest, version_str))
+    }
+
     /// Download package WASM binary directly (for backward compatibility)
     pub async fn download_wasm(
         &self,

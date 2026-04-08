@@ -116,7 +116,7 @@ export const ProviderSelector = memo(function ProviderSelector({
 							)}
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom" className="text-xs max-w-[200px]">
+					<TooltipContent side="bottom" className="text-xs max-w-50">
 						{copilotRunning ? (
 							<div>
 								<div className="font-medium">GitHub Copilot Connected</div>

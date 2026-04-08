@@ -493,7 +493,10 @@ impl NodeLogic for LLMDescribeElementNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(format!("Describe element at ({}, {})", x, y), Vec::<Message>::new())
+            .completion(
+                format!("Describe element at ({}, {})", x, y),
+                Vec::<Message>::new(),
+            )
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()

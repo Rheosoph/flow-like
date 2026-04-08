@@ -15,12 +15,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const PINNED_TAG = "b8660";
 const GITHUB_API = "https://api.github.com";
 const OWNER = "ggml-org";
 const REPO = "llama.cpp";
-const BINARIES_DIR = path.resolve(import.meta.dir, "../src-tauri/binaries");
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BINARIES_DIR = path.resolve(SCRIPT_DIR, "../src-tauri/binaries");
 
 // Tauri externalBin requires a target-triple suffix on macOS/Linux executables and
 // macOS dylibs. Windows DLLs listed as resources don't need a suffix.
@@ -264,6 +266,68 @@ function extractFiles(
 	}
 }
 
+function fixMacOsDylibNames(
+	outDir: string,
+	config: PlatformConfig,
+): void {
+	if (!config.tauriTriple.includes("apple-darwin")) return;
+	if (process.platform !== "darwin") return;
+
+	const triple = config.tauriTriple;
+	const machOPaths = config.files
+		.filter((f) => f.executable || f.src.endsWith(".dylib"))
+		.map((f) => path.join(outDir, f.dst.replace("{TRIPLE}", triple)))
+		.filter((filePath) => fs.existsSync(filePath));
+	const dependencyMappings = new Map<string, string>();
+
+	for (const fm of config.files) {
+		if (!fm.src.endsWith(".dylib")) continue;
+		const dstPath = path.join(outDir, fm.dst.replace("{TRIPLE}", triple));
+		if (!fs.existsSync(dstPath)) continue;
+
+		const otoolOut = execSync(`otool -D "${dstPath}"`, {
+			encoding: "utf-8",
+		});
+		const lines = otoolOut.trim().split("\n");
+		if (lines.length < 2) continue;
+		const currentId = lines[1].trim();
+		const desiredId = `@rpath/${path.basename(fm.src)}`;
+		const legacyId = desiredId.replace(/\.dylib$/, ".0.dylib");
+
+		dependencyMappings.set(currentId, desiredId);
+		if (legacyId !== desiredId) {
+			dependencyMappings.set(legacyId, desiredId);
+		}
+
+		if (currentId !== desiredId) {
+			execSync(
+				`install_name_tool -id "${desiredId}" "${dstPath}"`,
+				{ stdio: "pipe" },
+			);
+			console.log(`  🔧 Fixed dylib id: ${currentId} → ${desiredId}`);
+		}
+	}
+
+	for (const machOPath of machOPaths) {
+		const linkedLibraries = execSync(`otool -L "${machOPath}"`, {
+			encoding: "utf-8",
+		})
+			.split("\n")
+			.slice(1)
+			.map((line) => line.trim().split(" ")[0])
+			.filter(Boolean);
+
+		for (const [oldName, newName] of dependencyMappings) {
+			if (oldName === newName || !linkedLibraries.includes(oldName)) continue;
+			execSync(
+				`install_name_tool -change "${oldName}" "${newName}" "${machOPath}"`,
+				{ stdio: "pipe" },
+			);
+			console.log(`  🔗 Fixed dependency in ${path.basename(machOPath)}: ${oldName} → ${newName}`);
+		}
+	}
+}
+
 function cleanDirectory(dir: string): void {
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
@@ -312,6 +376,9 @@ async function updatePlatform(
 			}
 		}
 	}
+
+	// Fix macOS dylib versioned install names (@rpath/libfoo.0.dylib → @rpath/libfoo.dylib)
+	fixMacOsDylibNames(outDir, config);
 
 	// Clean up archive
 	if (fs.existsSync(archivePath)) {

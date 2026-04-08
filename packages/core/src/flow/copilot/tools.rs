@@ -427,8 +427,7 @@ impl Tool for FindConnectableNodesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        build_find_connectable_nodes_output(&self.graph_context, self.provider.as_ref(), args)
-            .await
+        build_find_connectable_nodes_output(&self.graph_context, self.provider.as_ref(), args).await
     }
 }
 
@@ -1044,12 +1043,7 @@ pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
         };
         lines.push(format!(
             "- {} | {} | {} | pos:({},{}){}",
-            node.id,
-            node.node_type,
-            node.friendly_name,
-            node.position.0,
-            node.position.1,
-            selected
+            node.id, node.node_type, node.friendly_name, node.position.0, node.position.1, selected
         ));
     }
 
@@ -1136,7 +1130,11 @@ pub async fn build_find_connectable_nodes_output(
     let mut pin_direction = None;
     let mut pin_type = None;
 
-    if let Some(node) = graph_context.nodes.iter().find(|node| node.id == args.node_id) {
+    if let Some(node) = graph_context
+        .nodes
+        .iter()
+        .find(|node| node.id == args.node_id)
+    {
         if let Some(pin) = node.inputs.iter().find(|pin| pin.name == args.pin_name) {
             pin_direction = Some("input");
             pin_type = Some(pin.type_name.clone());
@@ -1147,7 +1145,10 @@ pub async fn build_find_connectable_nodes_output(
     }
 
     if pin_type.is_none()
-        && let Some(layer) = graph_context.layers.iter().find(|layer| layer.id == args.node_id)
+        && let Some(layer) = graph_context
+            .layers
+            .iter()
+            .find(|layer| layer.id == args.node_id)
     {
         if let Some(pin) = layer.inputs.iter().find(|pin| pin.name == args.pin_name) {
             pin_direction = Some("input");
@@ -1242,9 +1243,7 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
             format!("Finding connectable nodes for {}.{}", node_id, pin_name)
         }
         "list_board_nodes" => "Listing nodes in the current workflow...".to_string(),
-        "get_unconfigured_nodes" => {
-            "Checking which nodes still need configuration...".to_string()
-        }
+        "get_unconfigured_nodes" => "Checking which nodes still need configuration...".to_string(),
         "filter_category" => {
             if let Some(category) = arguments.get("category_prefix").and_then(|v| v.as_str()) {
                 format!("Browsing {} category", category)

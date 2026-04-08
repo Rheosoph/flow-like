@@ -26,12 +26,31 @@ type SSEMessage = {
 	raw: string;
 };
 
+type ProcessedSSEEvent = {
+	type: string;
+	error?: Error;
+};
+
 function tryParseJSON<T>(text: string): T | null {
 	try {
 		return JSON.parse(text) as T;
 	} catch {
 		return null;
 	}
+}
+
+function buildSSEError(
+	event: SSEMessage,
+	parsedData: Record<string, unknown> | null,
+): Error {
+	const message =
+		typeof parsedData?.message === "string"
+			? parsedData.message
+			: typeof parsedData?.error === "string"
+				? parsedData.error
+				: event.data || "SSE stream error";
+
+	return new Error(message);
 }
 
 function parseSSEBuffer(buffer: string): {
@@ -72,7 +91,7 @@ function parseSSEBuffer(buffer: string): {
 function processSSEEvent<T>(
 	event: SSEMessage,
 	onMessage?: (data: T) => void,
-): string {
+): ProcessedSSEEvent {
 	const evt = event.event ?? "message";
 	const parsedData = tryParseJSON<T>(event.data);
 	if (parsedData && onMessage) {
@@ -82,12 +101,15 @@ function processSSEEvent<T>(
 	const data = parsedData as Record<string, unknown> | null;
 	const eventType = data?.event_type ?? data?.type;
 	if (evt === "done" || evt === "completed" || eventType === "completed") {
-		return "completed";
+		return { type: "completed" };
 	}
 	if (evt === "error" || eventType === "error") {
-		return "error";
+		return {
+			type: "error",
+			error: buildSSEError(event, data),
+		};
 	}
-	return evt;
+	return { type: evt };
 }
 
 export class TauriApiState implements IApiState {
@@ -239,7 +261,13 @@ export class TauriApiState implements IApiState {
 					if (buffer.trim()) {
 						const { events } = parseSSEBuffer(buffer + "\n\n");
 						for (const event of events) {
-							processSSEEvent(event, onMessage);
+							const result = processSSEEvent(event, onMessage);
+							if (result.type === "error") {
+								throw result.error ?? new Error("SSE stream error");
+							}
+							if (result.type === "completed") {
+								return;
+							}
 						}
 					}
 					break;
@@ -251,7 +279,11 @@ export class TauriApiState implements IApiState {
 
 				for (const event of events) {
 					const result = processSSEEvent(event, onMessage);
-					if (result === "completed" || result === "error") {
+					if (result.type === "error") {
+						abortController.abort();
+						throw result.error ?? new Error("SSE stream error");
+					}
+					if (result.type === "completed") {
 						abortController.abort();
 						return;
 					}
@@ -313,17 +345,21 @@ export class TauriApiState implements IApiState {
 				body: options?.body ? options.body : undefined,
 				signal: options?.signal,
 				onMessage: (message: EventSourceMessage) => {
-					const evt = message?.event ?? "message";
-					const parsedData = tryParseJSON<T>(message.data);
-					if (parsedData && onMessage) {
-						onMessage(parsedData);
-					}
+					const result = processSSEEvent<T>(
+						{
+							event: message.event,
+							data: message.data,
+							id: message.id,
+							raw: message.data,
+						},
+						onMessage,
+					);
 
-					if (evt === "done" || evt === "completed") {
+					if (result.type === "completed") {
 						closeAndResolve();
 					}
-					if (evt === "error") {
-						closeAndReject(new Error("SSE stream error"));
+					if (result.type === "error") {
+						closeAndReject(result.error ?? new Error("SSE stream error"));
 					}
 				},
 				onConnect: () => {},

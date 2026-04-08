@@ -14,6 +14,71 @@ interface ReasoningViewerProps {
 	compact?: boolean;
 }
 
+function hasStructuredMarkdown(reasoning: string): boolean {
+	return reasoning
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.some(
+			(line) =>
+				line.startsWith("```") ||
+				/^#{1,6}\s/.test(line) ||
+				/^[-*+]\s/.test(line) ||
+				/^\d+\.\s/.test(line) ||
+				/^>\s/.test(line) ||
+				/^\|.*\|$/.test(line),
+		);
+}
+
+function looksLikeTokenizedReasoning(reasoning: string): boolean {
+	const lines = reasoning
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+
+	if (lines.length < 6 || hasStructuredMarkdown(reasoning)) {
+		return false;
+	}
+
+	const shortLineCount = lines.filter((line) => {
+		const wordCount = line.split(/\s+/).filter(Boolean).length;
+		return wordCount <= 3 && line.length <= 24;
+	}).length;
+
+	return shortLineCount / lines.length >= 0.7;
+}
+
+function normalizeReasoningWhitespace(reasoning: string): string {
+	let normalized = "";
+	let pendingSpace = false;
+
+	for (const ch of reasoning) {
+		if (/\s/.test(ch)) {
+			pendingSpace = normalized.length > 0;
+			continue;
+		}
+
+		if (pendingSpace && !/[.,;:!?)}\]'\"]/.test(ch)) {
+			normalized += " ";
+		}
+
+		pendingSpace = false;
+		normalized += ch;
+	}
+
+	return normalized;
+}
+
+function prepareReasoningForDisplay(reasoning: string): string {
+	return looksLikeTokenizedReasoning(reasoning)
+		? normalizeReasoningWhitespace(reasoning)
+		: reasoning;
+}
+
+function shouldRenderAsPlainText(reasoning: string): boolean {
+	return looksLikeTokenizedReasoning(reasoning);
+}
+
 export function ReasoningViewer({
 	reasoning,
 	defaultExpanded = false,
@@ -22,8 +87,14 @@ export function ReasoningViewer({
 	const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 	const [shouldRender, setShouldRender] = useState(defaultExpanded);
 
-	// Memoize the reasoning content to prevent re-renders
-	const memoizedReasoning = useMemo(() => reasoning, [reasoning]);
+	const displayReasoning = useMemo(
+		() => prepareReasoningForDisplay(reasoning),
+		[reasoning],
+	);
+	const renderPlainText = useMemo(
+		() => shouldRenderAsPlainText(reasoning),
+		[reasoning],
+	);
 
 	// Lazy render on first expansion
 	const handleExpand = () => {
@@ -33,7 +104,7 @@ export function ReasoningViewer({
 		setIsExpanded(!isExpanded);
 	};
 
-	if (!reasoning || reasoning.trim() === "") {
+	if (!displayReasoning || displayReasoning.trim() === "") {
 		return null;
 	}
 
@@ -87,8 +158,8 @@ export function ReasoningViewer({
 					<div
 						className={
 							compact
-								? "max-h-[200px] overflow-y-auto scroll-smooth"
-								: "max-h-[300px] overflow-y-auto scroll-smooth"
+								? "max-h-50 overflow-y-auto scroll-smooth"
+								: "max-h-75 overflow-y-auto scroll-smooth"
 						}
 						style={{
 							containIntrinsicSize: compact ? "200px" : "300px",
@@ -103,12 +174,18 @@ export function ReasoningViewer({
 									</div>
 								}
 							>
-								<TextEditor
-									initialContent={memoizedReasoning}
-									isMarkdown={true}
-									editable={false}
-									minimal={true}
-								/>
+								{renderPlainText ? (
+									<div className="whitespace-normal wrap-break-word leading-relaxed text-foreground/90">
+										{displayReasoning}
+									</div>
+								) : (
+									<TextEditor
+										initialContent={displayReasoning}
+										isMarkdown={true}
+										editable={false}
+										minimal={true}
+									/>
+								)}
 							</Suspense>
 						</div>
 					</div>

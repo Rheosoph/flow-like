@@ -75,9 +75,7 @@ where
     Err(anyhow!("Unable to determine vector dimension from records"))
 }
 
-pub fn value_to_batch_iterator(
-    records: Vec<Value>,
-) -> Result<ValueBatchIterator> {
+pub fn value_to_batch_iterator(records: Vec<Value>) -> Result<ValueBatchIterator> {
     value_to_batch_iterator_with_fields(records, None)
 }
 
@@ -87,7 +85,8 @@ pub fn value_to_batch_iterator_with_fields(
 ) -> Result<ValueBatchIterator> {
     let batch = value_to_record_batch_with_fields(records, fields)?;
     let schema = batch.schema();
-    let iterator: ValueBatchIterator = RecordBatchIterator::new([batch].into_iter().map(Ok), schema);
+    let iterator: ValueBatchIterator =
+        RecordBatchIterator::new([batch].into_iter().map(Ok), schema);
 
     Ok(iterator)
 }

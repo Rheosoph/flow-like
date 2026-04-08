@@ -30,11 +30,7 @@ impl RemoveVariableCommand {
 
 #[async_trait]
 impl Command for RemoveVariableCommand {
-    async fn validate(
-        &self,
-        board: &Board,
-        _: Arc<FlowLikeState>,
-    ) -> flow_like_types::Result<()> {
+    async fn validate(&self, board: &Board, _: Arc<FlowLikeState>) -> flow_like_types::Result<()> {
         let variables = if let Some(ref layer_id) = self.layer_id {
             &board
                 .layers

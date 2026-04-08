@@ -185,8 +185,8 @@ impl ModelLogic for OpenAIModel {
 mod tests {
     use flow_like_types::tokio;
     use rig::agent::MultiTurnStreamItem;
-    use rig::completion::{Chat, Message};
     use rig::completion::ToolDefinition;
+    use rig::completion::{Chat, Message};
     use rig::message::Text;
     use rig::streaming::{StreamedAssistantContent, StreamingChat};
     use rig::tool::Tool;

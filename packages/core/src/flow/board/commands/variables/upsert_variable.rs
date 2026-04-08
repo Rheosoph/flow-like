@@ -40,11 +40,7 @@ impl UpsertVariableCommand {
 
 #[async_trait]
 impl Command for UpsertVariableCommand {
-    async fn validate(
-        &self,
-        board: &Board,
-        _: Arc<FlowLikeState>,
-    ) -> flow_like_types::Result<()> {
+    async fn validate(&self, board: &Board, _: Arc<FlowLikeState>) -> flow_like_types::Result<()> {
         let variables = if let Some(ref layer_id) = self.layer_id {
             &board
                 .layers
@@ -104,7 +100,9 @@ impl Command for UpsertVariableCommand {
             }
         }
 
-        if let Some(old_variable) = variables.insert(self.variable.id.clone(), self.variable.clone()) {
+        if let Some(old_variable) =
+            variables.insert(self.variable.id.clone(), self.variable.clone())
+        {
             self.old_variable = Some(old_variable);
         }
         Ok(())

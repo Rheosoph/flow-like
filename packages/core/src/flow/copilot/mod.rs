@@ -20,11 +20,11 @@ pub use search::{
 };
 pub use tools::{
     CatalogTool, EmitCommandsArgs, EmitCommandsTool, FilterCategoryArgs, FilterCategoryTool,
-    FindConnectableNodesArgs, FindConnectableNodesTool, GetNodeDetailsArgs,
-    GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool, QueryLogsArgs,
-    QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs,
-    SearchTemplatesTool, ThinkingArgs, build_find_connectable_nodes_output,
-    build_list_board_nodes_output, build_unconfigured_nodes_output, get_tool_description,
+    FindConnectableNodesArgs, FindConnectableNodesTool, GetNodeDetailsArgs, GetNodeDetailsTool,
+    GetUnconfiguredNodesTool, ListBoardNodesTool, QueryLogsArgs, QueryLogsTool, SearchArgs,
+    SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs,
+    build_find_connectable_nodes_output, build_list_board_nodes_output,
+    build_unconfigured_nodes_output, get_tool_description,
 };
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
@@ -331,6 +331,7 @@ impl Copilot {
         let mut plan_step_counter = 0u32;
         let mut invalid_emit_attempts = 0u8;
         let mut last_emit_validation: Option<String> = None;
+        let mut current_prompt = prompt_message.clone();
 
         for iteration in 0..max_iterations {
             // Send iteration start event
@@ -354,7 +355,7 @@ impl Copilot {
 
             // Build completion request - tools are already attached via agent builder
             let request = agent
-                .completion(prompt_message.clone(), current_history.clone())
+                .completion(current_prompt.clone(), current_history.clone())
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Completion error: {}", e))?;
 
@@ -498,8 +499,6 @@ impl Copilot {
                 ));
             }
 
-            full_response.push_str(&iteration_text);
-
             // Collect all tool calls first for parallel execution
             let tool_calls: Vec<_> = response_contents
                 .iter()
@@ -515,6 +514,8 @@ impl Copilot {
             let tool_calls_found = !tool_calls.is_empty();
 
             if tool_calls_found {
+                current_history.push(current_prompt.clone());
+
                 // Emit plan steps for all tool calls starting
                 let mut step_ids: Vec<(String, String, u32)> = Vec::new();
                 for tool_call in &tool_calls {
@@ -637,7 +638,8 @@ impl Copilot {
 
                 // Add all tool results to history as a single User message
                 // This is required for Gemini API which expects tool results to immediately follow
-                // the assistant's tool call message in a single message
+                // the assistant's tool call message in a single message. We use that
+                // combined tool-result message as the prompt for the next turn.
                 if !tool_results.is_empty() {
                     let tool_result_contents: Vec<UserContent> = tool_results
                         .iter()
@@ -662,7 +664,7 @@ impl Copilot {
                     let tool_result_msg = rig::message::Message::User {
                         content: combined_tool_results,
                     };
-                    current_history.push(tool_result_msg);
+                    current_prompt = tool_result_msg;
                 }
 
                 if invalid_emit_attempts >= 3 {
@@ -674,6 +676,7 @@ impl Copilot {
                 }
             } else {
                 // No tool calls, we're done
+                full_response.push_str(&iteration_text);
                 break;
             }
 

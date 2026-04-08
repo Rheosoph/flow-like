@@ -114,7 +114,10 @@ pub fn find_template_in_image(
     let mut gui = match rustautogui::RustAutoGui::new(false) {
         Ok(gui) => gui,
         Err(err) => {
-            tracing::warn!("Failed to initialize RustAutoGui for template matching: {}", err);
+            tracing::warn!(
+                "Failed to initialize RustAutoGui for template matching: {}",
+                err
+            );
             return Vec::new();
         }
     };

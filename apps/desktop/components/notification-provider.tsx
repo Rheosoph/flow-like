@@ -17,6 +17,7 @@ import {
 	type FlowNotificationBatchDetail,
 } from "../lib/flow-notification-events";
 import { addLocalNotification } from "../lib/notifications-db";
+import type { TauriBackend } from "./tauri-provider";
 
 type NotificationPermission = "granted" | "denied" | "default";
 type NotificationApi = {
@@ -55,6 +56,8 @@ type RemotePushApi = {
 	) => Promise<RemotePushListener>;
 };
 
+const LOCAL_EXECUTION_SUB = "local";
+
 async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 	try {
 		const mod = await import("@tauri-apps/plugin-notification");
@@ -77,7 +80,7 @@ async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 			onNotificationReceived: mod.onNotificationReceived,
 			onNotificationTapped: mod.onNotificationTapped,
 			onTokenRefresh: mod.onTokenRefresh,
-		};
+		} ;
 	} catch {
 		return null;
 	}
@@ -214,10 +217,13 @@ export default function NotificationProvider({
 }: NotificationProviderProps = {}) {
 	const auth = useAuth();
 	const backend = useBackend();
+	const tauriBackend = backend as TauriBackend | undefined;
+	const authContext = tauriBackend?.auth ?? auth;
+	const currentUser = authContext.user;
+	const isAuthenticated = authContext.isAuthenticated;
 	const hub = useHub();
 	const queryClient = useQueryClient();
-	// Use a constant for offline/unauthenticated users
-	const userId = auth.user?.profile?.sub ?? "offline-user";
+	const userId = currentUser?.profile?.sub ?? "offline-user";
 	const notificationApi = useRef<NotificationApi | null>(null);
 	const permissionGranted = useRef<boolean>(false);
 	const remotePushApi = useRef<RemotePushApi | null>(null);
@@ -279,7 +285,7 @@ export default function NotificationProvider({
 		if (
 			!remotePushApi.current ||
 			!backend?.profile ||
-			!auth.user ||
+			!currentUser ||
 			!canUseRemotePushForPlatform(pushConfig, platform) ||
 			!platform
 		) {
@@ -309,14 +315,14 @@ export default function NotificationProvider({
 					},
 				}),
 			},
-			auth,
+			authContext,
 		);
 
 		lastRegisteredToken.current = token;
 	};
 
 	const unregisterPushTarget = async () => {
-		if (!backend?.profile || !auth.user || !deviceId.current) {
+		if (!backend?.profile || !currentUser || !deviceId.current) {
 			return;
 		}
 
@@ -327,7 +333,7 @@ export default function NotificationProvider({
 				{
 					method: "DELETE",
 				},
-				auth,
+				authContext,
 			);
 		} catch (error) {
 			console.warn(
@@ -376,14 +382,14 @@ export default function NotificationProvider({
 	useEffect(() => {
 		const platform = detectPushPlatform();
 		const canRegister =
-			auth.isAuthenticated &&
+			isAuthenticated &&
 			backend?.profile &&
 			canUseRemotePushForPlatform(pushConfig, platform);
 		if (!canRegister) {
 			if (
-				auth.isAuthenticated &&
+				isAuthenticated &&
 				backend?.profile &&
-				auth.user &&
+				currentUser &&
 				deviceId.current
 			) {
 				void unregisterPushTarget();
@@ -498,7 +504,7 @@ export default function NotificationProvider({
 				listeners.map((listener) => Promise.resolve(listener.unregister())),
 			);
 		};
-	}, [auth.isAuthenticated, auth.user, backend?.profile, pushConfig, appId]);
+	}, [isAuthenticated, currentUser, backend?.profile, pushConfig, appId]);
 
 	useEffect(() => {
 		const subscriptions: (Promise<UnlistenFn> | undefined)[] = [];
@@ -511,9 +517,13 @@ export default function NotificationProvider({
 		) => {
 			for (const event of events) {
 				const notification = event.payload as INotificationEvent;
+				const targetUserSub = notification.target_user_sub?.trim();
+				const normalizedTargetUserSub =
+					targetUserSub && targetUserSub !== LOCAL_EXECUTION_SUB
+						? targetUserSub
+						: undefined;
 				const isCurrentUserTarget =
-					!notification.target_user_sub ||
-					notification.target_user_sub === userId;
+					!normalizedTargetUserSub || normalizedTargetUserSub === userId;
 				const canPersistNotification =
 					Boolean(notification.event_id?.trim()) || Boolean(boardId?.trim());
 
@@ -521,7 +531,7 @@ export default function NotificationProvider({
 					persistViaApi &&
 					notificationAppId &&
 					backend?.profile &&
-					auth.user &&
+					currentUser &&
 					canPersistNotification
 				) {
 					try {
@@ -537,7 +547,7 @@ export default function NotificationProvider({
 										notification.event_id.trim().length > 0
 											? undefined
 											: boardId,
-									target_user_sub: notification.target_user_sub,
+										target_user_sub: normalizedTargetUserSub,
 									title: notification.title,
 									description: notification.description,
 									icon: notification.icon,
@@ -546,7 +556,7 @@ export default function NotificationProvider({
 									node_id: notification.source_node_id,
 								}),
 							},
-							auth,
+							authContext,
 						);
 					} catch (e) {
 						console.warn(
@@ -629,7 +639,7 @@ export default function NotificationProvider({
 				}
 			})();
 		};
-	}, [userId, appId, queryClient, backend?.profile, auth.user]);
+	}, [userId, appId, queryClient, backend?.profile, currentUser, authContext]);
 
 	return null;
 }

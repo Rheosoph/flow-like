@@ -79,10 +79,10 @@ pub struct PinMetadata {
     pub value_type: String, // e.g., "Normal", "Array", "HashMap", "HashSet"
     #[serde(default)]
     pub default_value: Option<String>,
-    pub schema: Option<String>, // JSON schema for Struct types
-    pub is_generic: bool, // Generic pins can connect to any type
+    pub schema: Option<String>,            // JSON schema for Struct types
+    pub is_generic: bool,                  // Generic pins can connect to any type
     pub valid_values: Option<Vec<String>>, // For enum-like pins
-    pub enforce_schema: bool, // If true, schema must match exactly
+    pub enforce_schema: bool,              // If true, schema must match exactly
 }
 
 /// Pin definition for placeholder nodes

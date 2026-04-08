@@ -12,9 +12,29 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like::flow::{board::Board, node::Node};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+const LOCAL_EXECUTION_SUB: &str = "local";
+const ALLOWED_NOTIFICATION_NODES: [&str; 2] = ["notify_user", "notify_project_user"];
+
+fn board_nodes(board: &Board) -> impl Iterator<Item = &Node> {
+    board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+}
+
+fn find_board_node<'a>(board: &'a Board, node_id: &str) -> Option<&'a Node> {
+    board.nodes.get(node_id).or_else(|| {
+        board
+            .layers
+            .values()
+            .find_map(|layer| layer.nodes.get(node_id))
+    })
+}
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateNotificationParams {
@@ -132,12 +152,8 @@ pub async fn create_notification(
         ));
     };
 
-    let allowed_notification_nodes = ["notify_user", "notify_project_user"];
-
-    let board_has_notification_node = board
-        .nodes
-        .values()
-        .any(|node| allowed_notification_nodes.contains(&node.name.as_str()));
+    let board_has_notification_node =
+        board_nodes(&board).any(|node| ALLOWED_NOTIFICATION_NODES.contains(&node.name.as_str()));
 
     if !board_has_notification_node {
         tracing::warn!(
@@ -151,9 +167,9 @@ pub async fn create_notification(
     }
 
     if let Some(ref source_node_id) = params.node_id {
-        let node = board.nodes.get(source_node_id);
+        let node = find_board_node(&board, source_node_id);
         let allowed = node
-            .map(|n| allowed_notification_nodes.contains(&n.name.as_str()))
+            .map(|n| ALLOWED_NOTIFICATION_NODES.contains(&n.name.as_str()))
             .unwrap_or(false);
 
         if !allowed {
@@ -170,7 +186,13 @@ pub async fn create_notification(
     }
 
     // Determine target user
-    let target_sub = params.target_user_sub.unwrap_or_else(|| caller_sub.clone());
+    let target_sub = params
+        .target_user_sub
+        .as_deref()
+        .map(str::trim)
+        .filter(|target_sub| !target_sub.is_empty() && *target_sub != LOCAL_EXECUTION_SUB)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| caller_sub.clone());
 
     // If targeting a different user, verify they are a member of the project
     if target_sub != caller_sub {

@@ -231,7 +231,7 @@ const FeedbackDialog = ({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="sm:max-w-[500px]">
+			<DialogContent className="sm:max-w-125">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<MessageSquareIcon className="w-5 h-5 text-primary" />
@@ -250,7 +250,7 @@ const FeedbackDialog = ({
 							placeholder="Tell us what you think about this response..."
 							value={feedbackComment}
 							onChange={(e) => setFeedbackComment(e.target.value)}
-							className="min-h-[100px] resize-none"
+							className="min-h-25 resize-none"
 						/>
 					</div>
 
@@ -293,6 +293,7 @@ const FeedbackDialog = ({
 const MessageActions = ({
 	isUser,
 	hasFooterContent,
+	compact = false,
 	rating,
 	gaveMoreFeedback,
 	onThumbsUp,
@@ -306,6 +307,7 @@ const MessageActions = ({
 }: {
 	isUser: boolean;
 	hasFooterContent: boolean;
+	compact?: boolean;
 	rating: number;
 	gaveMoreFeedback: boolean;
 	onThumbsUp: () => void;
@@ -319,12 +321,19 @@ const MessageActions = ({
 }) => (
 	<div
 		className={cn(
-			"flex flex-row items-center gap-3 h-6 w-full",
-			isUser
-				? "justify-end px-2 pt-2 mt-2"
-				: hasFooterContent
-					? "justify-start mt-2"
-					: "justify-start mt-0.5",
+			"flex flex-row items-center gap-3",
+			compact
+				? "absolute bottom-3 right-4 z-10 h-auto w-auto gap-2"
+				: cn(
+					"h-6 w-full",
+					isUser
+						? hasFooterContent
+							? "justify-end px-2 pt-2 mt-2"
+							: "justify-end px-2 mt-0.5"
+						: hasFooterContent
+							? "justify-start mt-2"
+							: "justify-start mt-0.5",
+				),
 		)}
 	>
 		{!isUser && (
@@ -665,9 +674,32 @@ export const MessageComponent = memo(function MessageComponent({
 		);
 	}, [message.ratingSettings]);
 
+	const planSteps = useMemo(() => {
+		if (isUser || !message.plan_steps) {
+			return [];
+		}
+
+		return message.plan_steps.filter((step) => {
+			const isEmptyFallbackStep =
+				step.id === "step-0" &&
+				step.title === "Thinking" &&
+				!(step.description?.trim()) &&
+				!(step.reasoning?.trim());
+
+			return !isEmptyFallbackStep;
+		});
+	}, [isUser, message.plan_steps]);
+
+	const currentPlanStepId =
+		message.current_step_id &&
+		planSteps.some((step) => step.id === message.current_step_id)
+			? message.current_step_id
+			: undefined;
+
 	const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 	const hasUsageStats = usageStats.length > 0;
 	const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
+	const compactUserActions = isUser && !hasFooterContent;
 
 	return (
 		<>
@@ -680,21 +712,23 @@ export const MessageComponent = memo(function MessageComponent({
 				<div
 					className={cn(
 						"rounded-xl rounded-tr-sm p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+						compactUserActions && "relative",
 						isUser
 							? "bg-muted dark:bg-muted/30 text-foreground max-w-3xl"
 							: "bg-background text-foreground max-w-full w-full pb-0",
 					)}
 				>
-					{!isUser && message.plan_steps && message.plan_steps.length > 0 && (
+					{!isUser && planSteps.length > 0 && (
 						<PlanSteps
-							steps={message.plan_steps}
-							currentStepId={message.current_step_id}
+							steps={planSteps}
+							currentStepId={currentPlanStepId}
 						/>
 					)}
 					<div
 						ref={contentRef}
 						className={cn(
 							"text-sm leading-relaxed whitespace-break-spaces text-wrap max-w-full w-full",
+							compactUserActions && "pr-10",
 							isUser && !isExpanded && "overflow-hidden",
 						)}
 						style={
@@ -754,6 +788,7 @@ export const MessageComponent = memo(function MessageComponent({
 						<MessageActions
 							isUser={isUser}
 							hasFooterContent={hasFooterContent}
+							compact={compactUserActions}
 							rating={message.rating ?? 0}
 							gaveMoreFeedback={gaveMoreFeedback}
 							onThumbsUp={() => upsertFeedback(1)}

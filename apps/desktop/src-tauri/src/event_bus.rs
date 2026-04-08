@@ -72,10 +72,7 @@ impl EventBusEvent {
         let board_version = loaded_event.board_version;
         let board_id = loaded_event.board_id.clone();
 
-        let Ok(board) = app
-            .open_board(board_id.clone(), None, board_version)
-            .await
-        else {
+        let Ok(board) = app.open_board(board_id.clone(), None, board_version).await else {
             return Err(flow_like_types::anyhow!("Board not found"));
         };
 
@@ -212,8 +209,8 @@ impl EventBusEvent {
                 .execute()
                 .await
                 .map_err(|e| {
-                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-            })?;
+                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                })?;
             meta.flush(db, write_options.as_ref()).await.map_err(|e| {
                 flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
             })?;

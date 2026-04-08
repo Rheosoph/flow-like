@@ -19,6 +19,24 @@ fn side_car_path(command: &PathBuf) -> flow_like_types::Result<PathBuf> {
     return Ok(executable.join(command));
 }
 
+fn set_library_path(cmd: &mut StdCommand, binary_path: &std::path::Path) {
+    if let Some(dir) = binary_path.parent() {
+        #[cfg(target_os = "macos")]
+        cmd.env("DYLD_LIBRARY_PATH", dir);
+        #[cfg(target_os = "linux")]
+        cmd.env("LD_LIBRARY_PATH", dir);
+    }
+}
+
+fn set_library_path_async(cmd: &mut Command, binary_path: &std::path::Path) {
+    if let Some(dir) = binary_path.parent() {
+        #[cfg(target_os = "macos")]
+        cmd.env("DYLD_LIBRARY_PATH", dir);
+        #[cfg(target_os = "linux")]
+        cmd.env("LD_LIBRARY_PATH", dir);
+    }
+}
+
 /// Creates a sidecar command to run a script or executable.
 /// If `with_bash` is true, it will run the command using `bash`. Important for some Systems and binaries
 /// Otherwise, it will run the command directly.
@@ -51,12 +69,14 @@ pub async fn sidecar(
         #[cfg(target_os = "linux")]
         {
             let mut sidecar = StdCommand::new("bash");
-            sidecar.arg(path);
+            sidecar.arg(&path);
+            set_library_path(&mut sidecar, &path);
             return Ok(sidecar);
         }
     }
 
-    let sidecar = StdCommand::new(path);
+    let mut sidecar = StdCommand::new(&path);
+    set_library_path(&mut sidecar, &path);
     Ok(sidecar)
 }
 
@@ -80,14 +100,16 @@ pub async fn async_sidecar(command: &PathBuf) -> flow_like_types::Result<Command
 
     #[cfg(not(target_os = "linux"))]
     {
-        let sidecar = process::Command::new(path);
+        let mut sidecar = process::Command::new(&path);
+        set_library_path_async(&mut sidecar, &path);
         Ok(sidecar)
     }
 
     #[cfg(target_os = "linux")]
     {
         let mut sidecar = process::Command::new("bash");
-        sidecar.arg(path);
+        sidecar.arg(&path);
+        set_library_path_async(&mut sidecar, &path);
         Ok(sidecar)
     }
 }

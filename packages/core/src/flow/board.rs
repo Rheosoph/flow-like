@@ -410,7 +410,9 @@ impl Board {
         let mut commands = commands;
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
-                let recovery_errors = self.rollback_commands(&mut commands[..index], state.clone()).await;
+                let recovery_errors = self
+                    .rollback_commands(&mut commands[..index], state.clone())
+                    .await;
                 return Err(if recovery_errors.is_empty() {
                     error
                 } else {
@@ -429,7 +431,8 @@ impl Board {
                     ));
                 }
                 recovery_errors.extend(
-                    self.rollback_commands(&mut commands[..index], state.clone()).await,
+                    self.rollback_commands(&mut commands[..index], state.clone())
+                        .await,
                 );
                 return Err(if recovery_errors.is_empty() {
                     error
@@ -453,26 +456,27 @@ impl Board {
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
         let mut commands = commands;
-		for index in (0..commands.len()).rev() {
-			if let Err(error) = commands[index].undo(self, state.clone()).await {
-				let mut recovery_errors = Vec::new();
-				if let Err(rollback_error) = commands[index].execute(self, state.clone()).await {
-					recovery_errors.push(format!(
-						"failed to restore current command at index {index}: {rollback_error}"
-					));
-				}
-				recovery_errors.extend(
-					self.reapply_commands(&mut commands[index + 1..], state.clone()).await,
-				);
-				return Err(if recovery_errors.is_empty() {
-					error
-				} else {
-					flow_like_types::anyhow!(
-						"Undo failed at index {index}: {error}; recovery errors: {}",
-						recovery_errors.join(" | ")
-					)
-				});
-			}
+        for index in (0..commands.len()).rev() {
+            if let Err(error) = commands[index].undo(self, state.clone()).await {
+                let mut recovery_errors = Vec::new();
+                if let Err(rollback_error) = commands[index].execute(self, state.clone()).await {
+                    recovery_errors.push(format!(
+                        "failed to restore current command at index {index}: {rollback_error}"
+                    ));
+                }
+                recovery_errors.extend(
+                    self.reapply_commands(&mut commands[index + 1..], state.clone())
+                        .await,
+                );
+                return Err(if recovery_errors.is_empty() {
+                    error
+                } else {
+                    flow_like_types::anyhow!(
+                        "Undo failed at index {index}: {error}; recovery errors: {}",
+                        recovery_errors.join(" | ")
+                    )
+                });
+            }
         }
         self.node_updates(state).await;
         self.updated_at = SystemTime::now();
@@ -488,7 +492,9 @@ impl Board {
         let mut commands = commands;
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
-                let recovery_errors = self.rollback_commands(&mut commands[..index], state.clone()).await;
+                let recovery_errors = self
+                    .rollback_commands(&mut commands[..index], state.clone())
+                    .await;
                 return Err(if recovery_errors.is_empty() {
                     error
                 } else {
@@ -507,7 +513,8 @@ impl Board {
                     ));
                 }
                 recovery_errors.extend(
-                    self.rollback_commands(&mut commands[..index], state.clone()).await,
+                    self.rollback_commands(&mut commands[..index], state.clone())
+                        .await,
                 );
                 return Err(if recovery_errors.is_empty() {
                     error

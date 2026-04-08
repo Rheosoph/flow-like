@@ -324,7 +324,7 @@ export default function InstalledPackagesPage() {
 	const hasUpdates = (availableUpdates.data?.length ?? 0) > 0;
 
 	return (
-		<main className="flex-col flex flex-grow max-h-full p-6 overflow-auto min-h-0 w-full">
+		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 			<div className="mx-auto w-full max-w-7xl space-y-6">
 				{/* Header */}
 				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

@@ -267,7 +267,7 @@ function HostedLLMForm({
 	};
 
 	return (
-		<div className="space-y-4 max-w-screen-md">
+		<div className="space-y-4 max-w-3xl">
 			{/* identity */}
 			<Card>
 				<CardHeader>
@@ -552,7 +552,7 @@ function HostedLLMForm({
 			</Card>
 
 			<Button
-				className="w-full max-w-screen-md"
+				className="w-full max-w-3xl"
 				disabled={loading || !bit.name?.trim()}
 				onClick={onSubmit}
 			>
@@ -649,6 +649,7 @@ export default function Page() {
 		async (bitToUpload: IBit): Promise<IBit> => {
 			if (!profile.data) throw new Error("User profile is not available");
 			let finalBit = { ...bitToUpload };
+			let receivedFinalBit = false;
 			await backend.apiState.stream(
 				profile.data,
 				`admin/bit/${bitToUpload.id}`,
@@ -695,9 +696,15 @@ export default function Page() {
 							lastSampleRef.current = { t: now, downloaded };
 						}
 					}
-					if (data?.id) finalBit = data as unknown as IBit;
+					if (data?.id) {
+						finalBit = data as unknown as IBit;
+						receivedFinalBit = true;
+					}
 				},
 			);
+			if (!receivedFinalBit) {
+				throw new Error("Bit upload did not complete");
+			}
 			return finalBit;
 		},
 		[backend.apiState, profile.data],
@@ -1091,7 +1098,7 @@ export default function Page() {
 					) : (
 						<>
 							{/* download link for non-hosted */}
-							<div className="flex flex-row items-center gap-2 max-w-screen-md">
+							<div className="flex flex-row items-center gap-2 max-w-3xl">
 								{loading ? (
 									<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
 								) : null}
@@ -1129,7 +1136,7 @@ export default function Page() {
 							{(bit.type === IBitTypes.Embedding ||
 								bit.type === IBitTypes.ImageEmbedding) ? (
 								<>
-									<div className="flex flex-col items-start gap-6 w-full max-w-screen-lg">
+									<div className="flex flex-col items-start gap-6 w-full max-w-5xl">
 										<EmbeddingConfiguration bit={bit} setBit={setBit} />
 										{textEmbeddingModel && (
 											<DependencyConfiguration
@@ -1207,7 +1214,7 @@ export default function Page() {
 							)}
 
 							<Button
-								className="mt-4 w-full max-w-screen-lg"
+								className="mt-4 w-full max-w-5xl"
 								onClick={handleSubmit}
 								disabled={loading}
 							>
@@ -1241,7 +1248,7 @@ function UploadProgressCard(props: {
 }) {
 	const { percent, downloaded, total, label, bit, speedBps, etaSec } = props;
 	return (
-		<Card className="mt-4 w-full max-w-screen-lg">
+		<Card className="mt-4 w-full max-w-5xl">
 			<CardHeader className="flex flex-row items-center justify-between space-y-0">
 				<div className="flex items-center gap-2 text-sm text-muted-foreground">
 					<UploadCloudIcon className="h-4 w-4" />

@@ -9,7 +9,6 @@ use flow_like_secrets::{
 use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
 use lambda_http::{Error, run_with_streaming_response};
-use sentry_tracing::{EventFilter, default_event_filter};
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 
@@ -25,11 +24,6 @@ async fn main() -> Result<(), Error> {
             .init();
         None
     } else {
-        let sentry_layer =
-            sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
-                tracing::Level::ERROR => EventFilter::Breadcrumb,
-                _ => default_event_filter(metadata),
-            });
         let guard = sentry::init((
             sentry_endpoint,
             sentry::ClientOptions {
@@ -40,7 +34,7 @@ async fn main() -> Result<(), Error> {
         ));
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .with(sentry_layer)
+            .with(sentry_tracing::layer())
             .init();
         Some(guard)
     };

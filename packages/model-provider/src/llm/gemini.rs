@@ -31,7 +31,10 @@ fn is_gemini_3_model(model_name: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-fn thinking_config_for_history(history: Option<&History>, model_name: Option<&str>) -> ThinkingConfig {
+fn thinking_config_for_history(
+    history: Option<&History>,
+    model_name: Option<&str>,
+) -> ThinkingConfig {
     let Some(history) = history else {
         return default_thinking_config();
     };

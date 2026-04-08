@@ -377,21 +377,22 @@ fn get_pin_mut<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::{BTreeSet, HashMap}, sync::Arc, time::SystemTime};
+    use std::{
+        collections::{BTreeSet, HashMap},
+        sync::Arc,
+        time::SystemTime,
+    };
 
     use flow_like_storage::object_store::path::Path;
 
-    use crate::{
-        flow::{
-            board::{
-                cleanup::BoardCleanupLogic, Board, ExecutionMode, ExecutionStage, Layer,
-                LayerType,
-            },
-            execution::LogLevel,
-            node::Node,
-            pin::{Pin, PinType, ValueType},
-            variable::VariableType,
+    use crate::flow::{
+        board::{
+            Board, ExecutionMode, ExecutionStage, Layer, LayerType, cleanup::BoardCleanupLogic,
         },
+        execution::LogLevel,
+        node::Node,
+        pin::{Pin, PinType, ValueType},
+        variable::VariableType,
     };
 
     use super::BridgeLayersCleanup;
@@ -467,8 +468,12 @@ mod tests {
         board
             .nodes
             .insert(parent_source.id.clone(), parent_source.clone());
-        board.nodes.insert(child_node.id.clone(), child_node.clone());
-        board.nodes.insert(parent_sink.id.clone(), parent_sink.clone());
+        board
+            .nodes
+            .insert(child_node.id.clone(), child_node.clone());
+        board
+            .nodes
+            .insert(parent_sink.id.clone(), parent_sink.clone());
 
         crate::flow::board::commands::pins::connect_pins::connect_pins(
             &mut board,
@@ -494,9 +499,15 @@ mod tests {
             for pin in node.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone())),
+                    (
+                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
+                    ),
                 );
-                bridge_layers.initial_pin_iteration(pin, crate::flow::board::cleanup::NodeOrLayerRef::Node(node));
+                bridge_layers.initial_pin_iteration(
+                    pin,
+                    crate::flow::board::cleanup::NodeOrLayerRef::Node(node),
+                );
             }
         }
 
@@ -506,9 +517,15 @@ mod tests {
             for pin in layer.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone())),
+                    (
+                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
+                    ),
                 );
-                bridge_layers.initial_pin_iteration(pin, crate::flow::board::cleanup::NodeOrLayerRef::Layer(layer));
+                bridge_layers.initial_pin_iteration(
+                    pin,
+                    crate::flow::board::cleanup::NodeOrLayerRef::Layer(layer),
+                );
             }
         }
 
@@ -548,24 +565,32 @@ mod tests {
         let parent_sink = board.nodes.get("parent-sink").unwrap();
 
         assert_eq!(parent_source.pins[&parent_source_pin].connected_to.len(), 1);
-        assert!(parent_source.pins[&parent_source_pin]
-            .connected_to
-            .contains(&input_bridge.id));
+        assert!(
+            parent_source.pins[&parent_source_pin]
+                .connected_to
+                .contains(&input_bridge.id)
+        );
         assert_eq!(child_node.pins[&child_in_pin].depends_on.len(), 1);
-        assert!(child_node.pins[&child_in_pin]
-            .depends_on
-            .contains(&input_bridge.id));
+        assert!(
+            child_node.pins[&child_in_pin]
+                .depends_on
+                .contains(&input_bridge.id)
+        );
         assert!(input_bridge.depends_on.contains(&parent_source_pin));
         assert!(input_bridge.connected_to.contains(&child_in_pin));
 
         assert_eq!(child_node.pins[&child_out_pin].connected_to.len(), 1);
-        assert!(child_node.pins[&child_out_pin]
-            .connected_to
-            .contains(&output_bridge.id));
+        assert!(
+            child_node.pins[&child_out_pin]
+                .connected_to
+                .contains(&output_bridge.id)
+        );
         assert_eq!(parent_sink.pins[&parent_sink_pin].depends_on.len(), 1);
-        assert!(parent_sink.pins[&parent_sink_pin]
-            .depends_on
-            .contains(&output_bridge.id));
+        assert!(
+            parent_sink.pins[&parent_sink_pin]
+                .depends_on
+                .contains(&output_bridge.id)
+        );
         assert!(output_bridge.depends_on.contains(&child_out_pin));
         assert!(output_bridge.connected_to.contains(&parent_sink_pin));
     }
@@ -610,7 +635,9 @@ mod tests {
             .id
             .clone();
 
-        board.nodes.insert(child_node.id.clone(), child_node.clone());
+        board
+            .nodes
+            .insert(child_node.id.clone(), child_node.clone());
 
         crate::flow::board::commands::pins::connect_pins::connect_pins(
             &mut board,

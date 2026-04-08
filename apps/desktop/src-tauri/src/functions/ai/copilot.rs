@@ -2,13 +2,13 @@ use crate::state::{TauriFlowLikeState, TauriSettingsState};
 use async_trait::async_trait;
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
-    ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext,
-    UnifiedCopilot, UnifiedCopilotResponse,
+    ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext, UnifiedCopilot,
+    UnifiedCopilotResponse,
 };
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, NodeMetadata, PinMetadata, RunContext,
-    enrich_node_metadata, score_catalog_metadata,
+    BoardCommand, CatalogProvider, NodeMetadata, PinMetadata, RunContext, enrich_node_metadata,
+    score_catalog_metadata,
 };
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;

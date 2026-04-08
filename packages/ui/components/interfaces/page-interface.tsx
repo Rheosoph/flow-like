@@ -13,6 +13,10 @@ import {
 } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import {
+	readPageSurfaceCache,
+	writePageSurfaceCache,
+} from "../../lib/page-surface-cache";
+import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
@@ -588,11 +592,16 @@ function PageInterfaceInner({
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
+	const [isCacheLoading, setIsCacheLoading] = useState(false);
+	const [loadEventPhase, setLoadEventPhase] = useState<
+		"idle" | "preparing" | "running"
+	>("idle");
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	const pageRoute = route || (config?.route as string);
+	const cacheSource = providedPage ?? page;
 
 	useEffect(() => {
 		if (providedPage) {
@@ -777,41 +786,46 @@ function PageInterfaceInner({
 		backend.storageState,
 	]);
 
+	useEffect(() => {
+		let cancelled = false;
+
+		if (!cacheSource?.cache || !appId || !cacheSource.id) {
+			setCachedSurface(null);
+			setIsCacheLoading(false);
+			return;
+		}
+
+		setIsCacheLoading(true);
+		void readPageSurfaceCache(appId, cacheSource)
+			.then((surface) => {
+				if (cancelled) return;
+				setCachedSurface(surface);
+			})
+			.finally(() => {
+				if (cancelled) return;
+				setIsCacheLoading(false);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [appId, cacheSource?.cache, cacheSource?.id, cacheSource?.updatedAt]);
+
 	const initialSurface = useMemo(() => {
+		if (cachedSurface) return cachedSurface;
 		if (!page) return null;
 		return buildSurfaceFromPage(page, page.id);
-	}, [page]);
+	}, [page, cachedSurface]);
 
 	const { surface, handleServerMessage } = useManagedSurface(
 		initialSurface,
 		appId,
 	);
 
-	// Restore cached surface when page has cache enabled
-	useEffect(() => {
-		if (!page?.cache || !appId || !page.id) return;
-		const cacheKey = `page-cache:${appId}:${page.id}`;
-		try {
-			const cached = sessionStorage.getItem(cacheKey);
-			if (cached) {
-				setCachedSurface(JSON.parse(cached) as Surface);
-			}
-		} catch {
-			// Ignore parse errors
-		}
-	}, [page?.cache, page?.id, appId]);
-
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
 		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
-		const cacheKey = `page-cache:${appId}:${page.id}`;
-		try {
-			sessionStorage.setItem(cacheKey, JSON.stringify(surface));
-			// Clear cachedSurface once the real surface is ready
-			setCachedSurface(null);
-		} catch {
-			// sessionStorage full or unavailable
-		}
+		void writePageSurfaceCache(appId, page, surface);
 	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
 	// Comprehensive A2UI message handler for page events
@@ -949,6 +963,7 @@ function PageInterfaceInner({
 			eventNodeId: string | undefined,
 			eventName: string,
 			extraPayload?: Record<string, unknown>,
+			onRunStarted?: (runId: string) => void,
 		) => {
 			if (!eventNodeId || !page) return;
 
@@ -985,7 +1000,7 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
-				await execFn(appId, boardId, payload, false, undefined, (events) => {
+				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
@@ -1024,10 +1039,17 @@ function PageInterfaceInner({
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
+			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
-				await executePageEvent(page.onLoadEventId, "onLoad");
+				await executePageEvent(
+					page.onLoadEventId,
+					"onLoad",
+					undefined,
+					() => setLoadEventPhase("running"),
+				);
 			} finally {
+				setLoadEventPhase("idle");
 				setIsLoadEventRunning(false);
 			}
 		};
@@ -1082,19 +1104,22 @@ function PageInterfaceInner({
 		return { ...surface, canvasSettings: undefined };
 	}, [surface]);
 
-	// When cache is enabled and we have a cached surface, use it while onLoad runs
-	const activeSurface = surface ?? (page?.cache ? cachedSurface : null);
-	const activeSurfaceForRenderer = useMemo(() => {
-		if (surfaceForRenderer) return surfaceForRenderer;
-		if (!page?.cache || !cachedSurface) return null;
-		if (!cachedSurface.canvasSettings) return cachedSurface;
-		return { ...cachedSurface, canvasSettings: undefined };
-	}, [surfaceForRenderer, page?.cache, cachedSurface]);
+	const activeSurface = surface;
+	const activeSurfaceForRenderer = surfaceForRenderer;
 
-	// Show loading skeleton only when no cached content is available
-	const hasCachedContent = page?.cache && cachedSurface && !surface;
-	if (isLoading || (isLoadEventRunning && !hasCachedContent)) {
-		return <PageLoadingSkeleton />;
+	const shouldHoldForCachedState = Boolean(cacheSource?.cache) && isCacheLoading;
+	const canRenderFromCache = Boolean(cacheSource?.cache && cachedSurface);
+	const shouldShowLoading =
+		(isLoading && !canRenderFromCache) ||
+		shouldHoldForCachedState ||
+		(isLoadEventRunning && !canRenderFromCache);
+	const loadingTitle = isLoadEventRunning
+		? loadEventPhase === "running"
+			? "Running workflow"
+			: "Preparing workflow"
+		: "Loading page";
+	if (shouldShowLoading) {
+		return <PageLoadingSkeleton title={loadingTitle} />;
 	}
 
 	if (error) {

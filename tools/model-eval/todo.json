@@ -72,6 +72,16 @@
     ]
   },
   {
+    "modelSlug": "gemma-4-26b-a4b",
+    "modelName": "Gemma 4 26B A4B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)"
+    ]
+  },
+  {
     "modelSlug": "deepseek-r1-distill-llama-8b",
     "modelName": "DeepSeek R1 Distill Llama 8B",
     "missingFields": [
@@ -87,6 +97,17 @@
     "modelName": "DeepSeek R1 0528 Qwen3 8B",
     "missingFields": [
       "function_calling (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-e2b",
+    "modelName": "Gemma 4 E2B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
       "speed (no data)",
       "cost (no pricing data)"
     ]
@@ -152,6 +173,45 @@
     ]
   },
   {
+    "modelSlug": "glm-5",
+    "modelName": "GLM-5 (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "mimo-v2-0206",
+    "modelName": "MiMo-V2-Flash (Feb 2026)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-e4b",
+    "modelName": "Gemma 4 E4B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)"
+    ]
+  },
+  {
+    "modelSlug": "mimo-v2-pro",
+    "modelName": "MiMo-V2-Pro",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)"
+    ]
+  },
+  {
     "modelSlug": "minimax-m2-5",
     "modelName": "MiniMax-M2.5",
     "missingFields": [
@@ -194,6 +254,16 @@
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
       "function_calling (partial benchmarks)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-31b",
+    "modelName": "Gemma 4 31B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "cost (no pricing data)"
     ]
   },
   {

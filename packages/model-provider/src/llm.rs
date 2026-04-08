@@ -361,12 +361,19 @@ async fn invoke_with_stream<'a>(
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;
             }
-            StreamedAssistantContent::ToolCall { tool_call, internal_call_id: _ } => {
+            StreamedAssistantContent::ToolCall {
+                tool_call,
+                internal_call_id: _,
+            } => {
                 let chunk = ResponseChunk::from_tool_call(&tool_call, model_name);
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;
             }
-            StreamedAssistantContent::ToolCallDelta { id, content, internal_call_id: _ } => {
+            StreamedAssistantContent::ToolCallDelta {
+                id,
+                content,
+                internal_call_id: _,
+            } => {
                 let delta_str = match content {
                     ToolCallDeltaContent::Name(name) => name,
                     ToolCallDeltaContent::Delta(delta) => delta,
@@ -380,9 +387,7 @@ async fn invoke_with_stream<'a>(
                     .content
                     .iter()
                     .filter_map(|c| match c {
-                        rig::message::ReasoningContent::Text { text, .. } => {
-                            Some(text.as_str())
-                        }
+                        rig::message::ReasoningContent::Text { text, .. } => Some(text.as_str()),
                         rig::message::ReasoningContent::Summary(s) => Some(s.as_str()),
                         _ => None,
                     })

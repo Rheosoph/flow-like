@@ -438,7 +438,10 @@ impl UnifiedCopilot {
                     .await?
                 };
 
-                Ok(Self::merge_combined_responses(primary_response, secondary_response))
+                Ok(Self::merge_combined_responses(
+                    primary_response,
+                    secondary_response,
+                ))
             }
         }
     }
@@ -568,7 +571,10 @@ impl UnifiedCopilot {
     }
 
     fn keyword_hits(prompt: &str, keywords: &[&str]) -> usize {
-        keywords.iter().filter(|keyword| prompt.contains(**keyword)).count()
+        keywords
+            .iter()
+            .filter(|keyword| prompt.contains(**keyword))
+            .count()
     }
 
     fn merge_combined_responses(
