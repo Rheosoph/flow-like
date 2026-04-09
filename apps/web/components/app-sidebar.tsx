@@ -928,12 +928,21 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
 		[],
+		Boolean(auth?.isAuthenticated),
+		authQueryDeps,
 	);
-	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const info = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		Boolean(auth?.isAuthenticated),
+		authQueryDeps,
+	);
 
 	const displayName: string = useMemo(() => {
 		if (!info.data) return "Offline";
@@ -949,8 +958,8 @@ export function NavUser({
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
-		true,
-		[],
+		Boolean(auth?.isAuthenticated),
+		authQueryDeps,
 		0, // staleTime: 0 to always refetch on mount
 	);
 	// Show total unread count (includes invites + local workflow notifications)
@@ -979,7 +988,7 @@ export function NavUser({
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
-								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 									{notificationCount > 5 ? "5+" : notificationCount}
 								</div>
 							)}
@@ -1064,7 +1073,7 @@ export function NavUser({
 												<BellIcon className="size-4" />
 												{/* Add notification indicator */}
 												{notificationCount > 0 && (
-													<div className="absolute -top-0 -left-0 bg-red-500 text-white text-xs rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+													<div className="absolute top-0 left-0 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 														{notificationCount > 5 ? "5+" : notificationCount}
 													</div>
 												)}

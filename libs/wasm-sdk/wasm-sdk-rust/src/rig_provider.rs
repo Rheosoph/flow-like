@@ -306,6 +306,23 @@ struct ParsedLlmResponse {
     usage: Option<Usage>,
 }
 
+fn usage_from_host_tokens(
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+) -> Usage {
+    let input_tokens = prompt_tokens.unwrap_or_default();
+    let output_tokens = completion_tokens.unwrap_or_default();
+
+    Usage {
+        input_tokens,
+        output_tokens,
+        total_tokens: total_tokens.unwrap_or(input_tokens.saturating_add(output_tokens)),
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+    }
+}
+
 /// Parse the host response JSON into rig AssistantContent items.
 /// The host may return a JSON ChatMessage (with optional tool_calls) or plain text.
 fn parse_llm_response(text: &str) -> ParsedLlmResponse {
@@ -313,6 +330,8 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
     struct HostResponse {
         #[serde(default)]
         content: Option<String>,
+        #[serde(default)]
+        reasoning: Option<String>,
         #[serde(default)]
         tool_calls: Option<Vec<HostToolCall>>,
         #[serde(default)]
@@ -341,6 +360,14 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
     if let Ok(resp) = serde_json::from_str::<HostResponse>(text) {
         let mut items: Vec<AssistantContent> = Vec::new();
 
+        if let Some(reasoning) = &resp.reasoning {
+            if !reasoning.is_empty() {
+                items.push(AssistantContent::Reasoning(Reasoning::multi(vec![
+                    reasoning.clone(),
+                ])));
+            }
+        }
+
         if let Some(content) = &resp.content {
             if !content.is_empty() {
                 items.push(AssistantContent::Text(Text { text: content.clone() }));
@@ -356,10 +383,8 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
             }
         }
 
-        let usage = resp.usage.map(|u| Usage {
-            prompt_tokens: u.prompt_tokens,
-            completion_tokens: u.completion_tokens,
-            total_tokens: u.total_tokens,
+        let usage = resp.usage.map(|u| {
+            usage_from_host_tokens(u.prompt_tokens, u.completion_tokens, u.total_tokens)
         });
 
         if !items.is_empty() {
@@ -679,6 +704,29 @@ impl CompletionModel for FlowLikeCompletionModel {
 
             for content in parsed.choice.iter() {
                 match content {
+                    AssistantContent::Reasoning(reasoning) => {
+                        let reasoning_text = reasoning
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                rig::message::ReasoningContent::Text { text, .. } => {
+                                    Some(text.as_str())
+                                }
+                                rig::message::ReasoningContent::Summary(summary) => {
+                                    Some(summary.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+
+                        if !reasoning_text.is_empty() {
+                            items.push(Ok(RawStreamingChoice::ReasoningDelta {
+                                id: reasoning.id.clone(),
+                                reasoning: reasoning_text,
+                            }));
+                        }
+                    }
                     AssistantContent::Text(t) => {
                         items.push(Ok(RawStreamingChoice::Message(t.text.clone())));
                     }
@@ -695,11 +743,7 @@ impl CompletionModel for FlowLikeCompletionModel {
                 }
             }
 
-            let final_usage = parsed.usage.map(|u| rig::completion::Usage {
-                prompt_tokens: u.prompt_tokens,
-                completion_tokens: u.completion_tokens,
-                total_tokens: u.total_tokens,
-            });
+            let final_usage = parsed.usage;
 
             items.push(Ok(RawStreamingChoice::FinalResponse(
                 FinalCompletionResponse { usage: final_usage },
@@ -1306,6 +1350,26 @@ mod tests {
         } else {
             panic!("Expected Parts content with reasoning");
         }
+    }
+
+    #[test]
+    fn test_parse_llm_response_preserves_reasoning() {
+        let parsed = parse_llm_response(
+            r#"{
+                "reasoning": "thinking step 1\nthinking step 2",
+                "content": "final answer",
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 2,
+                    "total_tokens": 3
+                }
+            }"#,
+        );
+
+        let items: Vec<_> = parsed.choice.iter().collect();
+        assert!(items.iter().any(|item| matches!(item, AssistantContent::Reasoning(_))));
+        assert!(items.iter().any(|item| matches!(item, AssistantContent::Text(_))));
+        assert_eq!(parsed.usage.expect("usage should be present").total_tokens, 3);
     }
 
     #[test]

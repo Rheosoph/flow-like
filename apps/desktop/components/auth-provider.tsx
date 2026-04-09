@@ -4,6 +4,7 @@ import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	useBackend,
+	useInvalidateInfiniteInvoke,
 	useInvalidateInvoke,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
@@ -338,6 +339,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const auth = useAuth();
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const invalidateInfinite = useInvalidateInfiniteInvoke();
 	const userManager = useContext(UserManagerContext);
 
 	// auth.events belongs to the AuthProvider's internal UserManager (captured
@@ -439,13 +441,21 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 			void Promise.allSettled([
 				invalidate(backend.userState.getNotifications, []),
+				invalidateInfinite(backend.userState.listNotifications, [false]),
+				invalidateInfinite(backend.teamState.getInvites, []),
 				invalidate(backend.userState.getProfile, []),
 				invalidate(backend.userState.getSettingsProfile, []),
 				invalidate(backend.userState.getProfiles, []),
 				invalidate(backend.appState.getApps, []),
 			]);
 		})();
-	}, [backend, auth?.isAuthenticated, auth?.user?.profile?.sub, invalidate]);
+	}, [
+		backend,
+		auth?.isAuthenticated,
+		auth?.user?.profile?.sub,
+		invalidate,
+		invalidateInfinite,
+	]);
 
 	return (
 		<>

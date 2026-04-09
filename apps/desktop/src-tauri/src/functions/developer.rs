@@ -3,8 +3,9 @@ use crate::{
     state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
 };
 use dashmap::DashMap;
-use flow_like::flow::node::{Node, NodeLogic, NodeWasm};
+use flow_like::flow::node::{Node, NodeLogic, NodePermission, NodeWasm};
 use flow_like_wasm::abi::{WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
+use flow_like_wasm::host_functions::ModelContext;
 use flow_like_wasm::manifest::PackageManifest;
 use flow_like_wasm::{WasmEngine, WasmNodeLogic, WasmSecurityConfig, build_node_from_definition};
 use serde::{Deserialize, Serialize};
@@ -980,6 +981,39 @@ pub struct RunNodeInput {
     pub node_name: String,
 }
 
+fn resolve_debug_node_definition(
+    definitions: Vec<WasmNodeDefinition>,
+    node_name: &str,
+) -> Result<WasmNodeDefinition, TauriFunctionError> {
+    if let Some(definition) = definitions.iter().find(|def| def.name == node_name) {
+        return Ok(definition.clone());
+    }
+
+    if definitions.len() == 1 {
+        return definitions
+            .into_iter()
+            .next()
+            .ok_or_else(|| TauriFunctionError::new("No node definitions found"));
+    }
+
+    if node_name.is_empty() {
+        return Err(TauriFunctionError::new(
+            "Node name is required when the WASM package exports multiple nodes",
+        ));
+    }
+
+    Err(TauriFunctionError::new(&format!(
+        "Node '{}' not found in the selected WASM module",
+        node_name
+    )))
+}
+
+async fn current_registry_auth_token(app_handle: &AppHandle) -> Option<String> {
+    let state = TauriRegistryState::construct(app_handle).await.ok()?;
+    let guard = state.lock().await;
+    guard.as_ref().and_then(|client| client.auth_token().cloned())
+}
+
 #[tauri::command]
 pub async fn developer_run_node(
     app_handle: AppHandle,
@@ -987,6 +1021,15 @@ pub async fn developer_run_node(
 ) -> Result<WasmExecutionResult, TauriFunctionError> {
     let engine = TauriWasmEngineState::construct(&app_handle)
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle)
+        .await
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    let execution_settings = TauriSettingsState::current_profile(&app_handle)
+        .await
+        .ok()
+        .map(|profile| profile.execution_settings);
+    let registry_auth_token = current_registry_auth_token(&app_handle).await;
+
     tokio::spawn(async move {
         let path = PathBuf::from(&input.wasm_path);
         if !path.exists() {
@@ -998,10 +1041,48 @@ pub async fn developer_run_node(
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-        let security = WasmSecurityConfig::permissive();
-        let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
+        let mut inspect_instance = loaded
+            .instantiate(&engine, WasmSecurityConfig::permissive())
+            .await
+            .map_err(|e| {
+                TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
+            })?;
+
+        let definition = resolve_debug_node_definition(
+            inspect_instance.call_get_nodes().await.map_err(|e| {
+                TauriFunctionError::new(&format!("Failed to get node definitions: {}", e))
+            })?,
+            &input.node_name,
+        )?;
+
+        let mut instance = loaded
+            .instantiate(
+                &engine,
+                WasmSecurityConfig::from_node_permissions(&definition.permissions),
+            )
+            .await
+            .map_err(|e| {
             TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
         })?;
+
+        if definition
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, NodePermission::Models))
+        {
+            if let Some(settings) = execution_settings.clone() {
+                flow_like_state
+                    .model_factory
+                    .lock()
+                    .await
+                    .set_execution_settings(settings);
+            }
+
+            instance.host_state_mut().model_context = Some(ModelContext {
+                app_state: flow_like_state.clone(),
+                token: registry_auth_token.clone(),
+            });
+        }
 
         let exec_input = WasmExecutionInput {
             inputs: input.inputs,
@@ -1012,7 +1093,7 @@ pub async fn developer_run_node(
             user_id: "debug".to_string(),
             stream_state: false,
             log_level: 0,
-            node_name: input.node_name,
+            node_name: definition.name,
         };
 
         instance

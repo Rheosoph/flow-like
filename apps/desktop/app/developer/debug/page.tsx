@@ -27,6 +27,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 	cn,
+	useBackend,
+	useInvoke,
 } from "@tm9657/flow-like-ui";
 import type {
 	PackageInspection,
@@ -34,6 +36,8 @@ import type {
 	WasmNodeDefinition,
 	WasmPinDefinition,
 } from "@tm9657/flow-like-ui/lib/schema/developer";
+import type { IBit } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
+import { IBitTypes } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
 import type { PackageManifest } from "@tm9657/flow-like-ui/lib/schema/wasm";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -92,6 +96,8 @@ interface JsonSchema {
 	definitions?: Record<string, JsonSchema>;
 }
 
+const MODEL_BIT_TYPES = new Set<IBitTypes>([IBitTypes.Llm, IBitTypes.Vlm]);
+
 function parseSchema(raw: string | undefined): JsonSchema | null {
 	if (!raw) return null;
 	try {
@@ -101,6 +107,214 @@ function parseSchema(raw: string | undefined): JsonSchema | null {
 		/* malformed schema */
 	}
 	return null;
+}
+
+function getBitKey(bit: Pick<IBit, "id" | "hub">): string {
+	return bit.hub ? `${bit.hub}:${bit.id}` : bit.id;
+}
+
+function getBitDisplayName(bit: IBit): string {
+	return Object.values(bit.meta ?? {})[0]?.name ?? bit.id;
+}
+
+function getBitProviderName(bit: IBit): string | null {
+	if (typeof bit.parameters !== "object" || bit.parameters == null) return null;
+	const provider = (bit.parameters as {
+		provider?: { provider_name?: string | null };
+	}).provider?.provider_name;
+	return typeof provider === "string" && provider.length > 0 ? provider : null;
+}
+
+function isSelectedBitValue(value: unknown): value is Pick<IBit, "id" | "hub"> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as { id?: unknown }).id === "string"
+	);
+}
+
+function isBitSchema(schema: JsonSchema | null): boolean {
+	if (!schema) return false;
+
+	const resolved = resolveSchema(schema, schema);
+	if (resolved.type !== "object") return false;
+
+	const properties = resolved.properties ?? {};
+	const typeSchema = properties.type
+		? resolveSchema(properties.type, schema)
+		: undefined;
+	const typeValues = (typeSchema?.enum ?? []).filter(
+		(value): value is string => typeof value === "string",
+	);
+
+	return (
+		"id" in properties &&
+		"type" in properties &&
+		(
+			typeValues.some((value) => MODEL_BIT_TYPES.has(value as IBitTypes)) ||
+			"parameters" in properties ||
+			"meta" in properties ||
+			"hub" in properties ||
+			"hash" in properties
+		)
+	);
+}
+
+function isModelBitPin(pin: WasmPinDefinition): boolean {
+	return pin.data_type === "Struct" && isBitSchema(parseSchema(pin.schema));
+}
+
+function applySpecialInputDefaults(
+	node: WasmNodeDefinition,
+	values: Record<string, unknown>,
+	availableModelBits: IBit[],
+): Record<string, unknown> {
+	if (availableModelBits.length === 0) return values;
+
+	let nextValues = values;
+	for (const pin of node.pins) {
+		if (
+			pin.pin_type !== "Input" ||
+			pin.data_type === "Execution" ||
+			!isModelBitPin(pin) ||
+			isSelectedBitValue(values[pin.name])
+		) {
+			continue;
+		}
+
+		if (nextValues === values) {
+			nextValues = { ...values };
+		}
+		nextValues[pin.name] = availableModelBits[0];
+	}
+
+	return nextValues;
+}
+
+function buildInitialInputValues(
+	node: WasmNodeDefinition,
+	availableModelBits: IBit[],
+): Record<string, unknown> {
+	return applySpecialInputDefaults(
+		node,
+		initInputDefaults(node),
+		availableModelBits,
+	);
+}
+
+function getPermissionMeta(permission: string): {
+	label: string;
+	description: string;
+	className: string;
+	icon: typeof Globe;
+} {
+	switch (permission) {
+		case "network:http":
+			return {
+				label: "HTTP",
+				description: "Allows outbound HTTP requests during debug execution.",
+				className: "text-amber-600 border-amber-500/30",
+				icon: Globe,
+			};
+		case "network:websocket":
+			return {
+				label: "WebSocket",
+				description: "Allows WebSocket connections from the node sandbox.",
+				className: "text-amber-600 border-amber-500/30",
+				icon: Globe,
+			};
+		case "network:tcp":
+			return {
+				label: "TCP",
+				description: "Allows outbound TCP sockets for this node.",
+				className: "text-amber-600 border-amber-500/30",
+				icon: Globe,
+			};
+		case "network:udp":
+			return {
+				label: "UDP",
+				description: "Allows outbound UDP sockets for this node.",
+				className: "text-amber-600 border-amber-500/30",
+				icon: Globe,
+			};
+		case "network:dns":
+			return {
+				label: "DNS",
+				description: "Allows hostname resolution during execution.",
+				className: "text-amber-600 border-amber-500/30",
+				icon: Globe,
+			};
+		case "storage:read":
+			return {
+				label: "Storage Read",
+				description: "Allows reading node or user storage through Flow-Like APIs.",
+				className: "text-blue-600 border-blue-500/30",
+				icon: HardDrive,
+			};
+		case "storage:write":
+			return {
+				label: "Storage Write",
+				description: "Allows writing node or user storage through Flow-Like APIs.",
+				className: "text-blue-600 border-blue-500/30",
+				icon: HardDrive,
+			};
+		case "variables":
+			return {
+				label: "Variables",
+				description: "Allows reading and writing flow variables.",
+				className: "text-slate-600 border-slate-500/30",
+				icon: HardDrive,
+			};
+		case "cache":
+			return {
+				label: "Cache",
+				description: "Allows access to execution cache entries.",
+				className: "text-slate-600 border-slate-500/30",
+				icon: HardDrive,
+			};
+		case "streaming":
+			return {
+				label: "Streaming",
+				description: "Allows incremental output streaming while the node runs.",
+				className: "text-emerald-600 border-emerald-500/30",
+				icon: Zap,
+			};
+		case "models":
+			return {
+				label: "Models",
+				description: "Allows invoking LLM or VLM model providers from the host.",
+				className: "text-fuchsia-600 border-fuchsia-500/30",
+				icon: Sparkles,
+			};
+		case "a2ui":
+			return {
+				label: "A2UI",
+				description: "Allows agent-to-UI rendering features.",
+				className: "text-sky-600 border-sky-500/30",
+				icon: Shield,
+			};
+		case "oauth":
+			return {
+				label: "OAuth",
+				description: "Allows access to OAuth-backed credentials.",
+				className: "text-orange-600 border-orange-500/30",
+				icon: Lock,
+			};
+		case "functions":
+			return {
+				label: "Functions",
+				description: "Allows invoking other functions or sub-flows.",
+				className: "text-violet-600 border-violet-500/30",
+				icon: Code2,
+			};
+		default:
+			return {
+				label: permission,
+				description: "Custom node capability declared by the WASM node.",
+				className: "text-muted-foreground border-border/30",
+				icon: Shield,
+			};
+	}
 }
 
 function resolveRef(
@@ -168,6 +382,100 @@ function createDefaultFromSchema(
 		default:
 			return null;
 	}
+}
+
+function NodePermissionBadges({
+	permissions,
+	showEmpty = false,
+}: {
+	permissions: string[];
+	showEmpty?: boolean;
+}) {
+	if (permissions.length === 0) {
+		if (!showEmpty) return null;
+		return (
+			<Badge variant="outline" className="text-xs text-muted-foreground/70">
+				No extra permissions
+			</Badge>
+		);
+	}
+
+	return (
+		<div className="flex flex-wrap gap-1.5">
+			{permissions.map((permission) => {
+				const meta = getPermissionMeta(permission);
+				const Icon = meta.icon;
+				return (
+					<Badge
+						key={permission}
+						variant="outline"
+						className={cn("gap-1 text-xs", meta.className)}
+					>
+						<Icon className="h-3 w-3" />
+						{meta.label}
+					</Badge>
+				);
+			})}
+		</div>
+	);
+}
+
+function ModelBitInput({
+	bits,
+	value,
+	onChange,
+}: {
+	bits: IBit[];
+	value: unknown;
+	onChange: (val: unknown) => void;
+}) {
+	const selectedKey = isSelectedBitValue(value)
+		? getBitKey(value)
+		: undefined;
+	const selectedBit = bits.find((bit) => getBitKey(bit) === selectedKey);
+
+	return (
+		<div className="space-y-2">
+			<Select
+				value={selectedKey}
+				onValueChange={(nextKey) => {
+					const nextBit = bits.find((bit) => getBitKey(bit) === nextKey);
+					onChange(nextBit ?? null);
+				}}
+				disabled={bits.length === 0}
+			>
+				<SelectTrigger className="h-9">
+					<SelectValue placeholder="Select LLM/VLM bit..." />
+				</SelectTrigger>
+				<SelectContent>
+					{bits.map((bit) => (
+						<SelectItem key={getBitKey(bit)} value={getBitKey(bit)}>
+							{getBitDisplayName(bit)}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			{selectedBit ? (
+				<div className="rounded-lg border border-border/20 bg-muted/5 p-3 space-y-1.5">
+					<div className="flex items-center justify-between gap-2">
+						<span className="text-xs font-medium truncate">
+							{getBitDisplayName(selectedBit)}
+						</span>
+						<Badge variant="outline" className="text-[10px]">
+							{selectedBit.type}
+						</Badge>
+					</div>
+					<p className="text-[11px] text-muted-foreground/60">
+						{getBitProviderName(selectedBit) ?? selectedBit.hub ?? "Current profile"}
+					</p>
+				</div>
+			) : (
+				<p className="text-xs text-amber-600">
+					No LLM or VLM bits are available in the current profile.
+				</p>
+			)}
+		</div>
+	);
 }
 
 function SchemaField({
@@ -617,11 +925,23 @@ function PinInput({
 	pin,
 	value,
 	onChange,
+ 	availableModelBits,
 }: {
 	pin: WasmPinDefinition;
 	value: unknown;
 	onChange: (val: unknown) => void;
+	availableModelBits: IBit[];
 }) {
+	if (isModelBitPin(pin)) {
+		return (
+			<ModelBitInput
+				bits={availableModelBits}
+				value={value}
+				onChange={onChange}
+			/>
+		);
+	}
+
 	if (pin.valid_values && pin.valid_values.length > 0) {
 		return (
 			<Select value={String(value ?? "")} onValueChange={(v) => onChange(v)}>
@@ -928,6 +1248,82 @@ function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
 	);
 }
 
+function NodePermissionsDetail({ permissions }: { permissions: string[] }) {
+	if (permissions.length === 0) {
+		return (
+			<div className="rounded-xl border border-border/20 bg-muted/5 p-4">
+				<p className="text-sm text-muted-foreground/70">
+					This node does pure computation in the debug sandbox and does not request
+					any extra host capabilities.
+				</p>
+			</div>
+		);
+	}
+
+	return (
+		<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+			{permissions.map((permission) => {
+				const meta = getPermissionMeta(permission);
+				const Icon = meta.icon;
+				return (
+					<div
+						key={permission}
+						className="rounded-xl border border-border/20 bg-muted/5 p-4 space-y-2"
+					>
+						<div className="flex items-center gap-2">
+							<Icon className="h-4 w-4 text-muted-foreground/70" />
+							<span className="text-sm font-medium">{meta.label}</span>
+						</div>
+						<p className="text-xs text-muted-foreground/60">
+							{meta.description}
+						</p>
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+function NodePermissionsSummary({
+	permissions,
+	title = "Permissions",
+	description,
+	className,
+}: {
+	permissions: string[];
+	title?: string;
+	description?: string;
+	className?: string;
+}) {
+	return (
+		<div className={cn("rounded-xl border border-border/20 bg-muted/5 p-3", className)}>
+			<div className="flex items-center justify-between gap-3">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2">
+						<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
+						<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+							{title}
+						</span>
+					</div>
+					{description && (
+						<p className="mt-1 text-xs text-muted-foreground/60">
+							{description}
+						</p>
+					)}
+				</div>
+				<Badge variant="outline" className="text-[10px] shrink-0">
+					{permissions.length === 0
+						? "Pure"
+						: `${permissions.length} ${permissions.length === 1 ? "permission" : "permissions"}`}
+				</Badge>
+			</div>
+			<div className="mt-3">
+				<NodePermissionBadges permissions={permissions} showEmpty />
+			</div>
+		</div>
+	);
+}
+
 function NodeCard({
 	node,
 	isSelected,
@@ -982,6 +1378,17 @@ function NodeCard({
 						Long Running
 					</Badge>
 				)}
+			</div>
+			<div className="mt-3">
+				<NodePermissionsSummary
+					permissions={node.permissions}
+					title="Requires"
+					description="Sandbox capabilities this node asks for during execution."
+					className={cn(
+						"transition-colors",
+						isSelected ? "border-primary/20 bg-primary/5" : "bg-background/50",
+					)}
+				/>
 			</div>
 		</button>
 	);
@@ -1093,7 +1500,7 @@ function LintPanel({
 					</p>
 				</div>
 			) : (
-				<ScrollArea className="max-h-[500px]">
+				<ScrollArea className="max-h-125">
 					<div className="space-y-2 pr-3">
 						{filtered.map((issue, i) => (
 							<button
@@ -1133,6 +1540,7 @@ function LintPanel({
 }
 
 function DebugPageContent() {
+	const backend = useBackend();
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const initialProject = searchParams.get("project") ?? "";
@@ -1147,8 +1555,18 @@ function DebugPageContent() {
 	const [result, setResult] = useState<WasmExecutionResult | null>(null);
 	const [outputsExpanded, setOutputsExpanded] = useState(true);
 	const [activeTab, setActiveTab] = useState("debug");
+	const profileBits = useInvoke(
+		backend.bitState.getProfileBits,
+		backend.bitState,
+		[],
+	);
 
 	const selectedNode = nodes[selectedNodeIndex] ?? null;
+	const availableModelBits = useMemo(
+		() =>
+			(profileBits.data ?? []).filter((bit) => MODEL_BIT_TYPES.has(bit.type)),
+		[profileBits.data],
+	);
 
 	const inputPins = useMemo(
 		() =>
@@ -1168,6 +1586,15 @@ function DebugPageContent() {
 
 	const lintIssues = useMemo(() => lintNodes(nodes), [nodes]);
 	const lintCounts = useMemo(() => countBySeverity(lintIssues), [lintIssues]);
+	const missingModelInput = useMemo(
+		() =>
+			inputPins.some(
+				(pin) => isModelBitPin(pin) && !isSelectedBitValue(inputValues[pin.name]),
+			),
+		[inputPins, inputValues],
+	);
+	const selectedNodeRequiresModels =
+		selectedNode?.permissions.includes("models") ?? false;
 
 	const selectWasm = useCallback(async () => {
 		const selected = await open({
@@ -1190,13 +1617,15 @@ function DebugPageContent() {
 			setNodes(defs);
 			setIsPackage(defs.length > 1);
 			setManifest(null);
-			if (defs.length > 0) setInputValues(initInputDefaults(defs[0]));
+			if (defs.length > 0) {
+				setInputValues(buildInitialInputValues(defs[0], availableModelBits));
+			}
 		} catch (err) {
 			toast.error(`Failed to inspect: ${err}`);
 		} finally {
 			setLoading(false);
 		}
-	}, [wasmPath]);
+	}, [availableModelBits, wasmPath]);
 
 	const inspectProject = useCallback(async (projectPath?: string) => {
 		const target =
@@ -1215,13 +1644,15 @@ function DebugPageContent() {
 			setIsPackage(inspection.isPackage);
 			setWasmPath(inspection.wasmPath);
 			if (inspection.nodes.length > 0)
-				setInputValues(initInputDefaults(inspection.nodes[0]));
+				setInputValues(
+					buildInitialInputValues(inspection.nodes[0], availableModelBits),
+				);
 		} catch (err) {
 			toast.error(`Failed to inspect project: ${err}`);
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [availableModelBits]);
 
 	useEffect(() => {
 		if (initialProject) inspectProject(initialProject);
@@ -1232,10 +1663,19 @@ function DebugPageContent() {
 			setSelectedNodeIndex(index);
 			setResult(null);
 			const node = nodes[index];
-			if (node) setInputValues(initInputDefaults(node));
+			if (node) {
+				setInputValues(buildInitialInputValues(node, availableModelBits));
+			}
 		},
-		[nodes],
+		[availableModelBits, nodes],
 	);
+
+	useEffect(() => {
+		if (!selectedNode) return;
+		setInputValues((prev) =>
+			applySpecialInputDefaults(selectedNode, prev, availableModelBits),
+		);
+	}, [availableModelBits, selectedNode]);
 
 	const runNode = useCallback(async () => {
 		if (!wasmPath || !selectedNode) return;
@@ -1372,7 +1812,7 @@ function DebugPageContent() {
 											</Badge>
 										)}
 									</TabsTrigger>
-									{manifest && (
+									{selectedNode && (
 										<TabsTrigger value="permissions" className="gap-1.5">
 											<Shield className="h-3.5 w-3.5" />
 											Permissions
@@ -1412,19 +1852,42 @@ function DebugPageContent() {
 									<LintPanel issues={lintIssues} counts={lintCounts} onJumpToNode={(i) => { selectNode(i); setActiveTab("debug"); }} />
 								</TabsContent>
 
-								{manifest && (
+									{selectedNode && (
 									<TabsContent value="permissions" className="space-y-3">
-										<div className="rounded-xl border border-border/20 bg-card/50 p-4 space-y-4">
-											<div className="flex items-center gap-2">
-												<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
-												<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-													Package Permissions
-												</span>
+											<div className="rounded-xl border border-border/20 bg-card/50 p-4 space-y-4">
+												<div className="flex items-center gap-2">
+													<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
+													<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+														Node Permissions
+													</span>
+													<Badge variant="outline" className="text-[10px]">
+														Runtime-enforced
+													</Badge>
+												</div>
+												<p className="text-sm text-muted-foreground/70">
+													These capabilities come from the selected node definition and
+													are applied during debug execution.
+												</p>
+												<NodePermissionBadges
+													permissions={selectedNode.permissions}
+													showEmpty
+												/>
+												<div className="border-t border-border/10" />
+												<NodePermissionsDetail permissions={selectedNode.permissions} />
 											</div>
-											<PermissionsBadges manifest={manifest} />
-											<div className="border-t border-border/10" />
-											<PermissionsDetail manifest={manifest} />
-										</div>
+											{manifest && (
+												<div className="rounded-xl border border-border/20 bg-card/50 p-4 space-y-4">
+													<div className="flex items-center gap-2">
+														<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
+														<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+															Package Resource Tiers
+														</span>
+													</div>
+													<PermissionsBadges manifest={manifest} />
+													<div className="border-t border-border/10" />
+													<PermissionsDetail manifest={manifest} />
+												</div>
+											)}
 									</TabsContent>
 								)}
 
@@ -1458,6 +1921,32 @@ function DebugPageContent() {
 													)}
 												</div>
 											</div>
+											<div className="mt-3 flex flex-wrap items-center gap-2">
+												<NodePermissionsSummary
+													permissions={selectedNode.permissions}
+													title="Runtime Permissions"
+													description="These capabilities are granted to this node for debug execution."
+													className="w-full"
+												/>
+											</div>
+										</div>
+									)}
+
+									{selectedNode && (
+										<div className="rounded-xl border border-border/20 bg-card/50 p-4 space-y-4">
+											<div className="flex items-center gap-2">
+												<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
+												<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+													Execution Permissions
+												</span>
+												<Badge variant="outline" className="text-[10px]">
+													Applied on Run
+												</Badge>
+											</div>
+											<p className="text-sm text-muted-foreground/70">
+												The debug runner uses these node-declared capabilities when instantiating the WASM sandbox.
+											</p>
+											<NodePermissionsDetail permissions={selectedNode.permissions} />
 										</div>
 									)}
 
@@ -1475,7 +1964,7 @@ function DebugPageContent() {
 												<Button
 													size="sm"
 													onClick={runNode}
-													disabled={running || !wasmPath}
+													disabled={running || !wasmPath || missingModelInput}
 													className="h-8 rounded-full gap-1.5 px-4"
 												>
 													{running ? (
@@ -1493,6 +1982,11 @@ function DebugPageContent() {
 											) : (
 												<ScrollArea className="max-h-125">
 													<div className="space-y-4 pr-3">
+														{selectedNodeRequiresModels && missingModelInput && (
+															<div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700">
+																Select an LLM or VLM bit for this node before running it.
+															</div>
+														)}
 														{inputPins.map((pin) => (
 															<div key={pin.name} className="space-y-1.5">
 																<div className="flex items-center justify-between gap-2">
@@ -1510,6 +2004,7 @@ function DebugPageContent() {
 																	pin={pin}
 																	value={inputValues[pin.name]}
 																	onChange={(v) => setInputValue(pin.name, v)}
+																	availableModelBits={availableModelBits}
 																/>
 															</div>
 														))}

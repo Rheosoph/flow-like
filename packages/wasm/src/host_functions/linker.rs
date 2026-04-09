@@ -1616,7 +1616,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
             "flowlike_models",
             "llm_prompt",
             |caller: Caller<'_, StoreData>,
-             (bit_ptr, bit_len, messages_ptr, messages_len, _stream): (
+                 (bit_ptr, bit_len, messages_ptr, messages_len, stream): (
                 u32,
                 u32,
                 u32,
@@ -1758,6 +1758,25 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                                 text: text.to_string(),
                                             },
                                         );
+                                    } else if let Some(reasoning) = part
+                                        .get("reasoning")
+                                        .and_then(|reasoning| reasoning.get("text"))
+                                        .and_then(|text| text.as_array())
+                                    {
+                                        let text = reasoning
+                                            .iter()
+                                            .filter_map(|entry| entry.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        if !text.is_empty() {
+                                            contents.push(
+                                                flow_like_model_provider::history::Content::Text {
+                                                    content_type:
+                                                        flow_like_model_provider::history::ContentType::Text,
+                                                    text,
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                                 flow_like_model_provider::history::MessageContent::Contents(
@@ -1818,7 +1837,8 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         bit.id.clone(),
                         history_messages,
                     );
-                    history.stream = None;
+                    let should_stream = stream != 0;
+                    history.stream = should_stream.then_some(true);
 
                     // Apply optional request parameters
                     if let Some(temp) = req_temperature {
@@ -1906,7 +1926,30 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         );
                     }
 
-                    let response = match model.invoke(&history, None).await {
+                    let stream_events = should_stream.then(|| {
+                        Arc::new(parking_lot::RwLock::new(Vec::<crate::host_functions::StreamEvent>::new()))
+                    });
+
+                    let callback = stream_events.as_ref().map(|stream_events_cb| {
+                        let stream_events_cb = stream_events_cb.clone();
+                        Arc::new(
+                            move |chunk: flow_like_model_provider::response_chunk::ResponseChunk| {
+                                let events = stream_events_cb.clone();
+                                let future: std::pin::Pin<Box<dyn std::future::Future<Output = flow_like_types::Result<()>> + Send>> = Box::pin(async move {
+                                    if let Ok(chunk_json) = serde_json::to_value(&chunk) {
+                                        events.write().push(crate::host_functions::StreamEvent {
+                                            event_type: "llm_chunk".to_string(),
+                                            data: chunk_json,
+                                        });
+                                    }
+                                    Ok(())
+                                });
+                                future
+                            },
+                        ) as flow_like_model_provider::llm::LLMCallback
+                    });
+
+                    let response = match model.invoke(&history, callback).await {
                         Ok(r) => r,
                         Err(e) => {
                             println!("llm_prompt: model invoke failed: {e}");
@@ -1915,6 +1958,12 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             return pack_ptr_len(ptr, len);
                         }
                     };
+
+                    if let Some(stream_events) = stream_events {
+                        let collected = std::mem::take(&mut *stream_events.write());
+                        let mut host_events = caller.data().host_state.stream_events.write();
+                        host_events.extend(collected);
+                    }
 
                     // Convert response to SDK ChatMessage JSON
                     let resp_msg = match response.last_message() {
@@ -1951,11 +2000,19 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             )
                         };
 
+                    let usage = serde_json::json!({
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    });
+
                     let result = serde_json::json!({
                         "role": "assistant",
                         "content": resp_msg.content.clone().unwrap_or_default(),
+                        "reasoning": resp_msg.reasoning.clone(),
                         "tool_calls": tool_calls_json,
                         "message_id": response.id,
+                        "usage": usage,
                     });
 
                     let result_str = result.to_string();
@@ -2056,12 +2113,28 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             flow_like_model_provider::history::MessageContent::String(c.to_string())
                         } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
                             let contents = parts.iter().filter_map(|part| {
-                                part.get("text").and_then(|t| t.as_str()).map(|text| {
-                                    flow_like_model_provider::history::Content::Text {
+                                part
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(|text| text.to_string())
+                                    .or_else(|| {
+                                        part
+                                            .get("reasoning")
+                                            .and_then(|reasoning| reasoning.get("text"))
+                                            .and_then(|text| text.as_array())
+                                            .map(|entries| {
+                                                entries
+                                                    .iter()
+                                                    .filter_map(|entry| entry.as_str())
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n")
+                                            })
+                                    })
+                                    .filter(|text| !text.is_empty())
+                                    .map(|text| flow_like_model_provider::history::Content::Text {
                                         content_type: flow_like_model_provider::history::ContentType::Text,
-                                        text: text.to_string(),
-                                    }
-                                })
+                                        text,
+                                    })
                             }).collect();
                             flow_like_model_provider::history::MessageContent::Contents(contents)
                         } else {
@@ -2190,6 +2263,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let result = serde_json::json!({
                         "role": "assistant",
                         "content": resp_msg.content.clone().unwrap_or_default(),
+                        "reasoning": resp_msg.reasoning.clone(),
                         "tool_calls": tool_calls_json,
                         "message_id": response.id,
                         "usage": usage,

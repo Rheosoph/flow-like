@@ -124,7 +124,7 @@ export class WebUserState implements IUserState {
 
 	async markNotificationRead(notificationId: string): Promise<void> {
 		await apiPost(
-			`user/notifications/${notificationId}`,
+			`user/notifications/${notificationId}/read`,
 			undefined,
 			this.backend.auth,
 		);
@@ -135,11 +135,15 @@ export class WebUserState implements IUserState {
 	}
 
 	async markAllNotificationsRead(): Promise<number> {
-		const result = await apiPost<{ count: number }>(
+		const result = await apiPost<number | { count: number }>(
 			"user/notifications/read-all",
 			undefined,
 			this.backend.auth,
 		);
+		if (typeof result === "number") {
+			return result;
+		}
+
 		return result?.count ?? 0;
 	}
 

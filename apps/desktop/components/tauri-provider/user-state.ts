@@ -243,8 +243,9 @@ export class UserState implements IUserState {
 	async markNotificationRead(notificationId: string): Promise<void> {
 		// Try local first
 		try {
-			await markLocalNotificationRead(notificationId);
-			return;
+			if (await markLocalNotificationRead(notificationId)) {
+				return;
+			}
 		} catch {
 			// Not a local notification, try remote
 		}
@@ -256,7 +257,7 @@ export class UserState implements IUserState {
 
 		await fetcher(
 			this.backend.profile,
-			`user/notifications/${notificationId}`,
+			`user/notifications/${notificationId}/read`,
 			{
 				method: "POST",
 			},
@@ -267,8 +268,9 @@ export class UserState implements IUserState {
 	async deleteNotification(notificationId: string): Promise<void> {
 		// Try local first
 		try {
-			await deleteLocalNotification(notificationId);
-			return;
+			if (await deleteLocalNotification(notificationId)) {
+				return;
+			}
 		} catch {
 			// Not a local notification, try remote
 		}

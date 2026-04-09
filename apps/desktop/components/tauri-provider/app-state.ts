@@ -633,7 +633,14 @@ export class AppState implements IAppState {
 	}
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {
-		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
+		const auth = this.backend.auth;
+
+		if (!auth?.isAuthenticated) {
+			await auth?.signinRedirect();
+			return;
+		}
+
+		if (this.backend.profile && this.backend.queryClient) {
 			await fetcher<IApp>(
 				this.backend.profile,
 				`apps/${appId}/team/queue`,
@@ -643,16 +650,12 @@ export class AppState implements IAppState {
 						comment: comment,
 					}),
 				},
-				this.backend.auth,
+				auth,
 			);
 			return;
 		}
 
-		if (this.backend.auth) {
-			await this.backend.auth.signinRedirect();
-			return;
-		}
-		toast.error("You must be logged in to request access to an app.");
+		throw new Error("Profile or auth context not available");
 	}
 
 	async purchaseApp(appId: string): Promise<IPurchaseResponse> {

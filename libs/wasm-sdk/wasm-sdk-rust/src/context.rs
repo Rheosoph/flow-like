@@ -318,8 +318,8 @@ impl Context {
 
     pub fn llm_prompt_stream(&self, bit: &Bit, messages: &[ChatMessage]) -> Option<String> {
         let bit_json = serde_json::to_string(bit).ok()?;
-        let messages_json = serde_json::to_string(messages).ok()?;
-        crate::host::llm_prompt(&bit_json, &messages_json, true)
+        let request_json = serde_json::json!({ "messages": messages }).to_string();
+        crate::host::llm_prompt_stream(&bit_json, &request_json)
     }
 
     // ========================================================================
