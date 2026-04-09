@@ -1011,7 +1011,9 @@ fn resolve_debug_node_definition(
 async fn current_registry_auth_token(app_handle: &AppHandle) -> Option<String> {
     let state = TauriRegistryState::construct(app_handle).await.ok()?;
     let guard = state.lock().await;
-    guard.as_ref().and_then(|client| client.auth_token().cloned())
+    guard
+        .as_ref()
+        .and_then(|client| client.auth_token().cloned())
 }
 
 #[tauri::command]
@@ -1062,8 +1064,8 @@ pub async fn developer_run_node(
             )
             .await
             .map_err(|e| {
-            TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
-        })?;
+                TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
+            })?;
 
         if definition
             .permissions
