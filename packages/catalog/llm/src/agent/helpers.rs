@@ -1568,15 +1568,6 @@ pub async fn execute_agent_streaming(
         }
     }
 
-    // Proven-deterministic cache:
-    // - call_prior_result: last result seen for (name::args) — used to detect consistency
-    // - call_result_cache: only populated after 2 consecutive identical results (proven deterministic)
-    // - call_cache_blacklist: keys that ever returned different results — never cached
-    let mut call_prior_result: HashMap<String, Value> = HashMap::new();
-    let mut call_result_cache: HashMap<String, Value> = HashMap::new();
-    let mut call_cache_blacklist: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-
     // Follow rig's pattern: prompt is always the last message in current_history,
     // and everything before it is the chat history. This ensures that after tool
     // results are appended, the tool result becomes the new "prompt" and the
@@ -1812,21 +1803,7 @@ pub async fn execute_agent_streaming(
             {
                 tool_calls_found = true;
 
-                let cache_key = format!(
-                    "{}::{}",
-                    name,
-                    json::to_string(arguments).unwrap_or_default()
-                );
-                let tool_output = if let Some(cached) = call_result_cache.get(&cache_key) {
-                    context.log_message(
-                        &format!(
-                            "Cache hit for '{}' — proven deterministic, skipping execution",
-                            name
-                        ),
-                        LogLevel::Info,
-                    );
-                    cached.clone()
-                } else if let Some(referenced_node) = tool_name_to_node.get(name) {
+                let tool_output = if let Some(referenced_node) = tool_name_to_node.get(name) {
                     let result = execute_tool_call(context, referenced_node, name, arguments).await;
                     match result {
                         Ok(value) => value,
@@ -1910,30 +1887,6 @@ pub async fn execute_agent_streaming(
                         name
                     ));
                 };
-
-                // Update proven-deterministic cache state (skip for cache hits — already proven)
-                if !call_result_cache.contains_key(&cache_key)
-                    && !call_cache_blacklist.contains(&cache_key)
-                {
-                    if let Some(prior) = call_prior_result.get(&cache_key) {
-                        if *prior == tool_output {
-                            context.log_message(
-                                &format!("Tool '{}' returned same result twice — caching as deterministic", name),
-                                LogLevel::Info,
-                            );
-                            call_result_cache.insert(cache_key.clone(), tool_output.clone());
-                        } else {
-                            context.log_message(
-                                &format!("Tool '{}' returned different result for same args — will not cache", name),
-                                LogLevel::Info,
-                            );
-                            call_cache_blacklist.insert(cache_key.clone());
-                            call_prior_result.remove(&cache_key);
-                        }
-                    } else {
-                        call_prior_result.insert(cache_key, tool_output.clone());
-                    }
-                }
 
                 tool_results.push((
                     id.clone(),
