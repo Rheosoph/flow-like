@@ -102,6 +102,10 @@ pub fn routes() -> Router<AppState> {
             axum::routing::delete(push_targets::unregister_push_target),
         )
         .route(
+            "/notifications/create",
+            post(notifications::create_user_notification),
+        )
+        .route(
             "/notifications/list",
             get(notifications::list_notifications),
         )

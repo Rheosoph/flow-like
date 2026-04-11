@@ -1,3 +1,4 @@
+use super::persist::{PersistNotificationParams, build_notification_link, persist_notification};
 use flow_like::{
     flow::{
         board::Board,
@@ -11,7 +12,8 @@ use flow_like_types::async_trait;
 use std::sync::Arc;
 
 /// Node to notify the user who executed the workflow.
-/// Sends an InterCom notification event that can be displayed locally.
+/// Sends an InterCom notification event that can be displayed locally
+/// and persists it via the backend API for push delivery.
 #[crate::register_node]
 #[derive(Default)]
 pub struct NotifyUserNode {}
@@ -57,7 +59,7 @@ impl NodeLogic for NotifyUserNode {
         node.add_input_pin(
             "link",
             "Link",
-            "Link to navigate to when clicked (optional, e.g., /use?project=xyz)",
+            "Relative path for the notification link (e.g. /dashboard or /store?item=abc)",
             VariableType::String,
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
@@ -96,31 +98,60 @@ impl NodeLogic for NotifyUserNode {
         let link = context.evaluate_pin::<String>("link").await?;
         let show_desktop = context.evaluate_pin::<bool>("show_desktop").await?;
 
-        // Build notification event
+        // Build the resolved link with app_id + route query params
+        let app_id = context
+            .execution_cache
+            .as_ref()
+            .map(|c| c.app_id.as_str())
+            .unwrap_or("");
+        let resolved_link = build_notification_link(
+            app_id,
+            if link.is_empty() { None } else { Some(&link) },
+        );
+
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(show_desktop)
             .with_source_run_id(context.run_id())
-            .with_source_node_id(&context.id);
+            .with_source_node_id(&context.id)
+            .with_link(&resolved_link);
 
         if let Some(event_id) = context.event_id().await {
             notification = notification.with_event_id(&event_id);
         }
-
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
         if !icon.is_empty() {
             notification = notification.with_icon(&icon);
         }
-        if !link.is_empty() {
-            notification = notification.with_link(&link);
-        }
 
-        // Send notification via InterCom stream
+        // Send notification via InterCom stream (local display / SSE forwarding)
         context
             .stream_response("flow_notification", notification)
             .await?;
-        context.log_message("Notification sent", LogLevel::Info);
+
+        // Persist notification via backend API for push delivery
+        match persist_notification(
+            context,
+            PersistNotificationParams {
+                title,
+                description: (!description.is_empty()).then_some(description),
+                icon: (!icon.is_empty()).then_some(icon),
+                link: Some(resolved_link),
+                target_user_sub: None,
+            },
+        )
+        .await
+        {
+            Ok(true) => context.log_message("Notification persisted via API", LogLevel::Debug),
+            Ok(false) => {
+                context.log_message("Notification sent locally (no hub/token)", LogLevel::Debug)
+            }
+            Err(e) => context.log_message(
+                &format!("Failed to persist notification via API: {e}"),
+                LogLevel::Warn,
+            ),
+        }
 
         context
             .set_pin_value("success", flow_like_types::json::json!(true))

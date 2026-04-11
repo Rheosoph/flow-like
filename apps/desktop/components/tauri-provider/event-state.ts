@@ -186,10 +186,27 @@ export class EventState implements IEventState {
 		};
 
 		if (force) {
-			const remoteData = await syncRemote();
-			const queryKey = [this.getEvents.name || "backendFn", appId];
-			this.backend.queryClient.setQueryData(queryKey, remoteData);
-			return remoteData;
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getEvents.name || "backendFn", appId, true];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch (error) {
+				if (events.length === 0) throw error;
+				console.warn("[EventSync] Forced event fetch failed, falling back to local events:", error);
+				return events;
+			}
+		}
+
+		if (events.length === 0) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getEvents.name || "backendFn", appId];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch {
+				return events;
+			}
 		}
 
 		const promise = injectDataFunction(

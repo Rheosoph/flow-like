@@ -265,22 +265,14 @@ export class AppState implements IAppState {
 			!this.backend.profile ||
 			!this.backend.auth
 		) {
-			console.warn(
-				"Query client, profile or auth context not available, returning local apps only.",
-			);
-			console.warn({
-				queryClient: this?.backend?.queryClient,
-				profile: this?.backend?.profile,
-				auth: this?.backend?.auth,
-			});
 			return localApps;
 		}
 
-		const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
+		const syncRemote = async () => {
+			const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
 
-		try {
 			const remoteData = await fetcher<[IApp, IMetadata | undefined][]>(
-				this.backend.profile,
+				this.backend.profile!,
 				"apps",
 				undefined,
 				this.backend.auth,
@@ -288,21 +280,21 @@ export class AppState implements IAppState {
 
 			for (const [app, meta] of remoteData) {
 				mergedData.set(app.id, [app, meta]);
-				await appsDB.visibility.put({
-					visibility: app.visibility ?? IAppVisibility.Private,
-					appId: app.id,
-				});
+				appsDB.visibility
+					.put({
+						visibility: app.visibility ?? IAppVisibility.Private,
+						appId: app.id,
+					})
+					.catch(() => {});
 
 				const exists = localApps.find(([localApp]) => localApp.id === app.id);
 				if (exists) {
-					await invoke("update_app", {
-						app: app,
-					});
+					invoke("update_app", { app }).catch(() => {});
 					if (meta)
-						await invoke("push_app_meta", {
+						invoke("push_app_meta", {
 							appId: app.id,
 							metadata: meta,
-						});
+						}).catch(() => {});
 					continue;
 				}
 
@@ -314,17 +306,39 @@ export class AppState implements IAppState {
 						id: app.id,
 					});
 			}
-		} catch (error) {
-			console.error("Failed to merge app data:", error);
+
+			localApps.forEach(([app, meta]) => {
+				if (!mergedData.has(app.id)) {
+					mergedData.set(app.id, [app, meta]);
+				}
+			});
+
+			return Array.from(mergedData.values());
+		};
+
+		if (localApps.length === 0) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getApps.name || "backendFn"];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch {
+				return localApps;
+			}
 		}
 
-		localApps.forEach(([app, meta]) => {
-			if (!mergedData.has(app.id)) {
-				mergedData.set(app.id, [app, meta]);
-			}
-		});
+		const promise = injectDataFunction(
+			syncRemote,
+			this,
+			this.backend.queryClient,
+			this.getApps,
+			[],
+			[],
+			localApps,
+		);
 
-		return Array.from(mergedData.values());
+		this.backend.backgroundTaskHandler(promise);
+		return localApps;
 	}
 
 	async getApp(appId: string): Promise<IApp> {

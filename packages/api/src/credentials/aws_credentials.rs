@@ -562,6 +562,7 @@ fn invoke_none_policy(
             ],
             "Resource": [
                 format!("arn:aws:s3:::{}", credentials.meta_bucket),
+                format!("arn:aws:s3:::{}", credentials.content_bucket),
             ],
             "Condition": {
                 "StringLike": {

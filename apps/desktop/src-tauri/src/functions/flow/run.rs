@@ -11,6 +11,7 @@ use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{json, tokio};
 use futures::TryStreamExt;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +22,99 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
+
+#[derive(Serialize)]
+struct ReportRunRequest {
+    run_id: String,
+    node_id: String,
+    event_id: Option<String>,
+    version: Option<String>,
+    log_level: u8,
+    start: u64,
+    end: u64,
+    error_message: Option<String>,
+}
+
+async fn report_run_to_backend(
+    app_handle: &AppHandle,
+    token: &str,
+    meta: &LogMeta,
+) {
+    let hub_url = match TauriSettingsState::current_profile(app_handle).await {
+        Ok(profile) => profile.hub_profile.hub.clone(),
+        Err(_) => return,
+    };
+
+    if hub_url.is_empty() {
+        return;
+    }
+
+    let url = format!(
+        "{}/api/v1/apps/{}/board/{}/runs/report",
+        hub_url.trim_end_matches('/'),
+        meta.app_id,
+        meta.board_id,
+    );
+
+    let error_message = if meta.log_level >= 3 {
+        Some(format!("Local run failed with log_level {}", meta.log_level))
+    } else {
+        None
+    };
+
+    let body = ReportRunRequest {
+        run_id: meta.run_id.clone(),
+        node_id: meta.node_id.clone(),
+        event_id: if meta.event_id.is_empty() {
+            None
+        } else {
+            Some(meta.event_id.clone())
+        },
+        version: if meta.version.is_empty() {
+            None
+        } else {
+            Some(meta.version.clone())
+        },
+        log_level: meta.log_level,
+        start: meta.start,
+        end: meta.end,
+        error_message,
+    };
+
+    let auth_val = if token.starts_with("Bearer ") {
+        token.to_string()
+    } else {
+        format!("Bearer {}", token)
+    };
+
+    let client = flow_like_types::reqwest::Client::new();
+    match client
+        .post(&url)
+        .header("Authorization", &auth_val)
+        .json(&body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!(run_id = %meta.run_id, "Reported local run to backend");
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                run_id = %meta.run_id,
+                status = %resp.status(),
+                "Failed to report local run to backend"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                run_id = %meta.run_id,
+                error = %e,
+                "Failed to report local run to backend"
+            );
+        }
+    }
+}
 
 /// Update the last_node_update timestamp for a run when we see run events
 fn touch_run_last_update(app_handle: &AppHandle, events: &[InterComEvent]) {
@@ -75,6 +169,9 @@ async fn execute_internal(
     let board = Arc::new(board.lock().await.clone());
 
     let profile = TauriSettingsState::current_profile(&app_handle).await?;
+
+    let app_handle_for_report = app_handle.clone();
+    let token_for_report = token.clone();
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
         Arc::new(move |event| {
@@ -226,6 +323,18 @@ async fn execute_internal(
         meta.flush(db, write_options.as_ref())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
+    }
+
+    // Report to backend for online apps when warnings or errors occurred
+    if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
+        if meta.log_level >= 2 {
+            let app_handle = app_handle_for_report.clone();
+            let token = token.clone();
+            let meta = meta.clone();
+            tokio::spawn(async move {
+                report_run_to_backend(&app_handle, &token, &meta).await;
+            });
+        }
     }
 
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);

@@ -43,6 +43,9 @@ pub struct CronSink {
     pub schedule: CronSchedule,
     pub last_fired: Option<String>,
     pub timezone: Option<String>,
+    /// Where this sink should execute: "LOCAL", "REMOTE", or "HYBRID"
+    #[serde(default)]
+    pub sink_execution: Option<String>,
 }
 
 impl CronSink {

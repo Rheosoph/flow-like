@@ -73,7 +73,7 @@ export function HttpConfig({
 		return `${protocol}://${hub.domain}/sink/trigger/http/${appId}${path}`;
 	}, [hub?.domain, hub?.environment, appId, path]);
 
-	const supportsRemote = hub?.supported_sinks?.http === true;
+	const supportsRemote = hub?.domain != null;
 	const supportsLocal = canExecuteLocally ?? false;
 	const supportsBoth = supportsRemote && supportsLocal;
 

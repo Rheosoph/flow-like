@@ -7,7 +7,6 @@ import {
 	BellRing,
 	Check,
 	CheckCheck,
-	Clock3,
 	ExternalLink,
 	LoaderCircle,
 	MailOpen,
@@ -33,10 +32,6 @@ import type { IInvite, INotification } from "../../state/backend-state/types";
 import {
 	Badge,
 	Button,
-	Card,
-	CardContent,
-	CardHeader,
-	CardTitle,
 	Skeleton,
 	Tabs,
 	TabsContent,
@@ -181,116 +176,90 @@ export function NotificationsPageScreen() {
 
 	return (
 		<main className="relative flex min-h-0 flex-1 overflow-hidden">
-			<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_52%)]" />
-			<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,hsl(var(--secondary)/0.08),transparent_46%)]" />
-			<div className="absolute inset-0 bg-grid-pattern opacity-[0.04]" />
+			<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.06),transparent_52%)]" />
+			<div className="absolute inset-0 bg-grid-pattern opacity-[0.03]" />
 
-			<div className="relative mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+			<div className="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
 				<motion.section
-					initial={{ opacity: 0, y: -18 }}
+					initial={{ opacity: 0, y: -12 }}
 					animate={{ opacity: 1, y: 0 }}
-					transition={{ duration: 0.35 }}
-					className="relative overflow-hidden rounded-4xl border border-border/60 bg-background/80 p-6 shadow-sm backdrop-blur-xl sm:p-8"
+					transition={{ duration: 0.3 }}
+					className="relative overflow-hidden rounded-2xl border border-border/60 bg-background/80 px-5 py-4 shadow-sm backdrop-blur-xl sm:px-6"
 				>
-					<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--primary)/0.12),transparent_50%)]" />
-					<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,hsl(var(--accent)/0.2),transparent_45%)]" />
+					<div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--primary)/0.08),transparent_50%)]" />
 
-					<div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-						<div className="flex items-start gap-4 sm:gap-5">
-							<div className="relative flex size-15 shrink-0 items-center justify-center rounded-2xl border border-primary/20 bg-background/85 shadow-sm sm:size-17">
-								<BellRing className="size-7 text-primary sm:size-8" />
+					<div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+						<div className="flex items-center gap-3">
+							<div className="relative flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-background/85 shadow-sm">
+								<BellRing className="size-5 text-primary" />
 								{unreadCount > 0 && (
-									<span className="absolute -top-1 -right-1 flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground shadow-sm">
+									<span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 py-px text-[9px] font-semibold text-primary-foreground shadow-sm">
 										{unreadCount > 9 ? "9+" : unreadCount}
 									</span>
 								)}
 							</div>
 
-							<div className="space-y-3">
-								<div className="flex flex-wrap items-center gap-2">
-									<Badge
-										variant="outline"
-										className="border-primary/20 bg-primary/5 text-primary"
-									>
-										Inbox
-									</Badge>
-									{isRefreshing && (
-										<Badge
-											variant="outline"
-											className="gap-1.5 border-border/60 bg-background/80 text-muted-foreground"
-										>
-											<LoaderCircle className="size-3.5 animate-spin" />
-											Syncing
-										</Badge>
-									)}
-								</div>
-
-								<div className="space-y-2">
-									<h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+							<div>
+								<div className="flex items-center gap-2">
+									<h1 className="text-xl font-semibold tracking-tight text-foreground">
 										Notifications
 									</h1>
-									<p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-										{subtitle}
-									</p>
+									{isRefreshing && (
+										<LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+									)}
 								</div>
+								<p className="text-xs text-muted-foreground">
+									{subtitle}
+								</p>
 							</div>
 						</div>
 
-						<div className="flex flex-wrap items-center gap-3">
+						<div className="flex items-center gap-2">
 							<Button
-								variant="outline"
+								variant="ghost"
 								size="sm"
 								onClick={() => void handleRefresh()}
 								disabled={isRefreshing}
-								className="gap-2 bg-background/80"
+								className="gap-1.5 text-muted-foreground"
 							>
-								{isRefreshing ? (
-									<LoaderCircle className="size-4 animate-spin" />
-								) : (
-									<RefreshCcw className="size-4" />
-								)}
+								<RefreshCcw className="size-3.5" />
 								Refresh
 							</Button>
 
 							{unreadCount > 0 && (
 								<Button
+									variant="outline"
 									size="sm"
 									onClick={() => void handleMarkAllAsRead()}
-									className="gap-2 shadow-sm"
+									className="gap-1.5"
 								>
-									<CheckCheck className="size-4" />
+									<CheckCheck className="size-3.5" />
 									Mark all read
 								</Button>
 							)}
 						</div>
 					</div>
 
-					<div className="relative mt-6 grid gap-3 md:grid-cols-3">
+					<div className="relative mt-3 grid gap-2 sm:grid-cols-3">
 						<SummaryTile
 							label="Unread"
 							value={unreadCount}
-							description="Needs attention right now"
 							icon={BellRing}
 							loading={isSummaryLoading}
-							accentClass="from-primary/16 via-primary/6 to-transparent"
 							iconClassName="text-primary"
 						/>
 						<SummaryTile
 							label="Invitations"
 							value={invitations.length}
-							description="Pending workspace access"
 							icon={UserPlus}
 							loading={isSummaryLoading}
-							accentClass="from-amber-500/18 via-amber-500/5 to-transparent"
 							iconClassName="text-amber-600"
 						/>
 						<SummaryTile
-							label="Workflow Alerts"
+							label="Workflows"
 							value={notifications.length}
-							description="Runs, updates, and system activity"
 							icon={Workflow}
 							loading={isSummaryLoading}
-							accentClass="from-sky-500/18 via-sky-500/5 to-transparent"
 							iconClassName="text-sky-600"
 						/>
 					</div>
@@ -352,7 +321,7 @@ export function NotificationsPageScreen() {
 						</div>
 					</div>
 
-					<TabsContent value="all" className="mt-4 min-h-0 flex-1 overflow-auto pr-1">
+					<TabsContent value="all" className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
 						<NotificationsPanel>
 							<AnimatePresence mode="popLayout">
 								{showAllSkeleton ? (
@@ -403,7 +372,7 @@ export function NotificationsPageScreen() {
 
 					<TabsContent
 						value="invitations"
-						className="mt-4 min-h-0 flex-1 overflow-auto pr-1"
+						className="mt-3 min-h-0 flex-1 overflow-auto pr-1"
 					>
 						<NotificationsPanel>
 							<AnimatePresence mode="popLayout">
@@ -439,7 +408,7 @@ export function NotificationsPageScreen() {
 
 					<TabsContent
 						value="notifications"
-						className="mt-4 min-h-0 flex-1 overflow-auto pr-1"
+						className="mt-3 min-h-0 flex-1 overflow-auto pr-1"
 					>
 						<NotificationsPanel>
 							<AnimatePresence mode="popLayout">
@@ -482,56 +451,36 @@ export function NotificationsPageScreen() {
 function SummaryTile({
 	label,
 	value,
-	description,
 	icon: Icon,
 	loading,
-	accentClass,
 	iconClassName,
 }: {
 	label: string;
 	value: number;
-	description: string;
 	icon: LucideIcon;
 	loading: boolean;
-	accentClass: string;
 	iconClassName: string;
 }) {
 	return (
-		<motion.div whileHover={{ y: -2 }} transition={{ duration: 0.18 }}>
-			<Card className="relative overflow-hidden border-border/60 bg-background/85 shadow-sm backdrop-blur-sm">
-				<div className={cn("absolute inset-0 bg-linear-to-br", accentClass)} />
-				<CardContent className="relative flex items-start justify-between gap-4 p-5">
-					<div className="space-y-2">
-						<p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-							{label}
-						</p>
-						{loading ? (
-							<>
-								<Skeleton className="h-8 w-14" />
-								<Skeleton className="h-3 w-32" />
-							</>
-						) : (
-							<>
-								<div className="text-3xl font-semibold tracking-tight text-foreground">
-									{value}
-								</div>
-								<p className="text-sm text-muted-foreground">{description}</p>
-							</>
-						)}
-					</div>
-
-					<div className="rounded-2xl border border-border/60 bg-background/80 p-3 shadow-sm">
-						<Icon className={cn("size-5", iconClassName)} />
-					</div>
-				</CardContent>
-			</Card>
-		</motion.div>
+		<div className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/70 px-3.5 py-2.5">
+			<div className="rounded-lg border border-border/50 bg-background/80 p-1.5">
+				<Icon className={cn("size-3.5", iconClassName)} />
+			</div>
+			{loading ? (
+				<Skeleton className="h-4 w-16" />
+			) : (
+				<div className="flex items-baseline gap-1.5">
+					<span className="text-lg font-semibold tabular-nums text-foreground">{value}</span>
+					<span className="text-xs text-muted-foreground">{label}</span>
+				</div>
+			)}
+		</div>
 	);
 }
 
 function NotificationsPanel({ children }: { children: ReactNode }) {
 	return (
-		<div className="min-h-96 rounded-[1.75rem] border border-border/60 bg-background/78 p-4 shadow-sm backdrop-blur-sm sm:p-5">
+		<div className="flex flex-col gap-2 py-1">
 			{children}
 		</div>
 	);
@@ -552,22 +501,19 @@ function NotificationsEmptyState({
 			animate={{ opacity: 1, scale: 1 }}
 			exit={{ opacity: 0, scale: 0.98 }}
 			transition={{ duration: 0.2 }}
-			className="flex min-h-88 items-center justify-center"
+			className="flex min-h-48 items-center justify-center"
 		>
-			<div className="relative max-w-xl overflow-hidden rounded-[1.75rem] border border-dashed border-border/70 bg-muted/30 px-8 py-12 text-center">
-				<div className="absolute inset-0 bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.08),transparent_52%)]" />
-				<div className="relative flex flex-col items-center gap-4">
-					<div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
-						<Icon className="size-8 text-primary" />
-					</div>
-					<div className="space-y-2">
-						<h3 className="text-xl font-semibold tracking-tight text-foreground">
-							{title}
-						</h3>
-						<p className="text-sm leading-6 text-muted-foreground">
-							{description}
-						</p>
-					</div>
+			<div className="flex flex-col items-center gap-3 text-center">
+				<div className="rounded-xl border border-border/60 bg-muted/40 p-3">
+					<Icon className="size-6 text-muted-foreground" />
+				</div>
+				<div className="space-y-1">
+					<h3 className="text-sm font-medium text-foreground">
+						{title}
+					</h3>
+					<p className="text-xs text-muted-foreground">
+						{description}
+					</p>
 				</div>
 			</div>
 		</motion.div>
@@ -579,36 +525,22 @@ function NotificationsListSkeleton({
 }: {
 	variant: NotificationsTab;
 }) {
-	const rows = variant === "all" ? 3 : 2;
+	const rows = variant === "all" ? 4 : 3;
 
 	return (
-		<div className="space-y-4">
+		<div className="flex flex-col gap-2">
 			{Array.from({ length: rows }).map((_, index) => (
-				<Card
+				<div
 					key={`${variant}-skeleton-${index.toString()}`}
-					className="border-border/50 bg-background/80 shadow-sm"
+					className="flex items-start gap-3 rounded-xl border border-border/50 bg-background/85 px-4 py-3"
 				>
-					<CardHeader className="pb-4">
-						<div className="flex items-start gap-3">
-							<Skeleton className="size-11 rounded-2xl" />
-							<div className="flex-1 space-y-2.5">
-								<Skeleton className="h-5 w-44" />
-								<div className="flex flex-wrap gap-2">
-									<Skeleton className="h-5 w-20 rounded-full" />
-									<Skeleton className="h-5 w-28 rounded-full" />
-								</div>
-							</div>
-						</div>
-					</CardHeader>
-					<CardContent className="space-y-4 pt-0">
-						<Skeleton className="h-4 w-full" />
-						<Skeleton className="h-4 w-5/6" />
-						<div className="flex flex-wrap gap-2">
-							<Skeleton className="h-9 w-28 rounded-lg" />
-							<Skeleton className="h-9 w-24 rounded-lg" />
-						</div>
-					</CardContent>
-				</Card>
+					<Skeleton className="size-8 shrink-0 rounded-lg" />
+					<div className="flex-1 space-y-2">
+						<Skeleton className="h-4 w-48" />
+						<Skeleton className="h-3 w-24" />
+						<Skeleton className="h-3 w-64" />
+					</div>
+				</div>
 			))}
 		</div>
 	);
@@ -674,72 +606,62 @@ function InvitationCard({
 			exit={{ opacity: 0, y: -10, scale: 0.98 }}
 			transition={{ duration: 0.22, delay: index * 0.04 }}
 		>
-			<Card className="overflow-hidden border-border/60 bg-background/85 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md">
-				<div className="h-1 bg-linear-to-r from-amber-500/90 via-primary/80 to-primary/20" />
-				<CardHeader className="pb-4">
-					<div className="flex items-start justify-between gap-4">
-						<div className="flex min-w-0 items-start gap-3">
-							<div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 shadow-sm">
-								<UserPlus className="size-5 text-amber-600" />
-							</div>
-							<div className="min-w-0 space-y-2">
-								<div className="flex flex-wrap items-center gap-2">
-									<Badge variant="outline" className="border-amber-500/20 bg-amber-500/5 text-amber-700">
-										Invitation
-									</Badge>
-									<Badge variant="secondary" className="gap-1.5">
-										<Clock3 className="size-3" />
-										{formatRelativeTime(invite.created_at)}
-									</Badge>
-								</div>
+			<div className="rounded-xl border border-border/50 bg-background/85 px-4 py-3 transition-colors hover:border-primary/20 hover:bg-background/95">
+				<div className="flex items-start gap-3">
+					<div className="mt-0.5 rounded-lg border border-amber-500/20 bg-amber-500/8 p-2">
+						<UserPlus className="size-4 text-amber-600" />
+					</div>
 
-								<CardTitle className="truncate text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-									{invite.name ?? "New invitation"}
-								</CardTitle>
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center justify-between gap-2">
+							<p className="truncate text-sm font-medium text-foreground">
+								{invite.name ?? "New invitation"}
+							</p>
+							<span className="shrink-0 text-xs text-muted-foreground">
+								{formatRelativeTime(invite.created_at)}
+							</span>
+						</div>
 
-								<div className="flex min-h-5 items-center gap-2 text-sm text-muted-foreground">
-									<span>Invited by</span>
-									{inviterLabel ? (
-										<Badge variant="secondary" className="font-medium">
-											{inviterLabel}
-										</Badge>
-									) : (
-										<Skeleton className="h-5 w-24 rounded-full" />
-									)}
-								</div>
-							</div>
+						<div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+							<Badge variant="outline" className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700">
+								Invitation
+							</Badge>
+							<span>from</span>
+							{inviterLabel ? (
+								<span className="font-medium text-foreground/80">{inviterLabel}</span>
+							) : (
+								<Skeleton className="h-3 w-16" />
+							)}
+						</div>
+
+						{invite.message && (
+							<p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+								{invite.message}
+							</p>
+						)}
+
+						<div className="mt-2 flex gap-2">
+							<Button
+								onClick={() => onAction(invite.id, "accept")}
+								size="sm"
+								className="h-7 gap-1.5 px-3 text-xs"
+							>
+								<Check className="size-3" />
+								Accept
+							</Button>
+							<Button
+								onClick={() => onAction(invite.id, "decline")}
+								variant="ghost"
+								size="sm"
+								className="h-7 gap-1.5 px-3 text-xs"
+							>
+								<X className="size-3" />
+								Decline
+							</Button>
 						</div>
 					</div>
-				</CardHeader>
-
-				<CardContent className="space-y-4 pt-0">
-					{invite.message && (
-						<p className="text-sm leading-6 text-muted-foreground sm:text-[15px]">
-							{invite.message}
-						</p>
-					)}
-
-					<div className="flex flex-wrap gap-2">
-						<Button
-							onClick={() => onAction(invite.id, "accept")}
-							size="sm"
-							className="gap-2"
-						>
-							<Check className="size-4" />
-							Accept
-						</Button>
-						<Button
-							onClick={() => onAction(invite.id, "decline")}
-							variant="outline"
-							size="sm"
-							className="gap-2"
-						>
-							<X className="size-4" />
-							Decline
-						</Button>
-					</div>
-				</CardContent>
-			</Card>
+				</div>
+			</div>
 		</motion.div>
 	);
 }
@@ -784,131 +706,104 @@ function NotificationCard({
 			exit={{ opacity: 0, y: -10, scale: 0.98 }}
 			transition={{ duration: 0.22, delay: index * 0.035 }}
 		>
-			<Card
+			<div
 				className={cn(
-					"overflow-hidden border-border/60 bg-background/85 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md",
-					!notification.read && "border-primary/25 bg-primary/3",
+					"group rounded-xl border px-4 py-3 transition-colors",
+					notification.read
+						? "border-border/50 bg-background/85 hover:border-border/70 hover:bg-background/95"
+						: "border-primary/20 bg-primary/3 hover:border-primary/30 hover:bg-primary/5",
 				)}
 			>
-				<div
-					className={cn(
-						"h-1 bg-linear-to-r",
-						notification.read
-							? "from-border via-border/50 to-transparent"
-							: "from-primary via-sky-500/80 to-sky-500/20",
-					)}
-				/>
-				<CardHeader className="pb-4">
-					<div className="flex items-start justify-between gap-4">
-						<div className="flex min-w-0 items-start gap-3">
-							<div
+				<div className="flex items-start gap-3">
+					<div
+						className={cn(
+							"mt-0.5 rounded-lg border p-2",
+							notification.read
+								? "border-border/50 bg-muted/50"
+								: "border-primary/20 bg-primary/8",
+						)}
+					>
+						{notification.icon ? (
+							<span className="text-sm leading-none">{notification.icon}</span>
+						) : (
+							<Workflow
 								className={cn(
-									"rounded-2xl border p-3 shadow-sm",
-									notification.read
-										? "border-border/60 bg-muted/70"
-										: "border-primary/20 bg-primary/10",
+									"size-4",
+									notification.read ? "text-muted-foreground" : "text-primary",
 								)}
+							/>
+						)}
+					</div>
+
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center justify-between gap-2">
+							<p className={cn(
+								"truncate text-sm font-medium",
+								notification.read ? "text-foreground/80" : "text-foreground",
+							)}>
+								{notification.title}
+							</p>
+							<span className="shrink-0 text-xs text-muted-foreground">
+								{formatRelativeTime(notification.created_at)}
+							</span>
+						</div>
+
+						<div className="mt-0.5 flex items-center gap-1.5">
+							<Badge
+								variant={notification.notification_type === "WORKFLOW" ? "default" : "secondary"}
+								className="px-1.5 py-0 text-[10px]"
 							>
-								{notification.icon ? (
-									<span className="text-lg leading-none">{notification.icon}</span>
-								) : (
-									<Workflow
-										className={cn(
-											"size-5",
-											notification.read
-												? "text-muted-foreground"
-												: "text-primary",
-										)}
-									/>
-								)}
-							</div>
+								{notification.notification_type === "WORKFLOW" ? "Workflow" : "System"}
+							</Badge>
+							{!notification.read && (
+								<span className="size-1.5 rounded-full bg-primary" />
+							)}
+						</div>
 
-							<div className="min-w-0 space-y-2">
-								<div className="flex flex-wrap items-center gap-2">
-									<Badge
-										variant={
-											notification.notification_type === "WORKFLOW"
-												? "default"
-												: "secondary"
-										}
-									>
-										{notification.notification_type === "WORKFLOW"
-											? "Workflow"
-											: "System"}
-									</Badge>
-									<Badge variant="secondary" className="gap-1.5">
-										<Clock3 className="size-3" />
-										{formatRelativeTime(notification.created_at)}
-									</Badge>
-									{!notification.read && (
-										<Badge
-											variant="outline"
-											className="border-primary/20 bg-primary/5 text-primary"
-										>
-											New
-										</Badge>
-									)}
-								</div>
+						{notification.description && (
+							<p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+								{notification.description}
+							</p>
+						)}
 
-								<CardTitle
-									className={cn(
-										"truncate text-lg font-semibold tracking-tight sm:text-xl",
-										notification.read
-											? "text-foreground/80"
-											: "text-foreground",
-									)}
+						<div className="mt-2 flex gap-2">
+							{notification.link && (
+								<Button
+									onClick={handleLinkClick}
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 px-3 text-xs"
 								>
-									{notification.title}
-								</CardTitle>
-							</div>
+									<ExternalLink className="size-3" />
+									View
+								</Button>
+							)}
+
+							{!notification.read && (
+								<Button
+									onClick={() => onMarkRead(notification.id)}
+									variant="ghost"
+									size="sm"
+									className="h-7 gap-1.5 px-3 text-xs"
+								>
+									<Check className="size-3" />
+									Read
+								</Button>
+							)}
+
+							<Button
+								onClick={() => onDelete(notification.id)}
+								variant="ghost"
+								size="sm"
+								className="h-7 gap-1.5 px-3 text-xs text-destructive hover:text-destructive"
+							>
+								<Trash2 className="size-3" />
+								Delete
+							</Button>
 						</div>
 					</div>
-				</CardHeader>
-
-				<CardContent className="space-y-4 pt-0">
-					{notification.description && (
-						<p className="text-sm leading-6 text-muted-foreground sm:text-[15px]">
-							{notification.description}
-						</p>
-					)}
-
-					<div className="flex flex-wrap gap-2">
-						{notification.link && (
-							<Button
-								onClick={handleLinkClick}
-								variant="outline"
-								size="sm"
-								className="gap-2"
-							>
-								<ExternalLink className="size-4" />
-								View details
-							</Button>
-						)}
-
-						{!notification.read && (
-							<Button
-								onClick={() => onMarkRead(notification.id)}
-								variant="secondary"
-								size="sm"
-								className="gap-2"
-							>
-								<Check className="size-4" />
-								Mark as read
-							</Button>
-						)}
-
-						<Button
-							onClick={() => onDelete(notification.id)}
-							variant="outline"
-							size="sm"
-							className="gap-2 text-destructive hover:text-destructive"
-						>
-							<Trash2 className="size-4" />
-							Delete
-						</Button>
-					</div>
-				</CardContent>
-			</Card>
+				</div>
+			</div>
 		</motion.div>
 	);
 }

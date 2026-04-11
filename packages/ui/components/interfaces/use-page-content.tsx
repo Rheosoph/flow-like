@@ -54,19 +54,19 @@ export function UsePageContent({
 	) as React.RefObject<ISidebarActions>;
 	const setQueryParams = useSetQueryParams();
 
-	// --- Data fetching (cache-first with background sync) ---
+	// --- Data fetching (force-fresh with offline fallback) ---
 
 	const routes = useInvoke(
 		backend.routeState.getRoutes,
 		backend.routeState,
-		[appId ?? ""],
+		[appId ?? "", true],
 		typeof appId === "string",
 	);
 
 	const events = useInvoke(
 		backend.eventState.getEvents,
 		backend.eventState,
-		[appId ?? ""],
+		[appId ?? "", true],
 		(appId ?? "") !== "",
 		[],
 	);
