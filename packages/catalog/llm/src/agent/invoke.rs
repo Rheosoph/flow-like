@@ -39,7 +39,7 @@ impl NodeLogic for InvokeAgentNode {
             "Executes an Agent with history and returns the complete response",
             "AI/Agents",
         );
-        node.set_version(3);
+        node.set_version(4);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

@@ -26,6 +26,7 @@ impl NodeLogic for ExtractContentNode {
             "AI/Generative/History/Message",
         );
         node.add_icon("/flow/icons/message.svg");
+        node.set_version(1);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(10)

@@ -27,6 +27,7 @@ impl NodeLogic for MakeHistoryNode {
             "AI/Generative/History",
         );
         node.add_icon("/flow/icons/history.svg");
+        node.set_version(1);
 
         // Pure helper to allocate an empty History; fully local and cheap.
         node.set_scores(

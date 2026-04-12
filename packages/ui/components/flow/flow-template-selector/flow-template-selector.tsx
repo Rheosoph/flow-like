@@ -938,14 +938,14 @@ function BrowserTemplateCard({
 		<button
 			type="button"
 			onClick={onClick}
-			className={`text-left rounded-xl border bg-card overflow-hidden hover:border-primary/50 hover:shadow-lg transition-all duration-200 group ${
+			className={`text-left rounded-xl border bg-card overflow-hidden hover:border-primary/50 hover:shadow-lg transition-all duration-200 group flex flex-col h-full ${
 				isSelected
 					? "border-primary ring-2 ring-primary/20"
 					: "border-border/50"
 			}`}
 		>
 			{/* Preview placeholder */}
-			<div className="aspect-video relative overflow-hidden flex items-center justify-center">
+			<div className="aspect-video relative overflow-hidden flex items-center justify-center w-full">
 				{appThumbnail ? (
 					<img
 						src={appThumbnail}
@@ -990,7 +990,7 @@ function BrowserTemplateCard({
 			</div>
 
 			{/* Info */}
-			<div className="p-3">
+			<div className="p-3 flex flex-col flex-1">
 				<p className="font-medium text-sm text-foreground truncate group-hover:text-primary transition-colors">
 					{template.metadata?.name || template.templateId}
 				</p>
@@ -1000,7 +1000,7 @@ function BrowserTemplateCard({
 					</p>
 				)}
 				{template.metadata?.tags && template.metadata.tags.length > 0 && (
-					<div className="flex flex-wrap gap-1 mt-2">
+					<div className="flex flex-wrap gap-1 mt-auto pt-2">
 						{template.metadata.tags.slice(0, 3).map((tag: string) => (
 							<Badge
 								key={tag}
