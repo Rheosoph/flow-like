@@ -102,6 +102,7 @@ impl NodeLogic for LLMObserveScreenNode {
             "Automation/LLM/Vision",
         );
         node.add_icon("/flow/icons/bot-search.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -370,6 +371,7 @@ impl NodeLogic for LLMDescribeElementNode {
             "Automation/LLM/Vision",
         );
         node.add_icon("/flow/icons/bot-search.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()

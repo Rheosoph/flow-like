@@ -40,6 +40,7 @@ impl NodeLogic for AddModelHeadersNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/settings.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()

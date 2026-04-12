@@ -70,6 +70,10 @@ next-env.d.ts
 # Kubernetes secrets
 **/values-secrets.yaml
 
+# Claude Code — track settings.json, ignore personal files
+.claude/settings.local.json
+.claude/CLAUDE.local.md
+
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 .codacy/cli.sh

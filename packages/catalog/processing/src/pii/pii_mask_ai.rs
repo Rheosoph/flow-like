@@ -179,6 +179,7 @@ impl NodeLogic for PiiMaskAiNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/shield-ai.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()

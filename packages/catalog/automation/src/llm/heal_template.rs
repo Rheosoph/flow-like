@@ -102,6 +102,7 @@ impl NodeLogic for LLMHealTemplateNode {
             "Automation/LLM/Healing",
         );
         node.add_icon("/flow/icons/bot-fix.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()

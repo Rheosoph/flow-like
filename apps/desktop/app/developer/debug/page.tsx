@@ -155,7 +155,9 @@ function isBitSchema(schema: JsonSchema | null): boolean {
 			"parameters" in properties ||
 			"meta" in properties ||
 			"hub" in properties ||
-			"hash" in properties
+			"hash" in properties ||
+			"model_slug" in properties ||
+			"model_evaluation" in properties
 		)
 	);
 }
@@ -344,8 +346,25 @@ function resolveSchema(
 		const resolved = resolveRef(schema.$ref, root);
 		if (resolved) return resolveSchema(resolved, root, nextSeen);
 	}
-	if (schema.allOf?.length === 1) {
-		return resolveSchema(schema.allOf[0], root, seen);
+	if (schema.allOf && schema.allOf.length > 0) {
+		if (schema.allOf.length === 1) {
+			return resolveSchema(schema.allOf[0], root, seen);
+		}
+		let merged: JsonSchema = {};
+		for (const sub of schema.allOf) {
+			const resolved = resolveSchema(sub, root, seen);
+			merged = {
+				...merged,
+				...resolved,
+				...(merged.properties || resolved.properties
+					? { properties: { ...merged.properties, ...resolved.properties } }
+					: {}),
+			};
+		}
+		return merged;
+	}
+	if (schema.anyOf?.length === 1) {
+		return resolveSchema(schema.anyOf[0], root, seen);
 	}
 	return schema;
 }
