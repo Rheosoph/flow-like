@@ -7,7 +7,7 @@ edition = "2024"
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 flow-like-types.workspace = true
-reqwest = { version = "0.12.15", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking"] }
 
 [dependencies]
 axum.workspace = true

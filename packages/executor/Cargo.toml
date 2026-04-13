@@ -26,14 +26,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
 chrono.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 tokio = { version = "1", features = ["sync", "time"] }
 axum.workspace = true
 futures-util.workspace = true
 thiserror.workspace = true
 
 # JWT verification
-jsonwebtoken = "9"
+jsonwebtoken.workspace = true
 base64 = "0.22"
 p256 = { version = "0.13", features = ["pkcs8", "pem"] }
 
