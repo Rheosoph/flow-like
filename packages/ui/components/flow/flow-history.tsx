@@ -22,8 +22,14 @@ const db = new UndoRedoDB();
 
 const MAX_STACK_SIZE = 100;
 
+const serializeBatch = (commands: IGenericCommand[]) => JSON.stringify(commands);
+
 export const useUndoRedo = (appId: string, boardId: string) => {
 	const key = `${appId}_${boardId}`;
+
+	const clearHistory = async () => {
+		await db.stacks.delete(key);
+	};
 
 	const pushCommand = async (command: IGenericCommand, append = false) => {
 		await db.transaction("rw", db.stacks, async () => {
@@ -121,5 +127,79 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 		});
 	};
 
-	return { pushCommand, pushCommands, undo, redo };
+	const rollbackUndo = async (commands: IGenericCommand[]) => {
+		const target = serializeBatch(commands);
+
+		await db.transaction("rw", db.stacks, async () => {
+			const data = await db.stacks.get(key);
+			const currentUndoStack = data?.undoStack || [];
+			const currentRedoStack = data?.redoStack || [];
+			const rollbackIndex = currentRedoStack.findIndex(
+				(batch) => serializeBatch(batch) === target,
+			);
+
+			if (rollbackIndex === -1) {
+				return;
+			}
+
+			const rollbackBatch = currentRedoStack[rollbackIndex];
+			const newRedoStack = currentRedoStack.filter(
+				(_, index) => index !== rollbackIndex,
+			);
+			let newUndoStack = [...currentUndoStack, rollbackBatch];
+
+			if (newUndoStack.length > MAX_STACK_SIZE) {
+				newUndoStack = newUndoStack.slice(1);
+			}
+
+			await db.stacks.put({
+				key,
+				undoStack: newUndoStack,
+				redoStack: newRedoStack,
+			});
+		});
+	};
+
+	const rollbackRedo = async (commands: IGenericCommand[]) => {
+		const target = serializeBatch(commands);
+
+		await db.transaction("rw", db.stacks, async () => {
+			const data = await db.stacks.get(key);
+			const currentUndoStack = data?.undoStack || [];
+			const currentRedoStack = data?.redoStack || [];
+			const rollbackIndex = currentUndoStack.findIndex(
+				(batch) => serializeBatch(batch) === target,
+			);
+
+			if (rollbackIndex === -1) {
+				return;
+			}
+
+			const rollbackBatch = currentUndoStack[rollbackIndex];
+			const newUndoStack = currentUndoStack.filter(
+				(_, index) => index !== rollbackIndex,
+			);
+			let newRedoStack = [rollbackBatch, ...currentRedoStack];
+
+			if (newRedoStack.length > MAX_STACK_SIZE) {
+				newRedoStack = newRedoStack.slice(0, MAX_STACK_SIZE);
+			}
+
+			await db.stacks.put({
+				key,
+				undoStack: newUndoStack,
+				redoStack: newRedoStack,
+			});
+		});
+	};
+
+	return {
+		pushCommand,
+		pushCommands,
+		undo,
+		redo,
+		rollbackUndo,
+		rollbackRedo,
+		clearHistory,
+	};
 };

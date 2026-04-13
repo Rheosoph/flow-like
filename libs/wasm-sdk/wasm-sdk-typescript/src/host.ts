@@ -29,6 +29,9 @@ export interface HostBridge {
 
 	storageRead(flowPath: FlowPath): Uint8Array | null;
 	storageWrite(flowPath: FlowPath, data: Uint8Array): boolean;
+	storageWriteStart(flowPath: FlowPath, totalSize: number): string | null;
+	storageWriteChunk(writeId: string, data: Uint8Array): boolean;
+	storageWriteFinish(writeId: string): boolean;
 	storageList(flowPath: FlowPath): FlowPath[] | null;
 
 	embedText(bit: Record<string, unknown>, texts: string[]): number[][] | null;
@@ -146,6 +149,36 @@ export class MockHostBridge implements HostBridge {
 		return true;
 	}
 
+	private _pendingWrites: Record<string, { flowPath: FlowPath; chunks: Uint8Array[] }> = {};
+
+	storageWriteStart(flowPath: FlowPath, _totalSize: number): string | null {
+		const id = `mock-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		this._pendingWrites[id] = { flowPath, chunks: [] };
+		return id;
+	}
+
+	storageWriteChunk(writeId: string, data: Uint8Array): boolean {
+		const pw = this._pendingWrites[writeId];
+		if (!pw) return false;
+		pw.chunks.push(new Uint8Array(data));
+		return true;
+	}
+
+	storageWriteFinish(writeId: string): boolean {
+		const pw = this._pendingWrites[writeId];
+		if (!pw) return false;
+		delete this._pendingWrites[writeId];
+		const totalLen = pw.chunks.reduce((s, c) => s + c.length, 0);
+		const merged = new Uint8Array(totalLen);
+		let offset = 0;
+		for (const chunk of pw.chunks) {
+			merged.set(chunk, offset);
+			offset += chunk.length;
+		}
+		this.storage[pw.flowPath.path] = merged;
+		return true;
+	}
+
 	storageList(flowPath: FlowPath): FlowPath[] {
 		const prefix = flowPath.path;
 		return Object.keys(this.storage)
@@ -223,6 +256,15 @@ class DefaultHostBridge implements HostBridge {
 		return null;
 	}
 	storageWrite(_flowPath: FlowPath, _data: Uint8Array): boolean {
+		return false;
+	}
+	storageWriteStart(_flowPath: FlowPath, _totalSize: number): string | null {
+		return null;
+	}
+	storageWriteChunk(_writeId: string, _data: Uint8Array): boolean {
+		return false;
+	}
+	storageWriteFinish(_writeId: string): boolean {
 		return false;
 	}
 	storageList(_flowPath: FlowPath): FlowPath[] | null {

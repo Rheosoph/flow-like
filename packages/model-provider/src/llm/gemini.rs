@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc};
 use super::{LLMCallback, ModelLogic, extract_headers};
 use crate::provider::random_provider;
 use crate::{
-    history::History,
+    history::{History, HistoryThinking},
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
     response::Response,
@@ -13,12 +13,70 @@ use flow_like_types::{Cacheable, Result, anyhow, async_trait};
 use rig::completion::CompletionModel;
 use rig::message::DocumentSourceKind;
 use rig::providers::gemini::completion::gemini_api_types::{
-    AdditionalParameters, GenerationConfig, ThinkingConfig,
+    AdditionalParameters, GenerationConfig, ThinkingConfig, ThinkingLevel,
 };
 use rig::{OneOrMany, completion::Message as RigMessage};
+
+fn default_thinking_config() -> ThinkingConfig {
+    ThinkingConfig {
+        include_thoughts: Some(true),
+        thinking_budget: Some(2048),
+        thinking_level: None,
+    }
+}
+
+fn is_gemini_3_model(model_name: Option<&str>) -> bool {
+    model_name
+        .map(|name| name.to_ascii_lowercase().contains("gemini-3"))
+        .unwrap_or(false)
+}
+
+fn thinking_config_for_history(
+    history: Option<&History>,
+    model_name: Option<&str>,
+) -> ThinkingConfig {
+    let Some(history) = history else {
+        return default_thinking_config();
+    };
+
+    let Some(thinking) = history.thinking else {
+        return default_thinking_config();
+    };
+
+    let include_thoughts = Some(thinking != HistoryThinking::Off);
+
+    if is_gemini_3_model(model_name) {
+        let thinking_level = match thinking {
+            HistoryThinking::Off => ThinkingLevel::Minimal,
+            HistoryThinking::Low => ThinkingLevel::Low,
+            HistoryThinking::Mid => ThinkingLevel::Medium,
+            HistoryThinking::High => ThinkingLevel::High,
+        };
+
+        ThinkingConfig {
+            include_thoughts,
+            thinking_budget: None,
+            thinking_level: Some(thinking_level),
+        }
+    } else {
+        let thinking_budget = match thinking {
+            HistoryThinking::Off => 0,
+            HistoryThinking::Low => 1024,
+            HistoryThinking::Mid => 2048,
+            HistoryThinking::High => 4096,
+        };
+
+        ThinkingConfig {
+            include_thoughts,
+            thinking_budget: Some(thinking_budget),
+            thinking_level: None,
+        }
+    }
+}
+
 pub struct GeminiModel {
     client: rig::providers::gemini::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -40,7 +98,7 @@ impl GeminiModel {
 
         Ok(GeminiModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -67,7 +125,7 @@ impl GeminiModel {
         Ok(GeminiModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 
@@ -220,11 +278,13 @@ impl ModelLogic for GeminiModel {
             .and_then(|h| h.build_additional_params().ok())
             .flatten();
 
+        let model_name = self
+            .default_model
+            .as_deref()
+            .or_else(|| history.as_ref().map(|item| item.model.as_str()));
+
         let gen_cfg = GenerationConfig {
-            thinking_config: Some(ThinkingConfig {
-                include_thoughts: Some(true),
-                thinking_budget: 2048,
-            }),
+            thinking_config: Some(thinking_config_for_history(history.as_ref(), model_name)),
             ..Default::default()
         };
         let additional_params = AdditionalParameters::default().with_config(gen_cfg);

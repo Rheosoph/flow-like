@@ -350,7 +350,7 @@ pub async fn sync_event_with_sink_tokens(
 
 /// Encrypt a token using AES-256-GCM
 /// Returns base64-encoded ciphertext with prepended nonce
-fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
+pub fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
 

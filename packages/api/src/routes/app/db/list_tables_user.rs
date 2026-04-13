@@ -38,11 +38,8 @@ pub async fn list_tables_user(
     let credentials = state
         .scoped_credentials(&sub, &app_id, CredentialsAccess::InvokeRead)
         .await?;
-    let connection = credentials
-        .to_db_scoped(&sub, &app_id)
-        .await?
-        .execute()
-        .await?;
+    let builder = credentials.to_db_scoped(&sub, &app_id).await?;
+    let connection = builder.execute().await?;
     let tables = connection.table_names().execute().await?;
 
     Ok(Json(tables))

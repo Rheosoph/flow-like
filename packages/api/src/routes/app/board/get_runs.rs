@@ -107,12 +107,10 @@ pub async fn get_runs(
                 .started_at
                 .map(|dt: chrono::NaiveDateTime| dt.and_utc().timestamp_micros() as u64)
                 .unwrap_or_else(|| run.created_at.and_utc().timestamp_micros() as u64);
-            // For incomplete runs, use start time so duration shows as 0
-            // rather than time since Unix epoch
             let end = run
                 .completed_at
                 .map(|dt: chrono::NaiveDateTime| dt.and_utc().timestamp_micros() as u64)
-                .unwrap_or(start);
+                .unwrap_or_else(|| run.updated_at.and_utc().timestamp_micros() as u64);
 
             LogMeta {
                 app_id: run.app_id,

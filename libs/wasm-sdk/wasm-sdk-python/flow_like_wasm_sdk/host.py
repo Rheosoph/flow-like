@@ -63,6 +63,15 @@ class HostBridge:
     def storage_write(self, flow_path: dict, data: bytes) -> bool:
         return False
 
+    def storage_write_start(self, flow_path: dict, total_size: int) -> str | None:
+        return None
+
+    def storage_write_chunk(self, write_id: str, data: bytes) -> bool:
+        return False
+
+    def storage_write_finish(self, write_id: str) -> bool:
+        return False
+
     def storage_list(self, flow_path: dict) -> list[dict] | None:
         return None
 
@@ -79,6 +88,9 @@ class HostBridge:
         return None
 
     def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
+        return None
+
+    def llm_prompt_stream(self, bit_json: str, request_json: str) -> str | None:
         return None
 
     def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
@@ -179,6 +191,27 @@ class MockHostBridge(HostBridge):
         self.storage[flow_path.get("path", "")] = data
         return True
 
+    def storage_write_start(self, flow_path: dict, total_size: int) -> str | None:
+        import uuid
+        write_id = str(uuid.uuid4())
+        if not hasattr(self, "_pending_writes"):
+            self._pending_writes: dict[str, tuple[dict, bytearray]] = {}
+        self._pending_writes[write_id] = (flow_path, bytearray())
+        return write_id
+
+    def storage_write_chunk(self, write_id: str, data: bytes) -> bool:
+        if not hasattr(self, "_pending_writes") or write_id not in self._pending_writes:
+            return False
+        self._pending_writes[write_id][1].extend(data)
+        return True
+
+    def storage_write_finish(self, write_id: str) -> bool:
+        if not hasattr(self, "_pending_writes") or write_id not in self._pending_writes:
+            return False
+        flow_path, buf = self._pending_writes.pop(write_id)
+        self.storage[flow_path.get("path", "")] = bytes(buf)
+        return True
+
     def storage_list(self, flow_path: dict) -> list[dict] | None:
         prefix = flow_path.get("path", "")
         return [{"path": k, "store_ref": flow_path.get("store_ref", ""), "cache_store_ref": None} for k in self.storage if k.startswith(prefix)]
@@ -198,6 +231,9 @@ class MockHostBridge(HostBridge):
 
     def llm_prompt(self, bit_json: str, messages_json: str, do_stream: bool) -> str | None:
         return '{"role": "assistant", "content": "Mock LLM response"}'
+
+    def llm_prompt_stream(self, bit_json: str, request_json: str) -> str | None:
+        return '{"role": "assistant", "content": "Mock LLM streaming response", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}'
 
     def embed_text_query(self, model_json: str, texts_json: str) -> str | None:
         import json as _json

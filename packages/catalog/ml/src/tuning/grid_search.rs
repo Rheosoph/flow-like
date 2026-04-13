@@ -415,7 +415,7 @@ impl NodeLogic for GridSearchNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let model_type: String = node
             .get_pin_by_name("model_type")
             .and_then(|pin| pin.default_value.clone())

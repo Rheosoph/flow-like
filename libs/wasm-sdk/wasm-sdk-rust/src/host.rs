@@ -182,6 +182,18 @@ pub fn storage_write(flow_path_json: &str, data: &[u8]) -> bool {
     storage::write_file(flow_path_json, data)
 }
 
+pub fn storage_write_start(flow_path_json: &str, total_size: u64) -> Option<String> {
+    storage::write_file_start(flow_path_json, total_size)
+}
+
+pub fn storage_write_chunk(write_id: &str, data: &[u8]) -> bool {
+    storage::write_file_chunk(write_id, data)
+}
+
+pub fn storage_write_finish(write_id: &str) -> bool {
+    storage::write_file_finish(write_id)
+}
+
 pub fn storage_list(flow_path_json: &str) -> Option<Vec<serde_json::Value>> {
     storage::list_files(flow_path_json).and_then(|s| serde_json::from_str(&s).ok())
 }
@@ -213,6 +225,10 @@ pub fn embed_image(model_json: &str, image_json: &str) -> Option<Vec<f32>> {
 
 pub fn llm_prompt(bit_json: &str, messages_json: &str, do_stream: bool) -> Option<String> {
     models::llm_prompt(bit_json, messages_json, do_stream)
+}
+
+pub fn llm_prompt_stream(bit_json: &str, request_json: &str) -> Option<String> {
+    models::llm_prompt_stream(bit_json, request_json)
 }
 
 // ============================================================================

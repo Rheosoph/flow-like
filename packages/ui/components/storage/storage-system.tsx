@@ -169,6 +169,8 @@ export function StorageSystem({
 		storageApi.listStorageItems,
 		storageApi,
 		[appId, prefix],
+		true,
+		[storageScopeKey],
 	);
 
 	// ---------- Virtual folders (sessionStorage) ----------

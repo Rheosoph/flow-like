@@ -89,7 +89,7 @@ impl NodeLogic for PushContentNode {
             "Appends text or image parts onto a chat message",
             "AI/Generative/History/Message",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/message.svg");
         node.set_scores(
             NodeScores::new()
@@ -181,7 +181,7 @@ impl NodeLogic for PushContentNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let type_pin: String = node
             .get_pin_by_name("type")
             .and_then(|pin| pin.default_value.clone())

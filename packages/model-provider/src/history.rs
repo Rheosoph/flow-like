@@ -164,6 +164,14 @@ impl HistoryMessage {
 impl From<RigMessage> for HistoryMessage {
     fn from(msg: RigMessage) -> Self {
         match msg {
+            RigMessage::System { content } => HistoryMessage {
+                role: Role::System,
+                content: MessageContent::String(content),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                annotations: None,
+            },
             RigMessage::User { content } => {
                 let is_single_tool_result =
                     content.len() == 1 && matches!(content.first(), RigUserContent::ToolResult(_));
@@ -605,6 +613,48 @@ pub struct Usage {
     pub include: bool,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryThinking {
+    Off,
+    Low,
+    Mid,
+    High,
+}
+
+impl HistoryThinking {
+    pub fn openai_reasoning_effort(self) -> &'static str {
+        match self {
+            Self::Off => "none",
+            Self::Low => "low",
+            Self::Mid => "medium",
+            Self::High => "high",
+        }
+    }
+
+    pub fn xai_reasoning_effort(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Low => Some("low"),
+            Self::Mid | Self::High => Some("high"),
+        }
+    }
+}
+
+impl std::str::FromStr for HistoryThinking {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "low" => Ok(Self::Low),
+            "mid" | "medium" => Ok(Self::Mid),
+            "high" => Ok(Self::High),
+            other => Err(format!("Unknown thinking mode: {other}")),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct History {
     pub model: String,
@@ -626,6 +676,9 @@ pub struct History {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<HistoryThinking>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u32>,
@@ -669,6 +722,7 @@ impl History {
             max_completion_tokens: None,
             top_p: None,
             temperature: None,
+            thinking: None,
             seed: None,
             presence_penalty: None,
             frequency_penalty: None,

@@ -25,6 +25,7 @@ import {
 } from "@tm9657/flow-like-ui";
 import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/types";
 import type {
+	ChatImage,
 	CopilotScope,
 	UIActionContext,
 	UnifiedChatMessage,
@@ -132,6 +133,7 @@ export class WebBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		_forceFresh?: boolean,
 	): Promise<IBoard> {
 		const params = version ? `?version=${version.join(".")}` : "";
 		const board = await apiGet<IBoard>(
@@ -685,6 +687,7 @@ export class WebBoardState implements IBoardState {
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
+		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
 		token?: string,
@@ -713,6 +716,7 @@ export class WebBoardState implements IBoardState {
 				selected_component_ids: selectedComponentIds,
 				user_prompt: userPrompt,
 				history,
+				request_images: requestImages,
 				model_id: modelId,
 				token,
 				run_context: runContext,

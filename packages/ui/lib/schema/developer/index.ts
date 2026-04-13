@@ -184,6 +184,7 @@ export interface WasmNodeDefinition {
 	category: string;
 	icon?: string;
 	pins: WasmPinDefinition[];
+	permissions: string[];
 	scores?: WasmNodeScores;
 	long_running?: boolean;
 	docs?: string;

@@ -10,8 +10,11 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
+	type IApp,
+	IAppVisibility,
 	Input,
 } from "@tm9657/flow-like-ui";
+import { appsDB } from "../../../lib/apps-db";
 import { EyeIcon, EyeOffIcon, LockIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -48,7 +51,11 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 			description: "Decrypting and importing. Please wait.",
 		});
 		try {
-			await invoke("import_app_from_file", { path, password });
+			const app = await invoke<IApp>("import_app_from_file", { path, password });
+			await appsDB.visibility.put({
+				visibility: app.visibility ?? IAppVisibility.Offline,
+				appId: app.id,
+			});
 			toast.success("App imported successfully!", { id: toastId });
 			onOpenChange(false);
 			await onImported();

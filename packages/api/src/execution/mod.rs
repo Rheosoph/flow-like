@@ -30,7 +30,7 @@ pub use jwt::{
 #[cfg(feature = "redis")]
 pub use queue::QueueWorker;
 pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
-pub use sse_proxy::proxy_sse_response;
+pub use sse_proxy::{proxy_sse_response, update_run_on_completion};
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,
     ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,

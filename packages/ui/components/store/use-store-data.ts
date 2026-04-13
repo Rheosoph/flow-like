@@ -2,6 +2,7 @@
 
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { useCallback, useMemo, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import type { IApp } from "../../lib/schema/app/app";
@@ -27,6 +28,7 @@ export function useStoreData(
 	eventConfig: IEventMapping,
 ) {
 	const backend = useBackend();
+	const auth = useAuth();
 	const [isPurchasing, setIsPurchasing] = useState(false);
 
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
@@ -113,8 +115,26 @@ export function useStoreData(
 		router.push(`/library/config?id=${id}`);
 	}, [id, router]);
 
+	const ensureAuthenticated = useCallback(async () => {
+		if (auth?.isAuthenticated) return true;
+		if (!auth?.signinRedirect) {
+			toast.error("You must be signed in to continue.");
+			return false;
+		}
+
+		try {
+			await auth.signinRedirect();
+		} catch (error) {
+			console.error("Failed to start sign in:", error);
+			toast.error("Failed to start sign in. Please try again.");
+		}
+
+		return false;
+	}, [auth]);
+
 	const onBuy = useCallback(async () => {
 		if (!id || isPurchasing) return;
+		if (!(await ensureAuthenticated())) return;
 
 		setIsPurchasing(true);
 		try {
@@ -123,6 +143,7 @@ export function useStoreData(
 			if (result.alreadyMember) {
 				toast.info("You already own this app!");
 				await apps.refetch?.();
+				await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(() => {});
 				router.push(`/use?id=${id}`);
 				return;
 			}
@@ -138,10 +159,12 @@ export function useStoreData(
 		} finally {
 			setIsPurchasing(false);
 		}
-	}, [id, isPurchasing, backend.appState, apps, router]);
+	}, [id, isPurchasing, ensureAuthenticated, backend.appState, apps, events, routes, router]);
 
 	const onJoinOrRequest = useCallback(async () => {
 		if (!appData || !id) return;
+		if (!(await ensureAuthenticated())) return;
+
 		try {
 			if (appData.price && appData.price > 0) {
 				await onBuy();
@@ -173,11 +196,12 @@ export function useStoreData(
 			);
 			toast.success("Joined app! You can now access it.");
 			await apps.refetch?.();
+			await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(() => {});
 			await router.push(`/use?id=${appData.id}`);
 		} catch (e) {
 			toast.error("Failed to request to join app. Please try again later.");
 		}
-	}, [appData, id, backend.appState, apps, router, onBuy]);
+	}, [appData, id, ensureAuthenticated, backend.appState, apps, events, routes, router, onBuy]);
 
 	const hasThumbnail = !!metaData?.thumbnail;
 	const coverUrl = metaData?.thumbnail || "/placeholder-thumbnail.webp";
@@ -188,8 +212,14 @@ export function useStoreData(
 	const isError = app.isError || meta.isError;
 	const notFound = !isLoading && !isError && !appData;
 	const refetchAppData = useCallback(async () => {
-		await Promise.all([app.refetch?.(), meta.refetch?.(), apps.refetch?.()]);
-	}, [app, meta, apps]);
+		await Promise.all([
+			app.refetch?.(),
+			meta.refetch?.(),
+			apps.refetch?.(),
+			events.refetch?.(),
+			routes.refetch?.(),
+		]);
+	}, [app, meta, apps, events, routes]);
 
 	return {
 		apps,

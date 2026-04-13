@@ -83,6 +83,7 @@ impl NodeLogic for ExtractAttachments {
             "Events/Chat",
         );
         node.add_icon("/flow/icons/paperclip.svg");
+        node.set_version(1);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(7)

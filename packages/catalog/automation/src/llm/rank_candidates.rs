@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -110,6 +110,7 @@ impl NodeLogic for LLMRankCandidatesNode {
             "Automation/LLM/Vision",
         );
         node.add_icon("/flow/icons/bot-search.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -290,7 +291,7 @@ impl NodeLogic for LLMRankCandidatesNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(criteria.clone(), vec![])
+            .completion(criteria.clone(), Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()

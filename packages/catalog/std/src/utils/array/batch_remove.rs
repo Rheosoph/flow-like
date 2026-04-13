@@ -107,9 +107,9 @@ impl NodeLogic for BatchRemoveArrayNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("array_out", board.clone(), Some(ValueType::Array), None);
-        let _ = node.match_type("array_in", board.clone(), Some(ValueType::Array), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("array_out", board, Some(ValueType::Array), None);
+        let _ = node.match_type("array_in", board, Some(ValueType::Array), None);
         let _ = node.match_type("removed", board, Some(ValueType::Array), None);
         node.harmonize_type(vec!["array_in", "array_out", "removed"], true);
     }

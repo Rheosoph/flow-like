@@ -2,6 +2,8 @@ import type { FlowPath } from "./host";
 import { type HostBridge, getHost } from "./host";
 import { ExecutionInput, ExecutionResult, LogLevel } from "./types";
 
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB, safely under host 10 MiB limit
+
 export class Context {
 	private _input: ExecutionInput;
 	private _result: ExecutionResult;
@@ -163,7 +165,16 @@ export class Context {
 	}
 
 	storageWrite(flowPath: FlowPath, data: Uint8Array): boolean {
-		return this._host.storageWrite(flowPath, data);
+		if (data.byteLength <= CHUNK_SIZE) {
+			return this._host.storageWrite(flowPath, data);
+		}
+		const writeId = this._host.storageWriteStart(flowPath, data.byteLength);
+		if (writeId === null) return false;
+		for (let offset = 0; offset < data.byteLength; offset += CHUNK_SIZE) {
+			const chunk = data.subarray(offset, Math.min(offset + CHUNK_SIZE, data.byteLength));
+			if (!this._host.storageWriteChunk(writeId, chunk)) return false;
+		}
+		return this._host.storageWriteFinish(writeId);
 	}
 
 	storageList(flowPath: FlowPath): FlowPath[] | null {

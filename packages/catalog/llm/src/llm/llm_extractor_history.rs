@@ -183,7 +183,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -306,7 +306,7 @@ impl NodeLogic for LLMExtractHistoryNode {
 
         let start = Instant::now();
         let response = agent
-            .completion(prompt, chat_history.into_iter().collect())
+            .completion(prompt, chat_history.into_iter().collect::<Vec<_>>())
             .await
             .map_err(|e| anyhow!("Model completion failed: {}", e))?
             .send()
@@ -364,7 +364,7 @@ impl NodeLogic for LLMExtractHistoryNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
 
         node.harmonize_type(vec!["response"], true);
@@ -423,7 +423,7 @@ impl NodeLogic for LLMExtractHistoryNode {
     }
 
     #[cfg(not(feature = "execute"))]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         node.harmonize_type(vec!["response"], true);
     }

@@ -16,6 +16,7 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
+	ChatImage,
 	CopilotScope,
 	UIActionContext,
 	UnifiedChatMessage,
@@ -30,6 +31,7 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		forceFresh?: boolean,
 	): Promise<IBoard>;
 
 	// Realtime collaboration
@@ -138,6 +140,7 @@ export interface IBoardState {
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
+		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
 		token?: string,

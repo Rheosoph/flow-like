@@ -74,9 +74,9 @@ impl NodeLogic for SelectNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("a", board.clone(), None, None);
-        let _ = node.match_type("b", board.clone(), None, None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("a", board, None, None);
+        let _ = node.match_type("b", board, None, None);
         let _ = node.match_type("result", board, None, None);
         node.harmonize_type(vec!["a", "b", "result"], true);
         node.harmonize_value_type(vec!["a", "b", "result"]);

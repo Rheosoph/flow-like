@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
+	type ChatImage,
 	type CopilotScope,
 	type IBoard,
 	type IBoardState,
@@ -36,9 +37,14 @@ import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/type
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
+import {
+	dispatchFlowNotificationEvent,
+	dispatchFlowNotificationEvents,
+} from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import type { TauriBackend } from "../tauri-provider";
+import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 interface DiffEntry {
 	path: string;
@@ -50,6 +56,8 @@ interface SystemTimeLike {
 	secs_since_epoch?: number;
 	nanos_since_epoch?: number;
 }
+
+const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -76,6 +84,21 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 		});
 
 	return hubCachePromise;
+}
+
+function dispatchRemoteBoardApplied(appId: string, boardId: string) {
+	if (typeof window === "undefined") {
+		return;
+	}
+
+	window.dispatchEvent(
+		new CustomEvent(REMOTE_BOARD_APPLIED_EVENT, {
+			detail: {
+				appId,
+				boardId,
+			},
+		}),
+	);
 }
 
 // Toast and Progress event handling for remote execution
@@ -583,6 +606,7 @@ export class BoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		forceFresh?: boolean,
 	): Promise<IBoard> {
 		let board: IBoard;
 		try {
@@ -618,6 +642,9 @@ export class BoardState implements IBoardState {
 			}).catch((e: unknown) => {
 				console.warn("[BoardState] Failed to persist remote board locally:", e);
 			});
+			if (typeof version === "undefined") {
+				dispatchRemoteBoardApplied(appId, boardId);
+			}
 			return remoteData;
 		}
 
@@ -632,6 +659,64 @@ export class BoardState implements IBoardState {
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
+			return board;
+		}
+
+		// When forceFresh is set, synchronously fetch from remote and persist
+		// before returning. This ensures the board in local storage is up-to-date
+		// before execution begins (used on the /use page and execution paths).
+		if (forceFresh) {
+			try {
+				let url = `apps/${appId}/board/${boardId}`;
+				if (version) {
+					url += `?version=${version.join("_")}`;
+				}
+				const remoteData = await fetcher<IBoard>(
+					this.backend.profile,
+					url,
+					{ method: "GET" },
+					this.backend.auth,
+				);
+
+				if (remoteData) {
+					const merged = mergeRemoteBoard(remoteData, board);
+					if (
+						boardsDifferIgnoringUpdatedAt(merged, board) &&
+						typeof version === "undefined"
+					) {
+						console.log("[BoardState] forceFresh: updating local board:", {
+							boardId,
+						});
+						await invoke("upsert_board", {
+							appId: appId,
+							boardId: boardId,
+							name: merged.name,
+							description: merged.description,
+							logLevel: merged.log_level,
+							stage: merged.stage,
+							executionMode: merged.execution_mode,
+							boardData: merged,
+						});
+						dispatchRemoteBoardApplied(appId, boardId);
+
+						if (this.backend.queryClient) {
+							const queryKey = [
+								this.getBoard.name || "backendFn",
+								appId,
+								boardId,
+								version,
+							].filter((arg) => typeof arg !== "undefined");
+							this.backend.queryClient.setQueryData(queryKey, merged);
+						}
+					}
+					return merged;
+				}
+			} catch (e) {
+				console.warn(
+					"[BoardState] forceFresh sync failed, using local board:",
+					e,
+				);
+			}
 			return board;
 		}
 
@@ -729,6 +814,7 @@ export class BoardState implements IBoardState {
 						executionMode: merged.execution_mode,
 						boardData: merged,
 					});
+					dispatchRemoteBoardApplied(appId, boardId);
 				} else {
 					console.log("Board data is up to date, no update needed.");
 				}
@@ -1046,7 +1132,7 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		const board = await this.getBoard(appId, boardId);
+		const board = await this.getBoard(appId, boardId, undefined, true);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
 
@@ -1189,6 +1275,8 @@ export class BoardState implements IBoardState {
 				}
 			}
 
+			dispatchFlowNotificationEvents(events, true, appId, boardId);
+
 			if (cb) cb(events);
 		};
 
@@ -1272,6 +1360,10 @@ export class BoardState implements IBoardState {
 				// Handle progress events globally
 				if (event.event_type === "progress") {
 					handleProgressEvent(event);
+				}
+
+				if (event.event_type === "flow_notification") {
+					dispatchFlowNotificationEvent(event, false, appId, boardId);
 				}
 
 				// Check for terminal events and finish progress toasts
@@ -1555,7 +1647,7 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		command: IGenericCommand,
 	): Promise<IGenericCommand> {
-		const returnValue = await invoke<IGenericCommand>("execute_command", {
+		const executedCommand = await invoke<IGenericCommand>("execute_command", {
 			appId: appId,
 			boardId: boardId,
 			command: command,
@@ -1563,7 +1655,7 @@ export class BoardState implements IBoardState {
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
-			return returnValue;
+			return executedCommand;
 		}
 
 		if (
@@ -1571,8 +1663,10 @@ export class BoardState implements IBoardState {
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [command]);
-			return returnValue;
+			await this.backend.pushOfflineSyncCommand(appId, boardId, [
+				executedCommand,
+			]);
+			return executedCommand;
 		}
 
 		try {
@@ -1582,17 +1676,19 @@ export class BoardState implements IBoardState {
 				{
 					method: "POST",
 					body: JSON.stringify({
-						commands: [command],
+						commands: [executedCommand],
 					}),
 				},
 				this.backend.auth,
 			);
 		} catch (error) {
 			console.error("Failed to push command to server:", error);
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [command]);
+			await this.backend.pushOfflineSyncCommand(appId, boardId, [
+				executedCommand,
+			]);
 		}
 
-		return returnValue;
+		return executedCommand;
 	}
 
 	async executeCommands(
@@ -1600,15 +1696,18 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		commands: IGenericCommand[],
 	): Promise<IGenericCommand[]> {
-		const returnValue = await invoke<IGenericCommand[]>("execute_commands", {
-			appId: appId,
-			boardId: boardId,
-			commands: commands,
-		});
+		const executedCommands = await invoke<IGenericCommand[]>(
+			"execute_commands",
+			{
+				appId: appId,
+				boardId: boardId,
+				commands: commands,
+			},
+		);
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
-			return returnValue;
+			return executedCommands;
 		}
 
 		if (
@@ -1616,28 +1715,36 @@ export class BoardState implements IBoardState {
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
-			return returnValue;
+			await this.backend.pushOfflineSyncCommand(
+				appId,
+				boardId,
+				executedCommands,
+			);
+			return executedCommands;
 		}
 
 		try {
-			const pushTask = await fetcher(
+			await fetcher(
 				this.backend.profile,
 				`apps/${appId}/board/${boardId}`,
 				{
 					method: "POST",
 					body: JSON.stringify({
-						commands: commands,
+						commands: executedCommands,
 					}),
 				},
 				this.backend.auth,
 			);
 		} catch (error) {
 			console.error("Failed to push commands to server:", error);
-			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			await this.backend.pushOfflineSyncCommand(
+				appId,
+				boardId,
+				executedCommands,
+			);
 		}
 
-		return returnValue;
+		return executedCommands;
 	}
 
 	async getExecutionElements(
@@ -1708,6 +1815,7 @@ export class BoardState implements IBoardState {
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
+		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
 		token?: string,
@@ -1736,6 +1844,7 @@ export class BoardState implements IBoardState {
 			selectedComponentIds,
 			userPrompt,
 			history,
+			currentImages: requestImages,
 			modelId,
 			channel,
 			token: actualToken,
@@ -1815,44 +1924,25 @@ export class BoardState implements IBoardState {
 			return buildLocalPrerun();
 		}
 
-		// Online apps: fetch from API to get execution requirements
-		// The API tells us if we can execute locally (based on permissions)
-		if (this.backend.profile && this.backend.auth) {
-			let url = `apps/${appId}/board/${boardId}/prerun`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
+		return resolveLocalFirstPrerun({
+			label: "prerunBoard",
+			buildLocal: buildLocalPrerun,
+			fetchRemote:
+				this.backend.profile && this.backend.auth
+					? async () => {
+						let url = `apps/${appId}/board/${boardId}/prerun`;
+						if (version) {
+							url += `?version=${version.join("_")}`;
+						}
 
-			try {
-				const response = await fetcher<IPrerunBoardResponse>(
-					this.backend.profile,
-					url,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-
-				if (response) {
-					// If we can execute locally and execution_mode is not Remote, use local board
-					// This ensures we get secrets from local board for local execution
-					if (
-						response.can_execute_locally &&
-						response.execution_mode !== IExecutionMode.Remote
-					) {
-						return buildLocalPrerun();
+						return fetcher<IPrerunBoardResponse>(
+							this.backend.profile!,
+							url,
+							{ method: "GET" },
+							this.backend.auth!,
+						);
 					}
-
-					// Server execution: return API response (no secrets needed locally)
-					return response;
-				}
-			} catch (e) {
-				console.warn(
-					"[prerunBoard] API call failed, falling back to local:",
-					e,
-				);
-			}
-		}
-
-		// Fallback to local board
-		return buildLocalPrerun();
+					: undefined,
+		});
 	}
 }

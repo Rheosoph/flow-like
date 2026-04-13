@@ -723,6 +723,19 @@ impl EventSinkManager {
 
         match config_result {
             Ok(event_config) => {
+                // If the sink is configured for remote-only execution, skip local registration
+                if event_config.is_remote_only() {
+                    tracing::info!(
+                        "Event {} configured for remote-only execution, skipping local registration",
+                        event.id
+                    );
+                    // Clean up any existing local registration
+                    if self.storage.get_registration(&event.id)?.is_some() {
+                        self.unregister_event(app_handle, &event.id).await?;
+                    }
+                    return Ok(());
+                }
+
                 // Merge oauth_tokens from existing registration with new tokens
                 let final_oauth_tokens =
                     if let Some(existing_reg) = self.storage.get_registration(&event.id)? {
@@ -1079,6 +1092,7 @@ impl EventSinkManager {
                             },
                             last_fired: None,
                             timezone: None,
+                            sink_execution: None,
                         };
                         manager
                             .ensure_sink_started("cron", &app_handle, &cron_sink)
@@ -1089,6 +1103,7 @@ impl EventSinkManager {
                             path: String::new(),
                             method: String::new(),
                             auth_token: None,
+                            sink_execution: None,
                         };
                         manager
                             .ensure_sink_started("http", &app_handle, &http_sink)

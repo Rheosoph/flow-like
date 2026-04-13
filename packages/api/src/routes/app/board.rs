@@ -10,6 +10,7 @@ pub mod invoke_board_async;
 pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
+pub mod report_run;
 pub mod summaries;
 pub mod undo_redo_board;
 pub mod upsert_board;
@@ -44,6 +45,10 @@ pub fn routes() -> Router<AppState> {
             get(realtime::jwks).post(realtime::access),
         )
         .route("/{board_id}/runs", get(get_runs::get_runs))
+        .route(
+            "/{board_id}/runs/report",
+            post(report_run::report_run),
+        )
         .route("/{board_id}/logs", get(query_logs::query_logs))
         .route(
             "/{board_id}/elements",

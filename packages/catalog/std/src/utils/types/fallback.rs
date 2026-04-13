@@ -76,9 +76,9 @@ impl NodeLogic for FallbackNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("value", board.clone(), None, None);
-        let _ = node.match_type("default", board.clone(), None, None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("value", board, None, None);
+        let _ = node.match_type("default", board, None, None);
         let _ = node.match_type("result", board, None, None);
         node.harmonize_type(vec!["value", "default", "result"], true);
     }

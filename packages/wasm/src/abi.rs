@@ -5,8 +5,8 @@
 use flow_like::flow::node::NodePermission;
 use serde::{Deserialize, Serialize};
 
-/// Current ABI version - bump when making breaking changes
-pub const WASM_ABI_VERSION: u32 = 1;
+/// Current ABI version - bump when adding new host functions
+pub const WASM_ABI_VERSION: u32 = 2;
 
 /// Module name for host function imports
 pub const HOST_MODULE_NAME: &str = "flow_like";

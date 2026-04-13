@@ -23,9 +23,14 @@ import {
 } from "@tm9657/flow-like-ui";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
+import {
+	dispatchFlowNotificationEvent,
+	dispatchFlowNotificationEvents,
+} from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import type { TauriBackend } from "../tauri-provider";
+import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
@@ -181,10 +186,27 @@ export class EventState implements IEventState {
 		};
 
 		if (force) {
-			const remoteData = await syncRemote();
-			const queryKey = [this.getEvents.name || "backendFn", appId];
-			this.backend.queryClient.setQueryData(queryKey, remoteData);
-			return remoteData;
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getEvents.name || "backendFn", appId, true];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch (error) {
+				if (events.length === 0) throw error;
+				console.warn("[EventSync] Forced event fetch failed, falling back to local events:", error);
+				return events;
+			}
+		}
+
+		if (events.length === 0) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getEvents.name || "backendFn", appId];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch {
+				return events;
+			}
 		}
 
 		const promise = injectDataFunction(
@@ -486,6 +508,7 @@ export class EventState implements IEventState {
 			appId,
 			event.board_id,
 			(event.board_version as [number, number, number]) ?? undefined,
+			true,
 		);
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
@@ -542,6 +565,8 @@ export class EventState implements IEventState {
 					foundRunId = true;
 				}
 			}
+
+			dispatchFlowNotificationEvents(events, true, appId);
 
 			if (cb) cb(events);
 		};
@@ -630,6 +655,10 @@ export class EventState implements IEventState {
 
 				if (event.event_type === "progress") {
 					showProgressToast(event.payload as ProgressToastData);
+				}
+
+				if (event.event_type === "flow_notification") {
+					dispatchFlowNotificationEvent(event, false, appId);
 				}
 
 				if (event.event_type === "completed") {
@@ -795,44 +824,25 @@ export class EventState implements IEventState {
 			return buildLocalPrerun();
 		}
 
-		// Online apps: fetch from API to get execution requirements
-		// The API tells us if we can execute locally (based on permissions)
-		if (this.backend.profile && this.backend.auth) {
-			let url = `apps/${appId}/events/${eventId}/prerun`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
+		return resolveLocalFirstPrerun({
+			label: "prerunEvent",
+			buildLocal: buildLocalPrerun,
+			fetchRemote:
+				this.backend.profile && this.backend.auth
+					? async () => {
+						let url = `apps/${appId}/events/${eventId}/prerun`;
+						if (version) {
+							url += `?version=${version.join("_")}`;
+						}
 
-			try {
-				const response = await fetcher<IPrerunEventResponse>(
-					this.backend.profile,
-					url,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-
-				if (response) {
-					// If we can execute locally and execution_mode is not Remote, use local board
-					// This ensures we get secrets from local board for local execution
-					if (
-						response.can_execute_locally &&
-						response.execution_mode !== IExecutionMode.Remote
-					) {
-						return buildLocalPrerun();
+						return fetcher<IPrerunEventResponse>(
+							this.backend.profile!,
+							url,
+							{ method: "GET" },
+							this.backend.auth!,
+						);
 					}
-
-					// Server execution: return API response (no secrets needed locally)
-					return response;
-				}
-			} catch (e) {
-				console.warn(
-					"[prerunEvent] API call failed, falling back to local:",
-					e,
-				);
-			}
-		}
-
-		// Fallback to local data
-		return buildLocalPrerun();
+					: undefined,
+		});
 	}
 }

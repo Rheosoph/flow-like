@@ -279,8 +279,25 @@ impl Context {
     }
 
     pub fn storage_write_typed(&self, flow_path: &FlowPath, data: &[u8]) -> bool {
+        if data.len() <= crate::CHUNK_SIZE {
+            let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
+            return crate::host::storage_write(&json, data);
+        }
+        self.storage_write_chunked(flow_path, data)
+    }
+
+    fn storage_write_chunked(&self, flow_path: &FlowPath, data: &[u8]) -> bool {
         let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
-        crate::host::storage_write(&json, data)
+        let write_id = match crate::host::storage_write_start(&json, data.len() as u64) {
+            Some(id) => id,
+            None => return false,
+        };
+        for chunk in data.chunks(crate::CHUNK_SIZE) {
+            if !crate::host::storage_write_chunk(&write_id, chunk) {
+                return false;
+            }
+        }
+        crate::host::storage_write_finish(&write_id)
     }
 
     pub fn storage_list_typed(&self, flow_path: &FlowPath) -> Option<Vec<FlowPath>> {
@@ -318,8 +335,8 @@ impl Context {
 
     pub fn llm_prompt_stream(&self, bit: &Bit, messages: &[ChatMessage]) -> Option<String> {
         let bit_json = serde_json::to_string(bit).ok()?;
-        let messages_json = serde_json::to_string(messages).ok()?;
-        crate::host::llm_prompt(&bit_json, &messages_json, true)
+        let request_json = serde_json::json!({ "messages": messages }).to_string();
+        crate::host::llm_prompt_stream(&bit_json, &request_json)
     }
 
     // ========================================================================

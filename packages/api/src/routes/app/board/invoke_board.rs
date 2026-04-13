@@ -25,7 +25,7 @@ use crate::{
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
         fetch_profile_for_dispatch, is_jwt_configured, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt,
+        resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -448,16 +448,8 @@ fn proxy_lambda_sse_response(
                                         let db = db.clone();
                                         let run_id_clone = run_id.clone();
                                         tokio::spawn(async move {
-                                            use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
-                                            use crate::entity::prelude::*;
-                                            if let Ok(Some(run)) = ExecutionRun::find_by_id(&run_id_clone).one(db.as_ref()).await {
-                                                let mut run: execution_run::ActiveModel = run.into();
-                                                run.status = Set(run_status);
-                                                run.log_level = Set(log_level);
-                                                run.updated_at = Set(chrono::Utc::now().naive_utc());
-                                                if let Err(e) = run.update(db.as_ref()).await {
-                                                    tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                                }
+                                            if let Err(e) = update_run_on_completion(db.as_ref(), &run_id_clone, run_status, log_level).await {
+                                                tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
                                             }
                                         });
                                     }

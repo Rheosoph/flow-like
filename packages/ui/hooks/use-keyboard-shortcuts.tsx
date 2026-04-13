@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Redo2Icon, Undo2Icon, XIcon } from "lucide-react";
 import { type RefObject, useCallback, useEffect } from "react";
 import { toastError, toastSuccess } from "../lib/messages";
+import type { IGenericCommand } from "../lib/schema";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
 import { useBackend } from "../state/backend-state";
@@ -18,8 +19,10 @@ interface UseKeyboardShortcutsProps {
 		node: INode,
 		position?: { x: number; y: number },
 	) => Promise<void>;
-	undo: () => Promise<any>;
-	redo: () => Promise<any>;
+	undo: () => Promise<IGenericCommand[] | null>;
+	redo: () => Promise<IGenericCommand[] | null>;
+	rollbackUndo: (commands: IGenericCommand[]) => Promise<void>;
+	rollbackRedo: (commands: IGenericCommand[]) => Promise<void>;
 }
 
 export function useKeyboardShortcuts({
@@ -32,6 +35,8 @@ export function useKeyboardShortcuts({
 	placeNode,
 	undo,
 	redo,
+	rollbackUndo,
+	rollbackRedo,
 }: UseKeyboardShortcutsProps) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -89,6 +94,7 @@ export function useKeyboardShortcuts({
 						toastSuccess("Undo", <Undo2Icon className="w-4 h-4" />);
 					} catch (error) {
 						console.error("Undo failed:", error);
+						await rollbackUndo(stack);
 						toastError("Undo failed", <XIcon />);
 						await invalidateBoard();
 					}
@@ -96,8 +102,12 @@ export function useKeyboardShortcuts({
 				return;
 			}
 
-			// Redo
-			if ((event.metaKey || event.ctrlKey) && event.key === "y") {
+			// Redo (Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z)
+			if (
+				(event.metaKey || event.ctrlKey) &&
+				(event.key === "y" ||
+					(event.key.toLowerCase() === "z" && event.shiftKey))
+			) {
 				event.preventDefault();
 				event.stopPropagation();
 				if (typeof version !== "undefined") {
@@ -112,6 +122,7 @@ export function useKeyboardShortcuts({
 						toastSuccess("Redo", <Redo2Icon className="w-4 h-4" />);
 					} catch (error) {
 						console.error("Redo failed:", error);
+						await rollbackRedo(stack);
 						toastError("Redo failed", <XIcon />);
 						await invalidateBoard();
 					}
@@ -207,6 +218,8 @@ export function useKeyboardShortcuts({
 			placeNodeShortcut,
 			undo,
 			redo,
+			rollbackUndo,
+			rollbackRedo,
 			appId,
 			invalidateBoard,
 		],

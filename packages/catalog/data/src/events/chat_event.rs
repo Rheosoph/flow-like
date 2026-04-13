@@ -315,6 +315,7 @@ impl NodeLogic for ChatEventNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("events_chat", "Chat Event", "A simple Chat event", "Events");
         node.add_icon("/flow/icons/event.svg");
+        node.set_version(1);
         node.set_start(true);
         node.set_can_be_referenced_by_fns(true);
 

@@ -1,7 +1,25 @@
 import type { AAModel, GlobalMaxes, ModelClassification, TodoEntry } from "./types";
 
-const MANUAL_FIELDS = ["creativity", "multilinguality", "openness", "safety"] as const;
+const MANUAL_FIELDS: (keyof ModelClassification)[] = [];
+const COMPUTED_FIELDS = [
+	"creativity",
+	"coding",
+	"cost",
+	"factuality",
+	"function_calling",
+	"multilinguality",
+	"openness",
+	"reasoning",
+	"safety",
+	"speed",
+] as const;
 const MIN_BENCHMARKS = 2;
+
+const OPENNESS_FALLBACKS = {
+	"Open Weights (License Required for Commercial Use)": 27.77777777777778 / 100,
+	"Open Weights (Permissive License)": 44.44444444444444 / 100,
+	Proprietary: 11.11111111111111 / 100,
+} as const;
 
 function validValues(vals: (number | null | undefined)[]): number[] {
 	return vals.filter((v): v is number => v != null && v > 0);
@@ -42,6 +60,12 @@ function normalizeCoding(model: AAModel, maxes: GlobalMaxes): { value: number; m
 		maxes.terminalbench_hard,
 	];
 	return safeNormalizedAvg(raw, max);
+}
+
+function normalizeCreativity(model: AAModel): number {
+	const score = model.evaluations.writing_benchmark_mean_score;
+	if (score == null || score <= 0) return 0;
+	return clampUnit(score / 10);
 }
 
 function normalizeReasoning(model: AAModel, maxes: GlobalMaxes): { value: number; missing: boolean } {
@@ -116,6 +140,61 @@ function normalizeCost(
 	return Math.max(0.05, Math.min(1.0, normalized * 0.95 + 0.05));
 }
 
+function normalizeMultilinguality(model: AAModel): number {
+	const score = model.evaluations.artificial_analysis_multilingual_index_normalized;
+	if (score == null || score <= 0) return 0;
+	return clampUnit(score);
+}
+
+function normalizeOpenness(model: AAModel): number {
+	const score = model.evaluations.artificial_analysis_openness_index;
+	if (score != null && score > 0) {
+		return clampUnit(score / 100);
+	}
+
+	const category = model.open_source_categorization;
+	if (!category) return 0;
+
+	return OPENNESS_FALLS_BACK_TO_SCORE(category);
+}
+
+function normalizeSafety(
+	model: AAModel,
+): { value: number; missing: boolean; partial: boolean } {
+	const e = model.evaluations;
+	const normalizedIndex = e.artificial_analysis_omniscience_index_normalized;
+	if (normalizedIndex != null && normalizedIndex > 0) {
+		return { value: clampUnit(normalizedIndex), missing: false, partial: false };
+	}
+
+	const components: number[] = [];
+	if (
+		e.artificial_analysis_omniscience_accuracy != null &&
+		e.artificial_analysis_omniscience_accuracy > 0
+	) {
+		components.push(clampUnit(e.artificial_analysis_omniscience_accuracy));
+	}
+
+	if (
+		e.artificial_analysis_omniscience_hallucination_rate != null &&
+		e.artificial_analysis_omniscience_hallucination_rate >= 0
+	) {
+		components.push(
+			clampUnit(1 - e.artificial_analysis_omniscience_hallucination_rate),
+		);
+	}
+
+	if (components.length === 0) {
+		return { value: 0, missing: true, partial: false };
+	}
+
+	return {
+		value: components.reduce((sum, value) => sum + value, 0) / components.length,
+		missing: false,
+		partial: components.length < 2,
+	};
+}
+
 export function computeClassification(
 	model: AAModel,
 	maxes: GlobalMaxes,
@@ -128,6 +207,9 @@ export function computeClassification(
 
 	const coding = normalizeCoding(model, maxes);
 	if (coding.missing) missingFields.push("coding (partial benchmarks)");
+
+	const creativity = normalizeCreativity(model);
+	if (creativity === 0) missingFields.push("creativity (no benchmark data)");
 
 	const reasoning = normalizeReasoning(model, maxes);
 	if (reasoning.missing) missingFields.push("reasoning (partial benchmarks)");
@@ -145,27 +227,46 @@ export function computeClassification(
 	const cost = normalizeCost(price, allPrices, isLocal);
 	if (cost === 0) missingFields.push("cost (no pricing data)");
 
+	const multilinguality = normalizeMultilinguality(model);
+	if (multilinguality === 0) missingFields.push("multilinguality (no benchmark data)");
+
+	const openness = normalizeOpenness(model);
+	if (openness === 0) missingFields.push("openness (no benchmark data)");
+
+	const safety = normalizeSafety(model);
+	if (safety.missing) {
+		missingFields.push("safety (no benchmark data)");
+	} else if (safety.partial) {
+		missingFields.push("safety (partial benchmark data)");
+	}
+
 	const classification: ModelClassification = {
 		coding: round(coding.value),
 		cost: round(cost),
-		creativity: 0,
+		creativity: round(creativity),
 		factuality: round(factuality.value),
 		function_calling: round(functionCalling.value),
-		multilinguality: 0,
-		openness: 0,
+		multilinguality: round(multilinguality),
+		openness: round(openness),
 		reasoning: round(reasoning.value),
-		safety: 0,
+		safety: round(safety.value),
 		speed: round(speed),
 	};
 
 	// For any computed metric that landed on 0, preserve the existing DB value if non-zero
-	const COMPUTED_FIELDS = ["coding", "cost", "factuality", "function_calling", "reasoning", "speed"] as const;
 	for (const field of COMPUTED_FIELDS) {
 		if (classification[field] === 0) {
 			const existing = existingClassification?.[field];
 			if (existing != null && existing > 0) {
 				classification[field] = round(existing);
 			}
+		}
+	}
+
+	for (const field of ["creativity", "multilinguality", "openness", "safety"] as const) {
+		const override = todoOverrides?.[field];
+		if (override != null && override > 0) {
+			classification[field] = round(override);
 		}
 	}
 
@@ -188,6 +289,16 @@ export function computeClassification(
 
 function round(v: number): number {
 	return Math.round(v * 100) / 100;
+}
+
+function clampUnit(v: number): number {
+	return Math.max(0, Math.min(1, v));
+}
+
+function OPENNESS_FALLS_BACK_TO_SCORE(
+	category: keyof typeof OPENNESS_FALLBACKS,
+): number {
+	return OPENNESS_FALLBACKS[category];
 }
 
 export function buildTodoList(

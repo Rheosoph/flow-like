@@ -166,7 +166,7 @@ pub async fn undo_board(
     let board = flow_like_state.get_board(&board_id, None)?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let mut board = board.lock().await;
-    let _ = board.undo(commands, flow_like_state).await;
+    board.undo(commands, flow_like_state).await?;
     board.save(Some(store.clone())).await?;
     Ok(board.clone())
 }
@@ -178,11 +178,11 @@ pub async fn redo_board(
     board_id: String,
     commands: Vec<GenericCommand>,
 ) -> Result<Board, TauriFunctionError> {
-    let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let board = flow_like_state.get_board(&board_id, None)?;
     let mut board = board.lock().await;
-    let _ = board.redo(commands, flow_like_state).await;
+    board.redo(commands, flow_like_state).await?;
     board.save(Some(store.clone())).await?;
     Ok(board.clone())
 }

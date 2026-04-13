@@ -17,6 +17,7 @@ import type {
 import type { IJwks, IRealtimeAccess } from "../../../";
 import type { SurfaceComponent } from "../../../components/a2ui/types";
 import type {
+	ChatImage,
 	CopilotScope,
 	UIActionContext,
 	UnifiedChatMessage,
@@ -34,6 +35,7 @@ export class EmptyBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		forceFresh?: boolean,
 	): Promise<IBoard> {
 		throw new Error("Method not implemented.");
 	}
@@ -158,6 +160,7 @@ export class EmptyBoardState implements IBoardState {
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
+		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
 		token?: string,

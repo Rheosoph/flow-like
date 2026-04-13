@@ -43,6 +43,11 @@ fn clear_package_status(app_handle: &AppHandle, package_id: &str) {
     emit_package_status(app_handle, package_id, "idle");
 }
 
+fn log_registry_package_error(command: &str, package_id: &str, error: &impl std::fmt::Display) {
+    println!("{} failed for {}: {}", command, package_id, error);
+    tracing::error!(command, package_id = %package_id, error = %error, "Registry package command failed");
+}
+
 async fn reload_wasm_nodes(
     app_handle: &AppHandle,
     emit_catalog_updated: bool,
@@ -180,7 +185,8 @@ pub async fn registry_install_package(
     let installed = registry_client
         .install(&package_id, version.as_deref(), token.as_deref())
         .await
-        .inspect_err(|_e| {
+        .inspect_err(|error| {
+            log_registry_package_error("registry_install_package", &package_id, error);
             emit_package_status(&app_handle, &package_id, "error");
         })?;
 
@@ -246,10 +252,39 @@ pub async fn registry_update_package(
 ) -> Result<CachedPackage, TauriFunctionError> {
     emit_package_status(&app_handle, &package_id, "downloading");
     let registry_client = get_client_with_token(&app_handle, token.clone()).await?;
+    let target_version = match version {
+        Some(version) => Some(version),
+        None => match registry_client.check_updates(token.as_deref()).await {
+            Ok(updates) => updates,
+            Err(error) => {
+                log_registry_package_error(
+                    "registry_update_package:check_updates",
+                    &package_id,
+                    &error,
+                );
+                emit_package_status(&app_handle, &package_id, "error");
+                return Err(error.into());
+            }
+        }
+        .into_iter()
+        .find(|(id, _, _)| id == &package_id)
+        .map(|(_, _, latest_version)| latest_version),
+    };
+
+    if target_version.is_none() {
+        println!(
+            "registry_update_package failed for {}: No update available",
+            package_id
+        );
+        clear_package_status(&app_handle, &package_id);
+        return Err(TauriFunctionError::new("No update available"));
+    }
+
     let installed = registry_client
-        .install(&package_id, version.as_deref(), token.as_deref())
+        .install(&package_id, target_version.as_deref(), token.as_deref())
         .await
-        .inspect_err(|_e| {
+        .inspect_err(|error| {
+            log_registry_package_error("registry_update_package:install", &package_id, error);
             emit_package_status(&app_handle, &package_id, "error");
         })?;
 

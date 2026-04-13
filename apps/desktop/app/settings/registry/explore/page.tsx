@@ -14,6 +14,7 @@ import {
 	StorePackageDetail,
 	useBackend,
 } from "@tm9657/flow-like-ui";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import type {
 	InstalledPackage,
 	PackageSummary,
@@ -274,7 +275,7 @@ export default function ExplorePackagesPage() {
 			await fetchPackages();
 		} catch (err) {
 			console.error("Failed to install package:", err);
-			toast.error(`Failed to install: ${err}`);
+			toast.error(`Failed to install: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -290,7 +291,7 @@ export default function ExplorePackagesPage() {
 			await fetchPackages();
 		} catch (err) {
 			console.error("Failed to uninstall package:", err);
-			toast.error(`Failed to uninstall: ${err}`);
+			toast.error(`Failed to uninstall: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -327,8 +328,8 @@ export default function ExplorePackagesPage() {
 					toast.success("Package uninstalled");
 					fetchInstalled();
 				}}
-				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
-				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onInstallError={(error) => toast.error(`Failed to install: ${getErrorMessage(error)}`)}
+				onUninstallError={(error) => toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
 					fetchInstalled();

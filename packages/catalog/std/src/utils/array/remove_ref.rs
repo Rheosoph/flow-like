@@ -79,7 +79,7 @@ impl NodeLogic for RemoveIndexArrayRefNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         let var_ref = match node.get_pin_by_name("var_ref") {

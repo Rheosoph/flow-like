@@ -79,9 +79,9 @@ impl NodeLogic for FindItemInArrayNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("array_in", board.clone(), Some(ValueType::Array), None);
-        let _ = node.match_type("item", board.clone(), Some(ValueType::Normal), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("array_in", board, Some(ValueType::Array), None);
+        let _ = node.match_type("item", board, Some(ValueType::Normal), None);
         node.harmonize_type(vec!["array_in", "item"], true);
     }
 }

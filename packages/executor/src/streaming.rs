@@ -349,7 +349,11 @@ async fn execute_inner(
                     let base_path = Path::from("runs")
                         .child(request.app_id.as_str())
                         .child(request.board_id.as_str());
-                    match db_fn(base_path.clone()).execute().await {
+                    match state
+                        .with_lance_session(db_fn(base_path.clone()))
+                        .execute()
+                        .await
+                    {
                         Ok(db) => {
                             if let Err(e) = meta.flush(db, write_options.as_ref()).await {
                                 tracing::error!(error = %e, "Failed to flush run logs");

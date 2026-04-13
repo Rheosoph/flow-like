@@ -9,8 +9,8 @@ use crate::{
 use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct VoyageAIModel {
-    client: rig::providers::voyageai::Client,
-    provider: ModelProvider,
+    _client: rig::providers::voyageai::Client,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -32,8 +32,8 @@ impl VoyageAIModel {
         let client = builder.build()?;
 
         Ok(VoyageAIModel {
-            client,
-            provider: provider.clone(),
+            _client: client,
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -55,9 +55,9 @@ impl VoyageAIModel {
         let client = builder.build()?;
 
         Ok(VoyageAIModel {
-            client,
+            _client: client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

@@ -35,7 +35,7 @@ pub struct PiiDetection {
     pub context: Option<String>,
 }
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -179,6 +179,7 @@ impl NodeLogic for PiiMaskAiNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/shield-ai.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -371,7 +372,7 @@ IMPORTANT:
         context.log_message("Invoking LLM for PII detection", LogLevel::Debug);
 
         let response = agent
-            .completion(user_prompt, vec![])
+            .completion(user_prompt, Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("Model completion failed: {}", e))?
             .send()

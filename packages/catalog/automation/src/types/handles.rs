@@ -158,7 +158,9 @@ impl AutomationSession {
             .map_err(|e| flow_like_types::anyhow!("Failed to create RustAutoGui: {}", e))?;
 
         let wrapper = AutomationSessionWrapper {
-            autogui: Arc::new(flow_like_types::sync::Mutex::new(SendSyncRustAutoGui(autogui))),
+            autogui: Arc::new(flow_like_types::sync::Mutex::new(SendSyncRustAutoGui(
+                autogui,
+            ))),
             browser_driver: None,
             current_window_handle: None,
         };

@@ -9,6 +9,7 @@ import {
 	LogsIcon,
 	ScrollIcon,
 	TriangleAlertIcon,
+	XIcon,
 } from "lucide-react";
 import {
 	type RefObject,
@@ -43,11 +44,15 @@ export function Traces({
 	boardId,
 	board,
 	onFocusNode,
+	nodeIdFilter,
+	onClearNodeIdFilter,
 }: Readonly<{
 	appId: string;
 	boardId: string;
 	board: RefObject<IBoard | undefined>;
 	onFocusNode: (nodeId: string) => void;
+	nodeIdFilter?: string;
+	onClearNodeIdFilter?: () => void;
 }>) {
 	const backend = useBackend();
 	const { currentMetadata } = useLogAggregation();
@@ -115,8 +120,12 @@ export function Traces({
 			parts.push(`message LIKE '%${debouncedSearch}%'`);
 		}
 
+		if (nodeIdFilter) {
+			parts.push(`node_id = '${nodeIdFilter}'`);
+		}
+
 		setQueryParts(parts);
-	}, [logFilter, debouncedSearch]);
+	}, [logFilter, debouncedSearch, nodeIdFilter]);
 
 	useEffect(() => {
 		if (queryParts.length === 0) {
@@ -239,6 +248,16 @@ export function Traces({
 								logFilter={logFilter}
 								toggleLogFilter={toggleLogFilter}
 							/>
+							{nodeIdFilter && (
+								<Badge
+									className="cursor-pointer gap-1"
+									variant="secondary"
+									onClick={onClearNodeIdFilter}
+								>
+									Node: {board.current?.nodes[nodeIdFilter]?.friendly_name ?? nodeIdFilter.slice(0, 8)}
+									<XIcon className="w-3 h-3" />
+								</Badge>
+							)}
 						</div>
 
 						<div className="flex flex-row items-center gap-2">

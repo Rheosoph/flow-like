@@ -1,7 +1,11 @@
 use crate::{
-    entity::{invitation, notification},
+    entity::{
+        invitation, notification,
+        sea_orm_active_enums::NotificationType,
+    },
     error::ApiError,
     middleware::jwt::AppUser,
+    push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
 use axum::{
@@ -216,4 +220,95 @@ pub async fn mark_all_read(
         .await?;
 
     Ok(Json(result.rows_affected))
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateUserNotificationParams {
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub link: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreateUserNotificationResponse {
+    pub id: String,
+    pub success: bool,
+}
+
+/// POST /user/notifications/create
+///
+/// Create a notification for the authenticated user.
+/// Used by offline/local workflows that don't have app-scoped board context.
+/// If `app_id` is provided and exists, it will be associated with the notification.
+#[utoipa::path(
+    post,
+    path = "/user/notifications/create",
+    tag = "user",
+    description = "Create a notification for the current user (for offline/local workflows).",
+    request_body = CreateUserNotificationParams,
+    responses(
+        (status = 200, description = "Notification created", body = CreateUserNotificationResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(
+        ("bearer_auth" = []),
+        ("pat" = [])
+    )
+)]
+#[tracing::instrument(name = "POST /user/notifications/create", skip(state, user))]
+pub async fn create_user_notification(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Json(params): Json<CreateUserNotificationParams>,
+) -> Result<Json<CreateUserNotificationResponse>, ApiError> {
+    let sub = user.sub()?;
+
+    // If app_id provided, verify it exists — but don't require it
+    let app_id = if let Some(ref id) = params.app_id {
+        let exists = crate::entity::app::Entity::find_by_id(id)
+            .one(&state.db)
+            .await?
+            .is_some();
+        if exists { Some(id.clone()) } else { None }
+    } else {
+        None
+    };
+
+    let notification_id = dispatch_notification(
+        &state,
+        DispatchNotificationInput {
+            user_id: sub,
+            app_id,
+            title: params.title,
+            description: params.description,
+            icon: params.icon,
+            link: params.link,
+            image: None,
+            notification_type: NotificationType::Workflow,
+            source_run_id: params.run_id,
+            source_node_id: params.node_id,
+        },
+    )
+    .await
+    .map_err(|e| {
+        ApiError::internal_error(flow_like_types::anyhow!(
+            "Failed to create notification: {}",
+            e
+        ))
+    })?;
+
+    Ok(Json(CreateUserNotificationResponse {
+        id: notification_id,
+        success: true,
+    }))
 }

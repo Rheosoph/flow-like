@@ -2154,7 +2154,7 @@ impl NodeLogic for CopilotChatNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         // Validate and normalize the timezone input
         if let Some(pin) = node.get_pin_mut_by_name("timezone")
             && let Some(ref value_bytes) = pin.default_value

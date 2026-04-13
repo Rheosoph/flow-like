@@ -1,12 +1,13 @@
 use std::any::Any;
 
-use super::{ModelLogic, extract_headers};
+use super::{ModelLogic, extract_headers, merge_additional_params};
 use crate::provider::random_provider;
 use crate::{
+    history::History,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait};
+use flow_like_types::{Cacheable, Result, async_trait, json::json};
 #[allow(deprecated)]
 use rig::client::completion::CompletionClientDyn;
 
@@ -163,6 +164,20 @@ impl ModelLogic for OpenAIModel {
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
     }
+
+    fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
+        let history = history.as_ref()?;
+        let base = history.build_additional_params().ok().flatten();
+        let reasoning = history.thinking.map(|thinking| {
+            json!({
+                "reasoning": {
+                    "effort": thinking.openai_reasoning_effort(),
+                }
+            })
+        });
+
+        merge_additional_params(base, reasoning)
+    }
 }
 
 #[cfg(test)]
@@ -170,8 +185,8 @@ impl ModelLogic for OpenAIModel {
 mod tests {
     use flow_like_types::tokio;
     use rig::agent::MultiTurnStreamItem;
-    use rig::completion::Chat;
     use rig::completion::ToolDefinition;
+    use rig::completion::{Chat, Message};
     use rig::message::Text;
     use rig::streaming::{StreamedAssistantContent, StreamingChat};
     use rig::tool::Tool;
@@ -551,7 +566,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -589,7 +604,7 @@ mod tests {
         let mut stream = agent
             .stream_chat(
                 "Please call the tool to get the weather for Berlin in celsius.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await;
 
@@ -633,7 +648,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -844,7 +859,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -877,7 +892,7 @@ mod tests {
         let mut stream = agent
             .stream_chat(
                 "Please call the tool to get the weather for Berlin in celsius.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await;
 
@@ -916,7 +931,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                vec![],
+                Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -1105,7 +1120,7 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, vec![]).await.unwrap();
+        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));
@@ -1133,7 +1148,7 @@ mod tests {
 
         use futures::StreamExt;
         let prompt = "Call both weather and forecast tools for Berlin (3 days).";
-        let mut stream = agent.stream_chat(prompt, vec![]).await;
+        let mut stream = agent.stream_chat(prompt, Vec::<Message>::new()).await;
 
         let mut response = String::new();
         while let Some(chunk_result) = stream.next().await {
@@ -1171,7 +1186,7 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, vec![]).await.unwrap();
+        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));
@@ -1195,7 +1210,7 @@ mod tests {
 
         use futures::StreamExt;
         let prompt = "Call both weather and forecast tools for Berlin (3 days).";
-        let mut stream = agent.stream_chat(prompt, vec![]).await;
+        let mut stream = agent.stream_chat(prompt, Vec::<Message>::new()).await;
 
         let mut response = String::new();
         while let Some(chunk_result) = stream.next().await {

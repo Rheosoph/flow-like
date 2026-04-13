@@ -47,10 +47,10 @@ impl NodeLogic for ArrayToSetNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let _ = node.match_type(
             "array_in",
-            board.clone(),
+            board,
             Some(ValueType::Array),
             Some(ValueType::Array),
         );

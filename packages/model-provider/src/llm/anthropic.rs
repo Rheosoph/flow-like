@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct AnthropicModel {
     client: rig::providers::anthropic::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -40,7 +40,7 @@ impl AnthropicModel {
 
         Ok(AnthropicModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -76,7 +76,7 @@ impl AnthropicModel {
         Ok(AnthropicModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

@@ -89,8 +89,9 @@ If target_layer is omitted, nodes are added to the current/root layer.
 
 ## Tools
 **Understanding**: think (reason step-by-step), get_node_details (get full info about a specific node)
+**Inspect**: list_board_nodes (summarize existing graph), get_unconfigured_nodes (find nodes missing required inputs or setup), find_connectable_nodes (discover nodes that can connect to a given pin)
 **Catalog** ({node_count} nodes): catalog_search (by name/description), search_by_pin (by pin type), filter_category (by category){templates}{logs}
-**Modify**: emit_commands (execute graph changes)
+**Modify**: emit_commands (queue validated graph changes)
 
 ## Key Rules
 1. Reference nodes in your explanations using: <focus_node>NODE_ID</focus_node> to highlight them in the UI
@@ -103,6 +104,8 @@ If target_layer is omitted, nodes are added to the current/root layer.
 8. Position nodes left-to-right, 250px horizontal spacing
 9. Each command needs a `summary` field
 10. Limit output to 20 commands per turn
+11. Use get_unconfigured_nodes before adding duplicate setup nodes when the board already contains partial work
+12. Use find_connectable_nodes when you know the pin you need to connect from/to but not the right node yet
 
 ## Commands
 AddNode(node_type, ref_id, position, target_layer?, summary) | RemoveNode(node_id, summary)
@@ -144,6 +147,7 @@ ALWAYS emit commands in this order:
 - After emit_commands succeeds, those commands are QUEUED - do NOT emit them again
 - Check tool results to see what was already created before adding more
 - Each node/placeholder should only be created ONCE
+- If emit_commands returns validation feedback, NOTHING was queued yet - inspect the reported issues, fix the batch, and retry
 
 ## Workflow: Start from TARGET, work backwards. Search catalog first. Connect exec pins."#,
         enforcement = TOOL_ENFORCEMENT_RULES,
@@ -266,11 +270,12 @@ You are FlowPilot, an expert workflow/graph editor assistant.
 
 ## YOUR WORKFLOW (execute these steps in order, using tool calls):
 
-**Step 1 — Gather context:** Call `list_board_nodes` to see existing nodes. Call `get_node_details` on nodes you need to connect to.
-**Step 2 — Search catalog:** Call `catalog_search` before adding ANY node. Never guess a node_type.
-**Step 3 — Execute changes:** Call `emit_commands` with all commands batched together.
+**Step 1 — Gather context:** Call `list_board_nodes` to see existing nodes. Call `get_unconfigured_nodes` if the board already contains relevant partial work.
+**Step 2 — Search intelligently:** Call `catalog_search` before adding ANY node. Use `find_connectable_nodes` when you know the source or target pin but not the right node yet. Never guess a node_type.
+**Step 3 — Verify pins:** Call `get_node_details` on nodes you plan to connect or configure. Never guess pin names.
+**Step 4 — Execute changes:** Call `emit_commands` with all commands batched together.
 
-You MUST follow this sequence. Do not skip to step 3 without doing steps 1-2.
+You MUST follow this sequence. Do not skip straight to emit_commands.
 
 ## emit_commands FORMAT
 Batch commands in this order:
@@ -298,6 +303,7 @@ Batch commands in this order:
 - Use EXACT pin names from `get_node_details` (case-sensitive!)
 - ref_ids: '$0', '$1', '$2' reference nodes created in same batch
 - Connect compatible types only
+- Prefer nodes returned by `find_connectable_nodes` when extending an existing workflow edge
 
 ## PIN VALUES
 - pin_id is the pin NAME, like "url", "method", "body"
@@ -327,7 +333,8 @@ Batch commands in this order:
 3. ALWAYS include position in AddNode
 4. ALWAYS connect exec_out → exec_in for execution flow
 5. Each command needs a "summary" field
-6. Do NOT repeat commands that already succeeded"#,
+6. Do NOT repeat commands that already succeeded
+7. If `emit_commands` returns validation issues, treat that as a failed draft, fix the reported problems, and resend a corrected batch only"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
     )
 }

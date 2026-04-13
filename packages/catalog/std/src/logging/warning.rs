@@ -75,7 +75,7 @@ impl NodeLogic for WarningNode {
         return Ok(());
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("message", board.clone(), None, Some(ValueType::Normal));
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("message", board, None, Some(ValueType::Normal));
     }
 }

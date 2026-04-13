@@ -154,7 +154,7 @@ impl NodeLogic for WidgetActionEvent {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         // Find the InstantiateWidget that references this event via fn_refs

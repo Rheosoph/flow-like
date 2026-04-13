@@ -5,18 +5,26 @@
 
 mod context;
 mod provider;
+mod search;
 mod tools;
 mod types;
+mod validation;
 
 pub use context::{
     EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,
 };
 pub use provider::CatalogProvider;
+pub use search::{
+    SearchQueryAnalysis, analyze_search_query, enrich_node_metadata, score_catalog_metadata,
+    search_result_hint_lines,
+};
 pub use tools::{
     CatalogTool, EmitCommandsArgs, EmitCommandsTool, FilterCategoryArgs, FilterCategoryTool,
-    GetNodeDetailsArgs, GetNodeDetailsTool, QueryLogsArgs, QueryLogsTool, SearchArgs,
+    FindConnectableNodesArgs, FindConnectableNodesTool, GetNodeDetailsArgs, GetNodeDetailsTool,
+    GetUnconfiguredNodesTool, ListBoardNodesTool, QueryLogsArgs, QueryLogsTool, SearchArgs,
     SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs,
-    get_tool_description,
+    build_find_connectable_nodes_output, build_list_board_nodes_output,
+    build_unconfigured_nodes_output, get_tool_description,
 };
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
@@ -156,6 +164,7 @@ impl Copilot {
         board: &Board,
         selected_node_ids: &[String],
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
         history: Vec<ChatMessage>,
         model_id: Option<String>,
         token: Option<String>,
@@ -187,12 +196,24 @@ impl Copilot {
             run_context.is_some(),
         );
 
+        let graph_context = Arc::new(context.clone());
+
         let mut agent_builder = completion_client
             .agent(&model_name)
             .preamble(&system_prompt)
             .tool(ThinkTool)
             .tool(GetNodeDetailsTool {
-                graph_context: Arc::new(context.clone()),
+                graph_context: graph_context.clone(),
+            })
+            .tool(ListBoardNodesTool {
+                graph_context: graph_context.clone(),
+            })
+            .tool(GetUnconfiguredNodesTool {
+                graph_context: graph_context.clone(),
+            })
+            .tool(FindConnectableNodesTool {
+                provider: self.catalog_provider.clone(),
+                graph_context: graph_context.clone(),
             })
             .tool(EmitCommandsTool)
             .tool(CatalogTool {
@@ -242,6 +263,29 @@ impl Copilot {
             }
         };
 
+        let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
+            text: prompt.clone(),
+        })];
+
+        if let Some(images) = &current_images {
+            for img in images {
+                prompt_contents.push(UserContent::Image(Image {
+                    data: DocumentSourceKind::Base64(img.data.clone()),
+                    media_type: parse_media_type(&img.media_type),
+                    detail: Some(ImageDetail::Auto),
+                    additional_params: None,
+                }));
+            }
+        }
+
+        let prompt_message = rig::message::Message::User {
+            content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
+                OneOrMany::one(UserContent::Text(rig::message::Text {
+                    text: prompt.clone(),
+                }))
+            }),
+        };
+
         // Convert chat history to rig message format (including images)
         let mut current_history: Vec<rig::message::Message> = history
             .iter()
@@ -285,6 +329,9 @@ impl Copilot {
         let mut all_commands: Vec<BoardCommand> = Vec::new();
         let max_iterations = 10u64;
         let mut plan_step_counter = 0u32;
+        let mut invalid_emit_attempts = 0u8;
+        let mut last_emit_validation: Option<String> = None;
+        let mut current_prompt = prompt_message.clone();
 
         for iteration in 0..max_iterations {
             // Send iteration start event
@@ -308,7 +355,7 @@ impl Copilot {
 
             // Build completion request - tools are already attached via agent builder
             let request = agent
-                .completion(prompt.clone(), current_history.clone())
+                .completion(current_prompt.clone(), current_history.clone())
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Completion error: {}", e))?;
 
@@ -335,14 +382,25 @@ impl Copilot {
                         }
                         response_contents.push(AssistantContent::Text(text));
                     }
-                    StreamedAssistantContent::ToolCall(tool_call) => {
+                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
                         response_contents.push(AssistantContent::ToolCall(tool_call));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                         // Deltas are accumulated into the final ToolCall
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        let reasoning_text = reasoning.reasoning.join("\n");
+                        let reasoning_text = reasoning
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                rig::message::ReasoningContent::Text { text, .. } => {
+                                    Some(text.as_str())
+                                }
+                                rig::message::ReasoningContent::Summary(s) => Some(s.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         current_reasoning.push_str(&reasoning_text);
                         current_reasoning.push('\n');
 
@@ -441,8 +499,6 @@ impl Copilot {
                 ));
             }
 
-            full_response.push_str(&iteration_text);
-
             // Collect all tool calls first for parallel execution
             let tool_calls: Vec<_> = response_contents
                 .iter()
@@ -458,6 +514,8 @@ impl Copilot {
             let tool_calls_found = !tool_calls.is_empty();
 
             if tool_calls_found {
+                current_history.push(current_prompt.clone());
+
                 // Emit plan steps for all tool calls starting
                 let mut step_ids: Vec<(String, String, u32)> = Vec::new();
                 for tool_call in &tool_calls {
@@ -523,22 +581,30 @@ impl Copilot {
                             println!("[Copilot]   [{}] {:?}", idx, cmd);
                         }
 
-                        // Deduplicate: only add commands that don't already exist
-                        for cmd in parsed {
-                            let is_duplicate = all_commands
-                                .iter()
-                                .any(|existing| Self::commands_are_duplicate(existing, &cmd));
-                            if !is_duplicate {
-                                all_commands.push(cmd);
-                            } else {
-                                println!("[Copilot] Skipping duplicate command");
-                            }
-                        }
+                        if parsed.is_empty() {
+                            invalid_emit_attempts = invalid_emit_attempts.saturating_add(1);
+                            last_emit_validation = Some(tool_output.clone());
+                        } else {
+                            invalid_emit_attempts = 0;
+                            last_emit_validation = None;
 
-                        println!(
-                            "[Copilot] all_commands now has {} total commands (after dedup)",
-                            all_commands.len()
-                        );
+                            // Deduplicate: only add commands that don't already exist
+                            for cmd in parsed {
+                                let is_duplicate = all_commands
+                                    .iter()
+                                    .any(|existing| Self::commands_are_duplicate(existing, &cmd));
+                                if !is_duplicate {
+                                    all_commands.push(cmd);
+                                } else {
+                                    println!("[Copilot] Skipping duplicate command");
+                                }
+                            }
+
+                            println!(
+                                "[Copilot] all_commands now has {} total commands (after dedup)",
+                                all_commands.len()
+                            );
+                        }
                     }
 
                     // Emit plan step completion
@@ -572,7 +638,8 @@ impl Copilot {
 
                 // Add all tool results to history as a single User message
                 // This is required for Gemini API which expects tool results to immediately follow
-                // the assistant's tool call message in a single message
+                // the assistant's tool call message in a single message. We use that
+                // combined tool-result message as the prompt for the next turn.
                 if !tool_results.is_empty() {
                     let tool_result_contents: Vec<UserContent> = tool_results
                         .iter()
@@ -597,10 +664,19 @@ impl Copilot {
                     let tool_result_msg = rig::message::Message::User {
                         content: combined_tool_results,
                     };
-                    current_history.push(tool_result_msg);
+                    current_prompt = tool_result_msg;
+                }
+
+                if invalid_emit_attempts >= 3 {
+                    println!(
+                        "[Copilot] Stopping after {} invalid emit_commands attempts",
+                        invalid_emit_attempts
+                    );
+                    break;
                 }
             } else {
                 // No tool calls, we're done
+                full_response.push_str(&iteration_text);
                 break;
             }
 
@@ -622,13 +698,23 @@ impl Copilot {
         );
 
         // Log the serialized response for debugging
+        let cleaned_message = Self::clean_message(&full_response);
+        let final_message = if cleaned_message.is_empty() {
+            last_emit_validation
+                .as_deref()
+                .map(Self::clean_validation_message)
+                .unwrap_or_default()
+        } else {
+            cleaned_message
+        };
+
         let response = CopilotResponse {
             agent_type: if has_commands {
                 AgentType::Edit
             } else {
                 AgentType::Explain
             },
-            message: Self::clean_message(&full_response),
+            message: final_message,
             commands: all_commands,
             suggestions: vec![],
         };
@@ -748,22 +834,42 @@ impl Copilot {
             }
             "emit_commands" => match serde_json::from_value::<EmitCommandsArgs>(arguments) {
                 Ok(args) => {
-                    let commands_json = serde_json::to_string(&args.commands).unwrap_or_default();
                     println!(
                         "[Copilot] emit_commands: {} commands, json length: {} chars",
                         args.commands.len(),
-                        commands_json.len()
+                        serde_json::to_string(&args.commands)
+                            .unwrap_or_default()
+                            .len()
                     );
-                    format!(
-                        "<commands>{}</commands>\n\n{}",
-                        commands_json, args.explanation
+
+                    let validation = validation::validate_emit_commands(
+                        &args,
+                        graph_context,
+                        self.catalog_provider.as_ref(),
                     )
+                    .await;
+
+                    validation::render_emit_commands_result(&args, &validation)
                 }
                 Err(e) => {
                     println!("[Copilot] emit_commands: Failed to parse args: {:?}", e);
                     format!("Failed to parse commands: {}", e)
                 }
             },
+            "list_board_nodes" => build_list_board_nodes_output(graph_context),
+            "get_unconfigured_nodes" => build_unconfigured_nodes_output(graph_context),
+            "find_connectable_nodes" => {
+                match serde_json::from_value::<FindConnectableNodesArgs>(arguments) {
+                    Ok(args) => build_find_connectable_nodes_output(
+                        graph_context,
+                        self.catalog_provider.as_ref(),
+                        args,
+                    )
+                    .await
+                    .unwrap_or_else(|err| err.to_string()),
+                    Err(err) => format!("Failed to parse connectable-node args: {}", err),
+                }
+            }
             "catalog_search" => {
                 if let Ok(args) = serde_json::from_value::<SearchArgs>(arguments) {
                     let matches = self.catalog_provider.search(&args.query).await;
@@ -981,6 +1087,16 @@ impl Copilot {
             && let Some(end) = result.find("</commands>")
         {
             result = format!("{}{}", &result[..start], &result[end + 11..]);
+        }
+        result.trim().to_string()
+    }
+
+    fn clean_validation_message(response: &str) -> String {
+        let mut result = response.to_string();
+        if let Some(start) = result.find("<validation>")
+            && let Some(end) = result.find("</validation>")
+        {
+            result = format!("{}{}", &result[..start], &result[end + 13..]);
         }
         result.trim().to_string()
     }

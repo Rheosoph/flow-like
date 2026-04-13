@@ -28,6 +28,8 @@ pub struct CopyPasteCommand {
     pub new_layers: Vec<Layer>,
     #[serde(default)]
     pub added_refs: Vec<String>,
+    #[serde(default)]
+    pub added_variables: Vec<String>,
     pub current_layer: Option<String>,
     pub old_mouse: Option<(f32, f32, f32)>,
     pub offset: (f32, f32, f32),
@@ -53,18 +55,87 @@ impl CopyPasteCommand {
             new_comments: vec![],
             new_layers: vec![],
             added_refs: vec![],
+            added_variables: vec![],
         }
     }
 }
 
 #[async_trait]
 impl Command for CopyPasteCommand {
+    async fn validate(
+        &self,
+        _board: &Board,
+        state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<()> {
+        let node_registry = state.node_registry.read().await.node_registry.clone();
+        for node in &self.original_nodes {
+            if node_registry.get_node(&node.name).is_err() && node.wasm.is_some() {
+                return Err(flow_like_types::anyhow!(
+                    "External node '{}' from package '{}' is not installed. Please install the package first.",
+                    node.friendly_name,
+                    node.wasm
+                        .as_ref()
+                        .map(|w| w.package_id.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn execute(
         &mut self,
         board: &mut Board,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
+        if !self.new_comments.is_empty()
+            || !self.new_nodes.is_empty()
+            || !self.new_layers.is_empty()
+        {
+            for comment in &self.new_comments {
+                board.comments.insert(comment.id.clone(), comment.clone());
+            }
+
+            self.added_variables.clear();
+            for node in &self.new_nodes {
+                board.nodes.insert(node.id.clone(), node.clone());
+
+                for pin in node.pins.values() {
+                    if pin.name == "var_ref" {
+                        if let Some(var_ref) = pin.default_value.as_ref() {
+                            if let Ok(var_ref) = from_slice::<String>(var_ref) {
+                                if board.variables.get(&var_ref).is_none() {
+                                    if let Some(orig) =
+                                        self.original_variables.iter().find(|v| v.id == var_ref)
+                                    {
+                                        board.variables.insert(var_ref.clone(), orig.clone());
+                                        self.added_variables.push(var_ref);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for layer in &self.new_layers {
+                board.layers.insert(layer.id.clone(), layer.clone());
+            }
+
+            self.added_refs.clear();
+            for (key, value) in &self.original_refs {
+                if !board.refs.contains_key(key) {
+                    board.refs.insert(key.clone(), value.clone());
+                    self.added_refs.push(key.clone());
+                }
+            }
+
+            return Ok(());
+        }
+
         let node_registry = state.node_registry.read().await.node_registry.clone();
+
         let mut translated_connection = HashMap::with_capacity(self.original_nodes.len());
         let mut intermediate_nodes = Vec::with_capacity(self.original_nodes.len());
         let mut intermediate_layers = Vec::with_capacity(self.original_layers.len());
@@ -178,18 +249,6 @@ impl Command for CopyPasteCommand {
             let mut new_node = node.clone();
             let blueprint_node = node_registry.get_node(&node.name).ok();
 
-            // If the pasted node is external (has wasm metadata) but not in the registry, reject it
-            if blueprint_node.is_none() && node.wasm.is_some() {
-                return Err(flow_like_types::anyhow!(
-                    "External node '{}' from package '{}' is not installed. Please install the package first.",
-                    node.friendly_name,
-                    node.wasm
-                        .as_ref()
-                        .map(|w| w.package_id.as_str())
-                        .unwrap_or("unknown")
-                ));
-            }
-
             let blueprint_node = blueprint_node.unwrap_or(node.clone());
             let old_id = new_node.id.clone();
             let new_id = create_id();
@@ -202,6 +261,9 @@ impl Command for CopyPasteCommand {
             new_node.start = blueprint_node.start;
             new_node.event_callback = blueprint_node.event_callback;
             new_node.wasm = blueprint_node.wasm.clone();
+            new_node.version = blueprint_node.version;
+            new_node.long_running = blueprint_node.long_running;
+            new_node.only_offline = blueprint_node.only_offline;
 
             // Preserve user-customized friendly_name and description for start nodes (events)
             let is_start_node = blueprint_node.start.unwrap_or(false);
@@ -251,12 +313,12 @@ impl Command for CopyPasteCommand {
                                     self.original_variables.iter().find(|v| v.id == var_ref);
 
                                 if let Some(orig) = original_var {
-                                    // Clone the original variable to preserve all properties including category
                                     let mut new_var = orig.clone();
                                     new_var.id = var_ref.clone();
+                                    self.added_variables.push(var_ref.clone());
                                     board.variables.insert(var_ref.clone(), new_var);
                                 } else {
-                                    // Fallback: create a new variable with basic info
+                                    // Fallback: create a variable with as much info as possible
                                     let var_name = if new_node.friendly_name.starts_with("Get ") {
                                         new_node.friendly_name.replace("Get ", "")
                                     } else if new_node.friendly_name.starts_with("Set ") {
@@ -264,21 +326,25 @@ impl Command for CopyPasteCommand {
                                     } else {
                                         new_node.friendly_name.clone()
                                     };
-                                    println!(
-                                        "Creating new variable: {}, friendly name: {}",
-                                        var_name, new_node.friendly_name
-                                    );
-                                    let (_id, value_ref_pin) = new_node
+                                    let value_ref_pin = new_node
                                         .pins
-                                        .iter()
-                                        .find(|(_, p)| p.name == "value_ref")
-                                        .unwrap_or((&String::new(), &pin));
+                                        .values()
+                                        .find(|p| p.name == "value_ref");
                                     let mut new_var = Variable::new(
                                         &var_name,
-                                        value_ref_pin.data_type.clone(),
-                                        value_ref_pin.value_type.clone(),
+                                        value_ref_pin
+                                            .map(|p| p.data_type.clone())
+                                            .unwrap_or(pin.data_type.clone()),
+                                        value_ref_pin
+                                            .map(|p| p.value_type.clone())
+                                            .unwrap_or(pin.value_type.clone()),
                                     );
                                     new_var.id = var_ref.clone();
+                                    if let Some(vr) = value_ref_pin {
+                                        new_var.default_value = vr.default_value.clone();
+                                        new_var.schema = vr.schema.clone();
+                                    }
+                                    self.added_variables.push(var_ref.clone());
                                     board.variables.insert(var_ref.clone(), new_var);
                                 }
                             }
@@ -295,14 +361,13 @@ impl Command for CopyPasteCommand {
                         pin.default_value = Some(bytes);
                     }
 
-                    // Only override schema/options from the blueprint if the blueprint
-                    // actually defines them. Dynamic schemas (set by on_update, not
-                    // in get_node()) must survive the paste cycle so that on_update
-                    // can find the schema on the first pass without clearing pins.
-                    if blueprint_pin.schema.is_some() {
+                    // Only override schema/options from the blueprint when the
+                    // pasted pin doesn't already carry one. Dynamic schemas (set
+                    // by on_update at runtime) must survive the paste cycle.
+                    if pin.schema.is_none() && blueprint_pin.schema.is_some() {
                         pin.schema = blueprint_pin.schema.clone();
                     }
-                    if blueprint_pin.options.is_some() {
+                    if pin.options.is_none() && blueprint_pin.options.is_some() {
                         pin.options = blueprint_pin.options.clone();
                     }
 
@@ -342,21 +407,25 @@ impl Command for CopyPasteCommand {
                     .collect();
             }
 
-            // Remap fn_refs to new node IDs, then validate and deduplicate
+            // Remap fn_refs to new node IDs (validation deferred until all nodes are inserted)
             if let Some(fn_refs) = &mut new_node.fn_refs {
-                // First, remap to new IDs
                 fn_refs.fn_refs = fn_refs
                     .fn_refs
                     .iter()
                     .filter_map(|ref_id| translated_connection.get(ref_id).cloned())
                     .collect();
-
-                // Then validate and deduplicate - never trust the frontend!
-                super::validate_and_deduplicate_fn_refs(fn_refs, board);
             }
 
             board.nodes.insert(new_node.id.clone(), new_node.clone());
             self.new_nodes.push(new_node);
+        }
+
+        // Validate fn_refs now that all pasted nodes exist in the board
+        for node in self.new_nodes.iter_mut() {
+            if let Some(fn_refs) = &mut node.fn_refs {
+                super::validate_and_deduplicate_fn_refs(fn_refs, board);
+            }
+            board.nodes.insert(node.id.clone(), node.clone());
         }
 
         for layer in intermediate_layers.iter() {
@@ -413,6 +482,10 @@ impl Command for CopyPasteCommand {
             board.refs.remove(ref_key);
         }
         self.added_refs.clear();
+
+        for var_key in &self.added_variables {
+            board.variables.remove(var_key);
+        }
 
         Ok(())
     }

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::provider::CatalogProvider;
+use super::search::score_catalog_metadata;
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::state::FlowLikeState;
 
@@ -23,6 +24,10 @@ pub struct TemplateToolError;
 #[derive(Debug, thiserror::Error)]
 #[error("Get node details tool error: {0}")]
 pub struct GetNodeDetailsToolError(pub String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("Board inspection tool error: {0}")]
+pub struct BoardInspectionToolError(pub String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("Emit commands tool error")]
@@ -65,6 +70,14 @@ pub struct ThinkingArgs {
 #[derive(Deserialize)]
 pub struct GetNodeDetailsArgs {
     pub node_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct FindConnectableNodesArgs {
+    pub node_id: String,
+    pub pin_name: String,
+    pub intent: Option<String>,
+    pub limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -301,6 +314,121 @@ use super::context::GraphContext;
 
 pub struct GetNodeDetailsTool {
     pub graph_context: Arc<GraphContext>,
+}
+
+// ============================================================================
+// List Board Nodes Tool
+// ============================================================================
+
+pub struct ListBoardNodesTool {
+    pub graph_context: Arc<GraphContext>,
+}
+
+impl Tool for ListBoardNodesTool {
+    const NAME: &'static str = "list_board_nodes";
+
+    type Error = BoardInspectionToolError;
+    type Args = serde_json::Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "list_board_nodes".to_string(),
+            description: r#"List all nodes and layers in the current workflow with IDs and positions. Use this first when modifying an existing graph."#.to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(build_list_board_nodes_output(&self.graph_context))
+    }
+}
+
+// ============================================================================
+// Get Unconfigured Nodes Tool
+// ============================================================================
+
+pub struct GetUnconfiguredNodesTool {
+    pub graph_context: Arc<GraphContext>,
+}
+
+impl Tool for GetUnconfiguredNodesTool {
+    const NAME: &'static str = "get_unconfigured_nodes";
+
+    type Error = BoardInspectionToolError;
+    type Args = serde_json::Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "get_unconfigured_nodes".to_string(),
+            description: r#"Find nodes that still have missing non-execution inputs. Use this after planning or after a failed emit_commands validation to see what the graph is missing."#.to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(build_unconfigured_nodes_output(&self.graph_context))
+    }
+}
+
+// ============================================================================
+// Find Connectable Nodes Tool
+// ============================================================================
+
+pub struct FindConnectableNodesTool {
+    pub provider: Arc<dyn CatalogProvider>,
+    pub graph_context: Arc<GraphContext>,
+}
+
+impl Tool for FindConnectableNodesTool {
+    const NAME: &'static str = "find_connectable_nodes";
+
+    type Error = BoardInspectionToolError;
+    type Args = FindConnectableNodesArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "find_connectable_nodes".to_string(),
+            description: r#"Find catalog nodes that can connect to a specific existing pin, then rerank them by intent. Use this instead of guessing follow-up nodes for complex workflows."#.to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": "Existing node or layer ID from the current graph"
+                    },
+                    "pin_name": {
+                        "type": "string",
+                        "description": "Pin name on that node/layer"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "description": "Optional desired outcome for reranking, e.g. 'send email' or 'read unread inbox messages'"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum candidates to return (default 8, max 20)"
+                    }
+                },
+                "required": ["node_id", "pin_name"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        build_find_connectable_nodes_output(&self.graph_context, self.provider.as_ref(), args).await
+    }
 }
 
 impl Tool for GetNodeDetailsTool {
@@ -898,6 +1026,173 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
 // Tool Execution Helpers
 // ============================================================================
 
+pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
+    if graph_context.nodes.is_empty() && graph_context.layers.is_empty() {
+        return "The board is empty - no nodes found. Use catalog_search to find nodes to add."
+            .to_string();
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!("Board has {} nodes:", graph_context.nodes.len()));
+
+    for node in &graph_context.nodes {
+        let selected = if graph_context.selected_nodes.contains(&node.id) {
+            " [SELECTED]"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "- {} | {} | {} | pos:({},{}){}",
+            node.id, node.node_type, node.friendly_name, node.position.0, node.position.1, selected
+        ));
+    }
+
+    if !graph_context.layers.is_empty() {
+        lines.push(format!("\nLayers ({}):", graph_context.layers.len()));
+        for layer in &graph_context.layers {
+            let parent = layer.parent_id.as_deref().unwrap_or("root");
+            lines.push(format!(
+                "- {} | {} | parent:{} | nodes:{} | pos:({},{})",
+                layer.id,
+                layer.name,
+                parent,
+                layer.node_ids.len(),
+                layer.position.0,
+                layer.position.1,
+            ));
+        }
+    }
+
+    if !graph_context.variables.is_empty() {
+        lines.push(format!("\nVariables ({}):", graph_context.variables.len()));
+        for variable in &graph_context.variables {
+            lines.push(format!(
+                "- {}: {} ({}/{})",
+                variable.id, variable.name, variable.data_type, variable.value_type
+            ));
+        }
+    }
+
+    lines.push("\n→ Use get_node_details(node_id) to inspect exact pin names".to_string());
+    lines.join("\n")
+}
+
+pub fn build_unconfigured_nodes_output(graph_context: &GraphContext) -> String {
+    let connected_pins: std::collections::HashSet<(String, String)> = graph_context
+        .edges
+        .iter()
+        .map(|edge| (edge.to_node_id.clone(), edge.to_pin_name.clone()))
+        .collect();
+
+    let mut unconfigured = Vec::new();
+
+    for node in &graph_context.nodes {
+        let missing_inputs: Vec<_> = node
+            .inputs
+            .iter()
+            .filter(|input| input.type_name != "Execution")
+            .filter(|input| {
+                !connected_pins.contains(&(node.id.clone(), input.name.clone()))
+                    && input.default_value.is_none()
+            })
+            .map(|input| {
+                json!({
+                    "pin": input.name,
+                    "type": input.type_name,
+                })
+            })
+            .collect();
+
+        if !missing_inputs.is_empty() {
+            unconfigured.push(json!({
+                "node_id": node.id,
+                "node_type": node.node_type,
+                "name": node.friendly_name,
+                "missing_inputs": missing_inputs,
+            }));
+        }
+    }
+
+    if unconfigured.is_empty() {
+        "All nodes are configured - no missing non-execution inputs found.".to_string()
+    } else {
+        serde_json::to_string_pretty(&unconfigured).unwrap_or_default()
+    }
+}
+
+pub async fn build_find_connectable_nodes_output(
+    graph_context: &GraphContext,
+    provider: &dyn CatalogProvider,
+    args: FindConnectableNodesArgs,
+) -> Result<String, BoardInspectionToolError> {
+    let limit = args.limit.unwrap_or(8).clamp(1, 20);
+
+    let mut pin_direction = None;
+    let mut pin_type = None;
+
+    if let Some(node) = graph_context
+        .nodes
+        .iter()
+        .find(|node| node.id == args.node_id)
+    {
+        if let Some(pin) = node.inputs.iter().find(|pin| pin.name == args.pin_name) {
+            pin_direction = Some("input");
+            pin_type = Some(pin.type_name.clone());
+        } else if let Some(pin) = node.outputs.iter().find(|pin| pin.name == args.pin_name) {
+            pin_direction = Some("output");
+            pin_type = Some(pin.type_name.clone());
+        }
+    }
+
+    if pin_type.is_none()
+        && let Some(layer) = graph_context
+            .layers
+            .iter()
+            .find(|layer| layer.id == args.node_id)
+    {
+        if let Some(pin) = layer.inputs.iter().find(|pin| pin.name == args.pin_name) {
+            pin_direction = Some("input");
+            pin_type = Some(pin.type_name.clone());
+        } else if let Some(pin) = layer.outputs.iter().find(|pin| pin.name == args.pin_name) {
+            pin_direction = Some("output");
+            pin_type = Some(pin.type_name.clone());
+        }
+    }
+
+    let pin_type = pin_type.ok_or_else(|| {
+        BoardInspectionToolError(format!(
+            "Pin '{}' not found on node/layer '{}'",
+            args.pin_name, args.node_id
+        ))
+    })?;
+
+    let search_for_inputs = pin_direction == Some("output");
+    let mut matches = provider
+        .search_by_pin_type(&pin_type, search_for_inputs)
+        .await;
+
+    matches.retain(|metadata| metadata.name != args.node_id);
+
+    if let Some(intent) = args.intent.as_ref() {
+        matches.sort_by(|left, right| {
+            score_catalog_metadata(right, intent).cmp(&score_catalog_metadata(left, intent))
+        });
+    }
+
+    let payload = json!({
+        "source": {
+            "node_id": args.node_id,
+            "pin_name": args.pin_name,
+            "pin_type": pin_type,
+            "pin_direction": pin_direction.unwrap_or("unknown"),
+            "searching_for": if search_for_inputs { "input pins" } else { "output pins" },
+        },
+        "candidates": matches.into_iter().take(limit).collect::<Vec<_>>(),
+    });
+
+    Ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
 /// Get a human-readable description for a tool call
 pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String {
     match name {
@@ -936,6 +1231,19 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
                 "Finding compatible nodes...".to_string()
             }
         }
+        "find_connectable_nodes" => {
+            let node_id = arguments
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("node");
+            let pin_name = arguments
+                .get("pin_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pin");
+            format!("Finding connectable nodes for {}.{}", node_id, pin_name)
+        }
+        "list_board_nodes" => "Listing nodes in the current workflow...".to_string(),
+        "get_unconfigured_nodes" => "Checking which nodes still need configuration...".to_string(),
         "filter_category" => {
             if let Some(category) = arguments.get("category_prefix").and_then(|v| v.as_str()) {
                 format!("Browsing {} category", category)

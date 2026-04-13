@@ -172,3 +172,44 @@ After **any package manager operation** (npm/bun/pnpm install, adding deps):
 - Resolve security issues before continuing.
 
 Codacy identifiers: `provider: gh`, `organization: TM9657`, `repository: flow-like`.
+
+---
+
+## CI Parity
+
+PRs target `dev`. Run these locally before pushing — they match the CI pipeline:
+
+```bash
+# Clippy (same strict flags as CI)
+cargo clippy -- -D clippy::correctness -D clippy::suspicious
+
+# Format check
+cargo fmt --check
+
+# Security audit
+cargo audit
+
+# Tests (some require API keys via env vars)
+cargo test -p <package-name>
+
+# Frontend
+cd apps/desktop && bunx biome check . && bunx tsc --noEmit
+```
+
+---
+
+## Commit Conventions
+
+Use conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`.
+Keep the subject under 72 characters. The release changelog groups by these labels.
+
+---
+
+## Good Practices
+
+- **Read before writing**: always read existing code/patterns before modifying. Check neighboring files for conventions.
+- **Incremental verification**: run `cargo check -p <pkg>` after each file edit, not just at the end. Catch errors early.
+- **Match existing patterns**: when adding a new node, endpoint, or component, find the closest existing example and follow its structure.
+- **No speculative abstractions**: solve the problem at hand. Don't add config, feature flags, or extension points for hypothetical future needs.
+- **Error messages matter**: include enough context in error strings to diagnose without a debugger. Name the operation that failed and the value that was unexpected.
+- **Test at boundaries**: validate external input (user input, API responses, file contents). Trust internal code paths and framework guarantees.

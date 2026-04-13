@@ -49,12 +49,72 @@ function localToINotification(local: ILocalNotification): INotification {
 	};
 }
 
+function sortNotificationsByCreatedAtDesc(
+	notifications: INotification[],
+): INotification[] {
+	return notifications.sort(
+		(a, b) =>
+			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	);
+}
+
 export class UserState implements IUserState {
 	constructor(private readonly backend: TauriBackend) {}
 
 	private getUserId(): string {
-		// Use a constant for offline/unauthenticated users
 		return this.backend.auth?.user?.profile?.sub ?? "offline-user";
+	}
+
+	private getRelevantLocalUserIds(): string[] {
+		const userId = this.getUserId();
+		return userId === "offline-user" ? [userId] : [userId, "offline-user"];
+	}
+
+	private async getMergedLocalNotificationCounts(): Promise<{
+		total: number;
+		unread: number;
+	}> {
+		const counts = await Promise.all(
+			this.getRelevantLocalUserIds().map((userId) =>
+				getLocalNotificationCounts(userId),
+			),
+		);
+
+		return counts.reduce(
+			(acc, count) => ({
+				total: acc.total + count.total,
+				unread: acc.unread + count.unread,
+			}),
+			{ total: 0, unread: 0 },
+		);
+	}
+
+	private async getMergedLocalNotifications(
+		limit: number,
+		unreadOnly: boolean,
+	): Promise<INotification[]> {
+		const localNotifications = await Promise.all(
+			this.getRelevantLocalUserIds().map((userId) =>
+				getLocalNotifications(userId, limit, 0, unreadOnly),
+			),
+		);
+
+		const merged = new Map<string, INotification>();
+		for (const notification of localNotifications.flat().map(localToINotification)) {
+			merged.set(notification.id, notification);
+		}
+
+		return sortNotificationsByCreatedAtDesc([...merged.values()]).slice(0, limit);
+	}
+
+	private async markAllRelevantLocalNotificationsRead(): Promise<number> {
+		const counts = await Promise.all(
+			this.getRelevantLocalUserIds().map((userId) =>
+				markAllLocalNotificationsRead(userId),
+			),
+		);
+
+		return counts.reduce((sum, count) => sum + count, 0);
 	}
 
 	async lookupUser(userId: string): Promise<IUserLookup> {
@@ -90,15 +150,10 @@ export class UserState implements IUserState {
 		return result;
 	}
 	async getNotifications(): Promise<INotificationsOverview> {
-		const userId = this.getUserId();
-
 		// Get local notifications first (works offline)
 		let localCounts = { total: 0, unread: 0 };
 		try {
-			localCounts = await getLocalNotificationCounts(userId);
-			const offlineCounts = await getLocalNotificationCounts("offline-user");
-			localCounts.total = offlineCounts.total;
-			localCounts.unread = offlineCounts.unread;
+			localCounts = await this.getMergedLocalNotificationCounts();
 		} catch (e) {
 			console.error(
 				"[UserState.getNotifications] Error getting local counts:",
@@ -140,19 +195,13 @@ export class UserState implements IUserState {
 		offset = 0,
 		limit = 20,
 	): Promise<INotification[]> {
-		const userId = this.getUserId();
-
 		// Get local notifications first (works offline)
 		let localNotifications: INotification[] = [];
 		try {
-			// Fetch more than needed for proper pagination when merged
-			const local = await getLocalNotifications(
-				userId,
+			localNotifications = await this.getMergedLocalNotifications(
 				limit + offset,
-				0,
 				unreadOnly,
 			);
-			localNotifications = local.map(localToINotification);
 		} catch (e) {
 			console.error(
 				"[UserState.listNotifications] Error getting local notifications:",
@@ -182,10 +231,10 @@ export class UserState implements IUserState {
 		}
 
 		// Merge and sort by createdAt descending
-		const merged = [...remoteResult, ...localNotifications].sort(
-			(a, b) =>
-				new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-		);
+		const merged = sortNotificationsByCreatedAtDesc([
+			...remoteResult,
+			...localNotifications,
+		]);
 
 		// Apply pagination to merged result
 		return merged.slice(offset, offset + limit);
@@ -194,8 +243,9 @@ export class UserState implements IUserState {
 	async markNotificationRead(notificationId: string): Promise<void> {
 		// Try local first
 		try {
-			await markLocalNotificationRead(notificationId);
-			return;
+			if (await markLocalNotificationRead(notificationId)) {
+				return;
+			}
 		} catch {
 			// Not a local notification, try remote
 		}
@@ -207,7 +257,7 @@ export class UserState implements IUserState {
 
 		await fetcher(
 			this.backend.profile,
-			`user/notifications/${notificationId}`,
+			`user/notifications/${notificationId}/read`,
 			{
 				method: "POST",
 			},
@@ -218,8 +268,9 @@ export class UserState implements IUserState {
 	async deleteNotification(notificationId: string): Promise<void> {
 		// Try local first
 		try {
-			await deleteLocalNotification(notificationId);
-			return;
+			if (await deleteLocalNotification(notificationId)) {
+				return;
+			}
 		} catch {
 			// Not a local notification, try remote
 		}
@@ -259,10 +310,9 @@ export class UserState implements IUserState {
 		}
 
 		// Also mark all local notifications as read
-		const userId = this.getUserId();
 		let localCount = 0;
 		try {
-			localCount = await markAllLocalNotificationsRead(userId);
+			localCount = await this.markAllRelevantLocalNotificationsRead();
 		} catch {
 			// Ignore local errors
 		}

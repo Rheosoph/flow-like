@@ -103,18 +103,24 @@ fn create_sse_stream(
     Box::pin(stream)
 }
 
-async fn update_run_on_completion(
+pub async fn update_run_on_completion(
     db: &DatabaseConnection,
     run_id: &str,
     status: RunStatus,
     log_level: i32,
 ) -> Result<(), sea_orm::DbErr> {
     if let Some(existing) = ExecutionRun::find_by_id(run_id).one(db).await? {
+        let now = chrono::Utc::now().naive_utc();
+        let started_at = existing.started_at;
+        let created_at = existing.created_at;
         let mut model: execution_run::ActiveModel = existing.into();
         model.status = Set(status);
         model.log_level = Set(log_level);
-        model.completed_at = Set(Some(chrono::Utc::now().naive_utc()));
-        model.updated_at = Set(chrono::Utc::now().naive_utc());
+        if started_at.is_none() {
+            model.started_at = Set(Some(created_at));
+        }
+        model.completed_at = Set(Some(now));
+        model.updated_at = Set(now);
         model.update(db).await?;
         tracing::info!(run_id = %run_id, log_level = log_level, "Updated run status on completion");
     }

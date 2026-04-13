@@ -43,7 +43,7 @@ impl NodeLogic for MakeMapNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let _ = node.match_type("map_out", board, Some(ValueType::HashMap), None);
     }
 }

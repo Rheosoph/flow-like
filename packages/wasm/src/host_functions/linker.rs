@@ -7,6 +7,7 @@ use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
 use crate::memory::WasmAllocator;
 use flow_like_storage::object_store::path::Path;
+use std::sync::Arc;
 use wasmtime::{Caller, Linker, Memory, Ref, Val};
 
 /// Store data passed to host functions
@@ -920,6 +921,144 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             WasmError::Initialization(format!("Failed to register storage.write_request: {}", e))
         })?;
 
+    // write_start_request — begin chunked write, returns write_id via result buffer
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_start_request",
+            |caller: Caller<'_, StoreData>,
+             (path_ptr, path_len, total_size): (u32, u32, u64)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return 0u64;
+                    }
+                    let flow_path_json = match read_string_from_caller(&caller, path_ptr, path_len)
+                    {
+                        Ok(s) => s,
+                        Err(_) => return 0,
+                    };
+                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
+                        Ok(p) => p,
+                        Err(_) => return 0,
+                    };
+                    let write_id = crate::host_functions::storage::start_write(
+                        &mut caller.data().host_state.pending_writes.write(),
+                        flow_path,
+                        total_size,
+                    );
+                    match write_id {
+                        Some(id) => {
+                            let (ptr, len) = caller.data().host_state.store_result(id.as_bytes());
+                            pack_ptr_len(ptr, len)
+                        }
+                        None => 0,
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_start_request: {}",
+                e
+            ))
+        })?;
+
+    // write_chunk_request — append chunk to an in-flight write
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_chunk_request",
+            |caller: Caller<'_, StoreData>,
+             (id_ptr, id_len, data_ptr, data_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return -1i32;
+                    }
+                    let write_id = match read_string_from_caller(&caller, id_ptr, id_len) {
+                        Ok(s) => s,
+                        Err(_) => return -1,
+                    };
+                    let data = match read_bytes_from_caller(&caller, data_ptr, data_len) {
+                        Ok(d) => d,
+                        Err(_) => return -1,
+                    };
+                    let ok = crate::host_functions::storage::append_chunk(
+                        &mut caller.data().host_state.pending_writes.write(),
+                        &write_id,
+                        &data,
+                    );
+                    if ok { 0 } else { -1 }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_chunk_request: {}",
+                e
+            ))
+        })?;
+
+    // write_finish_request — flush accumulated chunks to object store
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_finish_request",
+            |caller: Caller<'_, StoreData>, (id_ptr, id_len): (u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return -1i32;
+                    }
+                    let write_id = match read_string_from_caller(&caller, id_ptr, id_len) {
+                        Ok(s) => s,
+                        Err(_) => return -1,
+                    };
+                    let pw = caller
+                        .data()
+                        .host_state
+                        .pending_writes
+                        .write()
+                        .remove(&write_id);
+                    let Some(pw) = pw else {
+                        return -1;
+                    };
+                    let ctx = match &caller.data().host_state.storage_context {
+                        Some(c) => c,
+                        None => return -1,
+                    };
+                    let store = match ctx.resolve_store(&pw.flow_path.store_ref) {
+                        Some(s) => s,
+                        None => return -1,
+                    };
+                    let path = Path::from(pw.flow_path.path);
+                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
+                        flow_like_types::Bytes::from(pw.buffer),
+                    );
+                    match store.as_generic().put(&path, payload).await {
+                        Ok(_) => 0,
+                        Err(_) => -1,
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_finish_request: {}",
+                e
+            ))
+        })?;
+
     // list_request — lists paths under a FlowPath prefix (async)
     linker
         .func_wrap_async(
@@ -1028,13 +1167,7 @@ fn storage_dir_impl(
     }
 }
 
-/// Minimal FlowPath for WASM — same shape as the real FlowPath for JSON compatibility.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StorageFlowPath {
-    path: String,
-    store_ref: String,
-    cache_store_ref: Option<String>,
-}
+use crate::host_functions::storage::StorageFlowPath;
 
 fn register_http_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
     linker
@@ -1615,7 +1748,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
             "flowlike_models",
             "llm_prompt",
             |caller: Caller<'_, StoreData>,
-             (bit_ptr, bit_len, messages_ptr, messages_len, _stream): (
+                 (bit_ptr, bit_len, messages_ptr, messages_len, stream): (
                 u32,
                 u32,
                 u32,
@@ -1671,22 +1804,32 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let app_state = model_ctx.app_state.clone();
                     let access_token = model_ctx.token.clone();
 
-                    // Parse messages_json: either {messages, tools} or a plain array
+                    // Parse messages_json: either {messages, tools, ...params} or a plain array
                     #[derive(serde::Deserialize)]
                     struct LlmPromptRequest {
                         messages: Vec<serde_json::Value>,
                         #[serde(default)]
                         tools: Option<Vec<serde_json::Value>>,
+                        #[serde(default)]
+                        temperature: Option<f64>,
+                        #[serde(default)]
+                        max_tokens: Option<u64>,
+                        #[serde(default)]
+                        tool_choice: Option<serde_json::Value>,
+                        #[serde(default)]
+                        output_schema: Option<serde_json::Value>,
+                        #[serde(default)]
+                        additional_params: Option<serde_json::Value>,
                     }
 
-                    let (raw_messages, raw_tools) =
+                    let (raw_messages, raw_tools, req_temperature, req_max_tokens, req_tool_choice, req_output_schema, req_additional_params) =
                         match serde_json::from_str::<LlmPromptRequest>(&messages_json) {
-                            Ok(req) => (req.messages, req.tools),
+                            Ok(req) => (req.messages, req.tools, req.temperature, req.max_tokens, req.tool_choice, req.output_schema, req.additional_params),
                             Err(_) => {
                                 match serde_json::from_str::<Vec<serde_json::Value>>(
                                     &messages_json,
                                 ) {
-                                    Ok(msgs) => (msgs, None),
+                                    Ok(msgs) => (msgs, None, None, None, None, None, None),
                                     Err(e) => {
                                         println!("llm_prompt: failed to parse messages JSON: {e}");
                                         let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
@@ -1747,6 +1890,25 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                                 text: text.to_string(),
                                             },
                                         );
+                                    } else if let Some(reasoning) = part
+                                        .get("reasoning")
+                                        .and_then(|reasoning| reasoning.get("text"))
+                                        .and_then(|text| text.as_array())
+                                    {
+                                        let text = reasoning
+                                            .iter()
+                                            .filter_map(|entry| entry.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        if !text.is_empty() {
+                                            contents.push(
+                                                flow_like_model_provider::history::Content::Text {
+                                                    content_type:
+                                                        flow_like_model_provider::history::ContentType::Text,
+                                                    text,
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                                 flow_like_model_provider::history::MessageContent::Contents(
@@ -1807,7 +1969,37 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         bit.id.clone(),
                         history_messages,
                     );
-                    history.stream = None;
+                    let should_stream = stream != 0;
+                    history.stream = should_stream.then_some(true);
+
+                    // Apply optional request parameters
+                    if let Some(temp) = req_temperature {
+                        history.temperature = Some(temp as f32);
+                    }
+                    if let Some(max) = req_max_tokens {
+                        history.max_completion_tokens = Some(max as u32);
+                    }
+                    if let Some(tc_val) = req_tool_choice {
+                        if let Ok(tc) = serde_json::from_value::<flow_like_model_provider::history::ToolChoice>(tc_val) {
+                            history.tool_choice = Some(tc);
+                        }
+                    }
+                    if let Some(schema) = req_output_schema {
+                        history.response_format = Some(flow_like_model_provider::history::ResponseFormat::Object(
+                            serde_json::json!({
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": schema.get("title").and_then(|t| t.as_str()).unwrap_or("response_schema"),
+                                    "schema": schema,
+                                    "strict": true
+                                }
+                            }),
+                        ));
+                    }
+                    // additional_params are provider-specific; log but don't lose them
+                    if let Some(ref params) = req_additional_params {
+                        println!("llm_prompt: additional_params: {params}");
+                    }
 
                     // Convert tool definitions if present
                     if let Some(tools) = raw_tools {
@@ -1866,7 +2058,30 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         );
                     }
 
-                    let response = match model.invoke(&history, None).await {
+                    let stream_events = should_stream.then(|| {
+                        Arc::new(parking_lot::RwLock::new(Vec::<crate::host_functions::StreamEvent>::new()))
+                    });
+
+                    let callback = stream_events.as_ref().map(|stream_events_cb| {
+                        let stream_events_cb = stream_events_cb.clone();
+                        Arc::new(
+                            move |chunk: flow_like_model_provider::response_chunk::ResponseChunk| {
+                                let events = stream_events_cb.clone();
+                                let future: std::pin::Pin<Box<dyn std::future::Future<Output = flow_like_types::Result<()>> + Send>> = Box::pin(async move {
+                                    if let Ok(chunk_json) = serde_json::to_value(&chunk) {
+                                        events.write().push(crate::host_functions::StreamEvent {
+                                            event_type: "llm_chunk".to_string(),
+                                            data: chunk_json,
+                                        });
+                                    }
+                                    Ok(())
+                                });
+                                future
+                            },
+                        ) as flow_like_model_provider::llm::LLMCallback
+                    });
+
+                    let response = match model.invoke(&history, callback).await {
                         Ok(r) => r,
                         Err(e) => {
                             println!("llm_prompt: model invoke failed: {e}");
@@ -1875,6 +2090,12 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             return pack_ptr_len(ptr, len);
                         }
                     };
+
+                    if let Some(stream_events) = stream_events {
+                        let collected = std::mem::take(&mut *stream_events.write());
+                        let mut host_events = caller.data().host_state.stream_events.write();
+                        host_events.extend(collected);
+                    }
 
                     // Convert response to SDK ChatMessage JSON
                     let resp_msg = match response.last_message() {
@@ -1911,10 +2132,19 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             )
                         };
 
+                    let usage = serde_json::json!({
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    });
+
                     let result = serde_json::json!({
                         "role": "assistant",
                         "content": resp_msg.content.clone().unwrap_or_default(),
+                        "reasoning": resp_msg.reasoning.clone(),
                         "tool_calls": tool_calls_json,
+                        "message_id": response.id,
+                        "usage": usage,
                     });
 
                     let result_str = result.to_string();
@@ -1926,6 +2156,259 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
         )
         .map_err(|e| {
             WasmError::Initialization(format!("Failed to register models.llm_prompt: {}", e))
+        })?;
+
+    // llm_prompt_stream — ABI v2 streaming LLM prompt
+    // Streams ResponseChunk events via add_stream_event("llm_chunk", ...) during invoke.
+    // Returns final response JSON with usage and message_id.
+    linker
+        .func_wrap_async(
+            "flowlike_models",
+            "llm_prompt_stream",
+            |caller: Caller<'_, StoreData>,
+             (bit_ptr, bit_len, req_ptr, req_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::MODELS)
+                    {
+                        return 0u64;
+                    }
+
+                    let bit_json = match read_string_from_caller(&caller, bit_ptr, bit_len) {
+                        Ok(s) => s,
+                        Err(_) => return 0u64,
+                    };
+                    let request_json = match read_string_from_caller(&caller, req_ptr, req_len) {
+                        Ok(s) => s,
+                        Err(_) => return 0u64,
+                    };
+
+                    let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
+                            let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                            return pack_ptr_len(ptr, len);
+                        }
+                    };
+
+                    let model_ctx = match &caller.data().host_state.model_context {
+                        Some(c) => c,
+                        None => {
+                            let err = serde_json::json!({"error": "Model context not available"}).to_string();
+                            let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                            return pack_ptr_len(ptr, len);
+                        }
+                    };
+                    let app_state = model_ctx.app_state.clone();
+                    let access_token = model_ctx.token.clone();
+
+                    #[derive(serde::Deserialize)]
+                    struct StreamRequest {
+                        messages: Vec<serde_json::Value>,
+                        #[serde(default)]
+                        tools: Option<Vec<serde_json::Value>>,
+                        #[serde(default)]
+                        temperature: Option<f64>,
+                        #[serde(default)]
+                        max_tokens: Option<u64>,
+                        #[serde(default)]
+                        tool_choice: Option<serde_json::Value>,
+                        #[serde(default)]
+                        output_schema: Option<serde_json::Value>,
+                        #[serde(default)]
+                        additional_params: Option<serde_json::Value>,
+                    }
+
+                    let req: StreamRequest = match serde_json::from_str(&request_json) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let err = serde_json::json!({"error": format!("Failed to parse request: {e}")}).to_string();
+                            let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                            return pack_ptr_len(ptr, len);
+                        }
+                    };
+
+                    // Convert messages → HistoryMessage (same logic as llm_prompt)
+                    let mut history_messages = Vec::with_capacity(req.messages.len());
+                    for msg in &req.messages {
+                        let role_str = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                        let role = match role_str {
+                            "system" => flow_like_model_provider::history::Role::System,
+                            "assistant" => flow_like_model_provider::history::Role::Assistant,
+                            "tool" => flow_like_model_provider::history::Role::Tool,
+                            _ => flow_like_model_provider::history::Role::User,
+                        };
+                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
+                            flow_like_model_provider::history::MessageContent::String(c.to_string())
+                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
+                            let contents = parts.iter().filter_map(|part| {
+                                part
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(|text| text.to_string())
+                                    .or_else(|| {
+                                        part
+                                            .get("reasoning")
+                                            .and_then(|reasoning| reasoning.get("text"))
+                                            .and_then(|text| text.as_array())
+                                            .map(|entries| {
+                                                entries
+                                                    .iter()
+                                                    .filter_map(|entry| entry.as_str())
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n")
+                                            })
+                                    })
+                                    .filter(|text| !text.is_empty())
+                                    .map(|text| flow_like_model_provider::history::Content::Text {
+                                        content_type: flow_like_model_provider::history::ContentType::Text,
+                                        text,
+                                    })
+                            }).collect();
+                            flow_like_model_provider::history::MessageContent::Contents(contents)
+                        } else {
+                            flow_like_model_provider::history::MessageContent::String(String::new())
+                        };
+                        let tool_calls = msg.get("tool_calls").and_then(|v| v.as_array()).map(|tcs| {
+                            tcs.iter().filter_map(|tc| {
+                                let id = tc.get("id")?.as_str()?.to_string();
+                                let name = tc.get("name")?.as_str()?.to_string();
+                                let args = tc.get("arguments").cloned().unwrap_or_default();
+                                let args_str = if args.is_string() { args.as_str().unwrap_or("{}").to_string() } else { serde_json::to_string(&args).unwrap_or_default() };
+                                Some(flow_like_model_provider::history::ToolCall { id, r#type: "function".to_string(), function: flow_like_model_provider::history::ToolCallFunction { name, arguments: args_str } })
+                            }).collect()
+                        });
+                        let tool_call_id = msg.get("tool_call_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        history_messages.push(flow_like_model_provider::history::HistoryMessage { role, content, name: None, tool_calls, tool_call_id, annotations: None });
+                    }
+
+                    let mut history = flow_like_model_provider::history::History::new(bit.id.clone(), history_messages);
+                    history.stream = Some(true);
+
+                    if let Some(temp) = req.temperature { history.temperature = Some(temp as f32); }
+                    if let Some(max) = req.max_tokens { history.max_completion_tokens = Some(max as u32); }
+                    if let Some(tc_val) = req.tool_choice {
+                        if let Ok(tc) = serde_json::from_value::<flow_like_model_provider::history::ToolChoice>(tc_val) {
+                            history.tool_choice = Some(tc);
+                        }
+                    }
+                    if let Some(schema) = req.output_schema {
+                        history.response_format = Some(flow_like_model_provider::history::ResponseFormat::Object(
+                            serde_json::json!({
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": schema.get("title").and_then(|t| t.as_str()).unwrap_or("response_schema"),
+                                    "schema": schema,
+                                    "strict": true
+                                }
+                            }),
+                        ));
+                    }
+
+                    if let Some(tools) = req.tools {
+                        let mut native_tools = Vec::new();
+                        for t in &tools {
+                            let name = match t.get("name").and_then(|n| n.as_str()) { Some(n) => n.to_string(), None => continue };
+                            let desc = t.get("description").and_then(|d| d.as_str()).map(String::from);
+                            let params = t.get("parameters").cloned().unwrap_or_default();
+                            if let Ok(parsed) = serde_json::from_value::<flow_like_model_provider::history::HistoryFunctionParameters>(params) {
+                                native_tools.push(flow_like_model_provider::history::Tool {
+                                    tool_type: flow_like_model_provider::history::ToolType::Function,
+                                    function: flow_like_model_provider::history::HistoryFunction { name, description: desc, parameters: parsed },
+                                });
+                            }
+                        }
+                        if !native_tools.is_empty() { history.tools = Some(native_tools); }
+                    }
+
+                    let model = {
+                        let mut factory = app_state.model_factory.lock().await;
+                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
+                                let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                                return pack_ptr_len(ptr, len);
+                            }
+                        }
+                    };
+
+                    // Create streaming callback that emits chunks as stream events
+                    let stream_events: Arc<parking_lot::RwLock<Vec<crate::host_functions::StreamEvent>>> = Arc::new(parking_lot::RwLock::new(Vec::new()));
+                    let stream_events_cb = stream_events.clone();
+                    let callback: flow_like_model_provider::llm::LLMCallback = Arc::new(move |chunk: flow_like_model_provider::response_chunk::ResponseChunk| {
+                        let events = stream_events_cb.clone();
+                        Box::pin(async move {
+                            if let Ok(chunk_json) = serde_json::to_value(&chunk) {
+                                events.write().push(crate::host_functions::StreamEvent {
+                                    event_type: "llm_chunk".to_string(),
+                                    data: chunk_json,
+                                });
+                            }
+                            Ok(())
+                        })
+                    });
+
+                    let response = match model.invoke(&history, Some(callback)).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
+                            let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                            return pack_ptr_len(ptr, len);
+                        }
+                    };
+
+                    // Move collected stream events into host_state so the runtime can poll them
+                    {
+                        let collected = std::mem::take(&mut *stream_events.write());
+                        let mut host_events = caller.data().host_state.stream_events.write();
+                        host_events.extend(collected);
+                    }
+
+                    let resp_msg = match response.last_message() {
+                        Some(m) => m,
+                        None => {
+                            let err = serde_json::json!({"error": "Model returned empty response"}).to_string();
+                            let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
+                            return pack_ptr_len(ptr, len);
+                        }
+                    };
+
+                    let tool_calls_json: Option<Vec<serde_json::Value>> = if resp_msg.tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(resp_msg.tool_calls.iter().map(|tc| {
+                            let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Object(Default::default()));
+                            serde_json::json!({"id": tc.id, "name": tc.function.name, "arguments": args})
+                        }).collect())
+                    };
+
+                    let usage = serde_json::json!({
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    });
+
+                    let result = serde_json::json!({
+                        "role": "assistant",
+                        "content": resp_msg.content.clone().unwrap_or_default(),
+                        "reasoning": resp_msg.reasoning.clone(),
+                        "tool_calls": tool_calls_json,
+                        "message_id": response.id,
+                        "usage": usage,
+                    });
+
+                    let result_str = result.to_string();
+                    let (ptr, len) = caller.data().host_state.store_result(result_str.as_bytes());
+                    pack_ptr_len(ptr, len)
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register models.llm_prompt_stream: {}", e))
         })?;
 
     Ok(())

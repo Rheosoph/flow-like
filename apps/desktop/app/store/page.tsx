@@ -21,7 +21,6 @@ export default function Page() {
 	const id = searchParams.get("id") ?? undefined;
 	const purchaseStatus = searchParams.get("purchase");
 	const {
-		apps,
 		appData,
 		metaData,
 		isMember,
@@ -49,7 +48,7 @@ export default function Page() {
 			toast.success("Purchase successful! You now have access to this app.", {
 				duration: 5000,
 			});
-			apps.refetch?.();
+			refetchAppData();
 		} else if (purchaseStatus === "canceled") {
 			toast.info("Purchase was canceled. You can try again anytime.");
 		}
@@ -57,7 +56,7 @@ export default function Page() {
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, apps, router]);
+	}, [purchaseStatus, refetchAppData, router]);
 
 	if (!id) {
 		return (

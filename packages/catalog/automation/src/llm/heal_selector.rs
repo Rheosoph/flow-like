@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -93,6 +93,7 @@ impl NodeLogic for LLMHealSelectorNode {
             "Automation/LLM/Healing",
         );
         node.add_icon("/flow/icons/bot-fix.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -277,7 +278,7 @@ impl NodeLogic for LLMHealSelectorNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(element_description.clone(), vec![])
+            .completion(element_description.clone(), Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()

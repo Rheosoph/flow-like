@@ -169,7 +169,16 @@ export class TauriBackend implements IBackendState {
 		if (typeof status !== "undefined") {
 			return status.visibility === IAppVisibility.Offline;
 		}
-		return true;
+		try {
+			const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
+				appId,
+			});
+			const visibility = app.visibility ?? IAppVisibility.Offline;
+			await appsDB.visibility.put({ visibility, appId });
+			return visibility === IAppVisibility.Offline;
+		} catch {
+			return true;
+		}
 	}
 
 	async pushOfflineSyncCommand(

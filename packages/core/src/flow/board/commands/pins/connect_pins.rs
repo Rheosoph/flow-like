@@ -81,14 +81,7 @@ impl Command for ConnectPinsCommand {
             &self.from_pin,
             &self.to_node,
             &self.to_pin,
-        )?;
-
-        let from_entity = find_node_or_layer(board, &self.from_node)?;
-        let to_entity = find_node_or_layer(board, &self.to_node)?;
-        upsert_node_or_layer(board, from_entity);
-        upsert_node_or_layer(board, to_entity);
-
-        Ok(())
+        )
     }
 
     async fn undo(
@@ -102,14 +95,7 @@ impl Command for ConnectPinsCommand {
             &self.from_pin,
             &self.to_node,
             &self.to_pin,
-        )?;
-
-        let from_entity = find_node_or_layer(board, &self.from_node)?;
-        let to_entity = find_node_or_layer(board, &self.to_node)?;
-        upsert_node_or_layer(board, from_entity);
-        upsert_node_or_layer(board, to_entity);
-
-        Ok(())
+        )
     }
 }
 

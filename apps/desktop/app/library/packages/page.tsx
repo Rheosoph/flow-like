@@ -41,6 +41,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import { usePackageStatusMap } from "../../../hooks/use-package-status";
 
 function InstalledPackageCard({
@@ -242,14 +243,14 @@ export default function InstalledPackagesPage() {
 			});
 		},
 		onError: (
-			error: Error,
+			error: unknown,
 			{ packageId }: { packageId: string; version?: string },
 		) => {
-			toast.error(`Failed to update package: ${error.message}`);
+			toast.error(`Failed to update package: ${getErrorMessage(error)}`);
 		},
 		onSettled: (
 			_: void | undefined,
-			__: Error | null,
+			__: unknown,
 			{ packageId }: { packageId: string; version?: string },
 		) => {
 			setUpdatingPackages((prev) => {
@@ -273,10 +274,10 @@ export default function InstalledPackagesPage() {
 				queryKey: ["installed-package", packageId],
 			});
 		},
-		onError: (error: Error) => {
-			toast.error(`Failed to uninstall package: ${error.message}`);
+		onError: (error: unknown) => {
+			toast.error(`Failed to uninstall package: ${getErrorMessage(error)}`);
 		},
-		onSettled: (_: void | undefined, __: Error | null, packageId: string) => {
+		onSettled: (_: void | undefined, __: unknown, packageId: string) => {
 			setUninstallingPackages((prev) => {
 				const next = new Set(prev);
 				next.delete(packageId);
@@ -301,8 +302,8 @@ export default function InstalledPackagesPage() {
 			queryClient.invalidateQueries({ queryKey: ["installed-packages"] });
 			queryClient.invalidateQueries({ queryKey: ["available-updates"] });
 		},
-		onError: (error: Error) => {
-			toast.error(`Failed to update packages: ${error.message}`);
+		onError: (error: unknown) => {
+			toast.error(`Failed to update packages: ${getErrorMessage(error)}`);
 		},
 	});
 
@@ -323,7 +324,7 @@ export default function InstalledPackagesPage() {
 	const hasUpdates = (availableUpdates.data?.length ?? 0) > 0;
 
 	return (
-		<main className="flex-col flex flex-grow max-h-full p-6 overflow-auto min-h-0 w-full">
+		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 			<div className="mx-auto w-full max-w-7xl space-y-6">
 				{/* Header */}
 				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

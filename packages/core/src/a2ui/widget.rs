@@ -449,6 +449,10 @@ pub struct Page {
     /// Key is the instance ID, value is the widget definition
     #[serde(default)]
     pub widget_refs: HashMap<String, Widget>,
+    /// When true, the frontend caches the last rendered state and shows it
+    /// instantly while the onLoad event runs in the background.
+    #[serde(default)]
+    pub cache: bool,
 }
 
 impl Page {
@@ -473,6 +477,7 @@ impl Page {
             on_interval_event_id: None,
             on_interval_seconds: None,
             widget_refs: HashMap::new(),
+            cache: false,
         }
     }
 

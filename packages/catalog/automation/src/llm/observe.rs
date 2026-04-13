@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -102,6 +102,7 @@ impl NodeLogic for LLMObserveScreenNode {
             "Automation/LLM/Vision",
         );
         node.add_icon("/flow/icons/bot-search.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -257,7 +258,7 @@ impl NodeLogic for LLMObserveScreenNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(prompt, vec![])
+            .completion(prompt, Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()
@@ -370,6 +371,7 @@ impl NodeLogic for LLMDescribeElementNode {
             "Automation/LLM/Vision",
         );
         node.add_icon("/flow/icons/bot-search.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -493,7 +495,10 @@ impl NodeLogic for LLMDescribeElementNode {
         let agent = agent_builder.build();
 
         let response = agent
-            .completion(format!("Describe element at ({}, {})", x, y), vec![])
+            .completion(
+                format!("Describe element at ({}, {})", x, y),
+                Vec::<Message>::new(),
+            )
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?
             .send()

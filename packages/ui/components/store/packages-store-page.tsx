@@ -20,6 +20,7 @@ import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
+import { getErrorMessage } from "../../lib/error-message";
 import type {
 	PackageSummary,
 	SearchResults,
@@ -225,10 +226,10 @@ export function PackageDetailWrapper({
 				toast.success("Package uninstalled successfully")
 			}
 			onInstallError={(error) =>
-				toast.error(`Failed to install package: ${error.message}`)
+				toast.error(`Failed to install package: ${getErrorMessage(error)}`)
 			}
 			onUninstallError={(error) =>
-				toast.error(`Failed to uninstall package: ${error.message}`)
+				toast.error(`Failed to uninstall package: ${getErrorMessage(error)}`)
 			}
 			onDeleteSuccess={handleBack}
 			fetcher={fetcher}

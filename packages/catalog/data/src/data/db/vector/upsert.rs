@@ -5,7 +5,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{Value, async_trait};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::NodeDBConnection;
 
@@ -45,16 +45,25 @@ impl NodeLogic for UpsertLocalDatabaseNode {
 
         node.add_output_pin(
             "exec_out",
-            "Created Database",
-            "Done Creating Database",
+            "Success",
+            "Upsert succeeded",
             VariableType::Execution,
         );
+        node.add_output_pin("error", "Error", "Upsert failed", VariableType::Execution);
+        node.add_output_pin(
+            "error_message",
+            "Error Message",
+            "Error details",
+            VariableType::String,
+        );
 
+        node.set_version(2);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
@@ -62,9 +71,18 @@ impl NodeLogic for UpsertLocalDatabaseNode {
         let id_row: String = context.evaluate_pin("id_row").await?;
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
-        database.upsert(value, id_row).await?;
 
-        context.activate_exec_pin("exec_out").await?;
+        match database.upsert(value, id_row).await {
+            Ok(()) => {
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Err(e) => {
+                context
+                    .set_pin_value("error_message", json!(e.to_string()))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+        }
 
         Ok(())
     }
@@ -107,25 +125,43 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
 
         node.add_output_pin(
             "exec_out",
-            "Created Database",
-            "Done Creating Database",
+            "Success",
+            "Upsert succeeded",
             VariableType::Execution,
         );
+        node.add_output_pin("error", "Error", "Upsert failed", VariableType::Execution);
+        node.add_output_pin(
+            "error_message",
+            "Error Message",
+            "Error details",
+            VariableType::String,
+        );
 
+        node.set_version(2);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?.db.clone();
         let mut database = database.write().await;
         let value: Vec<Value> = context.evaluate_pin("value").await?;
         let id_row: String = context.evaluate_pin("id_row").await?;
-        database.upsert(value, id_row).await?;
 
-        context.activate_exec_pin("exec_out").await?;
+        match database.upsert(value, id_row).await {
+            Ok(()) => {
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Err(e) => {
+                context
+                    .set_pin_value("error_message", json!(e.to_string()))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+        }
 
         Ok(())
     }

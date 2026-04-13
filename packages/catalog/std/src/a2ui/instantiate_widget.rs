@@ -303,7 +303,7 @@ impl NodeLogic for InstantiateWidget {
         node
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
         let widgets = load_app_widgets(&board).await;
 

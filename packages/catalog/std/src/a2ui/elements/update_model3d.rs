@@ -138,7 +138,7 @@ impl NodeLogic for UpdateModel3d {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let property = node
             .get_pin_by_name("property")
             .and_then(|pin| pin.default_value.clone())

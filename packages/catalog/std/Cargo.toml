@@ -42,6 +42,8 @@ chrono-tz.workspace = true
 iana-time-zone.workspace = true
 once_cell = "1.21.3"
 urlencoding.workspace = true
+sha2 = "0.11"
+md-5 = "0.11"
 
 # Computation dependencies - only included when execute feature is enabled
 fasteval = { version = "0.2.4", optional = true }

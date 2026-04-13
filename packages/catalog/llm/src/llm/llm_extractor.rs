@@ -182,7 +182,7 @@ impl NodeLogic for LLMExtractNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -304,7 +304,7 @@ impl NodeLogic for LLMExtractNode {
 
         let start = Instant::now();
         let response = agent
-            .completion(llm_input, vec![])
+            .completion(llm_input, Vec::<rig::completion::Message>::new())
             .await
             .map_err(|e| anyhow!("Model completion failed: {}", e))?
             .send()
@@ -362,7 +362,7 @@ impl NodeLogic for LLMExtractNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
 
         node.harmonize_type(vec!["response"], true);
@@ -421,7 +421,7 @@ impl NodeLogic for LLMExtractNode {
     }
 
     #[cfg(not(feature = "execute"))]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         node.harmonize_type(vec!["response"], true);
     }

@@ -178,6 +178,7 @@ export default function Page() {
 			}
 
 			let finalBit = { ...bit };
+			let receivedFinalBit = false;
 
 			await backend.apiState.stream(
 				profile.data,
@@ -250,9 +251,14 @@ export default function Page() {
 					// Completed single upload
 					if (data?.id) {
 						finalBit = data as IBit;
+						receivedFinalBit = true;
 					}
 				},
 			);
+
+			if (!receivedFinalBit) {
+				throw new Error("Bit upload did not complete");
+			}
 			return finalBit;
 		},
 		[backend.apiState, profile.data],

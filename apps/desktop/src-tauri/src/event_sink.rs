@@ -124,6 +124,25 @@ pub enum EventConfig {
     Cron(CronSink),
 }
 
+impl EventConfig {
+    /// Returns the `sink_execution` target if the underlying sink supports it.
+    /// Values: `"LOCAL"`, `"REMOTE"`, `"HYBRID"`, or `None` (default = local).
+    pub fn sink_execution(&self) -> Option<&str> {
+        match self {
+            EventConfig::Http(s) => s.sink_execution.as_deref(),
+            EventConfig::Cron(s) => s.sink_execution.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this config is explicitly set to remote-only execution,
+    /// meaning the local desktop should NOT register the sink.
+    pub fn is_remote_only(&self) -> bool {
+        self.sink_execution()
+            .is_some_and(|v| v.eq_ignore_ascii_case("REMOTE"))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRegistration {
     pub event_id: String, // Primary key - each event can only be attached to one sink

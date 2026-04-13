@@ -60,6 +60,14 @@ fn extract_text_content(content: &MessageContent) -> String {
 
 pub fn rig_message_to_history(msg: &RigMessage) -> Result<HistoryMessage> {
     match msg {
+        RigMessage::System { content } => Ok(HistoryMessage {
+            role: Role::System,
+            content: MessageContent::String(content.clone()),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        }),
         RigMessage::User { content } => {
             let text = extract_rig_user_text(content);
             Ok(HistoryMessage {

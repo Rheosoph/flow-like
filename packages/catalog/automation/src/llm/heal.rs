@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -102,6 +102,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
             "Automation/LLM/Healing",
         );
         node.add_icon("/flow/icons/bot-fix.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -330,7 +331,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         let response = agent
             .completion(
                 format!("Diagnose and heal: {} - {}", action_type, error_message),
-                vec![],
+                Vec::<Message>::new(),
             )
             .await
             .map_err(|e| anyhow!("LLM completion failed: {}", e))?

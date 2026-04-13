@@ -36,6 +36,16 @@ macro_rules! impl_command_methods {
                 }
             }
 
+            pub async fn validate(
+                &self,
+                board: &Board,
+                state: Arc<FlowLikeState>,
+            ) -> flow_like_types::Result<()> {
+                match self {
+                    $(GenericCommand::$variant(cmd) => cmd.validate(board, state).await,)*
+                }
+            }
+
             pub async fn undo(
                 &mut self,
                 board: &mut Board,
@@ -68,6 +78,14 @@ impl_command_methods!(
 
 #[async_trait]
 pub trait Command: Send + Sync {
+    async fn validate(
+        &self,
+        _board: &Board,
+        _state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<()> {
+        Ok(())
+    }
+
     async fn execute(
         &mut self,
         board: &mut Board,

@@ -239,7 +239,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         // Find the output struct pin

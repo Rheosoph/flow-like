@@ -87,14 +87,12 @@ pub async fn resolve_connection(
         let credentials = state
             .scoped_credentials(&sub, app_id, CredentialsAccess::InvokeRead)
             .await?;
-        Ok(credentials
-            .to_db_scoped(&sub, app_id)
-            .await?
-            .execute()
-            .await?)
+        let builder = credentials.to_db_scoped(&sub, app_id).await?;
+        Ok(builder.execute().await?)
     } else {
         let credentials = state.master_credentials().await?;
-        Ok(credentials.to_db(app_id).await?.execute().await?)
+        let builder = credentials.to_db(app_id).await?;
+        Ok(builder.execute().await?)
     }
 }
 

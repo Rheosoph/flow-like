@@ -55,7 +55,9 @@ impl EventBusEvent {
         flow_like_state: Arc<FlowLikeState>,
         hub: &Hub,
     ) -> flow_like_types::Result<Option<LogMeta>> {
-        let Ok(app) = App::load(self.app_id.clone(), flow_like_state.clone()).await else {
+        let execution_state = Arc::new(flow_like_state.for_execution_run());
+
+        let Ok(app) = App::load(self.app_id.clone(), execution_state.clone()).await else {
             return Err(flow_like_types::anyhow!("App not found"));
         };
 
@@ -70,10 +72,7 @@ impl EventBusEvent {
         let board_version = loaded_event.board_version;
         let board_id = loaded_event.board_id.clone();
 
-        let Ok(board) = app
-            .open_board(board_id.clone(), Some(false), board_version)
-            .await
-        else {
+        let Ok(board) = app.open_board(board_id.clone(), None, board_version).await else {
             return Err(flow_like_types::anyhow!("Board not found"));
         };
 
@@ -129,7 +128,7 @@ impl EventBusEvent {
             &self.app_id,
             board,
             Some(loaded_event),
-            &flow_like_state,
+            &execution_state,
             &profile.hub_profile,
             &payload,
             false,
@@ -164,7 +163,7 @@ impl EventBusEvent {
         flow_like_state.register_run(&run_id, run_data);
 
         let meta = tokio::select! {
-            result = internal_run.execute(flow_like_state.clone()) => result,
+            result = internal_run.execute(execution_state.clone()) => result,
             _ = cancellation_token.cancelled() => {
                 println!("Board execution cancelled for run: {}", run_id);
                 match tokio::time::timeout(Duration::from_secs(30), internal_run.flush_logs_cancelled()).await {
@@ -195,7 +194,7 @@ impl EventBusEvent {
 
         if let Some(meta) = &meta {
             let (db_fn, write_options) = {
-                let guard = flow_like_state.config.read().await;
+                let guard = execution_state.config.read().await;
                 (
                     guard.callbacks.build_logs_database.clone(),
                     guard.callbacks.lance_write_options.clone(),
@@ -205,9 +204,13 @@ impl EventBusEvent {
                 .as_ref()
                 .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
             let base_path = Path::from("runs").child(app_id).child(board_id);
-            let db = db_fn(base_path.clone()).execute().await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-            })?;
+            let db = execution_state
+                .with_lance_session(db_fn(base_path.clone()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                })?;
             meta.flush(db, write_options.as_ref()).await.map_err(|e| {
                 flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
             })?;

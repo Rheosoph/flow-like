@@ -145,7 +145,7 @@ impl NodeLogic for CallReferenceNode {
         return Ok(());
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
         let node_ref = match node.get_pin_by_name("fn_ref") {
             Some(pin) => pin.clone(),
