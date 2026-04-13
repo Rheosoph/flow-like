@@ -328,6 +328,24 @@ function fixMacOsDylibNames(
 	}
 }
 
+function createLinuxSoVersionAliases(
+	outDir: string,
+	config: PlatformConfig,
+): void {
+	if (!config.tauriTriple.includes("unknown-linux-gnu")) return;
+
+	for (const file of fs.readdirSync(outDir)) {
+		if (!file.endsWith(".so")) continue;
+
+		const sourcePath = path.join(outDir, file);
+		if (!fs.statSync(sourcePath).isFile()) continue;
+
+		const aliasPath = path.join(outDir, `${file}.0`);
+		fs.copyFileSync(sourcePath, aliasPath);
+		console.log(`  ↺ Created soname alias: ${path.basename(aliasPath)}`);
+	}
+}
+
 function cleanDirectory(dir: string): void {
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
@@ -363,6 +381,7 @@ async function updatePlatform(
 	cleanDirectory(outDir);
 	await downloadArchive(downloadUrl, archivePath);
 	extractFiles(archivePath, config.archiveType, fileMap, outDir);
+	createLinuxSoVersionAliases(outDir, config);
 
 	// Set executable bits
 	for (const fm of config.files) {
