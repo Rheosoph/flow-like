@@ -103,7 +103,7 @@ impl NodeLogic for ListTablesNode {
                 .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
         };
 
-        let db = db.execute().await?;
+        let db = context.app_state.with_lance_session(db).execute().await?;
         let mut intermediate = LanceDBVectorStore::from_connection(db, "".to_string()).await;
         if let Some(opts) = &context
             .app_state

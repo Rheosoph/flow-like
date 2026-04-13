@@ -16,6 +16,7 @@ import {
 	SheetContent,
 	SheetHeader,
 	SheetTitle,
+	Switch,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -653,6 +654,22 @@ function PageSettingsPanel({
 						Executes when the page first loads
 					</p>
 				</div>
+
+				{page.onLoadEventId && (
+					<div className="flex items-center justify-between">
+						<div className="space-y-0.5">
+							<Label>Cache Page</Label>
+							<p className="text-xs text-muted-foreground">
+								Show the last rendered state instantly while load runs in the
+								background
+							</p>
+						</div>
+						<Switch
+							checked={page.cache ?? false}
+							onCheckedChange={(checked) => onUpdatePage("cache", checked)}
+						/>
+					</div>
+				)}
 
 				<div className="space-y-2">
 					<Label>On Page Unload</Label>

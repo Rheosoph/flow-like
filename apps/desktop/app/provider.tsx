@@ -1,18 +1,8 @@
 // app/providers.tsx
 "use client";
-import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { useEffect } from "react";
-
-async function isTrackingAuthorized(): Promise<boolean> {
-	try {
-		const status = await invoke<string>("get_tracking_authorization_status");
-		return status === "authorized";
-	} catch {
-		return true;
-	}
-}
 
 export function PHProvider({
 	children,
@@ -34,14 +24,6 @@ export function PHProvider({
 			capture_pageleave: true,
 			autocapture: true,
 			enable_heatmaps: true,
-		});
-
-		isTrackingAuthorized().then((authorized) => {
-			if (!authorized) {
-				posthog.opt_out_capturing();
-			} else {
-				posthog.opt_in_capturing();
-			}
 		});
 	}, []);
 

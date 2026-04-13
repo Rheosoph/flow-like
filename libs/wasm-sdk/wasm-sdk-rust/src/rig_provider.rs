@@ -18,7 +18,7 @@ use rig::message::{
     AssistantContent, Audio, Document, DocumentSourceKind, Image, MimeType, Reasoning, Text,
     ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent, Video,
 };
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse, StreamingResult};
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse, StreamingResult};
 use rig::tool::Tool;
 use rig::OneOrMany;
 
@@ -101,11 +101,26 @@ fn rig_assistant_content_to_parts(
                 });
             }
             AssistantContent::Reasoning(r) => {
+                let text: Vec<String> = r
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        rig::message::ReasoningContent::Text { text, .. } => {
+                            Some(text.clone())
+                        }
+                        rig::message::ReasoningContent::Summary(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let signature = r.content.iter().find_map(|c| match c {
+                    rig::message::ReasoningContent::Text { signature, .. } => signature.clone(),
+                    _ => None,
+                });
                 parts.push(ContentPart::Reasoning {
                     reasoning: ReasoningData {
                         id: r.id.clone(),
-                        text: r.reasoning.clone(),
-                        signature: r.signature.clone(),
+                        text,
+                        signature,
                     },
                 });
             }
@@ -140,6 +155,7 @@ fn rig_message_to_chat(msg: &Message) -> ChatMessage {
                 tool_call_id: None,
             }
         }
+        Message::System { content } => ChatMessage::system(content.clone()),
         Message::Assistant { content, .. } => {
             let (parts, tool_calls) = rig_assistant_content_to_parts(content);
 
@@ -236,43 +252,92 @@ fn completion_request_to_messages(request: &CompletionRequest) -> Vec<ChatMessag
 }
 
 /// Serialize a CompletionRequest as the JSON payload for the host llm-prompt call.
-/// If tools are present, wraps messages+tools in an object; otherwise sends a plain array.
+/// Always wraps in an object with `messages`, optional `tools`, and optional model params.
 fn serialize_llm_request(request: &CompletionRequest) -> Option<String> {
     use serde_json::json;
 
     let messages = completion_request_to_messages(request);
 
-    if request.tools.is_empty() {
-        serde_json::to_string(&messages).ok()
-    } else {
-        let tools: Vec<serde_json::Value> = request
-            .tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                })
+    let tools: Vec<serde_json::Value> = request
+        .tools
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
             })
-            .collect();
-        serde_json::to_string(&json!({
-            "messages": messages,
-            "tools": tools,
-        }))
-        .ok()
+        })
+        .collect();
+
+    let mut payload = json!({
+        "messages": messages,
+    });
+
+    if !tools.is_empty() {
+        payload["tools"] = json!(tools);
+    }
+
+    if let Some(temp) = request.temperature {
+        payload["temperature"] = json!(temp);
+    }
+    if let Some(max) = request.max_tokens {
+        payload["max_tokens"] = json!(max);
+    }
+    if let Some(ref tc) = request.tool_choice {
+        payload["tool_choice"] = serde_json::to_value(tc).unwrap_or(json!("auto"));
+    }
+    if let Some(ref schema) = request.output_schema {
+        if let Ok(v) = serde_json::to_value(schema) {
+            payload["output_schema"] = v;
+        }
+    }
+    if let Some(ref additional) = request.additional_params {
+        payload["additional_params"] = additional.clone();
+    }
+
+    serde_json::to_string(&payload).ok()
+}
+
+/// Parsed host LLM response with optional message_id and usage.
+struct ParsedLlmResponse {
+    choice: OneOrMany<AssistantContent>,
+    message_id: Option<String>,
+    usage: Option<Usage>,
+}
+
+fn usage_from_host_tokens(
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+) -> Usage {
+    let input_tokens = prompt_tokens.unwrap_or_default();
+    let output_tokens = completion_tokens.unwrap_or_default();
+
+    Usage {
+        input_tokens,
+        output_tokens,
+        total_tokens: total_tokens.unwrap_or(input_tokens.saturating_add(output_tokens)),
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
     }
 }
 
 /// Parse the host response JSON into rig AssistantContent items.
 /// The host may return a JSON ChatMessage (with optional tool_calls) or plain text.
-fn parse_llm_response(text: &str) -> OneOrMany<AssistantContent> {
+fn parse_llm_response(text: &str) -> ParsedLlmResponse {
     #[derive(serde::Deserialize)]
     struct HostResponse {
         #[serde(default)]
         content: Option<String>,
         #[serde(default)]
+        reasoning: Option<String>,
+        #[serde(default)]
         tool_calls: Option<Vec<HostToolCall>>,
+        #[serde(default)]
+        message_id: Option<String>,
+        #[serde(default)]
+        usage: Option<HostUsage>,
     }
 
     #[derive(serde::Deserialize)]
@@ -282,12 +347,30 @@ fn parse_llm_response(text: &str) -> OneOrMany<AssistantContent> {
         arguments: serde_json::Value,
     }
 
+    #[derive(serde::Deserialize)]
+    struct HostUsage {
+        #[serde(default)]
+        prompt_tokens: Option<u64>,
+        #[serde(default)]
+        completion_tokens: Option<u64>,
+        #[serde(default)]
+        total_tokens: Option<u64>,
+    }
+
     if let Ok(resp) = serde_json::from_str::<HostResponse>(text) {
         let mut items: Vec<AssistantContent> = Vec::new();
 
-        if let Some(content) = resp.content {
+        if let Some(reasoning) = &resp.reasoning {
+            if !reasoning.is_empty() {
+                items.push(AssistantContent::Reasoning(Reasoning::multi(vec![
+                    reasoning.clone(),
+                ])));
+            }
+        }
+
+        if let Some(content) = &resp.content {
             if !content.is_empty() {
-                items.push(AssistantContent::Text(Text { text: content }));
+                items.push(AssistantContent::Text(Text { text: content.clone() }));
             }
         }
 
@@ -300,16 +383,29 @@ fn parse_llm_response(text: &str) -> OneOrMany<AssistantContent> {
             }
         }
 
+        let usage = resp.usage.map(|u| {
+            usage_from_host_tokens(u.prompt_tokens, u.completion_tokens, u.total_tokens)
+        });
+
         if !items.is_empty() {
-            return OneOrMany::many(items)
+            let choice = OneOrMany::many(items)
                 .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text { text: String::new() })));
+            return ParsedLlmResponse {
+                choice,
+                message_id: resp.message_id,
+                usage,
+            };
         }
     }
 
     // Fallback: treat the entire string as plain text
-    OneOrMany::one(AssistantContent::Text(Text {
-        text: text.to_string(),
-    }))
+    ParsedLlmResponse {
+        choice: OneOrMany::one(AssistantContent::Text(Text {
+            text: text.to_string(),
+        })),
+        message_id: None,
+        usage: None,
+    }
 }
 
 // =============================================================================
@@ -416,8 +512,7 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                                 ContentPart::Reasoning { reasoning } => {
                                     assistant_contents.push(AssistantContent::Reasoning(
                                         Reasoning::multi(reasoning.text.clone())
-                                            .optional_id(reasoning.id.clone())
-                                            .with_signature(reasoning.signature.clone()),
+                                            .optional_id(reasoning.id.clone()),
                                     ));
                                 }
                                 _ => {}
@@ -562,12 +657,13 @@ impl CompletionModel for FlowLikeCompletionModel {
                 }
             }
 
-            let choice = parse_llm_response(&text);
+            let parsed = parse_llm_response(&text);
 
             Ok(CompletionResponse {
-                choice,
-                usage: Usage::new(),
+                choice: parsed.choice,
+                usage: parsed.usage.unwrap_or_else(Usage::new),
                 raw_response: FlowLikeResponse,
+                message_id: parsed.message_id,
             })
         }
     }
@@ -578,10 +674,12 @@ impl CompletionModel for FlowLikeCompletionModel {
     ) -> impl std::future::Future<
         Output = Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>,
     > {
+        // ABI v2: use llm_prompt_stream for true host-side streaming
         let request_json = serialize_llm_request(&request);
+        let bit_json = serde_json::to_string(&self.bit).ok();
         let result = request_json.and_then(|json| {
-            let bit_json = serde_json::to_string(&self.bit).ok()?;
-            crate::host::llm_prompt(&bit_json, &json, true)
+            let bj = bit_json.as_deref()?;
+            crate::host::llm_prompt_stream(bj, &json)
         });
 
         async move {
@@ -591,20 +689,66 @@ impl CompletionModel for FlowLikeCompletionModel {
                 )
             })?;
 
-            // Check for host-side error response
             if let Ok(err_obj) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(err_msg) = err_obj.get("error").and_then(|v| v.as_str()) {
                     return Err(CompletionError::ProviderError(err_msg.to_string()));
                 }
             }
 
-            let items: Vec<Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>> =
-                vec![
-                    Ok(RawStreamingChoice::Message(text)),
-                    Ok(RawStreamingChoice::FinalResponse(
-                        FinalCompletionResponse { usage: None },
-                    )),
-                ];
+            let parsed = parse_llm_response(&text);
+            let mut items: Vec<Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>> = Vec::new();
+
+            if let Some(id) = parsed.message_id {
+                items.push(Ok(RawStreamingChoice::MessageId(id)));
+            }
+
+            for content in parsed.choice.iter() {
+                match content {
+                    AssistantContent::Reasoning(reasoning) => {
+                        let reasoning_text = reasoning
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                rig::message::ReasoningContent::Text { text, .. } => {
+                                    Some(text.as_str())
+                                }
+                                rig::message::ReasoningContent::Summary(summary) => {
+                                    Some(summary.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+
+                        if !reasoning_text.is_empty() {
+                            items.push(Ok(RawStreamingChoice::ReasoningDelta {
+                                id: reasoning.id.clone(),
+                                reasoning: reasoning_text,
+                            }));
+                        }
+                    }
+                    AssistantContent::Text(t) => {
+                        items.push(Ok(RawStreamingChoice::Message(t.text.clone())));
+                    }
+                    AssistantContent::ToolCall(tc) => {
+                        items.push(Ok(RawStreamingChoice::ToolCall(
+                            RawStreamingToolCall::new(
+                                tc.id.clone(),
+                                tc.function.name.clone(),
+                                tc.function.arguments.clone(),
+                            ),
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+
+            let final_usage = parsed.usage;
+
+            items.push(Ok(RawStreamingChoice::FinalResponse(
+                FinalCompletionResponse { usage: final_usage },
+            )));
+
             let raw_stream: StreamingResult<FinalCompletionResponse> =
                 Box::pin(stream::iter(items));
 
@@ -1206,6 +1350,26 @@ mod tests {
         } else {
             panic!("Expected Parts content with reasoning");
         }
+    }
+
+    #[test]
+    fn test_parse_llm_response_preserves_reasoning() {
+        let parsed = parse_llm_response(
+            r#"{
+                "reasoning": "thinking step 1\nthinking step 2",
+                "content": "final answer",
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 2,
+                    "total_tokens": 3
+                }
+            }"#,
+        );
+
+        let items: Vec<_> = parsed.choice.iter().collect();
+        assert!(items.iter().any(|item| matches!(item, AssistantContent::Reasoning(_))));
+        assert!(items.iter().any(|item| matches!(item, AssistantContent::Text(_))));
+        assert_eq!(parsed.usage.expect("usage should be present").total_tokens, 3);
     }
 
     #[test]

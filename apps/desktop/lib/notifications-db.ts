@@ -65,15 +65,24 @@ export async function getLocalNotifications(
 	return all.slice(offset, offset + limit);
 }
 
-export async function markLocalNotificationRead(id: string): Promise<void> {
-	await notificationsDB.notifications.update(id, {
+export async function markLocalNotificationRead(id: string): Promise<boolean> {
+	const updated = await notificationsDB.notifications.update(id, {
 		read: true,
 		readAt: new Date().toISOString(),
 	});
+
+	return updated > 0;
 }
 
-export async function deleteLocalNotification(id: string): Promise<void> {
+
+export async function deleteLocalNotification(id: string): Promise<boolean> {
+	const existing = await notificationsDB.notifications.get(id);
+	if (!existing) {
+		return false;
+	}
+
 	await notificationsDB.notifications.delete(id);
+	return true;
 }
 
 export async function markAllLocalNotificationsRead(

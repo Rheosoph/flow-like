@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct MiraModel {
     client: rig::providers::mira::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +33,7 @@ impl MiraModel {
 
         Ok(MiraModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -57,7 +57,7 @@ impl MiraModel {
         Ok(MiraModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

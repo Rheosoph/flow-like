@@ -25,8 +25,8 @@ export interface StorePackageDetailProps {
 	onInstallSuccess?: () => void;
 	onUninstallSuccess?: () => void;
 	onDeleteSuccess?: () => void;
-	onInstallError?: (error: Error) => void;
-	onUninstallError?: (error: Error) => void;
+	onInstallError?: (error: unknown) => void;
+	onUninstallError?: (error: unknown) => void;
 	fetcher: GenericFetcher;
 	auth?: unknown;
 	compileStatus?: CompileStatus;
@@ -122,8 +122,8 @@ export function StorePackageDetail({
 				queryKey: ["installed-package", packageId],
 			});
 		},
-		onError: (error: Error) => {
-			onUninstallError?.(error);
+		onError: (error: unknown) => {
+			onInstallError?.(error);
 		},
 	});
 
@@ -135,7 +135,7 @@ export function StorePackageDetail({
 				queryKey: ["installed-package", packageId],
 			});
 		},
-		onError: (error: Error) => {
+		onError: (error: unknown) => {
 			onUninstallError?.(error);
 		},
 	});

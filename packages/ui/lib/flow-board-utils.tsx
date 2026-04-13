@@ -66,6 +66,7 @@ interface ISerializedNode {
 	};
 	layer?: string;
 	fn_refs?: IFnRefs;
+	version?: number;
 }
 
 function serializeNode(node: INode): ISerializedNode {
@@ -99,6 +100,7 @@ function serializeNode(node: INode): ISerializedNode {
 		pins: pins,
 		layer: node.layer ?? undefined,
 		fn_refs: node.fn_refs ?? undefined,
+		version: node.version ?? undefined,
 	};
 }
 
@@ -120,7 +122,7 @@ function deserializeNode(node: ISerializedNode): INode {
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
 			description: "",
-			schema: pin.schema ?? "",
+			schema: pin.schema || undefined,
 			options: pin.options ?? undefined,
 		};
 	}
@@ -136,6 +138,7 @@ function deserializeNode(node: ISerializedNode): INode {
 		pins: pins,
 		layer: node.layer ?? "",
 		fn_refs: node.fn_refs ?? undefined,
+		version: node.version ?? undefined,
 	};
 }
 
@@ -351,6 +354,7 @@ export function parseBoard(
 	version?: [number, number, number],
 	onOpenInfo?: (node: INode) => void,
 	onExplain?: (nodeIds: string[]) => void,
+	onFilterLogs?: (nodeId: string) => void,
 	remoteBoardExecution?: {
 		isOffline: boolean;
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
@@ -460,6 +464,7 @@ export function parseBoard(
 					},
 					onOpenInfo: onOpenInfo,
 					onExplain: onExplain,
+					onFilterLogs: onFilterLogs,
 					executionMode: board.execution_mode,
 				},
 				selected: selected.has(node.id),
@@ -909,10 +914,9 @@ export function handleCopy(
 		for (const pin of Object.values(node.pins)) {
 			if (pin.name === "var_ref" && pin.default_value) {
 				try {
-					const varRef =
-						typeof pin.default_value === "string"
-							? JSON.parse(pin.default_value)
-							: pin.default_value;
+					const bytes = new Uint8Array(pin.default_value);
+					const jsonStr = new TextDecoder().decode(bytes);
+					const varRef = JSON.parse(jsonStr);
 					if (typeof varRef === "string") {
 						referencedVarIds.add(varRef);
 					}

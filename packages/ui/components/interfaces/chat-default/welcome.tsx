@@ -172,7 +172,7 @@ export function ChatWelcome({
 	};
 
 	return (
-		<div className="flex flex-col h-full flex-grow bg-background relative">
+		<div className="flex flex-col h-full grow bg-background relative">
 			{voiceModeOpen && (
 				<VoiceMode
 					open={voiceModeOpen}
@@ -182,7 +182,7 @@ export function ChatWelcome({
 			)}
 			{/* Loading Overlay */}
 			{isSending && (
-				<div className="absolute inset-0 bg-gradient-to-br from-background via-background/95 to-background/90 backdrop-blur-md z-50 flex items-center justify-center overflow-hidden">
+				<div className="absolute inset-0 bg-linear-to-br from-background via-background/95 to-background/90 backdrop-blur-md z-50 flex items-center justify-center overflow-hidden">
 					{/* Animated background elements */}
 					<div className="absolute inset-0 overflow-hidden">
 						<div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl animate-pulse" />
@@ -202,14 +202,14 @@ export function ChatWelcome({
 							<div className="absolute inset-6 rounded-full border-4 border-transparent border-t-purple-500 border-r-purple-500/50 animate-spin-reverse" />
 							{/* Center glow */}
 							<div className="absolute inset-0 flex items-center justify-center">
-								<div className="w-12 h-12 bg-gradient-to-br from-primary via-blue-500 to-purple-500 rounded-full animate-pulse blur-sm" />
-								<div className="absolute w-8 h-8 bg-gradient-to-br from-primary via-blue-500 to-purple-500 rounded-full animate-pulse" />
+								<div className="w-12 h-12 bg-linear-to-br from-primary via-blue-500 to-purple-500 rounded-full animate-pulse blur-sm" />
+								<div className="absolute w-8 h-8 bg-linear-to-br from-primary via-blue-500 to-purple-500 rounded-full animate-pulse" />
 							</div>
 						</div>
 
 						{/* Text content with animations */}
 						<div className="text-center space-y-4">
-							<h3 className="text-2xl font-bold bg-gradient-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent animate-pulse">
+							<h3 className="text-2xl font-bold bg-linear-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent animate-pulse">
 								Processing Your Message
 							</h3>
 							<div className="space-y-2">
@@ -226,7 +226,7 @@ export function ChatWelcome({
 
 						{/* Progress bar */}
 						<div className="w-full h-1 bg-muted/30 rounded-full overflow-hidden">
-							<div className="h-full bg-gradient-to-r from-primary via-blue-500 to-purple-500 animate-progress rounded-full" />
+							<div className="h-full bg-linear-to-r from-primary via-blue-500 to-purple-500 animate-progress rounded-full" />
 						</div>
 					</div>
 				</div>
@@ -268,7 +268,7 @@ export function ChatWelcome({
 										Suggestions
 									</p>
 								)}
-								<div className="space-y-1 min-h-[200px]">
+								<div className="space-y-1 min-h-50">
 									{filteredExamples.map((example, index) => (
 										<button
 											key={example + index}

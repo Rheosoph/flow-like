@@ -21,6 +21,9 @@ pub struct HttpSink {
     pub path: String,
     pub method: String,
     pub auth_token: Option<String>,
+    /// Where this sink should execute: "LOCAL", "REMOTE", or "HYBRID"
+    #[serde(default)]
+    pub sink_execution: Option<String>,
 }
 
 impl HttpSink {

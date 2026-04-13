@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct MozillaModel {
     client: rig::providers::openai::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -35,7 +35,7 @@ impl MozillaModel {
 
         Ok(MozillaModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -62,7 +62,7 @@ impl MozillaModel {
         Ok(MozillaModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

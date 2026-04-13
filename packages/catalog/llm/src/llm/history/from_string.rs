@@ -31,6 +31,7 @@ impl NodeLogic for HistoryFromStringNode {
             "AI/Generative/History",
         );
         node.add_icon("/flow/icons/history.svg");
+        node.set_version(1);
 
         // Pure helper to build a one-message History from local strings.
         node.set_scores(

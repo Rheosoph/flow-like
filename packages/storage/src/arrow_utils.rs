@@ -9,25 +9,44 @@ use flow_like_types::{
 };
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 
-pub fn value_to_record_batch(records: Vec<Value>) -> Result<RecordBatch> {
-    // Determine Arrow schema
-    let mut fields: Vec<std::sync::Arc<arrow_schema::Field>> =
-        Vec::<FieldRef>::from_samples(&records, TracingOptions::new())?;
+pub type ValueBatchIterator = RecordBatchIterator<
+    std::iter::Map<
+        std::array::IntoIter<RecordBatch, 1>,
+        fn(RecordBatch) -> Result<RecordBatch, arrow_schema::ArrowError>,
+    >,
+>;
 
-    // we need to make sure the vector column is actually a vector!!
-    for field in &mut fields {
-        if field.name() == "vector" {
-            *field = Arc::new(Field::new(
-                "vector",
-                DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Float32, true)),
-                    get_vector_dimension(&records)? as i32,
-                ),
-                true,
-            ));
+pub fn value_to_record_batch(records: Vec<Value>) -> Result<RecordBatch> {
+    value_to_record_batch_with_fields(records, None)
+}
+
+pub fn value_to_record_batch_with_fields(
+    records: Vec<Value>,
+    fields: Option<Vec<FieldRef>>,
+) -> Result<RecordBatch> {
+    // Determine Arrow schema
+    let fields = match fields {
+        Some(fields) => fields,
+        None => {
+            let mut fields: Vec<FieldRef> =
+                Vec::<FieldRef>::from_samples(&records, TracingOptions::new())?;
+
+            for field in &mut fields {
+                if field.name() == "vector" {
+                    *field = Arc::new(Field::new(
+                        "vector",
+                        DataType::FixedSizeList(
+                            Arc::new(Field::new("item", DataType::Float32, true)),
+                            get_vector_dimension(&records)? as i32,
+                        ),
+                        true,
+                    ));
+                }
+            }
+
+            fields
         }
-    }
-    //
+    };
 
     // Build a record batch
     let batch: RecordBatch = serde_arrow::to_record_batch(&fields, &records)?;
@@ -41,41 +60,33 @@ where
     if records.is_empty() {
         return Err(anyhow!("No records to determine vector dimension"));
     }
-    // Serialize the first record to JSON
-    let first_record = &records[0];
-    let serialized = to_value(first_record)?;
 
-    // Check if the "vector" field exists and is a Vec<f32>
-    if let Some(map) = serialized.as_object()
-        && let Some(Value::Array(vec)) = map.get("vector")
-        && !vec.is_empty()
-    {
-        // Determine the length of the vector
-        return Ok(vec.len() as i32);
+    for record in records {
+        let serialized = to_value(record)?;
+
+        if let Some(map) = serialized.as_object()
+            && let Some(Value::Array(vec)) = map.get("vector")
+            && !vec.is_empty()
+        {
+            return Ok(vec.len() as i32);
+        }
     }
 
     Err(anyhow!("Unable to determine vector dimension from records"))
 }
 
-pub fn value_to_batch_iterator(
+pub fn value_to_batch_iterator(records: Vec<Value>) -> Result<ValueBatchIterator> {
+    value_to_batch_iterator_with_fields(records, None)
+}
+
+pub fn value_to_batch_iterator_with_fields(
     records: Vec<Value>,
-) -> Result<
-    RecordBatchIterator<
-        std::iter::Map<
-            std::array::IntoIter<RecordBatch, 1>,
-            fn(RecordBatch) -> Result<RecordBatch, arrow_schema::ArrowError>,
-        >,
-    >,
-> {
-    // Determine Arrow schema
-    let batch = value_to_record_batch(records)?;
+    fields: Option<Vec<FieldRef>>,
+) -> Result<ValueBatchIterator> {
+    let batch = value_to_record_batch_with_fields(records, fields)?;
     let schema = batch.schema();
-    let iterator: RecordBatchIterator<
-        std::iter::Map<
-            std::array::IntoIter<RecordBatch, 1>,
-            fn(RecordBatch) -> Result<RecordBatch, arrow_schema::ArrowError>,
-        >,
-    > = RecordBatchIterator::new([batch].into_iter().map(Ok), schema);
+    let iterator: ValueBatchIterator =
+        RecordBatchIterator::new([batch].into_iter().map(Ok), schema);
 
     Ok(iterator)
 }

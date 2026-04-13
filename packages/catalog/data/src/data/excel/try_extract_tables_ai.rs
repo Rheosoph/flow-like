@@ -18,7 +18,7 @@ use flow_like_types::Value;
 use flow_like_types::json::{self, Deserialize, Serialize};
 use flow_like_types::{JsonSchema, async_trait, json::json, tokio};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -479,6 +479,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
             "Data/Excel",
         );
         node.add_icon("/flow/icons/file-spreadsheet.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -613,7 +614,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
                 .build();
 
             let response = agent
-                .completion(user_prompt, vec![])
+                .completion(user_prompt, Vec::<Message>::new())
                 .await
                 .map_err(|e| {
                     flow_like_types::anyhow!(

@@ -77,8 +77,8 @@ impl NodeLogic for GetArrayElementNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("array_in", board.clone(), Some(ValueType::Array), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("array_in", board, Some(ValueType::Array), None);
         let _ = node.match_type("element", board, Some(ValueType::Normal), None);
         node.harmonize_type(vec!["element", "array_in"], true);
     }

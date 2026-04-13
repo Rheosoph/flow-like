@@ -1,4 +1,5 @@
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::lance::session::Session as LanceSession;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Ok;
@@ -359,6 +360,7 @@ impl RunData {
 pub struct FlowLikeState {
     pub config: Arc<RwLock<FlowLikeConfig>>,
     pub http_client: Arc<HTTPClient>,
+    pub lance_session: Arc<LanceSession>,
 
     #[cfg(feature = "bit")]
     pub download_manager: Arc<Mutex<DownloadManager>>,
@@ -390,6 +392,7 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            lance_session: Arc::new(LanceSession::default()),
 
             #[cfg(feature = "bit")]
             download_manager: Arc::new(Mutex::new(DownloadManager::new())),
@@ -425,6 +428,7 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            lance_session: Arc::new(LanceSession::default()),
 
             #[cfg(feature = "bit")]
             download_manager: Arc::new(Mutex::new(DownloadManager::new())),
@@ -455,6 +459,40 @@ impl FlowLikeState {
     #[cfg(feature = "model")]
     pub fn model_factory(&self) -> Arc<Mutex<ModelFactory>> {
         self.model_factory.clone()
+    }
+
+    pub fn with_lance_session(&self, builder: ConnectBuilder) -> ConnectBuilder {
+        builder.session(self.lance_session.clone())
+    }
+
+    pub fn for_execution_run(&self) -> Self {
+        FlowLikeState {
+            config: self.config.clone(),
+            http_client: self.http_client.clone(),
+            lance_session: Arc::new(LanceSession::default()),
+
+            #[cfg(feature = "bit")]
+            download_manager: self.download_manager.clone(),
+
+            #[cfg(feature = "model")]
+            model_provider_config: self.model_provider_config.clone(),
+            #[cfg(feature = "model")]
+            model_factory: self.model_factory.clone(),
+            #[cfg(feature = "model")]
+            embedding_factory: self.embedding_factory.clone(),
+
+            #[cfg(feature = "flow-runtime")]
+            node_registry: self.node_registry.clone(),
+            #[cfg(feature = "flow-runtime")]
+            board_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "flow-runtime")]
+            board_run_registry: Arc::new(DashMap::new()),
+
+            #[cfg(feature = "flow-runtime")]
+            widget_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "flow-runtime")]
+            page_registry: Arc::new(DashMap::new()),
+        }
     }
 
     #[cfg(feature = "flow-runtime")]

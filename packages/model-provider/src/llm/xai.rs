@@ -1,15 +1,23 @@
 use std::any::Any;
 
-use super::ModelLogic;
+use super::{ModelLogic, merge_additional_params};
 use crate::provider::random_provider;
 use crate::{
+    history::History,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait};
+use flow_like_types::{Cacheable, Result, async_trait, json::json};
+
+fn supports_reasoning_effort(model_name: Option<&str>) -> bool {
+    model_name
+        .map(|name| name.to_ascii_lowercase().contains("grok-3-mini"))
+        .unwrap_or(false)
+}
+
 pub struct XAIModel {
     client: rig::providers::xai::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -32,7 +40,7 @@ impl XAIModel {
 
         Ok(XAIModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -56,7 +64,7 @@ impl XAIModel {
         Ok(XAIModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }
@@ -82,5 +90,29 @@ impl ModelLogic for XAIModel {
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+
+    fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
+        let history = history.as_ref()?;
+        let base = history.build_additional_params().ok().flatten();
+        let model_name = self
+            .default_model
+            .as_deref()
+            .or(Some(history.model.as_str()));
+
+        if !supports_reasoning_effort(model_name) {
+            return base;
+        }
+
+        let reasoning = history
+            .thinking
+            .and_then(|thinking| thinking.xai_reasoning_effort())
+            .map(|effort| {
+                json!({
+                    "reasoning_effort": effort,
+                })
+            });
+
+        merge_additional_params(base, reasoning)
     }
 }

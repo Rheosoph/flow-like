@@ -53,6 +53,37 @@ impl DataFusionSession {
     }
 }
 
+fn build_session_config(
+    target_partitions: i64,
+    batch_size: i64,
+    repartition_joins: bool,
+    repartition_aggregations: bool,
+    repartition_sorts: bool,
+    coalesce_batches: bool,
+    parquet_pruning: bool,
+    collect_statistics: bool,
+) -> SessionConfig {
+    let target_partitions = if target_partitions <= 0 {
+        num_cpus::get()
+    } else {
+        target_partitions as usize
+    };
+
+    let batch_size = batch_size.max(1) as usize;
+
+    SessionConfig::new()
+        .with_target_partitions(target_partitions)
+        .with_batch_size(batch_size)
+        .with_repartition_joins(repartition_joins)
+        .with_repartition_aggregations(repartition_aggregations)
+        .with_repartition_sorts(repartition_sorts)
+        .with_coalesce_batches(coalesce_batches)
+        .with_collect_statistics(collect_statistics)
+        .with_parquet_pruning(parquet_pruning)
+        .with_parquet_bloom_filter_pruning(parquet_pruning)
+        .with_parquet_page_index_pruning(parquet_pruning)
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct CreateDataFusionSessionNode {}
@@ -198,28 +229,16 @@ impl NodeLogic for CreateDataFusionSessionNode {
             let parquet_pruning: bool = context.evaluate_pin("parquet_pruning").await?;
             let collect_statistics: bool = context.evaluate_pin("collect_statistics").await?;
 
-            let target_partitions = if target_partitions <= 0 {
-                num_cpus::get()
-            } else {
-                target_partitions as usize
-            };
-
-            let batch_size = batch_size.max(1) as usize;
-
-            let mut config = SessionConfig::new()
-                .with_target_partitions(target_partitions)
-                .with_batch_size(batch_size)
-                .with_repartition_joins(repartition_joins)
-                .with_repartition_aggregations(repartition_aggregations)
-                .with_repartition_sorts(repartition_sorts)
-                .with_coalesce_batches(coalesce_batches)
-                .with_collect_statistics(collect_statistics);
-
-            if parquet_pruning {
-                config = config
-                    .with_parquet_pruning(true)
-                    .with_parquet_bloom_filter_pruning(true);
-            }
+            let config = build_session_config(
+                target_partitions,
+                batch_size,
+                repartition_joins,
+                repartition_aggregations,
+                repartition_sorts,
+                coalesce_batches,
+                parquet_pruning,
+                collect_statistics,
+            );
 
             // Note: Federation support (query push-down to external databases) requires
             // datafusion-federation 0.4.7+ which needs DataFusion 50+.
@@ -356,5 +375,14 @@ mod tests {
         assert!(scores.privacy > 0);
         assert!(scores.security > 0);
         assert!(scores.performance > 0);
+    }
+
+    #[test]
+    fn test_build_session_config_disables_parquet_pruning() {
+        let config = build_session_config(4, 1024, true, true, true, true, false, true);
+
+        assert!(!config.parquet_pruning());
+        assert!(!config.parquet_bloom_filter_pruning());
+        assert!(!config.parquet_page_index_pruning());
     }
 }

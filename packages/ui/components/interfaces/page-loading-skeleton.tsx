@@ -135,7 +135,7 @@ function StepIndicator() {
 					/>
 				))}
 			</div>
-			<span className="text-xs text-muted-foreground/50 min-w-[130px] transition-all duration-300">
+			<span className="text-xs text-muted-foreground/50 min-w-32.5 transition-all duration-300">
 				{STEPS[step]}…
 			</span>
 		</div>
@@ -146,7 +146,8 @@ function StepIndicator() {
 
 export function PageLoadingSkeleton({
 	className,
-}: Readonly<{ className?: string }>) {
+	title = "Running workflow",
+}: Readonly<{ className?: string; title?: string }>) {
 	return (
 		<div
 			className={cn(
@@ -156,7 +157,7 @@ export function PageLoadingSkeleton({
 		>
 			{/* radial ambient glow */}
 			<div className="pointer-events-none absolute inset-0 overflow-hidden">
-				<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[50vh] w-[50vh] rounded-full bg-primary/[0.03] blur-[120px] pls-breathe" />
+				<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[50vh] w-[50vh] rounded-full bg-primary/3 blur-[120px] pls-breathe" />
 			</div>
 
 			{/* animated node graph */}
@@ -167,7 +168,7 @@ export function PageLoadingSkeleton({
 			{/* status area */}
 			<div className="flex flex-col items-center gap-3 pls-enter" style={{ animationDelay: "0.2s" }}>
 				<p className="text-sm font-medium text-foreground/70">
-					Running workflow
+					{title}
 				</p>
 				<StepIndicator />
 			</div>

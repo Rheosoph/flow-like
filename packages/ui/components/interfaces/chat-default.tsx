@@ -268,6 +268,24 @@ function createResponseMessage(
 	};
 }
 
+function cloneResponseMessageForCompletion(responseMessage: IMessage): IMessage {
+	const clonedMessage =
+		typeof structuredClone === "function"
+			? structuredClone(responseMessage)
+			: (JSON.parse(JSON.stringify(responseMessage)) as IMessage);
+
+	clonedMessage.files = [];
+	clonedMessage.inner = {
+		...clonedMessage.inner,
+		content: "",
+	};
+	clonedMessage.plan_steps = undefined;
+	clonedMessage.current_step_id = undefined;
+	clonedMessage.usage_stats = undefined;
+
+	return clonedMessage;
+}
+
 async function handleStreamCompletion(
 	responseMessage: IMessage,
 	chatRef: RefObject<IChatRef | null>,
@@ -289,43 +307,48 @@ async function handleStreamCompletion(
 		return;
 	}
 
-	const result = processChatEvents(events, {
-		intermediateResponse,
-		responseMessage,
-		attachments,
-		tmpLocalState: initialLocalState ?? null,
-		tmpGlobalState: initialGlobalState ?? null,
-		done: false,
-		appId,
-		eventId,
-		sessionId,
-	});
-
 	processedCompletedStreams.current.add(streamId);
 
-	if (result.interactions?.length && onInteractions) {
-		onInteractions(result.interactions);
+	try {
+		const result = processChatEvents(events, {
+			intermediateResponse: Response.default(),
+			responseMessage: cloneResponseMessageForCompletion(responseMessage),
+			attachments: new Map(),
+			tmpLocalState: initialLocalState ?? null,
+			tmpGlobalState: initialGlobalState ?? null,
+			done: false,
+			appId,
+			eventId,
+			sessionId,
+		});
+
+		if (result.interactions?.length && onInteractions) {
+			onInteractions(result.interactions);
+		}
+
+		if (result.tmpLocalState) {
+			await chatDb.localStage.put(result.tmpLocalState);
+		}
+
+		if (result.tmpGlobalState) {
+			await chatDb.globalState.put(result.tmpGlobalState);
+		}
+
+		// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
+		// This prevents the message from briefly disappearing
+		await chatDb.messages.put(result.responseMessage);
+
+		// Clear the streaming message AFTER writing to Dexie
+		// The useLiveQuery will pick up the new message from DB
+		chatRef.current?.clearCurrentMessageUpdate();
+
+		chatRef.current?.scrollToBottom();
+
+		executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
+	} catch (error) {
+		processedCompletedStreams.current.delete(streamId);
+		throw error;
 	}
-
-	if (result.tmpLocalState) {
-		await chatDb.localStage.put(result.tmpLocalState);
-	}
-
-	if (result.tmpGlobalState) {
-		await chatDb.globalState.put(result.tmpGlobalState);
-	}
-
-	// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
-	// This prevents the message from briefly disappearing
-	await chatDb.messages.put(result.responseMessage);
-
-	// Clear the streaming message AFTER writing to Dexie
-	// The useLiveQuery will pick up the new message from DB
-	chatRef.current?.clearCurrentMessageUpdate();
-
-	chatRef.current?.scrollToBottom();
-
-	executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
 }
 
 /**
@@ -384,7 +407,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const activeSubscriptions = useRef<string[]>([]);
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
+	const pendingSendSessions = useRef<Set<string>>(new Set());
 	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
+	const [isStreamActive, setIsStreamActive] = useState(false);
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
@@ -592,6 +617,23 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			setQueryParams("sessionId", newSessionId);
 		}
 	}, [sessionIdParameter, setQueryParams]);
+
+	useEffect(() => {
+		if (!sessionIdParameter) {
+			setIsStreamActive(false);
+			return;
+		}
+
+		const update = () => {
+			setIsStreamActive(
+				pendingSendSessions.current.has(sessionIdParameter) ||
+					executionEngine.isStreamActive(sessionIdParameter),
+			);
+		};
+
+		update();
+		return executionEngine.subscribeToGlobalUpdates(update);
+	}, [executionEngine, sessionIdParameter]);
 
 	// Cleanup active subscriptions and restore cached interactions on session change
 	useEffect(() => {
@@ -1019,6 +1061,19 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			audioFile?: File,
 			skipConsentCheck?: boolean,
 		) => {
+			const streamId = sessionIdParameter;
+			if (
+				pendingSendSessions.current.has(streamId) ||
+				executionEngine.isStreamActive(streamId)
+			) {
+				toast.error("Please wait for the current response to complete.");
+				return;
+			}
+
+			pendingSendSessions.current.add(streamId);
+			setIsStreamActive(true);
+
+			try {
 			const isOffline = await backend.isOffline(appId);
 			const history_elements =
 				parseUint8ArrayToJson(event.config)?.history_elements ?? 5;
@@ -1117,14 +1172,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// Refs for incremental save to access current state
 			const localStateRef = { current: tmpLocalState };
 			const globalStateRef = { current: tmpGlobalState };
-
-			const streamId = sessionIdParameter;
-
-			// Prevent sending while a stream is already active for this session
-			if (executionEngine.isStreamActive(streamId)) {
-				toast.error("Please wait for the current response to complete.");
-				return;
-			}
 
 			const subscriberId = `chat-${responseMessage.id}`;
 			activeSubscriptions.current.push(subscriberId);
@@ -1232,6 +1279,13 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			);
 
 			await executionPromise;
+			} finally {
+				pendingSendSessions.current.delete(streamId);
+				setIsStreamActive(
+					pendingSendSessions.current.has(streamId) ||
+						executionEngine.isStreamActive(streamId),
+				);
+			}
 		},
 		[
 			backend,
@@ -1459,6 +1513,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					onSendMessage={handleSendMessage}
 					onMessageUpdate={onMessageUpdate}
 					config={config}
+					isStreamActive={isStreamActive}
 					activeInteractions={activeInteractions}
 					onRespondToInteraction={handleRespondToInteraction}
 				/>
@@ -1477,7 +1532,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							before sending:
 						</AlertDialogDescription>
 					</AlertDialogHeader>
-					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto break-words whitespace-pre-wrap">
+					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto wrap-break-word whitespace-pre-wrap">
 						{prefilledMessage}
 					</div>
 					<AlertDialogFooter>

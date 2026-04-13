@@ -20,7 +20,7 @@ export type AgentMode = "board" | "ui" | "both";
 /**
  * AI Provider type for FlowPilot
  * - "bits": Use configured model bits from user profile
- * - "copilot": Use GitHub Copilot SDK directly
+ * - "copilot": Use the GitHub Copilot SDK directly in the desktop app
  */
 export type AIProvider = "bits" | "copilot";
 
@@ -172,12 +172,6 @@ export interface FlowPilotProps {
 
 	/** Default provider to use (defaults to "bits" for backward compatibility) */
 	defaultProvider?: AIProvider;
-
-	/** Copilot server URL for web mode (required if using copilot provider in web) */
-	copilotServerUrl?: string;
-
-	/** Callback when copilot server URL is needed (shows dialog in web mode) */
-	onRequestCopilotServerUrl?: () => Promise<string | undefined>;
 
 	// === Board Mode Props ===
 

@@ -522,12 +522,18 @@ impl NodeLogic for WasmNodeLogic {
 
         // Process stream events
         for event in instance.host_state().take_stream_events() {
-            if event.event_type == "text" {
-                if let Some(text) = event.data.as_str() {
-                    context
-                        .stream_response("wasm_text", text.to_string())
-                        .await?;
+            match event.event_type.as_str() {
+                "text" => {
+                    if let Some(text) = event.data.as_str() {
+                        context
+                            .stream_response("wasm_text", text.to_string())
+                            .await?;
+                    }
                 }
+                "llm_chunk" => {
+                    context.stream_response("llm_chunk", event.data).await?;
+                }
+                _ => {}
             }
         }
 

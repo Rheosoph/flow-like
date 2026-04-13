@@ -10,6 +10,7 @@ interface UseLayerNavigationProps {
 	setLayerPath: (path: string | undefined | ((old?: string) => string)) => void;
 	saveViewport: () => Promise<void>;
 	fitView: ReactFlowInstance["fitView"];
+	getNodes: ReactFlowInstance["getNodes"];
 }
 
 export function useLayerNavigation({
@@ -19,6 +20,7 @@ export function useLayerNavigation({
 	setLayerPath,
 	saveViewport,
 	fitView,
+	getNodes,
 }: UseLayerNavigationProps) {
 	const focusNode = useCallback(
 		(nodeId: string) => {
@@ -42,27 +44,43 @@ export function useLayerNavigation({
 			}
 
 			if (layerTree.length > 0) {
-				setCurrentLayer(layerTree[layerTree.length - 1]);
+				setCurrentLayer(layerTree[0]);
 				setLayerPath(layerTree.slice().reverse().join("/"));
 			} else {
 				setCurrentLayer(undefined);
 				setLayerPath(undefined);
 			}
 
-			requestAnimationFrame(() => {
-				requestAnimationFrame(() => {
+			const focusRenderedNode = (attempt = 0) => {
+				if (getNodes().some((renderedNode) => renderedNode.id === node.id)) {
 					fitView({
 						nodes: [{ id: node.id }],
-						padding: 3,
+						padding: 0.35,
 						duration: 500,
+						maxZoom: 1.2,
 					});
+					return;
+				}
+
+				if (attempt >= 12) {
+					console.warn("Failed to focus rendered node:", node.id);
+					return;
+				}
+
+				requestAnimationFrame(() => {
+					focusRenderedNode(attempt + 1);
 				});
+			};
+
+			requestAnimationFrame(() => {
+				focusRenderedNode();
 			});
 		},
 		[
 			board.data?.nodes,
 			board.data?.layers,
 			fitView,
+			getNodes,
 			setCurrentLayer,
 			setLayerPath,
 		],

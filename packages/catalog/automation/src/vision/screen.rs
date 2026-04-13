@@ -241,8 +241,13 @@ impl NodeLogic for ScreenshotRegionNode {
                 .capture_image()
                 .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-            let cropped =
-                image::imageops::crop_imm(&full_image, x as u32, y as u32, width as u32, height as u32);
+            let cropped = image::imageops::crop_imm(
+                &full_image,
+                x as u32,
+                y as u32,
+                width as u32,
+                height as u32,
+            );
             cropped.to_image()
         };
 

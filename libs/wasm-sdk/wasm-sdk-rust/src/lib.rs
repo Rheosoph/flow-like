@@ -91,6 +91,9 @@ pub use serde_json;
 pub use serde_json::json;
 pub use types::*;
 
+/// Maximum chunk size for write operations (8 MiB, safely under the host 10 MiB limit).
+pub const CHUNK_SIZE: usize = 8 * 1024 * 1024;
+
 // Re-export proc macro so `use flow_like_wasm_sdk::*` brings in #[register_node]
 pub use flow_like_wasm_sdk_macros::register_node;
 
@@ -250,7 +253,8 @@ pub mod meta {
 
 pub mod storage_ns {
     pub use crate::host::{
-        cache_dir, storage_dir, storage_list, storage_read, storage_write, upload_dir, user_dir,
+        cache_dir, storage_dir, storage_list, storage_read, storage_write,
+        storage_write_chunk, storage_write_finish, storage_write_start, upload_dir, user_dir,
     };
 }
 

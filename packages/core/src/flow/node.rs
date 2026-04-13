@@ -478,7 +478,7 @@ impl Node {
     pub fn match_type(
         &mut self,
         pin_name: &str,
-        board: Arc<Board>,
+        board: &Board,
         value_type: Option<ValueType>,
         default_type: Option<ValueType>,
     ) -> flow_like_types::Result<VariableType> {
@@ -657,7 +657,7 @@ pub trait NodeLogic: Send + Sync {
         }
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: Arc<Board>) {}
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {}
     async fn on_delete(&self, _node: &mut Node, _board: Arc<Board>) {}
 }
 

@@ -9,13 +9,11 @@
             "binaries/mac/arm/libggml-rpc.dylib",
             "binaries/mac/arm/libggml.dylib",
             "binaries/mac/arm/libllama.dylib",
+            "binaries/mac/arm/libmtmd.dylib",
             "binaries/mac/arm/llama-server"
         ],
         "resources": {
             "icons/Assets.car": "Assets.car",
-            "binaries/mac/arm/ggml-common.h": "ggml-common.h",
-            "binaries/mac/arm/ggml-metal-impl.h": "ggml-metal-impl.h",
-            "binaries/mac/arm/ggml-metal.metal": "ggml-metal.metal",
             "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
         }
     }

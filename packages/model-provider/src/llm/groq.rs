@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct GroqModel {
     client: rig::providers::groq::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +33,7 @@ impl GroqModel {
 
         Ok(GroqModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -61,7 +61,7 @@ impl GroqModel {
         Ok(GroqModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

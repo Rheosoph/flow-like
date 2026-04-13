@@ -19,15 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.2</string>
 	<key>CFBundleURLTypes</key>
 	<array>
-		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array/>
-			<key>CFBundleURLName</key>
-			<string>https</string>
-		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
 			<string>flow-like</string>
@@ -38,7 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>0.0.9</string>
+	<string>0.1.2</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
@@ -73,8 +67,6 @@
 	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Flow Like needs Screen Recording access to capture screenshots for visual element matching in your automation workflows.</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Flow Like uses this to improve your experience and deliver relevant content. You can change this anytime in Settings.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

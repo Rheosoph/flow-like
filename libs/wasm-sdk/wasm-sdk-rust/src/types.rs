@@ -3,8 +3,8 @@
 pub use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 
-/// Current ABI version
-pub const ABI_VERSION: u32 = 1;
+/// Current ABI version — bump when adding new host functions
+pub const ABI_VERSION: u32 = 2;
 
 /// Permissions a WASM node can request.
 /// Declared per-node so the sandbox and UI can enforce/display them precisely.

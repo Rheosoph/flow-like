@@ -132,7 +132,7 @@ impl NodeLogic for PushCsvToChart {
         node
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let format = node
             .get_pin_by_name("format")
             .and_then(|pin| pin.default_value.clone())

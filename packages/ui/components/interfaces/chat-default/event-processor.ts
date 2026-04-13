@@ -20,6 +20,133 @@ interface BackendReasoning {
 	current_message: string;
 }
 
+function hasVisibleReasoning(reasoning: string | undefined): reasoning is string {
+	return Boolean(reasoning && reasoning.trim() !== "");
+}
+
+function hasStructuredReasoning(reasoning: string): boolean {
+	return reasoning
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.some(
+			(line) =>
+				line.startsWith("```") ||
+				/^#{1,6}\s/.test(line) ||
+				/^[-*+]\s/.test(line) ||
+				/^\d+\.\s/.test(line) ||
+				/^>\s/.test(line) ||
+				/^\|.*\|$/.test(line),
+		);
+}
+
+function looksLikeTokenizedReasoning(reasoning: string): boolean {
+	const lines = reasoning
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+
+	if (lines.length < 6 || hasStructuredReasoning(reasoning)) {
+		return false;
+	}
+
+	const shortLineCount = lines.filter((line) => {
+		const wordCount = line.split(/\s+/).filter(Boolean).length;
+		return wordCount <= 3 && line.length <= 24;
+	}).length;
+
+	return shortLineCount / lines.length >= 0.7;
+}
+
+function normalizeReasoningWhitespace(reasoning: string): string {
+	let normalized = "";
+	let pendingSpace = false;
+
+	for (const ch of reasoning) {
+		if (/\s/.test(ch)) {
+			pendingSpace = normalized.length > 0;
+			continue;
+		}
+
+		if (pendingSpace && !/[.,;:!?)}\]'\"]/.test(ch)) {
+			normalized += " ";
+		}
+
+		pendingSpace = false;
+		normalized += ch;
+	}
+
+	return normalized;
+}
+
+function sanitizeReasoningForDisplay(reasoning: string): string {
+	return looksLikeTokenizedReasoning(reasoning)
+		? normalizeReasoningWhitespace(reasoning)
+		: reasoning;
+}
+
+function appendFallbackReasoningStep(
+	responseMessage: IMessage,
+	reasoning: string,
+) {
+	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
+
+	if (
+		(!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) &&
+		!hasVisibleReasoning(sanitizedReasoning)
+	) {
+		return;
+	}
+
+	if (!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) {
+		responseMessage.plan_steps = [
+			{
+				id: "step-0",
+				title: "Thinking",
+				status: "progress",
+				reasoning: sanitizedReasoning,
+			},
+		];
+		responseMessage.current_step_id = "step-0";
+		return;
+	}
+
+	const currentStep =
+		responseMessage.plan_steps.find(
+			(step) => step.id === responseMessage.current_step_id,
+		) ??
+		responseMessage.plan_steps.find((step) => step.status === "progress") ??
+		responseMessage.plan_steps[responseMessage.plan_steps.length - 1];
+
+	if (!currentStep) {
+		return;
+	}
+
+	if (
+		!hasVisibleReasoning(currentStep.reasoning) &&
+		!hasVisibleReasoning(sanitizedReasoning)
+	) {
+		return;
+	}
+
+	currentStep.reasoning = sanitizeReasoningForDisplay(
+		(currentStep.reasoning || "") + sanitizedReasoning,
+	);
+	responseMessage.current_step_id = currentStep.id;
+}
+
+function hasUsageStat(
+	usageStats: IChatUsageStat[] | undefined,
+	stat: IChatUsageStat,
+): boolean {
+	if (!usageStats || usageStats.length === 0) {
+		return false;
+	}
+
+	const signature = JSON.stringify(stat);
+	return usageStats.some((existing) => JSON.stringify(existing) === signature);
+}
+
 function parseBackendPlan(reasoning: BackendReasoning): {
 	steps: IPlanStep[];
 	currentStepId: string | undefined;
@@ -54,8 +181,9 @@ function parseBackendPlan(reasoning: BackendReasoning): {
 			description,
 			status,
 			reasoning:
-				stepId === reasoning.current_step && reasoning.current_message
-					? reasoning.current_message
+				stepId === reasoning.current_step &&
+				hasVisibleReasoning(reasoning.current_message)
+					? sanitizeReasoningForDisplay(reasoning.current_message)
 					: undefined,
 		});
 	}
@@ -113,37 +241,9 @@ export function processChatEvents(
 
 				// Extract reasoning from chunk delta
 				const delta = ev.payload.chunk?.choices?.[0]?.delta;
-				if (delta?.reasoning) {
-					// Reasoning is being streamed - we'll get it via plan updates
-					// This is for compatibility with direct reasoning in chunks
-					if (
-						!responseMessage.plan_steps ||
-						responseMessage.plan_steps.length === 0
-					) {
-						// No plan yet, create a temporary step for the reasoning
-						if (!responseMessage.plan_steps) {
-							responseMessage.plan_steps = [];
-						}
-						if (responseMessage.plan_steps.length === 0) {
-							responseMessage.plan_steps.push({
-								id: "step-0",
-								title: "Thinking",
-								status: "progress",
-								reasoning: delta.reasoning,
-							});
-							responseMessage.current_step_id = "step-0";
-						} else {
-							// Append to existing step's reasoning
-							const currentStep = responseMessage.plan_steps.find(
-								(s) => s.id === responseMessage.current_step_id,
-							);
-							if (currentStep) {
-								currentStep.reasoning =
-									(currentStep.reasoning || "") + delta.reasoning;
-							}
-						}
-						shouldUpdate = true;
-					}
+				if (delta?.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(responseMessage, delta.reasoning);
+					shouldUpdate = true;
 				}
 			}
 
@@ -197,6 +297,14 @@ export function processChatEvents(
 			done = true;
 			if (ev.payload.response) {
 				intermediateResponse = Response.fromObject(ev.payload.response);
+				const lastMessage = intermediateResponse.lastMessageOfRole(
+					IRole.Assistant,
+				);
+				const finalContent = lastMessage?.content ?? responseMessage.inner.content;
+				if (finalContent !== responseMessage.inner.content) {
+					responseMessage.inner.content = finalContent ?? "";
+					shouldUpdate = true;
+				}
 			}
 
 			if (ev.payload.attachments) {
@@ -274,8 +382,10 @@ export function processChatEvents(
 			if (!responseMessage.usage_stats) {
 				responseMessage.usage_stats = [];
 			}
-			responseMessage.usage_stats.push(stat);
-			shouldUpdate = true;
+			if (!hasUsageStat(responseMessage.usage_stats, stat)) {
+				responseMessage.usage_stats.push(stat);
+				shouldUpdate = true;
+			}
 		}
 	}
 

@@ -265,19 +265,16 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
 fn extract_fingerprint_windows_inner(x: i32, y: i32) -> Option<RecordedFingerprint> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-    use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation,
-    };
+    use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(automation) => automation,
-        Err(e) => {
-            tracing::debug!("Failed to create UIAutomation: {:?}", e);
-            return None;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(automation) => automation,
+            Err(e) => {
+                tracing::debug!("Failed to create UIAutomation: {:?}", e);
+                return None;
+            }
+        };
 
     let point = POINT { x, y };
 

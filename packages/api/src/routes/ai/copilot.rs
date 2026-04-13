@@ -7,10 +7,13 @@ use axum::{
 };
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
-    CopilotScope, RunContext, UIActionContext, UnifiedChatMessage, UnifiedCopilotResponse,
+    ChatImage, CopilotScope, RunContext, UIActionContext, UnifiedChatMessage,
+    UnifiedCopilotResponse,
 };
 use flow_like::flow::board::Board;
-use flow_like::flow::copilot::{CatalogProvider, NodeMetadata, PinMetadata};
+use flow_like::flow::copilot::{
+    CatalogProvider, NodeMetadata, PinMetadata, enrich_node_metadata, score_catalog_metadata,
+};
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
@@ -43,6 +46,10 @@ pub struct CopilotChatRequest {
 
     /// The user's prompt
     pub user_prompt: String,
+
+    /// Images attached to the current prompt
+    #[serde(default)]
+    pub request_images: Option<Vec<ChatImage>>,
 
     /// Chat history
     #[serde(default)]
@@ -84,6 +91,11 @@ fn pin_to_metadata(pin: &Pin) -> PinMetadata {
         description: pin.description.clone(),
         data_type: format!("{:?}", pin.data_type),
         value_type: format!("{:?}", pin.value_type),
+        default_value: pin
+            .default_value
+            .as_ref()
+            .map(|value| String::from_utf8_lossy(value).to_string())
+            .filter(|value| !value.is_empty() && value != "null"),
         schema: pin.schema.clone(),
         is_generic,
         valid_values,
@@ -91,75 +103,49 @@ fn pin_to_metadata(pin: &Pin) -> PinMetadata {
     }
 }
 
+fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
+    let category = node
+        .name
+        .to_lowercase()
+        .split("::")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+
+    enrich_node_metadata(NodeMetadata {
+        name: node.name,
+        friendly_name: node.friendly_name,
+        description: node.description,
+        inputs: node
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Input)
+            .map(pin_to_metadata)
+            .collect(),
+        outputs: node
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output)
+            .map(pin_to_metadata)
+            .collect(),
+        category: Some(category),
+        required_inputs: Vec::new(),
+        companion_nodes: Vec::new(),
+        capability_tags: Vec::new(),
+    })
+}
+
 #[flow_like_types::async_trait]
 impl CatalogProvider for ServerCatalogProvider {
     async fn search(&self, query: &str) -> Vec<NodeMetadata> {
-        let query_lower = query.to_lowercase();
-        let query_tokens: Vec<&str> = query_lower.split_whitespace().collect();
-
         let mut scored_matches: Vec<(i32, NodeMetadata)> = Vec::new();
 
         for logic in self.catalog.iter() {
-            let node = logic.get_node();
-            let name_lower = node.name.to_lowercase();
-            let friendly_lower = node.friendly_name.to_lowercase();
-            let desc_lower = node.description.to_lowercase();
-
-            let category = name_lower.split("::").nth(1).unwrap_or("");
-
-            let mut score = 0i32;
-
-            if name_lower.contains(&query_lower) {
-                score += 100;
-            }
-            if friendly_lower.contains(&query_lower) {
-                score += 90;
-            }
-
-            for token in &query_tokens {
-                if name_lower.contains(token) {
-                    score += 30;
-                }
-                if friendly_lower.contains(token) {
-                    score += 25;
-                }
-                if category.contains(token) {
-                    score += 20;
-                }
-                if desc_lower.contains(token) {
-                    score += 10;
-                }
-            }
-
-            let name_parts: Vec<&str> = name_lower.split([':', '_']).collect();
-            for token in &query_tokens {
-                if name_parts.iter().any(|part| part == token) {
-                    score += 15;
-                }
-            }
+            let metadata = node_to_metadata(logic.get_node());
+            let score = score_catalog_metadata(&metadata, query);
 
             if score > 0 {
-                scored_matches.push((
-                    score,
-                    NodeMetadata {
-                        name: node.name,
-                        friendly_name: node.friendly_name,
-                        description: node.description,
-                        inputs: node
-                            .pins
-                            .values()
-                            .filter(|p| p.pin_type == PinType::Input)
-                            .map(pin_to_metadata)
-                            .collect(),
-                        outputs: node
-                            .pins
-                            .values()
-                            .filter(|p| p.pin_type == PinType::Output)
-                            .map(pin_to_metadata)
-                            .collect(),
-                        category: Some(category.to_string()),
-                    },
-                ));
+                scored_matches.push((score, metadata));
             }
         }
 
@@ -177,8 +163,6 @@ impl CatalogProvider for ServerCatalogProvider {
 
         for logic in self.catalog.iter() {
             let node = logic.get_node();
-            let name_lower = node.name.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
 
             let has_matching_pin = node.pins.values().any(|p| {
                 let is_correct_direction = if is_input {
@@ -193,24 +177,7 @@ impl CatalogProvider for ServerCatalogProvider {
             });
 
             if has_matching_pin {
-                matches.push(NodeMetadata {
-                    name: node.name,
-                    friendly_name: node.friendly_name,
-                    description: node.description,
-                    inputs: node
-                        .pins
-                        .values()
-                        .filter(|p| p.pin_type == PinType::Input)
-                        .map(pin_to_metadata)
-                        .collect(),
-                    outputs: node
-                        .pins
-                        .values()
-                        .filter(|p| p.pin_type == PinType::Output)
-                        .map(pin_to_metadata)
-                        .collect(),
-                    category: Some(category.to_string()),
-                });
+                matches.push(node_to_metadata(node));
             }
             if matches.len() >= 10 {
                 break;
@@ -229,30 +196,20 @@ impl CatalogProvider for ServerCatalogProvider {
             let category = name_lower.split("::").nth(1).unwrap_or("");
 
             if category.starts_with(&category_prefix) || name_lower.contains(&category_prefix) {
-                matches.push(NodeMetadata {
-                    name: node.name,
-                    friendly_name: node.friendly_name,
-                    description: node.description,
-                    inputs: node
-                        .pins
-                        .values()
-                        .filter(|p| p.pin_type == PinType::Input)
-                        .map(pin_to_metadata)
-                        .collect(),
-                    outputs: node
-                        .pins
-                        .values()
-                        .filter(|p| p.pin_type == PinType::Output)
-                        .map(pin_to_metadata)
-                        .collect(),
-                    category: Some(category.to_string()),
-                });
+                matches.push(node_to_metadata(node));
             }
             if matches.len() >= 15 {
                 break;
             }
         }
         matches
+    }
+
+    async fn get_node_metadata(&self, node_type: &str) -> Option<NodeMetadata> {
+        self.catalog.iter().find_map(|logic| {
+            let node = logic.get_node();
+            (node.name == node_type).then(|| node_to_metadata(node))
+        })
     }
 
     async fn get_all_nodes(&self) -> Vec<String> {
@@ -350,6 +307,7 @@ pub async fn copilot_chat(
                 payload.current_surface.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
+                payload.request_images,
                 payload.history,
                 payload.model_id,
                 token,
@@ -381,6 +339,7 @@ pub async fn copilot_chat(
                 payload.current_surface.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
+                payload.request_images,
                 payload.history,
                 payload.model_id,
                 token,

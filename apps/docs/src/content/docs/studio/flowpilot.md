@@ -24,7 +24,7 @@ FlowPilot supports two AI provider modes:
 Uses your configured model bits from your user profile. This is the default mode and works with any LLM provider you've set up in Flow-Like.
 
 ### GitHub Copilot
-Uses the GitHub Copilot SDK directly for AI-powered assistance. This mode provides access to GitHub's latest AI models and features native integration with your GitHub account.
+Uses the GitHub Copilot SDK directly for AI-powered assistance in the desktop app. This mode provides access to GitHub's latest AI models and uses your local Copilot CLI session.
 
 ## Setting Up GitHub Copilot
 
@@ -119,7 +119,7 @@ In the FlowPilot panel, you'll see provider toggle buttons:
 - **Bits** - Use your configured model bits
 - **Copilot** - Use GitHub Copilot
 
-Click on the Copilot button to switch. In the desktop app, FlowPilot will automatically connect to the local Copilot CLI. In the web version, you'll be prompted to enter a server address.
+Click on the Copilot button to switch. In the desktop app, FlowPilot connects to the local Copilot CLI. In browser-based FlowPilot sessions, the Copilot option stays disabled and Bits remains the available provider.
 
 ### Selecting Models
 
@@ -178,14 +178,11 @@ When you send a message to FlowPilot, it:
 
 All changes are applied through the same command system used by manual editing, so you can always undo AI-generated changes.
 
-## Infinite Context
+## Rolling Context Budget
 
-FlowPilot with GitHub Copilot supports **infinite context handling**, which automatically manages conversation length by:
-- Compacting older messages when the context window fills up
-- Preserving important context while discarding less relevant details
-- Allowing long-running sessions without losing track of the conversation
+FlowPilot compacts older conversation turns before each request instead of sending the full transcript every time. It keeps recent turns verbatim, summarizes accepted work from older turns, and sends current-turn images separately from the text prompt.
 
-This is particularly useful for complex workflows that require multiple iterations to build.
+This keeps long workflow sessions usable without duplicating the latest request or letting the prompt grow without bound.
 
 ## Privacy and Security
 
@@ -202,8 +199,8 @@ Ensure the Copilot CLI is installed and in your PATH. Try running `copilot` dire
 ### Authentication issues
 Run `copilot` in your terminal and use the `/login` command to re-authenticate.
 
-### Connection issues (web version)
-Ensure your Copilot server is running and accessible from your browser. Check firewall settings if needed.
+### Copilot option is disabled
+GitHub Copilot in FlowPilot currently runs only in the desktop app. Use the Bits provider in web sessions.
 
 ### Model not available
 Some models may require specific Copilot subscription tiers. Check your subscription level if a model is unavailable.

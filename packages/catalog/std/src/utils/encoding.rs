@@ -1,0 +1,12 @@
+pub mod base64_decode;
+pub mod base64_decode_bytes;
+pub mod base64_encode;
+pub mod base64_encode_bytes;
+pub mod hex_decode;
+pub mod hex_decode_bytes;
+pub mod hex_encode;
+pub mod hex_encode_bytes;
+pub mod html_decode;
+pub mod html_encode;
+pub mod url_decode;
+pub mod url_encode;

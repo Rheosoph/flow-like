@@ -12,7 +12,9 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "factuality (partial benchmarks)"
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -23,7 +25,9 @@
       "reasoning (partial benchmarks)",
       "factuality (partial benchmarks)",
       "function_calling (partial benchmarks)",
-      "speed (no data)"
+      "speed (no data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -31,14 +35,18 @@
     "modelName": "Llama 3.2 Instruct 3B",
     "missingFields": [
       "coding (partial benchmarks)",
-      "function_calling (partial benchmarks)"
+      "function_calling (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
     "modelSlug": "gemma-3-4b",
     "modelName": "Gemma 3 4B Instruct",
     "missingFields": [
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (partial benchmark data)"
     ]
   },
   {
@@ -49,7 +57,9 @@
       "reasoning (partial benchmarks)",
       "function_calling (partial benchmarks)",
       "speed (no data)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -61,14 +71,30 @@
       "factuality (partial benchmarks)",
       "function_calling (partial benchmarks)",
       "speed (no data)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
     "modelSlug": "gemma-3-12b",
     "modelName": "Gemma 3 12B Instruct",
     "missingFields": [
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (partial benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-26b-a4b",
+    "modelName": "Gemma 4 26B A4B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -79,7 +105,9 @@
       "reasoning (partial benchmarks)",
       "function_calling (partial benchmarks)",
       "speed (no data)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -88,7 +116,22 @@
     "missingFields": [
       "function_calling (partial benchmarks)",
       "speed (no data)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-e2b",
+    "modelName": "Gemma 4 E2B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -107,14 +150,18 @@
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
       "function_calling (partial benchmarks)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
     "modelSlug": "o3-mini-high",
     "modelName": "o3-mini (high)",
     "missingFields": [
-      "reasoning (partial benchmarks)"
+      "reasoning (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -123,7 +170,17 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "function_calling (partial benchmarks)"
+      "function_calling (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "llama-3-1-instruct-8b",
+    "modelName": "Llama 3.1 Instruct 8B",
+    "missingFields": [
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -132,7 +189,8 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "factuality (partial benchmarks)"
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)"
     ]
   },
   {
@@ -141,14 +199,79 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "factuality (partial benchmarks)"
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "kimi-k2",
+    "modelName": "Kimi K2",
+    "missingFields": [
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
     "modelSlug": "minimax-m2",
     "modelName": "MiniMax-M2",
     "missingFields": [
-      "reasoning (partial benchmarks)"
+      "reasoning (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "glm-5",
+    "modelName": "GLM-5 (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "mimo-v2-0206",
+    "modelName": "MiMo-V2-Flash (Feb 2026)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-e4b",
+    "modelName": "Gemma 4 E4B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "speed (no data)",
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "gpt-4-1",
+    "modelName": "GPT-4.1",
+    "missingFields": [
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "mimo-v2-pro",
+    "modelName": "MiMo-V2-Pro",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "multilinguality (no benchmark data)"
     ]
   },
   {
@@ -157,14 +280,17 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "factuality (partial benchmarks)"
+      "factuality (partial benchmarks)",
+      "safety (no benchmark data)"
     ]
   },
   {
     "modelSlug": "grok-4-1-fast-reasoning",
     "modelName": "Grok 4.1 Fast (Reasoning)",
     "missingFields": [
-      "reasoning (partial benchmarks)"
+      "reasoning (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -175,7 +301,9 @@
       "reasoning (partial benchmarks)",
       "function_calling (partial benchmarks)",
       "speed (no data)",
-      "cost (no pricing data)"
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -193,7 +321,21 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "function_calling (partial benchmarks)"
+      "function_calling (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
+    ]
+  },
+  {
+    "modelSlug": "gemma-4-31b",
+    "modelName": "Gemma 4 31B (Reasoning)",
+    "missingFields": [
+      "coding (partial benchmarks)",
+      "reasoning (partial benchmarks)",
+      "factuality (partial benchmarks)",
+      "cost (no pricing data)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {
@@ -202,7 +344,9 @@
     "missingFields": [
       "coding (partial benchmarks)",
       "reasoning (partial benchmarks)",
-      "function_calling (partial benchmarks)"
+      "function_calling (partial benchmarks)",
+      "multilinguality (no benchmark data)",
+      "safety (no benchmark data)"
     ]
   },
   {

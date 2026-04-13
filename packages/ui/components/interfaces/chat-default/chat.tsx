@@ -49,6 +49,7 @@ export interface IChatProps {
 	) => void | Promise<void>;
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
+	isStreamActive?: boolean;
 	activeInteractions?: IInteractionRequest[];
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
 }
@@ -71,6 +72,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			onMessageUpdate,
 			config = {},
 			sessionId,
+			isStreamActive = false,
 			activeInteractions,
 			onRespondToInteraction,
 		},
@@ -396,12 +398,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					<div
 						ref={scrollContainerRef}
 						onScroll={handleScroll}
-						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center flex-grow max-h-full"
+						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
 						style={{ WebkitOverflowScrolling: "touch" }}
 					>
 						{chatItems.map((item) => (
 							<div
-								className="w-full max-w-screen-lg px-1 sm:px-4"
+								className="w-full max-w-5xl px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
 							>
 								<MessageComponent
@@ -416,7 +418,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									m.inner.role === "user" &&
 									getMessageTextContent(m) === sendingContent,
 							) && (
-								<div className="w-full max-w-screen-lg px-4 flex flex-col items-end space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
+								<div className="w-full max-w-5xl px-4 flex flex-col items-end space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
 									<div className="bg-muted dark:bg-muted/30 text-foreground px-4 py-2 rounded-xl rounded-tr-sm max-w-3xl shadow-sm">
 										<p className="whitespace-pre-wrap text-sm">
 											{sendingContent}
@@ -435,7 +437,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 							)}
 						{currentMessage && (
 								<div
-									className="w-full max-w-screen-lg px-4"
+									className="w-full max-w-5xl px-4"
 									key={`msg-${currentMessage.id}`}
 								>
 									<MessageComponent loading message={currentMessage} />
@@ -444,7 +446,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div
-									className="w-full max-w-screen-lg px-4 flex flex-col items-start"
+									className="w-full max-w-5xl px-4 flex flex-col items-start"
 									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
 								>
 									<InteractionGroup
@@ -454,7 +456,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							) : (
 								<div
-									className="w-full max-w-screen-lg px-4 flex flex-col items-start"
+									className="w-full max-w-5xl px-4 flex flex-col items-start"
 									key={`int-${(item.data as IInteractionRequest).id}`}
 								>
 									<Interaction
@@ -469,7 +471,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 					{/* ChatBox */}
 					<div
-						className="bg-background px-2 pb-2 max-w-screen-lg w-full mx-auto"
+						className="bg-background px-2 pb-2 max-w-5xl w-full mx-auto"
 						style={{
 							paddingBottom:
 								"calc(0.5rem + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
@@ -483,6 +485,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={config?.allow_voice_input ?? true}
+								sendDisabled={isSending || isStreamActive}
 								onVoiceModeToggle={
 									(config?.allow_voice_mode ?? true)
 										? () => setVoiceModeOpen(true)

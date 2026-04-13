@@ -1,3 +1,4 @@
+use super::persist::{PersistNotificationParams, build_notification_link, persist_notification};
 use flow_like::{
     flow::{
         board::Board,
@@ -11,7 +12,7 @@ use flow_like_types::async_trait;
 use std::sync::Arc;
 
 /// Node to notify a specific user in the project by their sub (user ID).
-/// Currently sends a local notification - remote user targeting requires API integration.
+/// Persists the notification via the backend API for push delivery.
 #[crate::register_node]
 #[derive(Default)]
 pub struct NotifyProjectUserNode {}
@@ -65,7 +66,7 @@ impl NodeLogic for NotifyProjectUserNode {
         node.add_input_pin(
             "link",
             "Link",
-            "Link to navigate to when clicked (optional, e.g., /use?project=xyz)",
+            "Relative path for the notification link (e.g. /dashboard or /store?item=abc)",
             VariableType::String,
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
@@ -108,42 +109,65 @@ impl NodeLogic for NotifyProjectUserNode {
             return Ok(());
         }
 
-        // Build notification (no desktop since this is for another user)
+        // Build the resolved link with app_id + route query params
+        let app_id = context
+            .execution_cache
+            .as_ref()
+            .map(|c| c.app_id.as_str())
+            .unwrap_or("");
+        let resolved_link = build_notification_link(
+            app_id,
+            if link.is_empty() { None } else { Some(&link) },
+        );
+
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(false)
             .with_target_user_sub(&user_sub)
             .with_source_run_id(context.run_id())
-            .with_source_node_id(&context.id);
+            .with_source_node_id(&context.id)
+            .with_link(&resolved_link);
 
         if let Some(event_id) = context.event_id().await {
             notification = notification.with_event_id(&event_id);
         }
-
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
         if !icon.is_empty() {
             notification = notification.with_icon(&icon);
         }
-        if !link.is_empty() {
-            notification = notification.with_link(&link);
-        }
 
-        // For now, send as local notification - remote targeting would require API integration
-        // TODO: When remote execution is available, call API to notify specific user
-        context.log_message(
-            &format!("Sending notification intended for user: {}", user_sub),
-            LogLevel::Info,
-        );
-
-        // stream_response logs errors internally but always returns Ok
+        // Send notification via InterCom stream (local display / SSE forwarding)
         context
             .stream_response("flow_notification", notification)
             .await?;
-        context.log_message(
-            &format!("Notification sent (target user: {})", user_sub),
-            LogLevel::Info,
-        );
+
+        // Persist notification via backend API for push delivery
+        match persist_notification(
+            context,
+            PersistNotificationParams {
+                title,
+                description: (!description.is_empty()).then_some(description),
+                icon: (!icon.is_empty()).then_some(icon),
+                link: Some(resolved_link),
+                target_user_sub: Some(user_sub.clone()),
+            },
+        )
+        .await
+        {
+            Ok(true) => context.log_message(
+                &format!("Notification persisted via API (target user: {user_sub})"),
+                LogLevel::Debug,
+            ),
+            Ok(false) => context.log_message(
+                &format!("Notification sent locally for user: {user_sub} (no hub/token or offline)"),
+                LogLevel::Debug,
+            ),
+            Err(e) => context.log_message(
+                &format!("Failed to persist notification for user {user_sub} via API: {e}"),
+                LogLevel::Warn,
+            ),
+        }
 
         context
             .set_pin_value("success", flow_like_types::json::json!(true))
@@ -153,7 +177,7 @@ impl NodeLogic for NotifyProjectUserNode {
         Ok(())
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {
         // No type matching needed
     }
 }

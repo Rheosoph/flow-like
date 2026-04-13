@@ -27,6 +27,7 @@ impl NodeLogic for SetHistorySeedNode {
             "AI/Generative/History",
         );
         node.add_icon("/flow/icons/history.svg");
+        node.set_version(1);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(10)

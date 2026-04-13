@@ -184,6 +184,8 @@ pub struct HostState {
     pub model_context: Option<ModelContext>,
     /// Active WebSocket connections (session_id -> connection)
     pub ws_connections: Arc<tokio::sync::Mutex<HashMap<String, WsConnection>>>,
+    /// In-flight chunked writes (write_id -> buffer)
+    pub pending_writes: RwLock<HashMap<String, storage::PendingWrite>>,
 }
 
 /// Log entry from WASM
@@ -241,6 +243,7 @@ impl HostState {
             storage_context: None,
             model_context: None,
             ws_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_writes: RwLock::new(HashMap::new()),
         }
     }
 

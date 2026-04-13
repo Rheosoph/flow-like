@@ -30,6 +30,26 @@ impl RemoveVariableCommand {
 
 #[async_trait]
 impl Command for RemoveVariableCommand {
+    async fn validate(&self, board: &Board, _: Arc<FlowLikeState>) -> flow_like_types::Result<()> {
+        let variables = if let Some(ref layer_id) = self.layer_id {
+            &board
+                .layers
+                .get(layer_id)
+                .ok_or_else(|| flow_like_types::anyhow!("Layer not found"))?
+                .variables
+        } else {
+            &board.variables
+        };
+
+        if let Some(old_variable) = variables.get(&self.variable.id)
+            && !old_variable.editable
+        {
+            return Err(flow_like_types::anyhow!("Variable is not editable"));
+        }
+
+        Ok(())
+    }
+
     async fn execute(
         &mut self,
         board: &mut Board,
@@ -45,14 +65,13 @@ impl Command for RemoveVariableCommand {
             &mut board.variables
         };
 
-        let old_variable = variables.remove(&self.variable.id);
-
-        if let Some(old_variable) = old_variable {
+        if let Some(old_variable) = variables.get(&self.variable.id) {
             if !old_variable.editable {
-                variables.insert(old_variable.id.clone(), old_variable);
                 return Err(flow_like_types::anyhow!("Variable is not editable"));
             }
+        }
 
+        if let Some(old_variable) = variables.remove(&self.variable.id) {
             self.variable = old_variable;
         }
 

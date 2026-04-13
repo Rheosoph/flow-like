@@ -15,103 +15,8 @@ use flow_like_model_provider::{
 use flow_like_types::{Error, Value, anyhow, async_trait, json, regex::Regex};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
     time::Instant,
 };
-
-const SP_TEMPLATE_AUTO: &str = r#"
-# Instruction
-You are a helpful assistant with access to the tools below.
-
-# Tools
-Here are the schemas for the tools you *can* use:
-
-## Schemas
-TOOLS_STR
-
-## Tool Use Format
-<tooluse>
-    {
-        "name": "<name of the tool you want to use>",
-        "arguments": "<key: value dict for args as defined by schema of the tool you want to use>"
-    }
-</tooluse>
-
-# Response Format
-Your tool use json data within the <tooluse></tooluse> will be validated by the tool json schemas above.
-
-The tool use data string inside the <tooluse></tooluse> tags *MUST* be compliant with the tool json schemas above.
-
-If you want to use a tool you *MUST* wrap your tool use json data in these xml tags: <tooluse></tooluse>.
-
-Do *NOT* use code blocks.
-
-Wrap every tool use in a pair of xml tags <tooluse></tooluse>.
-"#;
-
-const SP_TEMPLATE_REQUIRED: &str = r#"
-# Instruction
-You are a helpful assistant with access to the tools below.
-
-# Tools
-You *MUST* use one of the tools below to make your response.
-
-## Schemas
-TOOLS_STR
-
-## Tool Use Format
-<tooluse>
-    {
-        "name": "<name of the tool you want to use>",
-        "arguments": "<key: value dict for args as defined by schema of the tool you want to use>"
-    }
-</tooluse>
-
-# Response Format
-Your tool use json data within the <tooluse></tooluse> will be validated by the tool json schemas above.
-
-The tool use data string inside the <tooluse></tooluse> tags *MUST* be compliant with the tool json schemas above.
-
-You *MUST* wrap your tool use json data in these xml tags: <tooluse></tooluse>.
-
-Do *NOT* use code blocks.
-
-Wrap every tool use in a pair of xml tags <tooluse></tooluse>.
-
-You *MUST* use at least one tool.
-"#;
-
-const SP_TEMPLATE_SPECIFIC: &str = r#"
-# Instruction
-You are a helpful assistant with access to the tool below.
-
-# Tool
-You *MUST* use the tools below to make your response.
-
-## Schema
-TOOL_STR
-
-## Tool Use Format
-<tooluse>
-    {
-        "name": "<name of the tool>",
-        "arguments": "<key: value dict for args as defined by schema of the tool>"
-    }
-</tooluse>
-
-# Response Format
-Your tool use json data within the <tooluse></tooluse> will be validated by the tool json schemas above.
-
-The tool use data string inside the <tooluse></tooluse> tags *MUST* be compliant with the tool json schemas above.
-
-You *MUST* wrap your tool use json data in these xml tags: <tooluse></tooluse>.
-
-Do *NOT* use code blocks.
-
-Wrap your tool use in a pair of xml tags <tooluse></tooluse>.
-
-You *MUST* use the tool specified above to make your response.
-"#;
 
 /// Extract tagged substrings, e.g. Hello, <tool>extract this</tool> and <tool>this</tool>, good bye.
 pub fn extract_tagged_simple(text: &str, tag: &str) -> Result<Vec<String>, Error> {
@@ -197,7 +102,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -320,8 +225,6 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             .try_to_provider()
             .ok_or_else(|| anyhow!("Model Bit does not contain provider information"))?;
 
-        let is_local_provider = provider.provider_name == "Local";
-
         // log model name
         if let Some(meta) = model_bit.meta.get("en") {
             context.log_message(&format!("Loading model {:?}", meta.name), LogLevel::Debug);
@@ -329,22 +232,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
 
         let mut history = context.evaluate_pin::<History>("history").await?;
 
-        // Only the Local provider needs the <tooluse> prompt hack.
-        if is_local_provider && !tools.is_empty() && !matches!(tool_choice, ToolChoice::None) {
-            let system_prompt_tools = match tool_choice {
-                ToolChoice::Required => SP_TEMPLATE_REQUIRED.replace("TOOLS_STR", &tools_str),
-                _ => SP_TEMPLATE_AUTO.replace("TOOLS_STR", &tools_str),
-            };
-            let system_prompt = match history.get_system_prompt() {
-                Some(sp) => format!("{sp}\n\n{system_prompt_tools}"),
-                None => system_prompt_tools,
-            };
-            history.set_system_prompt(system_prompt.clone());
-            context.log_message(
-                &format!("system prompt (Local): {}", system_prompt),
-                LogLevel::Debug,
-            );
-        } else if !tools.is_empty() && !matches!(tool_choice, ToolChoice::None) {
+        if !tools.is_empty() && !matches!(tool_choice, ToolChoice::None) {
             history.tools = Some(tools.clone());
             history.tool_choice = Some(tool_choice.clone());
         }
@@ -360,15 +248,9 @@ impl NodeLogic for InvokeLLMWithToolsNode {
 
             let start = Instant::now();
 
-            if !is_local_provider && !tools.is_empty() && !matches!(tool_choice, ToolChoice::None) {
-                let res = model.invoke(&history, None).await?;
-                let duration_ms = start.elapsed().as_millis() as u64;
-                (res, duration_ms)
-            } else {
-                let res = model.invoke(&history, None).await?;
-                let duration_ms = start.elapsed().as_millis() as u64;
-                (res, duration_ms)
-            }
+            let res = model.invoke(&history, None).await?;
+            let duration_ms = start.elapsed().as_millis() as u64;
+            (res, duration_ms)
         };
 
         let (response, duration_ms) = response;
@@ -383,23 +265,20 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             LogLevel::Debug,
         );
 
-        // Prefer native tool calls (non-Local); Local falls back to <tooluse> parsing.
         let mut tool_calls: Vec<ResponseFunction> = Vec::new();
 
-        if !is_local_provider {
-            if let Some(msg) = response.last_message() {
-                // Expect native tool-calls attached to the message:
+        if let Some(msg) = response.last_message() {
+            tool_calls = msg
+                .tool_calls
+                .iter()
+                .map(|tc| ResponseFunction {
+                    name: tc.function.name.clone(),
+                    arguments: tc.function.arguments.clone(),
+                })
+                .collect();
+        }
 
-                tool_calls = msg
-                    .tool_calls
-                    .iter()
-                    .map(|tc| ResponseFunction {
-                        name: tc.function.name.clone(),
-                        arguments: tc.function.arguments.clone(),
-                    })
-                    .collect();
-            }
-        } else if response_string.contains("<tooluse>") {
+        if tool_calls.is_empty() && response_string.contains("<tooluse>") {
             let tool_calls_strs = extract_tagged(&response_string, "tooluse")?;
             tool_calls = tool_calls_strs
                 .iter()
@@ -478,7 +357,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         let current_tool_exec_pins: Vec<_> = node
             .pins

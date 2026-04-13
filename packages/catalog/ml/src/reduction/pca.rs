@@ -250,7 +250,7 @@ impl NodeLogic for FitPcaNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 
         let source_pin: String = node

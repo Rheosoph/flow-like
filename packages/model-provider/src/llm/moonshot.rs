@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct MoonshotModel {
     client: rig::providers::moonshot::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +33,7 @@ impl MoonshotModel {
 
         Ok(MoonshotModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -57,7 +57,7 @@ impl MoonshotModel {
         Ok(MoonshotModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

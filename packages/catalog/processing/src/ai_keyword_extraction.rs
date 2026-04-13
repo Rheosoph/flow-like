@@ -11,7 +11,7 @@ use flow_like::{
 use flow_like_types::anyhow;
 use flow_like_types::{Value, async_trait, json::json};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, Message, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
@@ -108,6 +108,7 @@ impl NodeLogic for AiKeywordExtractionNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/sparkles.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -220,7 +221,7 @@ impl NodeLogic for AiKeywordExtractionNode {
         context.log_message("Invoking LLM for keyword extraction", LogLevel::Debug);
 
         let response = agent
-            .completion(llm_input, vec![])
+            .completion(llm_input, Vec::<Message>::new())
             .await
             .map_err(|e| anyhow!("Model completion failed: {}", e))?
             .send()

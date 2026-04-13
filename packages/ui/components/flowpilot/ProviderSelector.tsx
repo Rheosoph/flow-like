@@ -1,21 +1,11 @@
 "use client";
 
 import { GithubIcon, LayersIcon, ServerIcon } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback } from "react";
 
 import { isTauri } from "../../lib/platform";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "../ui/dialog";
-import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import {
 	Select,
 	SelectContent,
@@ -51,25 +41,21 @@ export const ProviderSelector = memo(function ProviderSelector({
 	disabled = false,
 	className,
 }: ProviderSelectorProps) {
-	const [showServerDialog, setShowServerDialog] = useState(false);
-	const [serverUrl, setServerUrl] = useState("");
 	const isTauriEnv = isTauri();
+	const copilotUnavailable = !isTauriEnv;
 
 	const handleProviderChange = useCallback(
 		async (newProvider: AIProvider) => {
 			if (newProvider === "copilot" && !copilotRunning) {
-				// If switching to Copilot and not running, need to start it
-				if (isTauriEnv) {
-					// In Tauri, start with stdio (local)
-					try {
-						await onStartCopilot();
-						onProviderChange(newProvider);
-					} catch {
-						// Error will be handled by the hook
-					}
-				} else {
-					// In web, show server URL dialog
-					setShowServerDialog(true);
+				if (copilotUnavailable) {
+					return;
+				}
+
+				try {
+					await onStartCopilot();
+					onProviderChange(newProvider);
+				} catch {
+					// Error will be handled by the hook
 				}
 			} else if (newProvider === "bits" && copilotRunning) {
 				// Optionally stop Copilot when switching away
@@ -79,23 +65,11 @@ export const ProviderSelector = memo(function ProviderSelector({
 				onProviderChange(newProvider);
 			}
 		},
-		[copilotRunning, isTauriEnv, onStartCopilot, onProviderChange],
+		[copilotRunning, copilotUnavailable, onStartCopilot, onProviderChange],
 	);
 
-	const handleServerDialogSubmit = useCallback(async () => {
-		if (!serverUrl.trim()) return;
-		try {
-			await onStartCopilot(serverUrl);
-			setShowServerDialog(false);
-			onProviderChange("copilot");
-		} catch {
-			// Error will be handled by the hook
-		}
-	}, [serverUrl, onStartCopilot, onProviderChange]);
-
 	return (
-		<>
-			<div className={cn("flex items-center gap-1.5", className)}>
+		<div className={cn("flex items-center gap-1.5", className)}>
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
@@ -130,7 +104,7 @@ export const ProviderSelector = memo(function ProviderSelector({
 								copilotConnecting && "animate-pulse",
 							)}
 							onClick={() => handleProviderChange("copilot")}
-							disabled={disabled || copilotConnecting}
+							disabled={disabled || copilotConnecting || copilotUnavailable}
 						>
 							<GithubIcon className="w-3.5 h-3.5" />
 							<span className="hidden sm:inline">Copilot</span>
@@ -142,7 +116,7 @@ export const ProviderSelector = memo(function ProviderSelector({
 							)}
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom" className="text-xs max-w-[200px]">
+					<TooltipContent side="bottom" className="text-xs max-w-50">
 						{copilotRunning ? (
 							<div>
 								<div className="font-medium">GitHub Copilot Connected</div>
@@ -153,10 +127,12 @@ export const ProviderSelector = memo(function ProviderSelector({
 										</div>
 									)}
 							</div>
+						) : copilotUnavailable ? (
+							"GitHub Copilot is currently desktop-only in FlowPilot"
 						) : isTauriEnv ? (
 							"Use GitHub Copilot (local)"
 						) : (
-							"Use GitHub Copilot (requires server)"
+							"GitHub Copilot is unavailable in this environment"
 						)}
 					</TooltipContent>
 				</Tooltip>
@@ -181,56 +157,6 @@ export const ProviderSelector = memo(function ProviderSelector({
 					</Tooltip>
 				)}
 			</div>
-
-			{/* Server URL Dialog for Web */}
-			<Dialog open={showServerDialog} onOpenChange={setShowServerDialog}>
-				<DialogContent className="sm:max-w-[425px]">
-					<DialogHeader>
-						<DialogTitle className="flex items-center gap-2">
-							<GithubIcon className="w-5 h-5" />
-							Connect to Copilot Server
-						</DialogTitle>
-						<DialogDescription>
-							Enter the address of your Copilot server. The server must be
-							running and accessible from this browser.
-						</DialogDescription>
-					</DialogHeader>
-					<div className="grid gap-4 py-4">
-						<div className="grid gap-2">
-							<Label htmlFor="server-url">Server URL</Label>
-							<Input
-								id="server-url"
-								placeholder="http://localhost:8080"
-								value={serverUrl}
-								onChange={(e) => setServerUrl(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") {
-										handleServerDialogSubmit();
-									}
-								}}
-							/>
-							<p className="text-xs text-muted-foreground">
-								The URL should include the protocol (http:// or https://)
-							</p>
-						</div>
-					</div>
-					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => setShowServerDialog(false)}
-						>
-							Cancel
-						</Button>
-						<Button
-							onClick={handleServerDialogSubmit}
-							disabled={!serverUrl.trim() || copilotConnecting}
-						>
-							{copilotConnecting ? "Connecting..." : "Connect"}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-		</>
 	);
 });
 

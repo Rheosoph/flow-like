@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct PerplexityModel {
     client: rig::providers::perplexity::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +33,7 @@ impl PerplexityModel {
 
         Ok(PerplexityModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -57,7 +57,7 @@ impl PerplexityModel {
         Ok(PerplexityModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

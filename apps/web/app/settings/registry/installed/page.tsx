@@ -38,6 +38,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { getErrorMessage } from "../error-utils";
 import { fetcher } from "../../../../lib/api";
 
 function InstalledPackageCard({
@@ -53,7 +54,7 @@ function InstalledPackageCard({
 	hasUpdate?: boolean;
 	latestVersion?: string;
 	onUninstall: (id: string) => void;
-	onUpdate: (id: string) => void;
+	onUpdate: (id: string, version?: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
@@ -69,12 +70,12 @@ function InstalledPackageCard({
 				<CardHeader className="pb-2">
 					<div className="flex items-start justify-between gap-2">
 						<div className="flex items-center gap-2 min-w-0">
-							<Package className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
+							<Package className="h-5 w-5 shrink-0 text-muted-foreground" />
 							<CardTitle className="text-base truncate">
 								{pkg.manifest.name}
 							</CardTitle>
 						</div>
-						<div className="flex items-center gap-1 flex-shrink-0">
+						<div className="flex items-center gap-1 shrink-0">
 							<Badge variant="outline">v{pkg.version}</Badge>
 							{hasUpdate && (
 								<Badge variant="default" className="gap-1">
@@ -107,7 +108,7 @@ function InstalledPackageCard({
 									variant="secondary"
 									onClick={(e) => {
 										e.stopPropagation();
-										onUpdate(pkg.id);
+										onUpdate(pkg.id, latestVersion);
 									}}
 									disabled={isLoading}
 								>
@@ -160,7 +161,7 @@ function LocalPackageCard({
 				<CardHeader className="pb-2">
 					<div className="flex items-start justify-between gap-2">
 						<div className="flex items-center gap-2 min-w-0">
-							<FolderOpen className="h-5 w-5 flex-shrink-0 text-primary" />
+							<FolderOpen className="h-5 w-5 shrink-0 text-primary" />
 							<CardTitle className="text-base truncate">
 								{pkg.manifest.name}
 							</CardTitle>
@@ -306,22 +307,22 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to uninstall package:", err);
-			toast.error(`Failed to uninstall: ${err}`);
+			toast.error(`Failed to uninstall: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
 	};
 
-	const handleUpdate = async (packageId: string) => {
+	const handleUpdate = async (packageId: string, version?: string) => {
 		if (!backend?.registryState) return;
 		setLoadingPackage(packageId);
 		try {
-			await backend.registryState.updatePackage(packageId);
+			await backend.registryState.updatePackage(packageId, version);
 			toast.success("Package updated");
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to update package:", err);
-			toast.error(`Failed to update: ${err}`);
+			toast.error(`Failed to update: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -336,7 +337,7 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to install package:", err);
-			toast.error(`Failed to install: ${err}`);
+			toast.error(`Failed to install: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -396,10 +397,10 @@ export default function InstalledPackagesPage() {
 					fetchInstalled();
 				}}
 				onInstallError={(error) =>
-					toast.error(`Failed to install: ${error.message}`)
+					toast.error(`Failed to install: ${getErrorMessage(error)}`)
 				}
 				onUninstallError={(error) =>
-					toast.error(`Failed to uninstall: ${error.message}`)
+					toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)
 				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
@@ -556,12 +557,12 @@ export default function InstalledPackagesPage() {
 										<CardHeader className="pb-2">
 											<div className="flex items-start justify-between gap-2">
 												<div className="flex items-center gap-2 min-w-0">
-													<Package className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
+													<Package className="h-5 w-5 shrink-0 text-muted-foreground" />
 													<CardTitle className="text-base truncate">
 														{pkg.name}
 													</CardTitle>
 												</div>
-												<div className="flex items-center gap-1 flex-shrink-0">
+												<div className="flex items-center gap-1 shrink-0">
 													<Badge variant="outline">v{pkg.latestVersion}</Badge>
 													{pkg.status === PackageStatus.Disabled && (
 														<Badge variant="destructive">Disabled</Badge>

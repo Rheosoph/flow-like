@@ -122,6 +122,7 @@ export type FlowNode = Node<
 		peerUsers?: Map<string, PeerUserInfo>;
 		onOpenInfo?: (node: INode) => void;
 		onExplain?: (nodeIds: string[]) => void;
+		onFilterLogs?: (nodeId: string) => void;
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
 		functionLayerId?: string;
@@ -949,7 +950,10 @@ const FlowNodeInner = memo(
 						<div className="flex flex-row items-center gap-1">
 							{executed && (
 								<ScrollTextIcon
-									// onClick={() => props.data.openTrace(props.data.traces)}
+									onClick={(e) => {
+										e.stopPropagation();
+										props.data.onFilterLogs?.(props.data.node.id);
+									}}
 									className="w-2 h-2 cursor-pointer hover:text-primary"
 								/>
 							)}

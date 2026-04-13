@@ -14,15 +14,17 @@ import {
 	ScrollIcon,
 	TriangleAlertIcon,
 } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
+	type ILog,
 	ILogLevel,
+	type ILogMetadata,
 	type INode,
 	formatDuration,
 	formatRelativeTime,
 } from "../../lib";
-import { logLevelFromNumber } from "../../lib/log-level";
+import { logLevelFromNumber, logLevelToNumber } from "../../lib/log-level";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import {
@@ -44,6 +46,60 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../ui";
+
+function parseVersion(versionStr: string): [number, number, number] | undefined {
+	const normalized = versionStr.trim().replace(/^v/i, "");
+	const delimiter = normalized.includes("-") ? "-" : ".";
+	const parts = normalized.split(delimiter).map(Number);
+
+	if (parts.length >= 3 && parts.every((part) => Number.isFinite(part))) {
+		return [parts[0], parts[1], parts[2]];
+	}
+
+	return undefined;
+}
+
+function isCurrentBoardVersion(
+	runVersion: string,
+	version: [number, number, number],
+) {
+	const normalized = runVersion.trim().replace(/^v/i, "");
+	return normalized === version.join("-") || normalized === version.join(".");
+}
+
+function toMicros(time: ILog["start"]) {
+	return time.secs_since_epoch * 1_000_000 + Math.floor(time.nanos_since_epoch / 1_000);
+}
+
+function hydrateMetadataFromLogs(run: ILogMetadata, logs: ILog[]): ILogMetadata {
+	const nodes = new Map<string, number>();
+	let earliest = Number.POSITIVE_INFINITY;
+	let latest = 0;
+
+	for (const log of logs) {
+		const start = toMicros(log.start);
+		const end = toMicros(log.end);
+
+		earliest = Math.min(earliest, start);
+		latest = Math.max(latest, end);
+
+		if (!log.node_id) {
+			continue;
+		}
+
+		nodes.set(
+			log.node_id,
+			Math.max(nodes.get(log.node_id) ?? 0, logLevelToNumber(log.log_level)),
+		);
+	}
+
+	return {
+		...run,
+		start: Number.isFinite(earliest) ? earliest : run.start,
+		end: latest > 0 ? Math.max(run.end, latest) : run.end,
+		nodes: Array.from(nodes.entries()),
+	};
+}
 
 const FlowRunsComponent = ({
 	appId,
@@ -80,10 +136,15 @@ const FlowRunsComponent = ({
 		from: (Date.now() - 5 * 60 * 1000) * 1000,
 	});
 	const [timeRange, setTimeRange] = useState("last_5_minutes");
+	const [selectedRunId, setSelectedRunId] = useState<string>();
 
 	useEffect(() => {
 		setFilter(backend, localFilter);
 	}, [appId, boardId, backend, localFilter, setFilter]);
+
+	useEffect(() => {
+		setSelectedRunId(undefined);
+	}, [appId, boardId]);
 
 	useEffect(() => {
 		const now = Date.now();
@@ -124,6 +185,65 @@ const FlowRunsComponent = ({
 		}));
 	}, [timeRange]);
 
+	const handleRunSelection = useCallback(
+		async (run: ILogMetadata) => {
+			if (currentMetadata?.run_id === run.run_id) {
+				setSelectedRunId(undefined);
+				setCurrentMetadata(undefined);
+				onVersionChange(undefined);
+				return;
+			}
+
+			setSelectedRunId(run.run_id);
+			setCurrentMetadata(run);
+			onVersionChange(
+				isCurrentBoardVersion(run.version, version)
+					? undefined
+					: parseVersion(run.version),
+			);
+
+			try {
+				const logs: ILog[] = [];
+				const pageSize = 1000;
+				let offset = 0;
+
+				while (true) {
+					const batch = await backend.boardState.queryRun(run, "", offset, pageSize);
+					if (batch.length === 0) {
+						break;
+					}
+
+					logs.push(...batch);
+
+					if (batch.length < pageSize) {
+						break;
+					}
+
+					offset += batch.length;
+				}
+
+				if (useLogAggregation.getState().currentMetadata?.run_id === run.run_id) {
+					setCurrentMetadata(hydrateMetadataFromLogs(run, logs));
+				}
+			} catch {
+				if (useLogAggregation.getState().currentMetadata?.run_id === run.run_id) {
+					setCurrentMetadata(run);
+				}
+			} finally {
+				setSelectedRunId((current) =>
+					current === run.run_id ? undefined : current,
+				);
+			}
+		},
+		[
+			backend.boardState,
+			currentMetadata?.run_id,
+			onVersionChange,
+			setCurrentMetadata,
+			version,
+		],
+	);
+
 	return (
 		<div className="flex flex-col gap-2 p-4 bg-background grow h-full max-h-full overflow-hidden">
 			<div className="flex flex-row items-center justify-between">
@@ -143,7 +263,7 @@ const FlowRunsComponent = ({
 						setTimeRange(value);
 					}}
 				>
-					<SelectTrigger className="max-w-[180px]">
+					<SelectTrigger className="max-w-45">
 						<SelectValue placeholder="Time Range" />
 					</SelectTrigger>
 					<SelectContent>
@@ -165,7 +285,7 @@ const FlowRunsComponent = ({
 						}));
 					}}
 				>
-					<SelectTrigger className="max-w-[180px]">
+					<SelectTrigger className="max-w-45">
 						<SelectValue placeholder="Nodes" />
 					</SelectTrigger>
 					<SelectContent>
@@ -203,7 +323,7 @@ const FlowRunsComponent = ({
 						setLocalFilter((old) => ({ ...old, status: status }));
 					}}
 				>
-					<SelectTrigger className="max-w-[180px]">
+					<SelectTrigger className="max-w-45">
 						<SelectValue placeholder="Status" />
 					</SelectTrigger>
 					<SelectContent>
@@ -235,34 +355,7 @@ const FlowRunsComponent = ({
 						key={run.run_id}
 						className={`flex flex-row gap-2 items-center justify-between border p-2 rounded-md ${currentMetadata?.run_id === run.run_id ? "bg-muted/50" : "hover:bg-muted/50"}`}
 						onClick={() => {
-							if (currentMetadata?.run_id === run.run_id) {
-								setCurrentMetadata(undefined);
-								onVersionChange(undefined);
-								return;
-							}
-
-							setCurrentMetadata(run);
-
-							// Parse version string safely - handle cases like "v1", "v1-0", "v1-0-0"
-							const parseVersion = (
-								versionStr: string,
-							): [number, number, number] | undefined => {
-								const parts = versionStr
-									.replace("v", "")
-									.split("-")
-									.map(Number);
-								if (parts.length >= 3 && parts.every((n) => !isNaN(n))) {
-									return [parts[0], parts[1], parts[2]];
-								}
-								// If version doesn't have 3 parts, return undefined (use latest)
-								return undefined;
-							};
-
-							onVersionChange(
-								run.version === `v${version.join("-")}`
-									? undefined
-									: parseVersion(run.version),
-							);
+							void handleRunSelection(run);
 						}}
 					>
 						<div className="flex flex-col gap-2 items-start justify-center">
@@ -280,7 +373,7 @@ const FlowRunsComponent = ({
 									{nodes[run.node_id]?.friendly_name ?? "Deleted Event"}
 								</small>
 								<small className="text-muted-foreground">
-									{run.version === `v${version.join("-")}`
+									{isCurrentBoardVersion(run.version, version)
 										? "Latest"
 										: `${run.version}`}
 								</small>
@@ -297,6 +390,9 @@ const FlowRunsComponent = ({
 							</small>
 						</div>
 						<div className="flex flex-row items-center gap-2">
+							{selectedRunId === run.run_id && (
+								<Loader2Icon className="w-3 h-3 animate-spin text-muted-foreground" />
+							)}
 							<div className="flex flex-row gap-2 items-center">
 								<small className="text-muted-foreground">
 									{formatDuration(Math.abs(run.end - run.start))}

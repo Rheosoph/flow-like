@@ -29,6 +29,7 @@ impl NodeLogic for SetHistoryResponseFormatNode {
             "AI/Generative/History",
         );
         node.add_icon("/flow/icons/history.svg");
+        node.set_version(1);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(10)
@@ -107,9 +108,9 @@ impl NodeLogic for SetHistoryResponseFormatNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let match_type = node
-            .match_type("response_format", board.clone(), None, None)
+            .match_type("response_format", board, None, None)
             .unwrap_or(VariableType::Generic);
         if match_type != VariableType::String
             && match_type != VariableType::Struct

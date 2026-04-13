@@ -732,7 +732,7 @@ impl NodeLogic for FormInteraction {
         node
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         if let Some(fn_refs) = &mut node.fn_refs
             && fn_refs.fn_refs.len() > 1
         {

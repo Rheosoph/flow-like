@@ -28,8 +28,7 @@ pub async fn capture_region(
         let (cropped, crop_width, crop_height, scale) = {
             use xcap::Monitor;
 
-            let monitors =
-                Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            let monitors = Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
             let monitor = find_monitor_at(x, y, &monitors)
                 .ok_or_else(|| TauriFunctionError::new("No monitor found at coordinates"))?;
@@ -113,8 +112,7 @@ pub async fn capture_full_screen(store: &FlowLikeStore) -> Result<String, TauriF
         let screenshot = {
             use xcap::Monitor;
 
-            let monitors =
-                Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            let monitors = Monitor::all().map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
             let primary = monitors
                 .into_iter()

@@ -8,8 +8,7 @@
             "binaries/mac/intel/libggml-rpc.dylib",
             "binaries/mac/intel/libggml.dylib",
             "binaries/mac/intel/libllama.dylib",
-            "binaries/mac/intel/libmtmd_helper_shared.dylib",
-            "binaries/mac/intel/libmtmd_shared.dylib",
+            "binaries/mac/intel/libmtmd.dylib",
             "binaries/mac/intel/llama-server"
         ],
         "resources": {

@@ -101,7 +101,7 @@ impl NodeLogic for GetGlobalState {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
 
         let read_only_node = node.clone();

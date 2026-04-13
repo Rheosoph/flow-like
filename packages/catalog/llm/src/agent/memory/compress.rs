@@ -166,7 +166,7 @@ impl NodeLogic for CompressMemoryNode {
 
         let start = Instant::now();
         let response = summary_agent
-            .completion(prompt, vec![])
+            .completion(prompt, Vec::<rig::completion::Message>::new())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to create compression request: {}", e))?
             .send()

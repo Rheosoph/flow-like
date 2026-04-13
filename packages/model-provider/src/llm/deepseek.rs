@@ -10,7 +10,7 @@ use flow_like_types::{Cacheable, Result, async_trait};
 
 pub struct DeepseekModel {
     client: rig::providers::deepseek::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +33,7 @@ impl DeepseekModel {
 
         Ok(DeepseekModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -61,7 +61,7 @@ impl DeepseekModel {
         Ok(DeepseekModel {
             client,
             default_model: model_id,
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }

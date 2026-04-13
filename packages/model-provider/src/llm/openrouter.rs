@@ -1,16 +1,17 @@
 use std::any::Any;
 
-use super::ModelLogic;
+use super::{ModelLogic, merge_additional_params};
 use crate::provider::random_provider;
 use crate::{
+    history::History,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait};
+use flow_like_types::{Cacheable, Result, async_trait, json::json};
 
 pub struct OpenRouterModel {
     client: rig::providers::openrouter::Client,
-    provider: ModelProvider,
+    _provider: ModelProvider,
     default_model: Option<String>,
 }
 
@@ -33,7 +34,7 @@ impl OpenRouterModel {
 
         Ok(OpenRouterModel {
             client,
-            provider: provider.clone(),
+            _provider: provider.clone(),
             default_model: model_id,
         })
     }
@@ -59,7 +60,7 @@ impl OpenRouterModel {
         Ok(OpenRouterModel {
             client,
             default_model: model_id.clone(),
-            provider: provider.clone(),
+            _provider: provider.clone(),
         })
     }
 }
@@ -85,5 +86,19 @@ impl ModelLogic for OpenRouterModel {
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+
+    fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
+        let history = history.as_ref()?;
+        let base = history.build_additional_params().ok().flatten();
+        let reasoning = history.thinking.map(|thinking| {
+            json!({
+                "reasoning": {
+                    "effort": thinking.openai_reasoning_effort(),
+                }
+            })
+        });
+
+        merge_additional_params(base, reasoning)
     }
 }

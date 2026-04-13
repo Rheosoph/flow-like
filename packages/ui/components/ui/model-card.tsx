@@ -331,7 +331,7 @@ function ModelCardGridVariant({
 		<div
 			onClick={onCardClick}
 			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className="group relative flex flex-col rounded-lg border bg-card p-3 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 h-[140px]"
+			className="group relative flex flex-col rounded-lg border bg-card p-3 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 h-35"
 		>
 			{/* Download Overlay */}
 			{progress !== undefined && !isVirtualBit && (

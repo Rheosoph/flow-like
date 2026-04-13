@@ -180,6 +180,8 @@ import {
 } from "./auto-layout-dialog";
 import { computeFlowLayout } from "../../lib/flow-auto-layout";
 
+const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -204,7 +206,15 @@ export function FlowBoard({
 	renderOverlay?: () => React.ReactNode;
 	sub?: string;
 }>) {
-	const { pushCommand, pushCommands, redo, undo } = useUndoRedo(appId, boardId);
+	const {
+		pushCommand,
+		pushCommands,
+		redo,
+		undo,
+		rollbackUndo,
+		rollbackRedo,
+		clearHistory,
+	} = useUndoRedo(appId, boardId);
 	const router = useRouter();
 	const backend = useBackend();
 	const selected = useRef(new Set<string>());
@@ -419,6 +429,7 @@ export function FlowBoard({
 		setLayerPath,
 		saveViewport,
 		fitView,
+		getNodes,
 	});
 
 	const {
@@ -686,6 +697,7 @@ export function FlowBoard({
 
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
+	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
 	const [pagesOpen, setPagesOpen] = useState(false);
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [searchMode, setSearchMode] = useState<"dialog" | "sidebar">("dialog");
@@ -1407,7 +1419,37 @@ export function FlowBoard({
 		placeNode,
 		undo,
 		redo,
+		rollbackUndo,
+		rollbackRedo,
 	});
+
+	useEffect(() => {
+		const handleRemoteBoardApplied = async (
+			event: Event,
+		): Promise<void> => {
+			const detail = (
+				event as CustomEvent<{ appId: string; boardId: string }>
+			).detail;
+
+			if (!detail || detail.appId !== appId || detail.boardId !== boardId) {
+				return;
+			}
+
+			await clearHistory();
+		};
+
+		window.addEventListener(
+			REMOTE_BOARD_APPLIED_EVENT,
+			handleRemoteBoardApplied as EventListener,
+		);
+
+		return () => {
+			window.removeEventListener(
+				REMOTE_BOARD_APPLIED_EVENT,
+				handleRemoteBoardApplied as EventListener,
+			);
+		};
+	}, [appId, boardId, clearHistory]);
 
 	const handleDrop = useCallback(
 		async (event: any) => {
@@ -1558,6 +1600,20 @@ export function FlowBoard({
 	const handleExplainNodesRef = useRef(handleExplainNodes);
 	handleExplainNodesRef.current = handleExplainNodes;
 
+	const handleFilterLogs = useCallback((nodeId: string) => {
+		setLogNodeIdFilter(nodeId);
+		if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+			setLogsOpen(true);
+			return;
+		}
+		if (!logPanelRef.current) return;
+		logPanelRef.current.expand();
+		const size = logPanelRef.current.getSize();
+		if (size < 10) logPanelRef.current.resize(20);
+	}, []);
+	const handleFilterLogsRef = useRef(handleFilterLogs);
+	handleFilterLogsRef.current = handleFilterLogs;
+
 	// Extract stable primitives from complex objects to avoid re-parsing on unrelated changes
 	const connectionMode = currentProfile.data?.settings?.connection_mode ?? "default";
 	const isOffline = app.data?.visibility === IAppVisibility.Offline;
@@ -1583,6 +1639,7 @@ export function FlowBoard({
 			version,
 			(node: INode) => openNodeInfoRef.current(node),
 			(nodeIds: string[]) => handleExplainNodesRef.current(nodeIds),
+			(nodeId: string) => handleFilterLogsRef.current(nodeId),
 			hasRemoteExecution
 				? {
 						isOffline,
@@ -2852,6 +2909,8 @@ export function FlowBoard({
 									boardId={boardId}
 									board={boardRef}
 									onFocusNode={focusNode}
+									nodeIdFilter={logNodeIdFilter}
+									onClearNodeIdFilter={() => setLogNodeIdFilter(undefined)}
 								/>
 							)}
 						</ResizablePanel>
@@ -2948,6 +3007,8 @@ export function FlowBoard({
 									boardId={boardId}
 									board={boardRef}
 									onFocusNode={focusNode}
+									nodeIdFilter={logNodeIdFilter}
+									onClearNodeIdFilter={() => setLogNodeIdFilter(undefined)}
 								/>
 							</div>
 						)}

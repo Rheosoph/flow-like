@@ -1118,7 +1118,7 @@ export function NavUser({
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
-								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 									{notificationCount > 5 ? "5+" : notificationCount}
 								</div>
 							)}
@@ -1199,7 +1199,7 @@ export function NavUser({
 												<BellIcon className="size-4" />
 												{/* Add notification indicator */}
 												{notificationCount > 0 && (
-													<div className="absolute -top-0 -left-0 bg-red-500 text-white text-xs rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+													<div className="absolute top-0 left-0 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 														{notificationCount > 5 ? "5+" : notificationCount}
 													</div>
 												)}

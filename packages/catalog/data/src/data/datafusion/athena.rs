@@ -257,7 +257,7 @@ impl NodeLogic for RegisterAthenaNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let credential_mode = get_pin_string_value(node, "credential_mode");
 
         let has_access_key = node.get_pin_by_name("access_key_id").is_some();
@@ -540,7 +540,7 @@ impl NodeLogic for MountAthenaQueryNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, _board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
         let credential_mode = get_pin_string_value(node, "credential_mode");
 
         let has_access_key = node.get_pin_by_name("access_key_id").is_some();

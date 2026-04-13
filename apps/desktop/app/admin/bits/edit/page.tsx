@@ -456,6 +456,7 @@ export default function EditBitsPage() {
 		setIsSaving(true);
 		try {
 			let savedBit = nextDraft;
+			let receivedSavedBit = false;
 			await backend.apiState.stream(
 				profile.data,
 				`admin/bit/${nextDraft.id}`,
@@ -466,9 +467,13 @@ export default function EditBitsPage() {
 				(data: Record<string, unknown>) => {
 					if (typeof data?.id === "string") {
 						savedBit = data as unknown as IBit;
+						receivedSavedBit = true;
 					}
 				},
 			);
+			if (!receivedSavedBit) {
+				throw new Error("Bit update did not complete");
+			}
 			await backend.apiState.put(profile.data, `admin/bit/${savedBit.id}/en`, nextDraft.meta.en);
 			toast.success("Bit updated");
 			queryClient.invalidateQueries({ queryKey: ["bit-search"] });
@@ -585,7 +590,7 @@ export default function EditBitsPage() {
 					</Card>
 
 					<div className="grid gap-6 lg:grid-cols-[360px,minmax(0,1fr)]">
-						<Card className="min-h-[720px]">
+						<Card className="min-h-180">
 							<CardHeader>
 								<CardTitle>Matching Bits</CardTitle>
 								<CardDescription>
@@ -662,7 +667,7 @@ export default function EditBitsPage() {
 							</CardContent>
 						</Card>
 
-						<Card className="min-h-[720px]">
+						<Card className="min-h-180">
 							<CardHeader>
 								<CardTitle>Editor</CardTitle>
 								<CardDescription>

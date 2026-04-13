@@ -27,6 +27,70 @@ import type { TauriBackend } from "../tauri-provider";
 export class AppState implements IAppState {
 	constructor(private readonly backend: TauriBackend) {}
 
+	private getRemoteAuth() {
+		return this.backend.auth?.isAuthenticated ? this.backend.auth : undefined;
+	}
+
+	private async fetchRemoteApp(appId: string): Promise<IApp> {
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot get app.");
+		}
+
+		const remoteData = await fetcher<IApp>(
+			this.backend.profile,
+			`apps/${appId}`,
+			undefined,
+			this.getRemoteAuth(),
+		);
+
+		try {
+			await invoke("update_app", {
+				app: remoteData,
+			});
+		} catch (error) {
+			console.warn("Failed to cache remote app locally:", error);
+		}
+
+		try {
+			await appsDB.visibility.put({
+				visibility: remoteData.visibility ?? IAppVisibility.Private,
+				appId: remoteData.id,
+			});
+		} catch (error) {
+			console.warn("Failed to cache remote app visibility:", error);
+		}
+
+		return remoteData;
+	}
+
+	private async fetchRemoteAppMeta(
+		appId: string,
+		language?: string,
+	): Promise<IMetadata> {
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot get app meta.");
+		}
+
+		const remoteMeta = await fetcher<IMetadata>(
+			this.backend.profile,
+			`apps/${appId}/meta?language=${language ?? "en"}`,
+			undefined,
+			this.getRemoteAuth(),
+		);
+
+		try {
+			await invoke("push_app_meta", {
+				appId,
+				metadata: remoteMeta,
+				language,
+			});
+		} catch (error) {
+			console.warn("Failed to cache remote app metadata locally:", error);
+		}
+
+		return remoteMeta;
+	}
+
 	private normalizeAppCommentsResponse(response: {
 		comments: Array<{
 			id: string;
@@ -100,6 +164,13 @@ export class AppState implements IAppState {
 		if (appId) {
 			await invoke("update_app", {
 				app: { ...app, visibility: IAppVisibility.Private },
+			});
+		}
+
+		if (!online) {
+			await appsDB.visibility.put({
+				visibility: IAppVisibility.Offline,
+				appId: app.id,
 			});
 		}
 
@@ -201,22 +272,14 @@ export class AppState implements IAppState {
 			!this.backend.profile ||
 			!this.backend.auth
 		) {
-			console.warn(
-				"Query client, profile or auth context not available, returning local apps only.",
-			);
-			console.warn({
-				queryClient: this?.backend?.queryClient,
-				profile: this?.backend?.profile,
-				auth: this?.backend?.auth,
-			});
 			return localApps;
 		}
 
-		const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
+		const syncRemote = async () => {
+			const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
 
-		try {
 			const remoteData = await fetcher<[IApp, IMetadata | undefined][]>(
-				this.backend.profile,
+				this.backend.profile!,
 				"apps",
 				undefined,
 				this.backend.auth,
@@ -224,21 +287,21 @@ export class AppState implements IAppState {
 
 			for (const [app, meta] of remoteData) {
 				mergedData.set(app.id, [app, meta]);
-				await appsDB.visibility.put({
-					visibility: app.visibility ?? IAppVisibility.Private,
-					appId: app.id,
-				});
+				appsDB.visibility
+					.put({
+						visibility: app.visibility ?? IAppVisibility.Private,
+						appId: app.id,
+					})
+					.catch(() => {});
 
 				const exists = localApps.find(([localApp]) => localApp.id === app.id);
 				if (exists) {
-					await invoke("update_app", {
-						app: app,
-					});
+					invoke("update_app", { app }).catch(() => {});
 					if (meta)
-						await invoke("push_app_meta", {
+						invoke("push_app_meta", {
 							appId: app.id,
 							metadata: meta,
-						});
+						}).catch(() => {});
 					continue;
 				}
 
@@ -250,66 +313,72 @@ export class AppState implements IAppState {
 						id: app.id,
 					});
 			}
-		} catch (error) {
-			console.error("Failed to merge app data:", error);
+
+			localApps.forEach(([app, meta]) => {
+				if (!mergedData.has(app.id)) {
+					mergedData.set(app.id, [app, meta]);
+				}
+			});
+
+			return Array.from(mergedData.values());
+		};
+
+		if (localApps.length === 0) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getApps.name || "backendFn"];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch {
+				return localApps;
+			}
 		}
 
-		localApps.forEach(([app, meta]) => {
-			if (!mergedData.has(app.id)) {
-				mergedData.set(app.id, [app, meta]);
-			}
-		});
+		const promise = injectDataFunction(
+			syncRemote,
+			this,
+			this.backend.queryClient,
+			this.getApps,
+			[],
+			[],
+			localApps,
+		);
 
-		return Array.from(mergedData.values());
+		this.backend.backgroundTaskHandler(promise);
+		return localApps;
 	}
 
 	async getApp(appId: string): Promise<IApp> {
-		const localApp: IApp = await invoke("get_app", {
-			appId: appId,
-		});
+		let localApp: IApp | undefined;
 
-		if (
-			!this?.backend?.queryClient ||
-			!this.backend.profile ||
-			!this.backend.auth?.isAuthenticated
-		) {
-			console.warn(
-				"Query client, profile or auth context not available, returning local app only.",
+		try {
+			localApp = await invoke("get_app", {
+				appId,
+			});
+		} catch (error) {
+			console.warn("Failed to get app from local cache:", error);
+		}
+
+		if (localApp) {
+			if (!this.backend.queryClient || !this.backend.profile) {
+				return localApp;
+			}
+
+			const promise = injectDataFunction(
+				() => this.fetchRemoteApp(appId),
+				this,
+				this.backend.queryClient,
+				this.getApp,
+				[appId],
+				[],
+				localApp,
 			);
+			this.backend.backgroundTaskHandler(promise);
 
 			return localApp;
 		}
 
-		const promise = injectDataFunction(
-			async () => {
-				const remoteData = await fetcher<IApp>(
-					this.backend.profile!,
-					`apps/${appId}`,
-					undefined,
-					this.backend.auth,
-				);
-
-				await invoke("update_app", {
-					app: remoteData,
-				});
-
-				await appsDB.visibility.put({
-					visibility: remoteData.visibility ?? IAppVisibility.Private,
-					appId: remoteData.id,
-				});
-
-				return remoteData;
-			},
-			this,
-			this.backend.queryClient,
-			this.getApp,
-			[appId],
-			[],
-			localApp,
-		);
-		this.backend.backgroundTaskHandler(promise);
-
-		return localApp;
+		return this.fetchRemoteApp(appId);
 	}
 	async updateApp(app: IApp): Promise<void> {
 		const isOffline = await this.backend.isOffline(app.id);
@@ -362,35 +431,17 @@ export class AppState implements IAppState {
 
 		if (
 			!this.backend.profile ||
-			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
 			if (meta) {
 				return meta;
 			}
-			throw new Error(
-				"Profile, auth or query client not set. Cannot get app meta.",
-			);
+			return this.fetchRemoteAppMeta(appId, language);
 		}
 
 		if (meta) {
 			const promise = injectDataFunction(
-				async () => {
-					const remoteMeta: IMetadata = await fetcher<IMetadata>(
-						this.backend.profile!,
-						`apps/${appId}/meta?language=${language ?? "en"}`,
-						undefined,
-						this.backend.auth,
-					);
-
-					await invoke("push_app_meta", {
-						appId: appId,
-						metadata: remoteMeta,
-						language,
-					});
-
-					return remoteMeta;
-				},
+				() => this.fetchRemoteAppMeta(appId, language),
 				this,
 				this.backend.queryClient,
 				this.getAppMeta,
@@ -404,22 +455,7 @@ export class AppState implements IAppState {
 		}
 
 		try {
-			const remoteMeta: IMetadata = await fetcher<IMetadata>(
-				this.backend.profile,
-				`apps/${appId}/meta?language=${language ?? "en"}`,
-				undefined,
-				this.backend.auth,
-			);
-
-			if (remoteMeta) {
-				await invoke("push_app_meta", {
-					appId: appId,
-					metadata: remoteMeta,
-					language,
-				});
-			}
-
-			return remoteMeta;
+			return await this.fetchRemoteAppMeta(appId, language);
 		} catch (error) {
 			console.error("Failed to fetch app meta from remote:", error);
 			if (meta) {
@@ -618,7 +654,14 @@ export class AppState implements IAppState {
 	}
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {
-		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
+		const auth = this.backend.auth;
+
+		if (!auth?.isAuthenticated) {
+			await auth?.signinRedirect();
+			return;
+		}
+
+		if (this.backend.profile && this.backend.queryClient) {
 			await fetcher<IApp>(
 				this.backend.profile,
 				`apps/${appId}/team/queue`,
@@ -628,16 +671,12 @@ export class AppState implements IAppState {
 						comment: comment,
 					}),
 				},
-				this.backend.auth,
+				auth,
 			);
 			return;
 		}
 
-		if (this.backend.auth) {
-			await this.backend.auth.signinRedirect();
-			return;
-		}
-		toast.error("You must be logged in to request access to an app.");
+		throw new Error("Profile or auth context not available");
 	}
 
 	async purchaseApp(appId: string): Promise<IPurchaseResponse> {

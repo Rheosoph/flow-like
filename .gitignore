@@ -9,7 +9,7 @@ pnpm-debug.log*
 lerna-debug.log*
 .venv
 
-.cargo/config.toml
+/.cargo/config.toml
 
 api.config.json
 
@@ -64,11 +64,15 @@ next-env.d.ts
 .yarn/install-state.gz
 .env
 .VSCodeCounter
-.cargo/config.toml
+/.cargo/config.toml
 .codacy/codacy.yaml
 
 # Kubernetes secrets
 **/values-secrets.yaml
+
+# Claude Code — track settings.json, ignore personal files
+.claude/settings.local.json
+.claude/CLAUDE.local.md
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

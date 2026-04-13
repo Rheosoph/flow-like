@@ -58,7 +58,7 @@ impl NodeLogic for CopilotSendAndWaitNode {
             "AI/GitHub/Copilot/Chat",
         );
         node.add_icon("/flow/icons/github.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -222,7 +222,7 @@ impl NodeLogic for CopilotSendStreamingNode {
             "AI/GitHub/Copilot/Chat",
         );
         node.add_icon("/flow/icons/github.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()

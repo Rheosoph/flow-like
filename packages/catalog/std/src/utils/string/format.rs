@@ -85,7 +85,7 @@ impl NodeLogic for FormatStringNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         let pins: Vec<_> = node
             .pins
             .values()
@@ -129,7 +129,7 @@ impl NodeLogic for FormatStringNode {
         }
 
         all_placeholders.iter().for_each(|placeholder| {
-            let _ = node.match_type(placeholder, board.clone(), None, None);
+            let _ = node.match_type(placeholder, board, None, None);
         })
     }
 }

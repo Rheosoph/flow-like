@@ -1310,6 +1310,8 @@ message Page {
   // Widget definitions referenced by widget instances on this page
   // Key is the instance ID, value is the widget definition
   map<string, Widget> widget_refs = 19;
+  // Cache the last rendered page state for instant display while onLoad runs
+  bool cache = 20;
 }
 
 // Canvas settings for page styling

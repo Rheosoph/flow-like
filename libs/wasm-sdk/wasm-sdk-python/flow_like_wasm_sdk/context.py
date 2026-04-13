@@ -11,6 +11,8 @@ if TYPE_CHECKING:
         Bit, CachedEmbeddingModel, ChatMessage, FlowImage,
     )
 
+_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB, safely under host 10 MiB limit
+
 _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 _B64_INV = {c: i for i, c in enumerate(_B64)}
 
@@ -191,7 +193,18 @@ class Context:
         return self._host.storage_read(flow_path)
 
     def storage_write(self, flow_path: dict, data: bytes) -> bool:
-        return self._host.storage_write(flow_path, data)
+        if len(data) <= _CHUNK_SIZE:
+            return self._host.storage_write(flow_path, data)
+        return self._storage_write_chunked(flow_path, data)
+
+    def _storage_write_chunked(self, flow_path: dict, data: bytes) -> bool:
+        write_id = self._host.storage_write_start(flow_path, len(data))
+        if write_id is None:
+            return False
+        for i in range(0, len(data), _CHUNK_SIZE):
+            if not self._host.storage_write_chunk(write_id, data[i:i + _CHUNK_SIZE]):
+                return False
+        return self._host.storage_write_finish(write_id)
 
     def storage_list(self, flow_path: dict) -> list[dict] | None:
         return self._host.storage_list(flow_path)
@@ -231,13 +244,48 @@ class Context:
         messages: list[ChatMessage],
         stream: bool = False,
         tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tool_choice: Any | None = None,
+        output_schema: dict | None = None,
     ) -> str | None:
         msg_list = [m.to_dict() for m in messages]
+        payload: dict[str, Any] = {"messages": msg_list}
         if tools:
-            payload = json.dumps({"messages": msg_list, "tools": tools})
-        else:
-            payload = json.dumps(msg_list)
-        return self._host.llm_prompt(bit.to_json(), payload, stream)
+            payload["tools"] = tools
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if output_schema is not None:
+            payload["output_schema"] = output_schema
+        return self._host.llm_prompt(bit.to_json(), json.dumps(payload), stream)
+
+    def llm_prompt_stream(
+        self,
+        bit: Bit,
+        messages: list[ChatMessage],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tool_choice: Any | None = None,
+        output_schema: dict | None = None,
+    ) -> str | None:
+        msg_list = [m.to_dict() for m in messages]
+        payload: dict[str, Any] = {"messages": msg_list}
+        if tools:
+            payload["tools"] = tools
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if output_schema is not None:
+            payload["output_schema"] = output_schema
+        return self._host.llm_prompt_stream(bit.to_json(), json.dumps(payload))
 
     # ── Embedding ────────────────────────────────────────────────────
 

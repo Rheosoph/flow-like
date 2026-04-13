@@ -114,19 +114,22 @@ impl<T: VectorStore> BufferedVectorStore<T> {
     }
 
     /// Partition items by schema compatibility.
-    /// Uses the existing table schema if available, otherwise derives the
-    /// reference key-set from the first element. Items whose JSON keys match
-    /// the reference go into `compatible`; the rest into `outliers`.
+    /// Uses the existing table schema (if any) to separate records whose
+    /// key set matches the schema from those that don't.
     async fn partition_by_schema(inner: &T, items: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
         if items.is_empty() {
             return (items, Vec::new());
         }
 
-        let reference_keys: BTreeSet<String> = if let Ok(schema) = inner.schema().await {
-            schema.fields().iter().map(|f| f.name().clone()).collect()
-        } else {
-            Self::value_keys(&items[0])
+        let Ok(schema) = inner.schema().await else {
+            return (items, Vec::new());
         };
+
+        let reference_keys: BTreeSet<String> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
 
         let mut compatible = Vec::new();
         let mut outliers = Vec::new();

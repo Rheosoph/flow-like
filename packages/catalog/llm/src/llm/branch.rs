@@ -108,6 +108,7 @@ impl NodeLogic for LLMBranchNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/split.svg");
+        node.set_version(1);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(5)

@@ -374,14 +374,14 @@ ctx.stream_progress(0.5, "Halfway");
 ctx.stream_json(&json!({ "status": "ok" }));
 ```
 
-### HTTP (requires `network.http_enabled` permission)
+### HTTP (requires `NodePermission::NetworkHttp`)
 
 ```rust
 use flow_like_wasm_sdk::http_ns;
 let response = http_ns::http_request(0, "https://api.example.com/data", "{}", &[]);
 ```
 
-### OAuth (requires `oauth_scopes` permission)
+### OAuth (requires `NodePermission::OAuth`)
 
 ```rust
 use flow_like_wasm_sdk::auth_ns;
@@ -390,7 +390,7 @@ if auth_ns::has_oauth_token("google") {
 }
 ```
 
-### Variables & Cache
+### Variables & Cache (require `NodePermission::Variables` / `NodePermission::Cache`)
 
 ```rust
 use flow_like_wasm_sdk::{var, cache_ns};
@@ -416,33 +416,45 @@ node.set_scores(NodeScores {
 });
 ```
 
-## Permissions & Security (flow-like.toml)
+## Permissions & Resource Limits
 
-The `flow-like.toml` manifest declares the package's security sandbox. The runtime **enforces** these — a node cannot access capabilities not declared here.
+`flow-like.toml` carries package metadata plus package-wide resource tiers such as memory and timeout. Capability permissions are declared per node in Rust with `node.add_permission(NodePermission::...)`, and those node-level permissions are what the runtime exposes and enforces for WASM nodes.
 
 ```toml
 [permissions]
-memory = "standard"        # Memory tier: minimal|light|standard|heavy|intensive|large|huge|extreme|maximum
-timeout = "standard"       # Timeout tier: quick|standard|extended|long_running|very_long|maximum
-
-[permissions.network]
-http_enabled = false       # Outbound HTTP
-allowed_hosts = []         # Empty = all hosts (if http_enabled)
-websocket_enabled = false
-tcp_enabled = false
-udp_enabled = false
-dns_enabled = false
-
-[permissions.filesystem]
-node_storage = false       # Node-scoped persistent storage
-user_storage = false       # User-scoped persistent storage
+memory = "standard"        # Package memory tier: minimal|light|standard|heavy|intensive|large|huge|extreme|maximum
+timeout = "standard"       # Package timeout tier: quick|standard|extended|long_running|very_long|maximum
 ```
 
-**Principle of least privilege** — only request what you need.
+```rust
+use flow_like_wasm_sdk::NodePermission;
+
+fn get_node(&self) -> NodeDefinition {
+    let mut node = NodeDefinition::new(
+        "fetch_data",
+        "Fetch Data",
+        "Fetches data over HTTP and stores it for later use",
+        "Custom/WASM",
+    );
+    node.add_permission(NodePermission::NetworkHttp);
+    node.add_permission(NodePermission::StorageWrite);
+    node
+}
+```
+
+Common capability permissions:
+
+- `NetworkHttp`, `NetworkWebsocket`, `NetworkTcp`, `NetworkUdp`, `NetworkDns`
+- `StorageRead`, `StorageWrite`, `Variables`, `Cache`
+- `Streaming`, `Models`, `A2ui`, `OAuth`, `Functions`
+
+**Principle of least privilege** — keep both manifest resource tiers and per-node capabilities as small as practical.
 
 ## Common Patterns
 
 ### Impure Node with Error Handling
+
+This pattern also needs `node.add_permission(NodePermission::NetworkHttp)` in `get_node()`.
 
 ```rust
 fn run(&self, mut ctx: Context) -> ExecutionResult {
@@ -576,7 +588,7 @@ mod tests {
 7. **Use `Bit`/`CachedEmbeddingModel`** for AI models — never pass model configs as JSON blobs.
 8. **Log meaningfully** — `ctx.debug()` for tracing, `ctx.warn()` / `ctx.error()` for issues.
 9. **Rate your node** — always call `node.set_scores(...)` with honest ratings.
-10. **Declare minimal permissions** — only request what the node actually needs in `flow-like.toml`.
+10. **Declare minimal node permissions** — only request what the node actually needs via `node.add_permission(...)`, and keep manifest resource tiers tight.
 11. **Version the manifest** — bump `version` in `flow-like.toml` when changing pin interfaces.
 
 ## File Structure
@@ -585,215 +597,7 @@ mod tests {
 ├── .cargo/config.toml     # Sets wasm32-wasip2 as default target
 ├── .github/workflows/     # CI: build + release
 ├── Cargo.toml             # Dependencies (flow-like-wasm-sdk)
-├── flow-like.toml         # Package manifest (permissions, metadata)
-├── mise.toml              # Task runner config
-├── src/
-│   └── lib.rs             # Node implementations
-└── AGENT.md               # This file
-```
-ctx.get_input_as::<T>("name")         // Option<T> — deserialize from JSON
-ctx.require_input("name")             // Result<&Value, String>
-ctx.require_input_as::<T>("name")     // Result<T, String>
-```
-
-### Writing Outputs
-
-```rust
-ctx.set_output("name", value)          // any impl Into<Value>
-ctx.set_output_json("name", &struct)   // serialize Rust struct
-```
-
-### Execution Control
-
-```rust
-ctx.activate_exec("exec_out")   // fire an exec output pin
-ctx.success()                   // finalize, auto-activates "exec_out"
-ctx.fail("reason")              // finalize with error
-ctx.finish()                    // finalize without auto-exec
-ctx.set_pending(true)           // mark as long-running
-```
-
-### Logging
-
-```rust
-ctx.debug("msg");
-ctx.info("msg");
-ctx.warn("msg");
-ctx.error("msg");
-```
-
-### Streaming
-
-```rust
-ctx.stream_text("partial output");
-ctx.stream_progress(0.5, "Halfway");
-ctx.stream_json(&json!({ "status": "ok" }));
-```
-
-### HTTP (requires `network.http_enabled` permission)
-
-```rust
-use flow_like_wasm_sdk::http_ns;
-let response = http_ns::http_request(0, "https://api.example.com/data", "{}", &[]);
-```
-
-### OAuth (requires `oauth_scopes` permission)
-
-```rust
-use flow_like_wasm_sdk::auth_ns;
-if auth_ns::has_oauth_token("google") {
-    let token = auth_ns::get_oauth_token("google");
-}
-```
-
-### Variables & Cache
-
-```rust
-use flow_like_wasm_sdk::{var, cache_ns};
-var::set_variable("key", &json!("value"));
-let val = var::get_variable("key");
-
-cache_ns::cache_set("key", &json!(42));
-let cached = cache_ns::cache_get("key");
-```
-
-## Node Scores
-
-Rate every node on these dimensions (0–10, 0 = bad, 10 = good):
-
-```rust
-node.set_scores(NodeScores {
-    privacy: 10,       // Does it leak data externally?
-    security: 8,       // Attack surface? Input validation?
-    performance: 7,    // CPU/memory efficiency?
-    governance: 9,     // Audit trail? Compliance?
-    reliability: 8,    // Error handling? Determinism?
-    cost: 10,          // External API costs?
-});
-```
-
-## Permissions & Security (flow-like.toml)
-
-The `flow-like.toml` manifest declares the package's security sandbox. The runtime **enforces** these — a node cannot access capabilities not declared here.
-
-```toml
-[permissions]
-memory = "standard"        # Memory tier: minimal|light|standard|heavy|intensive|large|huge|extreme|maximum
-timeout = "standard"       # Timeout tier: quick|standard|extended|long_running|very_long|maximum
-
-[permissions.network]
-http_enabled = false       # Outbound HTTP
-allowed_hosts = []         # Empty = all hosts (if http_enabled)
-websocket_enabled = false
-tcp_enabled = false
-udp_enabled = false
-dns_enabled = false
-
-[permissions.filesystem]
-node_storage = false       # Node-scoped persistent storage
-user_storage = false       # User-scoped persistent storage
-```
-
-**Principle of least privilege** — only request what you need. Packages requesting `http_enabled = true` with empty `allowed_hosts` get extra scrutiny during review.
-
-## Common Patterns
-
-### Impure Node with Error Handling
-
-```rust
-fn run(&self, mut ctx: Context) -> ExecutionResult {
-    let url = ctx.get_string("url").unwrap_or_default();
-
-    let response = match http_ns::http_request(0, &url, "{}", &[]) {
-        Some(r) => r,
-        None => return ctx.fail("HTTP request failed"),
-    };
-
-    ctx.set_output("response", response);
-    ctx.success()
-}
-```
-
-### Struct-Typed Pins with Schema
-
-```rust
-use schemars::JsonSchema;
-use serde::{Serialize, Deserialize};
-
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct EmailConfig {
-    to: String,
-    subject: String,
-    body: String,
-}
-
-// In get_node():
-node.add_pin(
-    PinDefinition::input("config", "Email Config", "Email parameters", DataType::STRUCT)
-        .with_schema_type::<EmailConfig>()
-);
-
-// In run():
-let config: EmailConfig = ctx.require_input_as("config")?;
-```
-
-### Enum Dropdown via valid_values
-
-```rust
-PinDefinition::input("format", "Format", "Output format", DataType::STRING)
-    .with_default(json!("json"))
-    .with_valid_values(vec!["json".into(), "csv".into(), "xml".into()])
-```
-
-### Multiple Pins with Same Name
-
-Pins with the same `name` allow the user to add more instances of that pin in the UI:
-
-```rust
-node.add_pin(PinDefinition::input("item", "Item", "Input item", DataType::STRING));
-node.add_pin(PinDefinition::input("item", "Item", "Input item", DataType::STRING));
-// User can add more "item" pins in the editor
-```
-
-## Testing
-
-Tests run on the native host (not WASM). The SDK provides mock stubs for all host functions during `#[cfg(test)]`.
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn node_definition_is_valid() {
-        let node = MyNode.get_node();
-        assert_eq!(node.name, "my_node");
-        assert!(!node.pins.is_empty());
-    }
-}
-```
-
-## Key Conventions
-
-1. **Always provide descriptions** — node description, pin descriptions. Users see these in the visual editor.
-2. **Set default values** — every non-exec input pin should have a sensible default via `.with_default(json!(...))`.
-3. **Use `DataType::STRUCT` + `with_schema_type`** — never `DataType::GENERIC` for structured data. If you can define a struct, always prefer it over Generic.
-4. **Use `with_value_type()` for collections** — for `Vec<T>` use `ValueType::ARRAY`, for `HashMap<String, T>` use `ValueType::HASH_MAP`, for `HashSet<T>` use `ValueType::HASH_SET`. The schema always describes the **single element**, not the collection.
-5. **Use `FlowPath`** for file I/O — never raw `String` paths.
-6. **Use `NodeImage`** for images — never raw bytes in Generic pins.
-7. **Use `Bit`/`CachedEmbeddingModel`** for AI models — never pass model configs as JSON blobs.
-8. **Log meaningfully** — `ctx.debug()` for tracing, `ctx.warn()` / `ctx.error()` for issues.
-9. **Rate your node** — always call `node.set_scores(...)` with honest ratings.
-10. **Declare minimal permissions** — only request what the node actually needs in `flow-like.toml`.
-11. **Version the manifest** — bump `version` in `flow-like.toml` when changing pin interfaces.
-
-## File Structure
-
-```
-├── .cargo/config.toml     # Sets wasm32-wasip2 as default target
-├── .github/workflows/     # CI: build + release
-├── Cargo.toml             # Dependencies (flow-like-wasm-sdk)
-├── flow-like.toml         # Package manifest (permissions, metadata)
+├── flow-like.toml         # Package manifest (metadata, memory, timeout tiers)
 ├── mise.toml              # Task runner config
 ├── src/
 │   └── lib.rs             # Node implementations

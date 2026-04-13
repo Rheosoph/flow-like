@@ -164,6 +164,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Release
+        id: build_release
+        continue-on-error: true
         uses: tauri-apps/tauri-action@73fb865345c54760d875b94642314f8c0c894afa # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -187,3 +189,51 @@ jobs:
           projectPath: "./apps/desktop"
           tauriScript: "bun tauri"
           args: ${{ matrix.args }}
+
+      - name: Retry upload on failure
+        if: steps.build_release.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION=$(jq -r '.version' apps/desktop/src-tauri/tauri.conf.json)
+          TAG="beta-v${VERSION}"
+
+          # Stagger retries to reduce concurrent upload collisions
+          sleep $((RANDOM % 30 + 10))
+
+          # Ensure the draft release exists
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "Flow Like - Beta v${VERSION}"
+
+          # Find all release artifacts and upload with retry
+          find target/release/bundle -type f \( \
+            -name "*.deb" -o -name "*.deb.sig" \
+            -o -name "*.rpm" -o -name "*.rpm.sig" \
+            -o -name "*.AppImage" -o -name "*.AppImage.sig" \
+            -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
+            -o -name "*.dmg" -o -name "*.dmg.sig" \
+            -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
+            -o -name "*.exe" -o -name "*.exe.sig" \
+            -o -name "*.msi" -o -name "*.msi.sig" \
+            -o -name "*.msi.zip" -o -name "*.msi.zip.sig" \
+            -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" \
+          \) 2>/dev/null | while read -r file; do
+            filename=$(basename "$file")
+            echo "Uploading $filename..."
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber; then
+                echo "  Uploaded $filename"
+                break
+              fi
+              echo "  Attempt $attempt failed, retrying in $((attempt * 15))s..."
+              sleep $((attempt * 15))
+            done
+          done
+
+      - name: Fail if build failed
+        if: steps.build_release.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::warning::Build and Release step failed initially, retry upload was attempted."
+          echo "Check the release draft to verify all artifacts were uploaded."

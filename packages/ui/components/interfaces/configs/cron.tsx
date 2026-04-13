@@ -24,8 +24,14 @@ import {
 	PopoverTrigger,
 	RadioGroup,
 	RadioGroupItem,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
 	Separator,
 } from "../../ui";
+import type { SinkExecutionTarget } from "./http";
 import { Calendar } from "../../ui/calendar";
 import { cn } from "../../../lib/utils";
 import type { IConfigInterfaceProps } from "../interfaces";
@@ -413,6 +419,8 @@ export function CronJobConfig({
 	isEditing,
 	config,
 	onConfigUpdate,
+	hub,
+	canExecuteLocally,
 }: IConfigInterfaceProps) {
 	const browserTZ =
 		typeof Intl !== "undefined"
@@ -516,6 +524,19 @@ export function CronJobConfig({
 		}
 	}, [expression, timezone]);
 
+	const sinkExecution = (config?.sink_execution as SinkExecutionTarget) || undefined;
+
+	const supportsRemote = hub?.domain != null;
+	const supportsLocal = canExecuteLocally ?? false;
+	const supportsBoth = supportsRemote && supportsLocal;
+
+	const effectiveExecution: SinkExecutionTarget = useMemo(() => {
+		if (sinkExecution) return sinkExecution;
+		if (supportsBoth) return "HYBRID";
+		if (supportsRemote) return "REMOTE";
+		return "LOCAL";
+	}, [sinkExecution, supportsBoth, supportsRemote]);
+
 	const setValue = (k: keyof CronSink | string, v: any) =>
 		onConfigUpdate?.({ ...(config as any), [k]: v });
 
@@ -556,6 +577,51 @@ export function CronJobConfig({
 					Rust runtime resolves timezone and UTC safely.
 				</p>
 			</div>
+
+			{/* Execution Target */}
+			{supportsBoth && (
+				<div className="space-y-2">
+					<Label htmlFor="sink_execution">Execution Target</Label>
+					<Select
+						value={effectiveExecution}
+						onValueChange={(value) => setValue("sink_execution", value)}
+						disabled={!isEditing}
+					>
+						<SelectTrigger id="sink_execution" className="w-full">
+							<SelectValue placeholder="Select execution target" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="REMOTE">
+								<div className="flex items-center gap-2">
+									<Badge variant="default">Remote</Badge>
+									<span className="text-muted-foreground text-xs">
+										Server only — available 24/7
+									</span>
+								</div>
+							</SelectItem>
+							<SelectItem value="LOCAL">
+								<div className="flex items-center gap-2">
+									<Badge variant="secondary">Local</Badge>
+									<span className="text-muted-foreground text-xs">
+										Desktop app only
+									</span>
+								</div>
+							</SelectItem>
+							<SelectItem value="HYBRID">
+								<div className="flex items-center gap-2">
+									<Badge variant="outline">Both</Badge>
+									<span className="text-muted-foreground text-xs">
+										Server + desktop app
+									</span>
+								</div>
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p className="text-sm text-muted-foreground">
+						Where this cron job should be registered and executed.
+					</p>
+				</div>
+			)}
 
 			{/* Mode */}
 			<div className="space-y-2">

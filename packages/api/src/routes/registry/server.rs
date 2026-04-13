@@ -301,6 +301,31 @@ impl ServerRegistry {
             .child("node.wasm")
     }
 
+    async fn resolve_wasm_path(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> flow_like_types::Result<Path> {
+        if let Some(version_record) = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(package_id))
+            .filter(wasm_package_version::Column::Version.eq(version))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(Path::from(version_record.wasm_path.as_str()));
+        }
+
+        if let Some(package_record) = wasm_package::Entity::find_by_id(package_id)
+            .filter(wasm_package::Column::Version.eq(version))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(Path::from(package_record.wasm_path.as_str()));
+        }
+
+        Ok(Self::wasm_path(package_id, version))
+    }
+
     /// Fetch meta models for a batch of packages, filtered by language + English fallback.
     async fn fetch_meta_map(
         &self,
@@ -544,7 +569,7 @@ impl ServerRegistry {
         package_id: &str,
         version: &str,
     ) -> flow_like_types::Result<String> {
-        let path = Self::wasm_path(package_id, version);
+        let path = self.resolve_wasm_path(package_id, version).await?;
 
         // Otherwise generate a signed URL (valid for 1 hour)
         let url = self
@@ -1339,7 +1364,41 @@ impl ServerRegistry {
             entry
                 .get_version(v)
                 .map(|v| v.version.clone())
-                .unwrap_or_else(|| v.to_string())
+                .ok_or_else(|| flow_like_types::anyhow!("Version not found: {}", v))?
+        } else {
+            entry
+                .latest_version()
+                .map(|v| v.version.clone())
+                .unwrap_or_else(|| entry.manifest.version.clone())
+        };
+
+        let download_url = self.get_download_url(package_id, &version_str).await?;
+
+        Ok((download_url, entry.manifest, version_str))
+    }
+
+    /// Get download URL for a package using viewer-aware package resolution.
+    ///
+    /// The caller is responsible for enforcing access control and deciding
+    /// whether non-active packages should be reachable for the provided viewer.
+    pub async fn get_wasm_url_as_viewer(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        viewer_sub: Option<&str>,
+    ) -> flow_like_types::Result<(String, PackageManifest, String)> {
+        let Some(entry) = self.get_package_as_viewer(package_id, viewer_sub).await? else {
+            return Err(flow_like_types::anyhow!(
+                "Package not found: {}",
+                package_id
+            ));
+        };
+
+        let version_str = if let Some(v) = version {
+            entry
+                .get_version(v)
+                .map(|v| v.version.clone())
+                .ok_or_else(|| flow_like_types::anyhow!("Version not found: {}", v))?
         } else {
             entry
                 .latest_version()
@@ -1377,7 +1436,7 @@ impl ServerRegistry {
                 .clone()
         };
 
-        let path = Self::wasm_path(package_id, &ver.version);
+        let path = self.resolve_wasm_path(package_id, &ver.version).await?;
         let data = self.content_bucket.as_generic().get(&path).await?;
         let bytes = data.bytes().await?.to_vec();
 

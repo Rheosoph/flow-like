@@ -1,7 +1,7 @@
 "use client";
 
 import { VariableIcon } from "lucide-react";
-import { type FC, memo, useEffect, useState } from "react";
+import { type FC, memo, useCallback, useEffect, useState } from "react";
 import { Button } from "../../../components/ui/button";
 import { IValueType } from "../../../lib";
 import {
@@ -46,9 +46,14 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 		setCachedDefaultValue(defaultValue);
 	}, [defaultValue]);
 
-	useEffect(() => {
-		changeDefaultValue(cachedDefaultValue);
-	}, [cachedDefaultValue, changeDefaultValue]);
+	const updateDefaultValue = useCallback(
+		async (value: any) => {
+			setCachedDefaultValue(value);
+			changeDefaultValue(value);
+			await saveDefaultValue(value);
+		},
+		[changeDefaultValue, saveDefaultValue],
+	);
 
 	if (pin.pin_type === IPinType.Output)
 		return <VariableDescription pin={pin} />;
@@ -58,10 +63,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 			<BooleanVariable
 				pin={pin}
 				value={cachedDefaultValue}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 	if (
@@ -72,10 +74,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 			<EnumVariable
 				pin={pin}
 				value={cachedDefaultValue}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 
@@ -88,10 +87,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 			<BitVariable
 				pin={pin}
 				value={cachedDefaultValue}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 	}
@@ -107,10 +103,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				pin={pin}
 				value={cachedDefaultValue}
 				appId={appId}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 	}
@@ -127,10 +120,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				value={cachedDefaultValue}
 				appId={appId}
 				currentLayerId={currentLayerId}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 	}
@@ -144,10 +134,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				pin={pin}
 				value={cachedDefaultValue}
 				appId={appId}
-				setValue={async (value) => {
-					setCachedDefaultValue(value);
-					await saveDefaultValue(value);
-				}}
+				setValue={updateDefaultValue}
 			/>
 		);
 	}

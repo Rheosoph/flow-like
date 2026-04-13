@@ -35,7 +35,8 @@ pub async fn list_tables(
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
 
     let credentials = state.master_credentials().await?;
-    let connection = credentials.to_db(&app_id).await?.execute().await?;
+    let builder = credentials.to_db(&app_id).await?;
+    let connection = builder.execute().await?;
     let tables = connection.table_names().execute().await?;
 
     Ok(Json(tables))

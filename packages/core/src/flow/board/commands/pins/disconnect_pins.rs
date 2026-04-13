@@ -42,30 +42,7 @@ impl Command for DisconnectPinsCommand {
             &self.from_pin,
             &self.to_node,
             &self.to_pin,
-        )?;
-
-        let from_node = board
-            .nodes
-            .get(&self.from_node)
-            .ok_or(flow_like_types::anyhow!(
-                "From Node: {} not found",
-                self.from_node
-            ))?
-            .clone();
-
-        let to_node = board
-            .nodes
-            .get(&self.to_node)
-            .ok_or(flow_like_types::anyhow!(
-                "To Node: {} not found",
-                self.to_node
-            ))?
-            .clone();
-
-        board.nodes.insert(from_node.id.clone(), from_node);
-        board.nodes.insert(to_node.id.clone(), to_node);
-
-        Ok(())
+        )
     }
 
     async fn undo(
@@ -79,23 +56,6 @@ impl Command for DisconnectPinsCommand {
             &self.from_pin,
             &self.to_node,
             &self.to_pin,
-        )?;
-
-        let from_node = board
-            .nodes
-            .get(&self.from_node)
-            .ok_or(flow_like_types::anyhow!("Node not found"))?
-            .clone();
-
-        let to_node = board
-            .nodes
-            .get(&self.to_node)
-            .ok_or(flow_like_types::anyhow!("Node not found"))?
-            .clone();
-
-        board.nodes.insert(from_node.id.clone(), from_node);
-        board.nodes.insert(to_node.id.clone(), to_node);
-
-        Ok(())
+        )
     }
 }

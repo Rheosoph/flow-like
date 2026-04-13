@@ -30,6 +30,7 @@ impl NodeLogic for SwitchOnBitNode {
         );
 
         node.add_icon("/flow/icons/bit.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",

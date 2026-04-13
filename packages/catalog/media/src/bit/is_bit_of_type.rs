@@ -32,6 +32,7 @@ impl NodeLogic for IsBitOfTypeNode {
             "Bit",
         );
         node.add_icon("/flow/icons/bit.svg");
+        node.set_version(1);
 
         // Input Pins
         node.add_input_pin(

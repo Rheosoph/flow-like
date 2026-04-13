@@ -3,11 +3,14 @@ use crate::{
     models::{ModelMeta, local_utils::ensure_local_weights},
     state::FlowLikeState,
 };
-use flow_like_model_provider::llm::{ModelLogic, llamacpp::LlamaCppModel};
+use flow_like_model_provider::{
+    llm::{ModelLogic, llamacpp::LlamaCppModel},
+    provider::ModelProvider,
+};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::{
-    Result, reqwest,
-    tokio::{self, task::JoinHandle, time::sleep},
+    Result, Value as JsonValue, reqwest,
+    tokio::{self, time::sleep},
 };
 use portpicker::pick_unused_port;
 use std::{
@@ -23,9 +26,60 @@ use super::ExecutionSettings;
 pub struct LocalModel {
     bit: Bit,
     handle: Arc<Mutex<Option<Child>>>,
-    thread_handle: JoinHandle<()>,
     llm_model: Arc<LlamaCppModel>,
     pub port: u16,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LlamaServerTemplateOverride {
+    chat_template: Option<String>,
+    chat_template_file: Option<String>,
+}
+
+fn provider_param_as_string(provider: &ModelProvider, key: &str) -> Option<String> {
+    provider
+        .params
+        .as_ref()
+        .and_then(|params| params.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+fn resolve_template_override(provider: &ModelProvider) -> LlamaServerTemplateOverride {
+    LlamaServerTemplateOverride {
+        chat_template: provider_param_as_string(provider, "chat_template"),
+        chat_template_file: provider_param_as_string(provider, "chat_template_file"),
+    }
+}
+
+fn find_string_field(value: &JsonValue, key: &str) -> Option<String> {
+    match value {
+        JsonValue::Object(map) => {
+            if let Some(string_value) = map.get(key).and_then(|value| value.as_str()) {
+                return Some(string_value.to_owned());
+            }
+
+            map.values().find_map(|child| find_string_field(child, key))
+        }
+        JsonValue::Array(values) => values
+            .iter()
+            .find_map(|child| find_string_field(child, key)),
+        _ => None,
+    }
+}
+
+fn template_supports_tool_use(template: &str) -> bool {
+    let template = template.to_lowercase();
+    ["tool", "tool_call", "tool_calls", "function", "functions"]
+        .iter()
+        .any(|marker| template.contains(marker))
+}
+
+fn props_support_tool_use(props: &JsonValue) -> bool {
+    find_string_field(props, "chat_template_tool_use")
+        .is_some_and(|template| !template.trim().is_empty())
+        || find_string_field(props, "chat_template")
+            .is_some_and(|template| template_supports_tool_use(&template))
 }
 
 impl ModelMeta for LocalModel {
@@ -59,6 +113,129 @@ impl LocalModel {
         }
     }
 
+    async fn wait_until_ready(port: u16) -> Result<()> {
+        let mut remaining_retries = 60;
+
+        while remaining_retries > 0 {
+            match Self::check_health(&port.to_string()).await {
+                Ok(true) => return Ok(()),
+                Ok(false) | Err(_) => {
+                    sleep(Duration::from_secs(1)).await;
+                    remaining_retries -= 1;
+                }
+            }
+        }
+
+        Err(flow_like_types::anyhow!(
+            "Failed to start local model server"
+        ))
+    }
+
+    async fn server_supports_tool_use(port: u16) -> Result<bool> {
+        let response = reqwest::get(format!("http://localhost:{port}/props")).await?;
+        if !response.status().is_success() {
+            return Ok(false);
+        }
+
+        let props = response.json::<JsonValue>().await?;
+        Ok(props_support_tool_use(&props))
+    }
+
+    async fn spawn_server(
+        child_handle: &Arc<Mutex<Option<Child>>>,
+        gguf_path: &PathBuf,
+        context_length: u32,
+        port: u16,
+        gpu_layer: u32,
+        projection_path: Option<&str>,
+        template_override: &LlamaServerTemplateOverride,
+    ) -> Result<()> {
+        let program = PathBuf::from("llama-server");
+        let mut sidecar = crate::utils::execute::sidecar(&program, None).await?;
+        let mut args = vec![
+            "-m".to_string(),
+            gguf_path.to_string_lossy().into_owned(),
+            "-c".to_string(),
+            context_length.to_string(),
+            "--host".to_string(),
+            "localhost".to_string(),
+            "--port".to_string(),
+            port.to_string(),
+            "--no-webui".to_string(),
+            "--jinja".to_string(),
+            "-ngl".to_string(),
+            gpu_layer.to_string(),
+        ];
+
+        if let Some(projection_path) = projection_path {
+            args.push("--mmproj".to_string());
+            args.push(projection_path.to_string());
+        }
+
+        if let Some(chat_template_file) = template_override.chat_template_file.as_ref() {
+            args.push("--chat-template-file".to_string());
+            args.push(chat_template_file.clone());
+        } else if let Some(chat_template) = template_override.chat_template.as_ref() {
+            args.push("--chat-template".to_string());
+            args.push(chat_template.clone());
+        }
+
+        println!("Starting LLM Server with args: {:?}", args);
+
+        let mut child = sidecar
+            .args(&args)
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                flow_like_types::anyhow!("Failed to spawn local model sidecar: {}", error)
+            })?;
+
+        let stdout = child.stdout.take().expect("Failed to capture stdout");
+        let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+        *child_handle.lock().unwrap() = Some(child);
+
+        let stdout_reader = BufReader::new(stdout);
+        let stderr_reader = BufReader::new(stderr);
+
+        let mut stdout_lines = stdout_reader.lines();
+        let mut stderr_lines = stderr_reader.lines();
+
+        tokio::spawn(async move {
+            stdout_lines.by_ref().flatten().for_each(|line| {
+                println!("[LLM] stdout: {}", line);
+            });
+        });
+
+        tokio::spawn(async move {
+            stderr_lines.by_ref().flatten().for_each(|line| {
+                eprintln!("[LLM ERROR] stderr: {}", line);
+            });
+        });
+
+        Ok(())
+    }
+
+    fn stop_server(child_handle: &Arc<Mutex<Option<Child>>>) {
+        if let Ok(mut guard) = child_handle.lock()
+            && let Some(mut child) = guard.take()
+        {
+            if let Err(error) = child.kill() {
+                eprintln!(
+                    "Failed to kill local model process during restart: {}",
+                    error
+                );
+            }
+            if let Err(error) = child.wait() {
+                eprintln!(
+                    "Failed to wait for local model process during restart: {}",
+                    error
+                );
+            }
+        }
+    }
+
     pub async fn new(
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
@@ -76,132 +253,77 @@ impl LocalModel {
             .ok_or(flow_like_types::anyhow!("No model path"))?;
         let pack = bit.pack(app_state.clone()).await?;
         ensure_local_weights(&pack, &app_state, bit.id.as_str(), "local model").await?;
+        let provider = bit
+            .try_to_provider()
+            .ok_or_else(|| flow_like_types::anyhow!("Failed to get provider from bit"))?;
+        let template_override = resolve_template_override(&provider);
 
         let projection_bit = pack
             .bits
             .iter()
             .find(|b| b.bit_type == BitTypes::Projection);
         let projection_bit = projection_bit.cloned();
+        let projection_path = projection_bit
+            .as_ref()
+            .and_then(|bit| bit.to_path(&bit_store))
+            .map(|path| path.to_string_lossy().into_owned());
 
         let child_handle = Arc::new(Mutex::new(None));
-        let child_handle_clone: Arc<Mutex<Option<Child>>> = Arc::clone(&child_handle);
         let port = pick_unused_port().unwrap();
 
-        let async_bit = bit.clone();
-        let execution_settings = execution_settings.clone();
-        let thread_handle = tokio::task::spawn(async move {
-            let program = PathBuf::from("llama-server");
-            let mut sidecar = match crate::utils::execute::sidecar(&program, None).await {
-                Ok(sidecar) => sidecar,
-                Err(e) => {
-                    println!("Error: {}", e);
-                    return;
-                }
+        let mut context_length = bit.try_to_context_length().unwrap_or(512);
+        context_length = std::cmp::min(context_length, execution_settings.max_context_size as u32);
+        let gpu_layer = if execution_settings.gpu_mode { 45 } else { 0 };
+
+        println!("Execution settings: {:?}", execution_settings);
+
+        Self::spawn_server(
+            &child_handle,
+            &gguf_path,
+            context_length,
+            port,
+            gpu_layer,
+            projection_path.as_deref(),
+            &template_override,
+        )
+        .await?;
+        Self::wait_until_ready(port).await?;
+
+        let should_probe_tool_template = projection_path.is_none()
+            && template_override.chat_template.is_none()
+            && template_override.chat_template_file.is_none();
+
+        if should_probe_tool_template
+            && !Self::server_supports_tool_use(port).await.unwrap_or(false)
+        {
+            println!(
+                "Local model template does not advertise tool support. Restarting llama-server with chatml fallback."
+            );
+            Self::stop_server(&child_handle);
+
+            let fallback_template = LlamaServerTemplateOverride {
+                chat_template: Some("chatml".to_string()),
+                chat_template_file: None,
             };
-            let mut context_length = async_bit.try_to_context_length().unwrap_or(512);
-            context_length =
-                std::cmp::min(context_length, execution_settings.max_context_size as u32);
-            let binding = context_length.to_string();
-            let port = port.to_string();
-            println!("Execution settings: {:?}", execution_settings);
-            let mut args = vec![
-                "-m",
-                &gguf_path.to_str().unwrap(),
-                "-c",
-                &binding,
-                "--host",
-                "localhost",
-                "--port",
-                &port,
-                "--no-webui",
-                "--jinja",
-            ];
 
-            let mut gpu_layer = 0;
-
-            if execution_settings.gpu_mode {
-                gpu_layer = 45;
-            }
-
-            let gpu_layer = gpu_layer.to_string();
-            args.push("-ngl");
-            args.push(&gpu_layer);
-
-            println!("Starting LLM Server with args: {:?}", args);
-
-            let mut projection_path = String::new();
-            if let Some(projection_bit) = projection_bit {
-                let path = projection_bit.to_path(&bit_store);
-                if let Some(path) = path {
-                    projection_path = path.to_str().unwrap().to_string();
-                }
-            }
-
-            if !projection_path.is_empty() {
-                args.push("--mmproj");
-                args.push(&projection_path);
-            }
-
-            let mut child = sidecar
-                .args(args)
-                .stderr(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .expect("Failed to spawn sidecar");
-
-            let stdout = child.stdout.take().expect("Failed to capture stdout");
-            let stderr = child.stderr.take().expect("Failed to capture stderr");
-
-            *child_handle_clone.lock().unwrap() = Some(child);
-
-            let stdout_reader = BufReader::new(stdout);
-            let stderr_reader = BufReader::new(stderr);
-
-            let mut stdout_lines = stdout_reader.lines();
-            let mut stderr_lines = stderr_reader.lines();
-
-            tokio::spawn(async move {
-                stdout_lines.by_ref().flatten().for_each(|line| {
-                    println!("[LLM] stdout: {}", line);
-                });
-            });
-
-            tokio::spawn(async move {
-                stderr_lines.by_ref().flatten().for_each(|line| {
-                    eprintln!("[LLM ERROR] stderr: {}", line);
-                });
-            });
-        });
-
-        let mut loaded = false;
-        let mut max_retries = 60;
-
-        while !loaded && max_retries > 0 {
-            match LocalModel::check_health(&port.to_string()).await {
-                Ok(_) => loaded = true,
-                Err(_e) => {
-                    sleep(Duration::from_secs(1)).await;
-                    max_retries -= 1;
-                }
-            }
+            Self::spawn_server(
+                &child_handle,
+                &gguf_path,
+                context_length,
+                port,
+                gpu_layer,
+                projection_path.as_deref(),
+                &fallback_template,
+            )
+            .await?;
+            Self::wait_until_ready(port).await?;
         }
-
-        if !loaded {
-            return Err(flow_like_types::anyhow!(
-                "Failed to start local model server"
-            ));
-        }
-
-        let provider = bit
-            .try_to_provider()
-            .ok_or_else(|| flow_like_types::anyhow!("Failed to get provider from bit"))?;
 
         let llm_model = LlamaCppModel::new(&provider, port).await?;
 
         Ok(LocalModel {
             bit: bit.clone(),
             handle: child_handle,
-            thread_handle,
             llm_model: Arc::new(llm_model),
             port,
         })
@@ -223,7 +345,5 @@ impl Drop for LocalModel {
         } else {
             println!("Failed to lock local model handle for dropping.");
         }
-
-        self.thread_handle.abort();
     }
 }

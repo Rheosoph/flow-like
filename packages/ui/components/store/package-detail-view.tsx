@@ -22,6 +22,7 @@ import {
 	ShoppingCart,
 	Star,
 	Tag,
+	Target,
 	Trash2,
 	User,
 } from "lucide-react";
@@ -482,8 +483,21 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	const manifest = pkg.manifest;
 	const latestVersion =
 		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
+	const isInstallable =
+		pkg.status === PackageStatus.Active ||
+		pkg.status === PackageStatus.Deprecated;
 	const isInstalled = !!installedVersion;
-	const hasUpdate = isInstalled && installedVersion !== latestVersion;
+	const hasUpdate =
+		isInstallable && isInstalled && installedVersion !== latestVersion;
+	const unavailableActionLabel =
+		pkg.status === PackageStatus.PendingReview
+			? "Pending review"
+			: pkg.status === PackageStatus.Disabled
+				? "Disabled"
+				: "Unavailable";
+	const unavailableActionMessage = isInstalled
+		? `Updates are unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`
+		: `Install is unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`;
 	const canManagePublication =
 		currentUserPermission != null &&
 		isMaintainer(currentUserPermission) &&
@@ -533,6 +547,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										{pkg.status === PackageStatus.Disabled && (
 											<Badge variant="destructive" className="gap-1">
 												Disabled
+											</Badge>
+										)}
+										{pkg.status === PackageStatus.PendingReview && (
+											<Badge variant="secondary" className="gap-1">
+												Pending Review
 											</Badge>
 										)}
 										{pkg.verified && (
@@ -596,6 +615,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												Update to v{latestVersion}
 											</Button>
 										)}
+										{!hasUpdate &&
+											!isInstallable &&
+											installedVersion !== latestVersion && (
+												<p className="max-w-xs text-sm text-muted-foreground">
+													{unavailableActionMessage}
+												</p>
+											)}
 										<Button
 											variant="destructive"
 											onClick={onUninstall}
@@ -638,6 +664,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</>
 										)}
 									</Button>
+									) : !isInstallable ? (
+										<>
+											<Button disabled>{unavailableActionLabel}</Button>
+											<p className="max-w-xs text-sm text-muted-foreground">
+												{unavailableActionMessage}
+											</p>
+										</>
 								) : (
 									<Button
 										onClick={() => onInstall(undefined)}
@@ -703,19 +736,40 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 						{/* Use Case */}
 						{meta?.useCase && (
-							<Card className="border-primary/20 bg-primary/5">
-								<CardContent className="pt-6">
-									<p className="text-sm font-medium text-primary mb-1">
-										Use Case
-									</p>
-									<div className="text-sm text-muted-foreground">
-										<TextEditor
-											initialContent={meta.useCase}
-											isMarkdown
-											minimal
-										/>
-									</div>
-								</CardContent>
+							<Card className="overflow-hidden border-border/60 bg-linear-to-br from-background via-background to-primary/5">
+								<div className="grid gap-0 md:grid-cols-[240px_minmax(0,1fr)]">
+									<CardHeader className="border-b bg-muted/30 md:border-b-0 md:border-r">
+										<div className="flex items-start gap-3">
+											<div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+												<Target className="h-5 w-5" />
+											</div>
+											<div className="space-y-2">
+												<Badge variant="secondary" className="w-fit">
+													Use Case
+												</Badge>
+												<div className="space-y-1">
+													<CardTitle className="text-base">
+														Where this package fits best
+													</CardTitle>
+													<CardDescription>
+														The primary workflow or scenario this package is designed for.
+													</CardDescription>
+												</div>
+											</div>
+										</div>
+									</CardHeader>
+									<CardContent className="flex items-center pt-6">
+										<div className="w-full rounded-2xl border bg-background/80 px-4 py-3 shadow-sm">
+											<div className="text-sm leading-relaxed text-foreground/90">
+												<TextEditor
+													initialContent={meta.useCase}
+													isMarkdown
+													minimal
+												/>
+											</div>
+										</div>
+									</CardContent>
+								</div>
 							</Card>
 						)}
 

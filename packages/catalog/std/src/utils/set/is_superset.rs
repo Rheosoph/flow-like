@@ -55,9 +55,9 @@ impl NodeLogic for SetIsSuperSetNode {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let _ = node.match_type("set_in_1", board.clone(), Some(ValueType::HashSet), None);
-        let _ = node.match_type("set_in_2", board.clone(), Some(ValueType::HashSet), None);
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        let _ = node.match_type("set_in_1", board, Some(ValueType::HashSet), None);
+        let _ = node.match_type("set_in_2", board, Some(ValueType::HashSet), None);
         node.harmonize_type(vec!["set_in_1", "set_in_2"], true);
     }
 }

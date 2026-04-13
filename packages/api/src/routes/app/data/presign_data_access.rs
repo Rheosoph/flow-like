@@ -5,7 +5,7 @@
 
 use crate::{
     credentials::{CredentialsAccess, RuntimeCredentials},
-    ensure_permission,
+    ensure_in_project, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -163,13 +163,13 @@ pub async fn presign_user_data_access(
         ));
     }
 
-    let (required_permission, credentials_access) = if access_mode == "write" {
-        (RolePermissions::WriteFiles, CredentialsAccess::EditUser)
+    let credentials_access = if access_mode == "write" {
+        CredentialsAccess::EditUser
     } else {
-        (RolePermissions::ReadFiles, CredentialsAccess::ReadUser)
+        CredentialsAccess::ReadUser
     };
 
-    let permission = ensure_permission!(user, &app_id, &state, required_permission);
+    let permission = ensure_in_project!(user, &app_id, &state);
     let sub = permission.sub()?;
 
     let scoped_credentials = RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access)

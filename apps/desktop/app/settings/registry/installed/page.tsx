@@ -14,6 +14,7 @@ import {
 	TooltipTrigger,
 	useBackend,
 } from "@tm9657/flow-like-ui";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -58,7 +59,7 @@ function PackageItem({
 	hasUpdate?: boolean;
 	latestVersion?: string;
 	onUninstall: (id: string) => void;
-	onUpdate: (id: string) => void;
+	onUpdate: (id: string, version?: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
 	compileStatus?:
@@ -139,7 +140,7 @@ function PackageItem({
 									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									onClick={(e) => {
 										e.stopPropagation();
-										onUpdate(pkg.id);
+										onUpdate(pkg.id, latestVersion);
 									}}
 									disabled={isLoading}
 								>
@@ -414,22 +415,22 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to uninstall package:", err);
-			toast.error(`Failed to uninstall: ${err}`);
+			toast.error(`Failed to uninstall: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
 	};
 
-	const handleUpdate = async (packageId: string) => {
+	const handleUpdate = async (packageId: string, version?: string) => {
 		if (!backend?.registryState) return;
 		setLoadingPackage(packageId);
 		try {
-			await backend.registryState.updatePackage(packageId);
+			await backend.registryState.updatePackage(packageId, version);
 			toast.success("Package updated");
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to update package:", err);
-			toast.error(`Failed to update: ${err}`);
+			toast.error(`Failed to update: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -444,7 +445,7 @@ export default function InstalledPackagesPage() {
 			await fetchInstalled();
 		} catch (err) {
 			console.error("Failed to install package:", err);
-			toast.error(`Failed to install: ${err}`);
+			toast.error(`Failed to install: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -511,10 +512,10 @@ export default function InstalledPackagesPage() {
 					fetchInstalled();
 				}}
 				onInstallError={(error) =>
-					toast.error(`Failed to install: ${error.message}`)
+					toast.error(`Failed to install: ${getErrorMessage(error)}`)
 				}
 				onUninstallError={(error) =>
-					toast.error(`Failed to uninstall: ${error.message}`)
+					toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)
 				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);

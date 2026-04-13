@@ -115,7 +115,7 @@ impl NodeLogic for GetElement {
         Ok(())
     }
 
-    async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         let read_only_node = node.clone();

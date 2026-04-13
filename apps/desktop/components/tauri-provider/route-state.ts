@@ -54,11 +54,23 @@ export class RouteState implements IAppRouteState {
 		if (force) {
 			try {
 				const remoteData = await syncRemote();
-				const queryKey = [this.getRoutes.name || "backendFn", appId];
+				const queryKey = [this.getRoutes.name || "backendFn", appId, true];
 				this.backend.queryClient.setQueryData(queryKey, remoteData);
 				return remoteData;
 			} catch (error) {
+				if (local.length === 0) throw error;
 				console.warn("[RouteSync] Forced route fetch failed, falling back to local routes:", error);
+				return local;
+			}
+		}
+
+		if (local.length === 0) {
+			try {
+				const remoteData = await syncRemote();
+				const queryKey = [this.getRoutes.name || "backendFn", appId];
+				this.backend.queryClient.setQueryData(queryKey, remoteData);
+				return remoteData;
+			} catch {
 				return local;
 			}
 		}
