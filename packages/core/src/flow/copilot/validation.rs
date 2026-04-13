@@ -306,11 +306,24 @@ pub async fn validate_emit_commands(
                 to_pin,
                 ..
             } => {
+                let from_entity = entities.get(from_node.as_str());
+                let to_entity = entities.get(to_node.as_str());
+
+                let canonical_from_pin = from_entity
+                    .and_then(|e| find_pin(e, from_pin))
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| from_pin.clone());
+
+                let canonical_to_pin = to_entity
+                    .and_then(|e| find_pin(e, to_pin))
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| to_pin.clone());
+
                 let key = (
                     from_node.clone(),
-                    from_pin.clone(),
+                    canonical_from_pin,
                     to_node.clone(),
-                    to_pin.clone(),
+                    canonical_to_pin,
                 );
                 if !proposed_connections.contains(&key) {
                     warnings.push(issue(
