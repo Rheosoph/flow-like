@@ -95,6 +95,15 @@ pub mod flow_like {
             pub fn write_file(_flow_path: &str, _data: &[u8]) -> bool {
                 false
             }
+            pub fn write_file_start(_flow_path: &str, _total_size: u64) -> Option<String> {
+                None
+            }
+            pub fn write_file_chunk(_write_id: &str, _data: &[u8]) -> bool {
+                false
+            }
+            pub fn write_file_finish(_write_id: &str) -> bool {
+                false
+            }
             pub fn list_files(_flow_path: &str) -> Option<String> {
                 None
             }

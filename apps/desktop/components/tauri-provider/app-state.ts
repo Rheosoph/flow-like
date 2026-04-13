@@ -167,6 +167,13 @@ export class AppState implements IAppState {
 			});
 		}
 
+		if (!online) {
+			await appsDB.visibility.put({
+				visibility: IAppVisibility.Offline,
+				appId: app.id,
+			});
+		}
+
 		await this.backend.boardState.upsertBoard(
 			app.id,
 			createId(),

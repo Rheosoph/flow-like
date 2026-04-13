@@ -48,6 +48,9 @@ interface storage {
     user-dir: func(node-scoped: bool) -> option<string>;
     read-file: func(flow-path: string) -> option<list<u8>>;
     write-file: func(flow-path: string, data: list<u8>) -> bool;
+    write-file-start: func(flow-path: string, total-size: u64) -> option<string>;
+    write-file-chunk: func(write-id: string, data: list<u8>) -> bool;
+    write-file-finish: func(write-id: string) -> bool;
     list-files: func(flow-path: string) -> option<string>;
 }
 

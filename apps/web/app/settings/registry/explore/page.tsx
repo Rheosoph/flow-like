@@ -39,6 +39,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { getErrorMessage } from "../error-utils";
 import { fetcher } from "../../../../lib/api";
 
 type SortOption =
@@ -85,10 +86,10 @@ function PackageCard({
 				<CardHeader className="pb-2">
 					<div className="flex items-start justify-between gap-2">
 						<div className="flex items-center gap-2 min-w-0">
-							<Package className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
+							<Package className="h-5 w-5 shrink-0 text-muted-foreground" />
 							<CardTitle className="text-base truncate">{pkg.name}</CardTitle>
 						</div>
-						<div className="flex items-center gap-1 flex-shrink-0">
+						<div className="flex items-center gap-1 shrink-0">
 							{pkg.verified && (
 								<Badge variant="secondary" className="gap-1">
 									<Shield className="h-3 w-3" />
@@ -267,7 +268,7 @@ export default function ExplorePackagesPage() {
 			await fetchPackages();
 		} catch (err) {
 			console.error("Failed to install package:", err);
-			toast.error(`Failed to install: ${err}`);
+			toast.error(`Failed to install: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -283,7 +284,7 @@ export default function ExplorePackagesPage() {
 			await fetchPackages();
 		} catch (err) {
 			console.error("Failed to uninstall package:", err);
-			toast.error(`Failed to uninstall: ${err}`);
+			toast.error(`Failed to uninstall: ${getErrorMessage(err)}`);
 		} finally {
 			setLoadingPackage(null);
 		}
@@ -318,8 +319,12 @@ export default function ExplorePackagesPage() {
 					toast.success("Package uninstalled");
 					fetchInstalled();
 				}}
-				onInstallError={(error) => toast.error(`Failed to install: ${error.message}`)}
-				onUninstallError={(error) => toast.error(`Failed to uninstall: ${error.message}`)}
+				onInstallError={(error) =>
+					toast.error(`Failed to install: ${getErrorMessage(error)}`)
+				}
+				onUninstallError={(error) =>
+					toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)
+				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
 					fetchInstalled();
@@ -370,7 +375,7 @@ export default function ExplorePackagesPage() {
 					value={sortBy}
 					onValueChange={(v) => setSortBy(v as SortOption)}
 				>
-					<SelectTrigger className="w-[180px]">
+					<SelectTrigger className="w-45">
 						<ArrowUpDown className="h-4 w-4 mr-2" />
 						<SelectValue />
 					</SelectTrigger>

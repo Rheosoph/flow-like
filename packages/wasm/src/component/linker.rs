@@ -667,6 +667,132 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 
     storage
         .func_wrap_async(
+            "write-file-start",
+            |mut store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (flow_path_json, total_size): (String, u64)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        tracing::warn!(
+                            "[wasm write-file-start] rejected: no STORAGE_WRITE capability"
+                        );
+                        return Ok((None::<String>,));
+                    }
+                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::warn!(
+                                "[wasm write-file-start] rejected: bad JSON {e}: {flow_path_json}"
+                            );
+                            return Ok((None,));
+                        }
+                    };
+                    let result = crate::host_functions::storage::start_write(
+                        &mut store.data_mut().host_state.pending_writes.write(),
+                        flow_path,
+                        total_size,
+                    );
+                    Ok((result,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    storage
+        .func_wrap_async(
+            "write-file-chunk",
+            |mut store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (write_id, data): (String, Vec<u8>)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return Ok((false,));
+                    }
+                    let ok = crate::host_functions::storage::append_chunk(
+                        &mut store.data_mut().host_state.pending_writes.write(),
+                        &write_id,
+                        &data,
+                    );
+                    Ok((ok,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    storage
+        .func_wrap_async(
+            "write-file-finish",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (write_id,): (String,)| {
+                Box::new(async move {
+                    if !store
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return Ok((false,));
+                    }
+                    let pw = store
+                        .data()
+                        .host_state
+                        .pending_writes
+                        .write()
+                        .remove(&write_id);
+                    let Some(pw) = pw else {
+                        tracing::warn!(
+                            "[wasm write-file-finish] rejected: unknown write_id {write_id}"
+                        );
+                        return Ok((false,));
+                    };
+                    let ctx = match &store.data().host_state.storage_context {
+                        Some(c) => c,
+                        None => {
+                            tracing::warn!(
+                                "[wasm write-file-finish] rejected: no storage context"
+                            );
+                            return Ok((false,));
+                        }
+                    };
+                    let obj_store = match ctx.resolve_store(&pw.flow_path.store_ref) {
+                        Some(s) => s,
+                        None => {
+                            tracing::warn!(
+                                "[wasm write-file-finish] rejected: unresolved store_ref={}",
+                                pw.flow_path.store_ref
+                            );
+                            return Ok((false,));
+                        }
+                    };
+                    let path = flow_like_storage::object_store::path::Path::from(
+                        pw.flow_path.path.clone(),
+                    );
+                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
+                        flow_like_types::Bytes::from(pw.buffer),
+                    );
+                    match obj_store.as_generic().put(&path, payload).await {
+                        Ok(_) => Ok((true,)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "[wasm write-file-finish] put failed for path={} store_ref={}: {e}",
+                                pw.flow_path.path,
+                                pw.flow_path.store_ref
+                            );
+                            Ok((false,))
+                        }
+                    }
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    storage
+        .func_wrap_async(
             "list-files",
             |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
              (flow_path_json,): (String,)| {
@@ -1701,13 +1827,7 @@ fn storage_dir_json(host: &HostState, node_scoped: bool, dir_type: &str) -> Opti
     Some(json.to_string())
 }
 
-/// Minimal FlowPath for component model — same shape as core module for JSON compatibility.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StorageFlowPath {
-    path: String,
-    store_ref: String,
-    cache_store_ref: Option<String>,
-}
+use crate::host_functions::storage::StorageFlowPath;
 
 fn register_websocket(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
     let mut ws = linker

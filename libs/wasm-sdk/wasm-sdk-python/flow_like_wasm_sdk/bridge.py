@@ -108,6 +108,15 @@ def _make_bridge():
         def storage_write(self, flow_path: dict, data: bytes) -> bool:
             return wit_storage.write_file(json.dumps(flow_path), data)
 
+        def storage_write_start(self, flow_path: dict, total_size: int) -> str | None:
+            return wit_storage.write_file_start(json.dumps(flow_path), total_size)
+
+        def storage_write_chunk(self, write_id: str, data: bytes) -> bool:
+            return wit_storage.write_file_chunk(write_id, data)
+
+        def storage_write_finish(self, write_id: str) -> bool:
+            return wit_storage.write_file_finish(write_id)
+
         def storage_list(self, flow_path: dict) -> list[dict] | None:
             result = wit_storage.list_files(json.dumps(flow_path))
             return json.loads(result) if result is not None else None

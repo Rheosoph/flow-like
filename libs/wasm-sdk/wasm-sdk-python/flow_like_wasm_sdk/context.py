@@ -11,6 +11,8 @@ if TYPE_CHECKING:
         Bit, CachedEmbeddingModel, ChatMessage, FlowImage,
     )
 
+_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB, safely under host 10 MiB limit
+
 _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 _B64_INV = {c: i for i, c in enumerate(_B64)}
 
@@ -191,7 +193,18 @@ class Context:
         return self._host.storage_read(flow_path)
 
     def storage_write(self, flow_path: dict, data: bytes) -> bool:
-        return self._host.storage_write(flow_path, data)
+        if len(data) <= _CHUNK_SIZE:
+            return self._host.storage_write(flow_path, data)
+        return self._storage_write_chunked(flow_path, data)
+
+    def _storage_write_chunked(self, flow_path: dict, data: bytes) -> bool:
+        write_id = self._host.storage_write_start(flow_path, len(data))
+        if write_id is None:
+            return False
+        for i in range(0, len(data), _CHUNK_SIZE):
+            if not self._host.storage_write_chunk(write_id, data[i:i + _CHUNK_SIZE]):
+                return False
+        return self._host.storage_write_finish(write_id)
 
     def storage_list(self, flow_path: dict) -> list[dict] | None:
         return self._host.storage_list(flow_path)

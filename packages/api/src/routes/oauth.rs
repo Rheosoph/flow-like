@@ -356,6 +356,96 @@ fn build_oauth_client() -> Result<flow_like_types::reqwest::Client, OAuthProxyEr
         .map_err(|e| OAuthProxyError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+/// Refresh an OAuth access token server-side using a refresh_token.
+///
+/// Used by the sink trigger path to refresh expired tokens before dispatching
+/// scheduled executions. Reuses the same provider config and HTTP logic as
+/// the `POST /oauth/refresh/{provider_id}` endpoint.
+pub async fn refresh_oauth_token_for_provider(
+    secrets: &SecretStore,
+    provider_id: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, String> {
+    let configs = get_oauth_configs(secrets).await;
+    let provider_config = configs
+        .get(provider_id)
+        .ok_or_else(|| format!("OAuth provider '{}' not found in config", provider_id))?;
+    let client_id = provider_config
+        .client_id
+        .as_deref()
+        .ok_or_else(|| format!("Client ID not configured for provider '{}'", provider_id))?;
+
+    let client = flow_like_types::reqwest::Client::builder()
+        .timeout(OAUTH_REQUEST_TIMEOUT)
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let response = match provider_config.auth_method {
+        AuthMethod::BasicJson => {
+            let client_secret = provider_config
+                .client_secret
+                .as_deref()
+                .ok_or_else(|| {
+                    format!("Client secret not configured for provider '{}'", provider_id)
+                })?;
+            let credentials = flow_like_types::base64::Engine::encode(
+                &flow_like_types::base64::engine::general_purpose::STANDARD,
+                format!("{}:{}", client_id, client_secret),
+            );
+
+            client
+                .post(&provider_config.token_url)
+                .header("Authorization", format!("Basic {}", credentials))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .json(&serde_json::json!({
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Refresh request failed: {}", e))?
+        }
+        AuthMethod::FormPost => {
+            let mut params = vec![
+                ("grant_type", "refresh_token".to_string()),
+                ("refresh_token", refresh_token.to_string()),
+                ("client_id", client_id.to_string()),
+            ];
+            if let Some(client_secret) = provider_config.client_secret.as_ref() {
+                params.push(("client_secret", client_secret.clone()));
+            }
+
+            client
+                .post(&provider_config.token_url)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Accept", "application/json")
+                .form(&params)
+                .send()
+                .await
+                .map_err(|e| format!("Refresh request failed: {}", e))?
+        }
+    };
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read refresh response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Token refresh failed ({}): {}",
+            status,
+            provider_error_message(&response_text)
+        ));
+    }
+
+    parse_token_response(&response_text)
+        .map_err(|e| format!("Failed to parse refresh response: {}", e.message))
+}
+
 #[utoipa::path(
     post,
     path = "/oauth/token/{provider_id}",

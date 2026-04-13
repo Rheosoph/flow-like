@@ -921,6 +921,144 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             WasmError::Initialization(format!("Failed to register storage.write_request: {}", e))
         })?;
 
+    // write_start_request — begin chunked write, returns write_id via result buffer
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_start_request",
+            |caller: Caller<'_, StoreData>,
+             (path_ptr, path_len, total_size): (u32, u32, u64)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return 0u64;
+                    }
+                    let flow_path_json = match read_string_from_caller(&caller, path_ptr, path_len)
+                    {
+                        Ok(s) => s,
+                        Err(_) => return 0,
+                    };
+                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
+                        Ok(p) => p,
+                        Err(_) => return 0,
+                    };
+                    let write_id = crate::host_functions::storage::start_write(
+                        &mut caller.data().host_state.pending_writes.write(),
+                        flow_path,
+                        total_size,
+                    );
+                    match write_id {
+                        Some(id) => {
+                            let (ptr, len) = caller.data().host_state.store_result(id.as_bytes());
+                            pack_ptr_len(ptr, len)
+                        }
+                        None => 0,
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_start_request: {}",
+                e
+            ))
+        })?;
+
+    // write_chunk_request — append chunk to an in-flight write
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_chunk_request",
+            |caller: Caller<'_, StoreData>,
+             (id_ptr, id_len, data_ptr, data_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return -1i32;
+                    }
+                    let write_id = match read_string_from_caller(&caller, id_ptr, id_len) {
+                        Ok(s) => s,
+                        Err(_) => return -1,
+                    };
+                    let data = match read_bytes_from_caller(&caller, data_ptr, data_len) {
+                        Ok(d) => d,
+                        Err(_) => return -1,
+                    };
+                    let ok = crate::host_functions::storage::append_chunk(
+                        &mut caller.data().host_state.pending_writes.write(),
+                        &write_id,
+                        &data,
+                    );
+                    if ok { 0 } else { -1 }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_chunk_request: {}",
+                e
+            ))
+        })?;
+
+    // write_finish_request — flush accumulated chunks to object store
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "write_finish_request",
+            |caller: Caller<'_, StoreData>, (id_ptr, id_len): (u32, u32)| {
+                Box::new(async move {
+                    if !caller
+                        .data()
+                        .host_state
+                        .has_capability(WasmCapabilities::STORAGE_WRITE)
+                    {
+                        return -1i32;
+                    }
+                    let write_id = match read_string_from_caller(&caller, id_ptr, id_len) {
+                        Ok(s) => s,
+                        Err(_) => return -1,
+                    };
+                    let pw = caller
+                        .data()
+                        .host_state
+                        .pending_writes
+                        .write()
+                        .remove(&write_id);
+                    let Some(pw) = pw else {
+                        return -1;
+                    };
+                    let ctx = match &caller.data().host_state.storage_context {
+                        Some(c) => c,
+                        None => return -1,
+                    };
+                    let store = match ctx.resolve_store(&pw.flow_path.store_ref) {
+                        Some(s) => s,
+                        None => return -1,
+                    };
+                    let path = Path::from(pw.flow_path.path);
+                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
+                        flow_like_types::Bytes::from(pw.buffer),
+                    );
+                    match store.as_generic().put(&path, payload).await {
+                        Ok(_) => 0,
+                        Err(_) => -1,
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!(
+                "Failed to register storage.write_finish_request: {}",
+                e
+            ))
+        })?;
+
     // list_request — lists paths under a FlowPath prefix (async)
     linker
         .func_wrap_async(
@@ -1029,13 +1167,7 @@ fn storage_dir_impl(
     }
 }
 
-/// Minimal FlowPath for WASM — same shape as the real FlowPath for JSON compatibility.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StorageFlowPath {
-    path: String,
-    store_ref: String,
-    cache_store_ref: Option<String>,
-}
+use crate::host_functions::storage::StorageFlowPath;
 
 fn register_http_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
     linker

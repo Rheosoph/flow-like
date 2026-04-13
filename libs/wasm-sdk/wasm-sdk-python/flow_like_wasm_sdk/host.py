@@ -63,6 +63,15 @@ class HostBridge:
     def storage_write(self, flow_path: dict, data: bytes) -> bool:
         return False
 
+    def storage_write_start(self, flow_path: dict, total_size: int) -> str | None:
+        return None
+
+    def storage_write_chunk(self, write_id: str, data: bytes) -> bool:
+        return False
+
+    def storage_write_finish(self, write_id: str) -> bool:
+        return False
+
     def storage_list(self, flow_path: dict) -> list[dict] | None:
         return None
 
@@ -180,6 +189,27 @@ class MockHostBridge(HostBridge):
 
     def storage_write(self, flow_path: dict, data: bytes) -> bool:
         self.storage[flow_path.get("path", "")] = data
+        return True
+
+    def storage_write_start(self, flow_path: dict, total_size: int) -> str | None:
+        import uuid
+        write_id = str(uuid.uuid4())
+        if not hasattr(self, "_pending_writes"):
+            self._pending_writes: dict[str, tuple[dict, bytearray]] = {}
+        self._pending_writes[write_id] = (flow_path, bytearray())
+        return write_id
+
+    def storage_write_chunk(self, write_id: str, data: bytes) -> bool:
+        if not hasattr(self, "_pending_writes") or write_id not in self._pending_writes:
+            return False
+        self._pending_writes[write_id][1].extend(data)
+        return True
+
+    def storage_write_finish(self, write_id: str) -> bool:
+        if not hasattr(self, "_pending_writes") or write_id not in self._pending_writes:
+            return False
+        flow_path, buf = self._pending_writes.pop(write_id)
+        self.storage[flow_path.get("path", "")] = bytes(buf)
         return True
 
     def storage_list(self, flow_path: dict) -> list[dict] | None:

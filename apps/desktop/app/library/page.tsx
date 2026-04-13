@@ -5,6 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
 	Button,
+	type IApp,
+	IAppVisibility,
 	LibraryPage,
 	Tooltip,
 	TooltipContent,
@@ -13,6 +15,7 @@ import {
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
 import { ImportIcon } from "lucide-react";
+import { appsDB } from "./../../lib/apps-db";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -83,7 +86,11 @@ export default function DesktopLibraryPage() {
 			description: "Please wait.",
 		});
 		try {
-			await invoke("import_app_from_file", { path });
+			const app = await invoke<IApp>("import_app_from_file", { path });
+			await appsDB.visibility.put({
+				visibility: app.visibility ?? IAppVisibility.Offline,
+				appId: app.id,
+			});
 			toast.success("App imported successfully!", { id: toastId });
 		} catch (err) {
 			console.error(err);

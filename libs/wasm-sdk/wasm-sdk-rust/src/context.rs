@@ -279,8 +279,25 @@ impl Context {
     }
 
     pub fn storage_write_typed(&self, flow_path: &FlowPath, data: &[u8]) -> bool {
+        if data.len() <= crate::CHUNK_SIZE {
+            let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
+            return crate::host::storage_write(&json, data);
+        }
+        self.storage_write_chunked(flow_path, data)
+    }
+
+    fn storage_write_chunked(&self, flow_path: &FlowPath, data: &[u8]) -> bool {
         let json = serde_json::to_string(flow_path).ok().unwrap_or_default();
-        crate::host::storage_write(&json, data)
+        let write_id = match crate::host::storage_write_start(&json, data.len() as u64) {
+            Some(id) => id,
+            None => return false,
+        };
+        for chunk in data.chunks(crate::CHUNK_SIZE) {
+            if !crate::host::storage_write_chunk(&write_id, chunk) {
+                return false;
+            }
+        }
+        crate::host::storage_write_finish(&write_id)
     }
 
     pub fn storage_list_typed(&self, flow_path: &FlowPath) -> Option<Vec<FlowPath>> {

@@ -81,6 +81,117 @@ fn merge_payloads(
     }
 }
 
+/// Refresh any expired OAuth tokens in the provided map.
+///
+/// For each provider whose access_token has expired but has a refresh_token,
+/// calls the provider's token endpoint. On success, updates the map entry with
+/// the new token data and persists the updated encrypted blob back to the
+/// EventSink row.
+async fn maybe_refresh_oauth_tokens(
+    state: &AppState,
+    sink_id: &str,
+    mut tokens: std::collections::HashMap<String, serde_json::Value>,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut any_refreshed = false;
+
+    let provider_ids: Vec<String> = tokens.keys().cloned().collect();
+    for provider_id in provider_ids {
+        let value = match tokens.get(&provider_id) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Check if the token is expired (same 60-second buffer as OAuthToken::is_expired)
+        let expires_at = value
+            .get("expires_at")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if expires_at == 0 || expires_at > now + 60 {
+            continue;
+        }
+
+        let refresh_token = match value.get("refresh_token").and_then(|v| v.as_str()) {
+            Some(rt) if !rt.is_empty() => rt.to_string(),
+            _ => {
+                tracing::warn!(
+                    provider = %provider_id,
+                    sink = %sink_id,
+                    "OAuth token expired but no refresh_token available"
+                );
+                continue;
+            }
+        };
+
+        match crate::routes::oauth::refresh_oauth_token_for_provider(
+            &state.secrets,
+            &provider_id,
+            &refresh_token,
+        )
+        .await
+        {
+            Ok(response) => {
+                let new_expires_at = response
+                    .expires_in
+                    .map(|ei| now + ei as u64);
+
+                let new_value = serde_json::json!({
+                    "access_token": response.access_token,
+                    "refresh_token": response.refresh_token.as_deref()
+                        .unwrap_or(&refresh_token),
+                    "expires_at": new_expires_at,
+                    "token_type": response.token_type.as_deref().unwrap_or("Bearer"),
+                });
+
+                tokens.insert(provider_id.clone(), new_value);
+                any_refreshed = true;
+
+                tracing::info!(
+                    provider = %provider_id,
+                    sink = %sink_id,
+                    "Refreshed expired OAuth token for scheduled execution"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    provider = %provider_id,
+                    sink = %sink_id,
+                    error = %err,
+                    "Failed to refresh OAuth token, proceeding with expired token"
+                );
+            }
+        }
+    }
+
+    if any_refreshed {
+        if let Ok(json_str) = serde_json::to_string(&tokens) {
+            use crate::routes::app::events::db::encrypt_token;
+            let encrypted = encrypt_token(&json_str, &state.encryption_key);
+
+            let update = event_sink::ActiveModel {
+                id: Set(sink_id.to_string()),
+                oauth_tokens_encrypted: Set(Some(encrypted)),
+                updated_at: Set(chrono::Utc::now().naive_utc()),
+                ..Default::default()
+            };
+
+            if let Err(err) = update.update(&state.db).await {
+                tracing::error!(
+                    sink = %sink_id,
+                    error = %err,
+                    "Failed to persist refreshed OAuth tokens to EventSink"
+                );
+            }
+        }
+    }
+
+    tokens
+}
+
 /// Input for programmatic event triggering
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TriggerEventInput {
@@ -188,6 +299,12 @@ pub async fn trigger_event(
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    // Refresh any expired OAuth tokens before dispatch (writes back to DB on success)
+    let oauth_tokens = match oauth_tokens {
+        Some(tokens) => Some(maybe_refresh_oauth_tokens(state, &sink.id, tokens).await),
+        None => None,
+    };
+
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request
@@ -204,7 +321,7 @@ pub async fn trigger_event(
         jwt: executor_jwt,
         callback_url,
         token,        // PAT from sink (if configured)
-        oauth_tokens, // OAuth tokens from sink (if configured)
+        oauth_tokens, // OAuth tokens from sink (refreshed if needed)
         stream_state: false,
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
@@ -440,6 +557,12 @@ pub async fn trigger_http(
         .as_ref()
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    // Refresh any expired OAuth tokens before dispatch (writes back to DB on success)
+    let oauth_tokens = match oauth_tokens {
+        Some(tokens) => Some(maybe_refresh_oauth_tokens(&state, &sink.id, tokens).await),
+        None => None,
+    };
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
 
@@ -783,6 +906,12 @@ pub async fn trigger_telegram(
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
 
+    // Refresh any expired OAuth tokens before dispatch (writes back to DB on success)
+    let oauth_tokens = match oauth_tokens {
+        Some(tokens) => Some(maybe_refresh_oauth_tokens(&state, &sink.id, tokens).await),
+        None => None,
+    };
+
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
@@ -1094,6 +1223,12 @@ pub async fn trigger_discord(
         .as_ref()
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key))
         .and_then(|json| serde_json::from_str(&json).ok());
+
+    // Refresh any expired OAuth tokens before dispatch (writes back to DB on success)
+    let oauth_tokens = match oauth_tokens {
+        Some(tokens) => Some(maybe_refresh_oauth_tokens(&state, &sink.id, tokens).await),
+        None => None,
+    };
 
     let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
 
