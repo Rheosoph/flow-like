@@ -30,7 +30,7 @@ image = "0.25.6"
 num_cpus = "1.17.0"
 strsim = "0.11.1"
 tempfile = "3.20.0"
-lz4_flex = "0.11.3"
+lz4_flex = "0.11.6"
 url = {version = "2.5.4", features = ["serde"]}
 json5 = "0.4.1"
 ahash.workspace = true

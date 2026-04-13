@@ -28,7 +28,7 @@ opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
 
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 url = "2"
 
 [profile.release]

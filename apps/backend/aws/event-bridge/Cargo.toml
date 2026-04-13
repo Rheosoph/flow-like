@@ -10,7 +10,7 @@ lambda_runtime = { version = "1.0.2", features = ["anyhow"] }
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 
 [profile.release]
 opt-level = "s"
