@@ -1,6 +1,7 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -30,6 +31,7 @@ impl NodeLogic for SetElementStyle {
             "UI/Elements",
         );
         node.add_icon("/flow/icons/a2ui.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);
 
@@ -44,8 +46,10 @@ impl NodeLogic for SetElementStyle {
             "style",
             "Style",
             "Style properties to set (JSON object)",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<flow_like::a2ui::Style>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
