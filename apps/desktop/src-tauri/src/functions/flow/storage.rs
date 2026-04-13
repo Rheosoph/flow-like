@@ -12,9 +12,20 @@ use flow_like_types::{Value, create_id, json};
 use futures::{StreamExt, TryStreamExt};
 use tauri::AppHandle;
 
-use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
+use crate::{
+    functions::TauriFunctionError,
+    state::{TauriFlowLikeState, TauriRegistryState},
+};
 
-async fn current_user_sub(_app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
+async fn current_user_sub(app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
+    if let Ok(state) = TauriRegistryState::construct(app_handle).await {
+        let guard = state.lock().await;
+        if let Some(token) = guard.as_ref().and_then(|c| c.auth_token().cloned()) {
+            if let Ok(sub) = flow_like::flow::execution::extract_sub_from_jwt(&token) {
+                return Ok(sub);
+            }
+        }
+    }
     Ok("local".to_string())
 }
 
