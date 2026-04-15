@@ -1,5 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
-import { CopyIcon } from "lucide-react";
+import { CopyIcon, Import } from "lucide-react";
 import type { RefObject } from "react";
 import { toast } from "sonner";
 import { InnerLayerNodeType } from "../components/flow/layer-inner-node";
@@ -10,6 +10,10 @@ import {
 	upsertCommentCommand,
 	upsertLayerCommand,
 } from "./command/generic-command";
+import { detectFormat } from "./importer/detect";
+import { translateDify } from "./importer/dify-translator";
+import { translateN8n } from "./importer/n8n-translator";
+import type { DifyWorkflow, N8nWorkflow } from "./importer/types";
 import { toastSuccess } from "./messages";
 import type { IGenericCommand, IValueType, IVariable } from "./schema";
 import {
@@ -975,6 +979,7 @@ export async function handlePaste(
 	boardId: string,
 	executeCommand: (command: IGenericCommand, append?: boolean) => Promise<any>,
 	currentLayer?: string,
+	catalog?: INode[],
 ) {
 	const activeElement = document.activeElement;
 	if (
@@ -987,18 +992,32 @@ export async function handlePaste(
 
 	event.preventDefault();
 	event.stopPropagation();
+
+	// 1. Try flow-like clipboard format (copy/paste within editor)
 	try {
 		const clipboard = await navigator.clipboard.readText();
 		const data = JSON.parse(clipboard);
 		if (!data) return;
 		if (!data.nodes && !data.comments) return;
 		const oldPosition = data.cursorPosition;
-		const nodes: any[] = data.nodes.map((node: ISerializedNode) =>
+		const rawNodes = Array.isArray(data.nodes)
+			? data.nodes
+			: Object.values(data.nodes ?? {});
+		const nodes: any[] = rawNodes.map((node: ISerializedNode) =>
 			deserializeNode(node),
 		);
-		const comments: any[] = data.comments;
-		const layers: ILayer[] = data.layers ?? [];
-		const variables: IVariable[] = data.variables ?? [];
+		const rawComments = Array.isArray(data.comments)
+			? data.comments
+			: Object.values(data.comments ?? {});
+		const comments: any[] = rawComments;
+		const rawLayers = Array.isArray(data.layers)
+			? data.layers
+			: Object.values(data.layers ?? {});
+		const layers: ILayer[] = rawLayers;
+		const rawVariables = Array.isArray(data.variables)
+			? data.variables
+			: Object.values(data.variables ?? {});
+		const variables: IVariable[] = rawVariables;
 		const refs: Record<string, string> = data.refs ?? {};
 
 		const command = copyPasteCommand({
@@ -1018,6 +1037,52 @@ export async function handlePaste(
 		return;
 	} catch (error) {}
 
+	// 2. Try n8n / Dify workflow paste
+	try {
+		const clipboard = await navigator.clipboard.readText();
+		const detection = detectFormat(clipboard);
+		if (detection.format !== "unknown" && detection.parsed) {
+			const result = detection.format === "n8n"
+				? translateN8n(detection.parsed as N8nWorkflow, catalog)
+				: translateDify(detection.parsed as DifyWorkflow);
+
+			const boardNodes = Object.values(result.board.nodes);
+			const boardComments = Object.values(result.board.comments);
+			const boardLayers = Object.values(result.board.layers);
+			const boardVariables = Object.values(result.board.variables);
+
+			if (boardNodes.length > 0) {
+				const command = copyPasteCommand({
+					original_nodes: boardNodes,
+					original_comments: boardComments,
+					original_layers: boardLayers,
+					original_variables: boardVariables,
+					original_refs: result.board.refs ?? {},
+					new_comments: [],
+					new_nodes: [],
+					new_layers: [],
+					current_layer: currentLayer,
+					old_mouse: [0, 0, 0],
+					offset: [cursorPosition.x, cursorPosition.y, 0],
+				});
+				await executeCommand(command);
+				if (result.status === "partial") {
+					toastSuccess(
+						`Imported ${result.stats.totalNodes} nodes from ${detection.format} (${result.stats.todo} need manual setup)`,
+						<Import className="w-4 h-4" />,
+					);
+				} else {
+					toastSuccess(
+						`Imported ${result.stats.totalNodes} nodes from ${detection.format}`,
+						<Import className="w-4 h-4" />,
+					);
+				}
+				return;
+			}
+		}
+	} catch (error) {}
+
+	// 3. Fallback: paste as text comment
 	try {
 		const clipboard = await navigator.clipboard.readText();
 		const comment: IComment = {

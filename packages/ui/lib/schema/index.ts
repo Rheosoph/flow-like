@@ -29,6 +29,8 @@ export {
 	ICommentType,
 	IExecutionStage,
 	IExecutionMode,
+	type ILayer,
+	ILayerType,
 	ILogLevel,
 	type ISystemTime,
 } from "./flow/board";

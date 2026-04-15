@@ -1282,6 +1282,7 @@ export function FlowBoard({
 				boardId,
 				executeCommand,
 				currentLayer,
+				catalog.data ?? undefined,
 			);
 		},
 		[
@@ -1290,6 +1291,7 @@ export function FlowBoard({
 			currentLayer,
 			version,
 			handleMediaPaste,
+			catalog.data,
 		],
 	);
 

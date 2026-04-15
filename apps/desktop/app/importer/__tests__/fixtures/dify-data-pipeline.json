@@ -1,0 +1,223 @@
+{
+	"version": "0.1.4",
+	"kind": "app",
+	"app": {
+		"name": "Data Processing Pipeline",
+		"mode": "workflow",
+		"description": "Iterates over documents, extracts info, and stores results"
+	},
+	"workflow": {
+		"environment_variables": [
+			{
+				"id": "env-db",
+				"name": "DATABASE_URL",
+				"value_type": "secret",
+				"value": ""
+			}
+		],
+		"graph": {
+			"nodes": [
+				{
+					"id": "start-1",
+					"type": "custom",
+					"position": { "x": 80, "y": 300 },
+					"data": {
+						"type": "start",
+						"title": "Start",
+						"variables": [
+							{
+								"variable": "documents",
+								"label": "Document URLs",
+								"type": "text"
+							}
+						]
+					}
+				},
+				{
+					"id": "iter-1",
+					"type": "custom",
+					"position": { "x": 328, "y": 300 },
+					"data": {
+						"type": "iteration",
+						"title": "Process Each Document",
+						"iterator_selector": ["start-1", "documents"]
+					}
+				},
+				{
+					"id": "extract-1",
+					"type": "custom",
+					"position": { "x": 576, "y": 300 },
+					"data": {
+						"type": "doc-extractor",
+						"title": "Extract Content",
+						"desc": "Extract text content from document"
+					}
+				},
+				{
+					"id": "code-1",
+					"type": "custom",
+					"position": { "x": 824, "y": 300 },
+					"data": {
+						"type": "code",
+						"title": "Transform Data",
+						"code": "def main(inputs):\n    return {'result': inputs['text'].upper()}",
+						"code_language": "python3"
+					}
+				},
+				{
+					"id": "llm-1",
+					"type": "custom",
+					"position": { "x": 1072, "y": 200 },
+					"data": {
+						"type": "llm",
+						"title": "Summarize",
+						"model": {
+							"provider": "anthropic",
+							"name": "claude-sonnet-4-20250514"
+						},
+						"prompt_template": [
+							{
+								"role": "system",
+								"text": "Summarize the following document concisely."
+							},
+							{
+								"role": "user",
+								"text": "{{#code-1.result#}}"
+							}
+						]
+					}
+				},
+				{
+					"id": "http-1",
+					"type": "custom",
+					"position": { "x": 1320, "y": 200 },
+					"data": {
+						"type": "http-request",
+						"title": "Store Results",
+						"url": "https://api.example.com/store",
+						"method": "POST"
+					}
+				},
+				{
+					"id": "agent-1",
+					"type": "custom",
+					"position": { "x": 1072, "y": 400 },
+					"data": {
+						"type": "agent",
+						"title": "Quality Check Agent",
+						"desc": "Agent that checks document quality"
+					}
+				},
+				{
+					"id": "assigner-1",
+					"type": "custom",
+					"position": { "x": 1320, "y": 400 },
+					"data": {
+						"type": "variable-assigner",
+						"title": "Update Counter"
+					}
+				},
+				{
+					"id": "unknown-1",
+					"type": "custom",
+					"position": { "x": 1568, "y": 300 },
+					"data": {
+						"type": "custom-plugin-node",
+						"title": "My Custom Plugin",
+						"desc": "A third-party plugin node with no mapping",
+						"plugin_id": "acme-corp/summarizer-v2"
+					}
+				},
+				{
+					"id": "end-1",
+					"type": "custom",
+					"position": { "x": 1816, "y": 300 },
+					"data": {
+						"type": "end",
+						"title": "End",
+						"outputs": [
+							{
+								"variable": "processed_count",
+								"label": "Processed Count",
+								"value_selector_type": "number"
+							}
+						]
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "e-1",
+					"source": "start-1",
+					"sourceHandle": "source",
+					"target": "iter-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-2",
+					"source": "iter-1",
+					"sourceHandle": "source",
+					"target": "extract-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-3",
+					"source": "extract-1",
+					"sourceHandle": "source",
+					"target": "code-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-4",
+					"source": "code-1",
+					"sourceHandle": "source",
+					"target": "llm-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-5",
+					"source": "code-1",
+					"sourceHandle": "source",
+					"target": "agent-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-6",
+					"source": "llm-1",
+					"sourceHandle": "source",
+					"target": "http-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-7",
+					"source": "agent-1",
+					"sourceHandle": "source",
+					"target": "assigner-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-8",
+					"source": "http-1",
+					"sourceHandle": "source",
+					"target": "unknown-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-9",
+					"source": "assigner-1",
+					"sourceHandle": "source",
+					"target": "unknown-1",
+					"targetHandle": "target"
+				},
+				{
+					"id": "e-10",
+					"source": "unknown-1",
+					"sourceHandle": "source",
+					"target": "end-1",
+					"targetHandle": "target"
+				}
+			],
+			"viewport": { "x": -50, "y": 100, "zoom": 1.2 }
+		}
+	}
+}

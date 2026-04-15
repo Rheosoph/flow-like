@@ -18,6 +18,7 @@ export * from "./schema/index";
 export * from "./command/generic-command";
 export * from "./permission/global-permission";
 export * from "./permission/role-permission";
+export * from "./importer/index";
 export * from "./time/now";
 export * from "./set-query-params";
 export * from "./theme";
