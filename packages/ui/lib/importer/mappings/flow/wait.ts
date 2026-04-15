@@ -4,7 +4,7 @@ const def: FlowNodeDef = {
 	mode: "direct",
 	catalog: "delay",
 	defaults: {
-		time: "$time_ms",
+		time: "$time",
 	},
 };
 export default def;

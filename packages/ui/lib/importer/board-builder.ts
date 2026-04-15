@@ -225,7 +225,6 @@ export function createTodoLayer(opts: {
 	y: number;
 	parentId?: string;
 }): ILayer {
-	const ts = now();
 	return {
 		id: createId(),
 		name: opts.name,

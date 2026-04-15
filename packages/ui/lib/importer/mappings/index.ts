@@ -1,7 +1,23 @@
-// Auto-generated barrel. To add a new mapping, create matching files in n8n/ and flow/
-// then add the import pair below.
-import type { N8nNodeDef, FlowNodeDef, NodeMappingDef } from "./types";
-export type { N8nNodeDef, FlowNodeDef, NodeMappingDef } from "./types";
+// Auto-generated barrel. To add a new built-in mapping, create matching files in n8n/
+// and flow/ then add the import pair below. Use overrides.ts for manual remaps.
+import { N8N_MAPPING_OVERRIDES } from "./overrides";
+import type {
+	FlowNodeDef,
+	N8nManualMappingOverride,
+	N8nManualMappingOverrides,
+	N8nNodeDef,
+	NodeMappingDef,
+	ResolvedN8nMappingDef,
+} from "./types";
+export { N8N_MAPPING_OVERRIDES } from "./overrides";
+export type {
+	N8nNodeDef,
+	FlowNodeDef,
+	NodeMappingDef,
+	N8nManualMappingOverride,
+	N8nManualMappingOverrides,
+	ResolvedN8nMappingDef,
+} from "./types";
 
 // ── N8n imports ──
 import manual_trigger_n8n from "./n8n/manual_trigger";
@@ -99,4 +115,36 @@ export const MAPPING_DEFS: Record<string, NodeMappingDef> = {
 export const N8N_TYPE_INDEX: Record<string, string> = {};
 for (const [name, def] of Object.entries(MAPPING_DEFS)) {
 	N8N_TYPE_INDEX[def.n8n.type] = name;
+}
+
+export function resolveN8nMappingDefs(
+	overrides: N8nManualMappingOverrides = N8N_MAPPING_OVERRIDES,
+): ResolvedN8nMappingDef[] {
+	const resolved = new Map<string, ResolvedN8nMappingDef>();
+
+	for (const [name, def] of Object.entries(MAPPING_DEFS)) {
+		resolved.set(def.n8n.type, {
+			name,
+			source: "built-in",
+			n8n: def.n8n,
+			flow: def.flow,
+		});
+	}
+
+	for (const [type, override] of Object.entries(overrides)) {
+		const base = resolved.get(type);
+		resolved.set(type, {
+			name: override.name ?? base?.name ?? type,
+			source: "override",
+			category: override.category ?? (base ? undefined : "Custom"),
+			n8n: {
+				...(base?.n8n ?? { type }),
+				...(override.n8n ?? {}),
+				type,
+			},
+			flow: override.flow,
+		});
+	}
+
+	return Array.from(resolved.values());
 }

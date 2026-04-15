@@ -72,13 +72,23 @@ const DIFY_NODE_REGISTRY: Record<string, DifyNodeMapping> = {
 			if (data.prompt_template) {
 				const promptData = data.prompt_template;
 				if (Array.isArray(promptData)) {
+					const roleCounts = new Map<string, number>();
 					for (const msg of promptData) {
 						const m = msg as Record<string, unknown>;
 						if (m.text) {
+							const role = String(m.role ?? "user");
+							const count = (roleCounts.get(role) ?? 0) + 1;
+							roleCounts.set(role, count);
+							const promptName =
+								count === 1 ? `prompt_${role}` : `prompt_${role}_${count}`;
 							const pin = createPin({
-								name: `prompt_${m.role ?? "user"}`,
-								friendlyName: `${String(m.role ?? "user")} prompt`,
-								description: `Prompt message (${m.role ?? "user"})`,
+								name: promptName,
+								friendlyName:
+									count === 1 ? `${role} prompt` : `${role} prompt ${count}`,
+								description:
+									count === 1
+										? `Prompt message (${role})`
+										: `Prompt message (${role}, ${count})`,
 								pinType: IPinType.Input,
 								dataType: IVariableType.String,
 								defaultValue: m.text,

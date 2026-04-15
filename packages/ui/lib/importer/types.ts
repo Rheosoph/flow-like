@@ -1,5 +1,7 @@
 import type { IBoard, INode } from "../schema";
 
+import type { N8nManualMappingOverrides } from "./mappings/types";
+
 export type ImportFormat = "n8n" | "dify" | "unknown";
 
 export type TranslationStatus = "pending" | "success" | "partial" | "error";
@@ -35,6 +37,10 @@ export interface TranslationResult {
 		connections: number;
 		variables: number;
 	};
+}
+
+export interface TranslateN8nOptions {
+	mappingOverrides?: N8nManualMappingOverrides;
 }
 
 // ---- n8n Types ----

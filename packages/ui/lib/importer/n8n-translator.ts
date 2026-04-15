@@ -29,11 +29,22 @@ import type {
 	N8nNode,
 	N8nWorkflow,
 	NodeMappingType,
+	TranslateN8nOptions,
 	TranslationDiagnostic,
 	TranslationResult,
 } from "./types";
-import { MAPPING_DEFS } from "./mappings";
-import type { FlowDirectDef, FlowLayerDef, ParameterRule } from "./mappings/types";
+import {
+	MAPPING_DEFS,
+	N8N_MAPPING_OVERRIDES,
+	resolveN8nMappingDefs,
+} from "./mappings";
+import type {
+	FlowDirectDef,
+	FlowLayerDef,
+	N8nManualMappingOverrides,
+	ParameterRule,
+	ResolvedN8nMappingDef,
+} from "./mappings/types";
 
 interface NodeMapping {
 	catalog: string;
@@ -41,6 +52,11 @@ interface NodeMapping {
 	type: NodeMappingType;
 	isEvent?: boolean;
 	skipDefaultExecPins?: boolean;
+	fallbackConfigure?: (
+		node: INode,
+		n8nNode: N8nNode,
+		diag: TranslationDiagnostic[],
+	) => void;
 	/** Catalog-driven: sets defaults on catalog-cloned node (all pins already present) */
 	configure?: (
 		node: INode,
@@ -1028,39 +1044,6 @@ function setupModelBuilderPins(
 	}
 }
 
-function setupAgentPins(
-	node: INode,
-	_n8nNode: N8nNode,
-	_diag: TranslationDiagnostic[],
-): void {
-	const agentIn = createPin({
-		name: "agent",
-		friendlyName: "Agent",
-		description: "The agent to invoke",
-		pinType: IPinType.Input,
-		dataType: IVariableType.Struct,
-	});
-	node.pins[agentIn.id] = agentIn;
-
-	const historyIn = createPin({
-		name: "history",
-		friendlyName: "History",
-		description: "Chat history",
-		pinType: IPinType.Input,
-		dataType: IVariableType.Struct,
-	});
-	node.pins[historyIn.id] = historyIn;
-
-	const responseOut = createPin({
-		name: "response",
-		friendlyName: "Response",
-		description: "Agent response",
-		pinType: IPinType.Output,
-		dataType: IVariableType.Struct,
-	});
-	node.pins[responseOut.id] = responseOut;
-}
-
 // ── Mapping data helpers ────────────────────────────────────
 
 function getNestedValue(obj: unknown, path: string): unknown {
@@ -1195,6 +1178,25 @@ function buildConfigure(
 	};
 }
 
+function buildFallbackConfigure(
+	n8nDef: { parameters?: Record<string, string | ParameterRule> },
+	flowDef: FlowDirectDef | FlowLayerDef,
+): NodeMapping["fallbackConfigure"] {
+	if (flowDef.mode !== "direct") return undefined;
+
+	return (node, n8nNode) => {
+		const params = extractParams(n8nNode, n8nDef.parameters ?? {});
+		if (!flowDef.defaults) return;
+
+		for (const [pin, value] of Object.entries(flowDef.defaults)) {
+			const resolved = resolveDefault(value, params);
+			if (resolved !== undefined) {
+				setPinDefault(node, pin, resolved);
+			}
+		}
+	};
+}
+
 // ── Build NODE_REGISTRY from mapping definitions ────────────
 
 const MAPPING_CATEGORIES: Record<string, string> = {
@@ -1218,106 +1220,7 @@ const MAPPING_CATEGORIES: Record<string, string> = {
 	discord: "Web/Discord",
 };
 
-const NODE_REGISTRY: Record<string, NodeMapping> = {};
-
-for (const [name, def] of Object.entries(MAPPING_DEFS)) {
-	const { n8n, flow } = def;
-	const isLayer = flow.mode === "layer";
-	const primaryCatalog = isLayer
-		? (flow as FlowLayerDef).nodes.find((n) => n.primary)?.catalog ??
-			(flow as FlowLayerDef).nodes[0].catalog
-		: (flow as FlowDirectDef).catalog;
-
-	NODE_REGISTRY[n8n.type] = {
-		catalog: primaryCatalog,
-		category:
-			MAPPING_CATEGORIES[name] ??
-			(name.startsWith("model_") ? "AI/Models" : "General"),
-		type: isLayer ? "composition" : "direct",
-		isEvent: n8n.isEvent,
-		skipDefaultExecPins: flow.skipExecPins,
-		configure: buildConfigure(n8n, flow),
-	};
-}
-
-// ── Special case overrides ──────────────────────────────────
-
-// wait: multiply seconds → milliseconds
-{
-	const entry = NODE_REGISTRY["n8n-nodes-base.wait"];
-	if (entry) {
-		const baseConfigure = entry.configure;
-		entry.configure = (node, n8nNode, diag, board, ci) => {
-			baseConfigure?.(node, n8nNode, diag, board, ci);
-			const amount =
-				typeof n8nNode.parameters.amount === "number"
-					? n8nNode.parameters.amount
-					: 1;
-			setPinDefault(node, "time", amount * 1000);
-		};
-	}
-}
-
-// google_sheets: change catalog based on operation
-{
-	const entry = NODE_REGISTRY["n8n-nodes-base.googleSheets"];
-	if (entry) {
-		const baseConfigure = entry.configure;
-		entry.configure = (node, n8nNode, diag, board, ci) => {
-			const op = n8nNode.parameters.operation;
-			if (op === "append" || op === "appendOrUpdate") {
-				node.name = "data_google_sheets_append_rows";
-			} else if (op === "update") {
-				node.name = "data_google_sheets_write_range";
-			}
-			baseConfigure?.(node, n8nNode, diag, board, ci);
-		};
-	}
-}
-
-// set: add comment based on assignments
-{
-	const entry = NODE_REGISTRY["n8n-nodes-base.set"];
-	if (entry) {
-		const baseConfigure = entry.configure;
-		entry.configure = (node, n8nNode, diag, board, ci) => {
-			baseConfigure?.(node, n8nNode, diag, board, ci);
-			const assignments = n8nNode.parameters.assignments as
-				| { assignments?: Array<{ name: string }> }
-				| undefined;
-			if (assignments?.assignments?.length) {
-				const fieldNames = assignments.assignments
-					.map((a) => a.name)
-					.join(", ");
-				node.comment = `Sets fields: ${fieldNames}. Chain multiple struct_set nodes for each field.`;
-			}
-		};
-	}
-}
-
-// http_request: add comment with method + url
-{
-	const entry = NODE_REGISTRY["n8n-nodes-base.httpRequest"];
-	if (entry) {
-		const baseConfigure = entry.configure;
-		entry.configure = (node, n8nNode, diag, board, ci) => {
-			baseConfigure?.(node, n8nNode, diag, board, ci);
-			const url =
-				typeof n8nNode.parameters.url === "string"
-					? n8nNode.parameters.url
-					: "";
-			const method =
-				typeof n8nNode.parameters.method === "string"
-					? String(n8nNode.parameters.method).toUpperCase()
-					: "GET";
-			if (url) node.comment = `HTTP ${method} ${url}`;
-		};
-	}
-}
-
-// ── Legacy setupPins (used when catalog unavailable) ────────
-
-const LEGACY_SETUP: Record<string, NodeMapping["setupPins"]> = {
+const BUILTIN_LEGACY_SETUP: Record<string, NodeMapping["setupPins"]> = {
 	"n8n-nodes-base.manualTrigger": setupEventPins,
 	"n8n-nodes-base.scheduleTrigger": (node, n8nNode, diag) => {
 		setupEventPins(node, n8nNode, diag);
@@ -1453,23 +1356,152 @@ const LEGACY_SETUP: Record<string, NodeMapping["setupPins"]> = {
 	"n8n-nodes-base.discord": setupDiscordPins,
 };
 
-// Attach model builder setupPins for all model entries
-for (const [name, def] of Object.entries(MAPPING_DEFS)) {
-	if (name.startsWith("model_")) {
-		LEGACY_SETUP[def.n8n.type] = setupModelBuilderPins;
+function getMappingCategory(mapping: ResolvedN8nMappingDef): string {
+	return (
+		mapping.category ??
+		MAPPING_CATEGORIES[mapping.name] ??
+		(mapping.name.startsWith("model_") ? "AI/Models" : "General")
+	);
+}
+
+function getBuiltInMappingTypes(
+	resolvedMappings: ResolvedN8nMappingDef[],
+): Set<string> {
+	return new Set(
+		resolvedMappings
+			.filter((mapping) => mapping.source === "built-in")
+			.map((mapping) => mapping.n8n.type),
+	);
+}
+
+function applyBuiltInSpecialCases(
+	registry: Record<string, NodeMapping>,
+	resolvedMappings: ResolvedN8nMappingDef[],
+): void {
+	const builtInTypes = getBuiltInMappingTypes(resolvedMappings);
+	const applyIfBuiltIn = (
+		type: string,
+		updater: (entry: NodeMapping) => void,
+	) => {
+		if (!builtInTypes.has(type)) return;
+		const entry = registry[type];
+		if (entry) updater(entry);
+	};
+
+	applyIfBuiltIn("n8n-nodes-base.wait", (entry) => {
+		const baseConfigure = entry.configure;
+		entry.configure = (node, n8nNode, diag, board, ci) => {
+			baseConfigure?.(node, n8nNode, diag, board, ci);
+			const amount =
+				typeof n8nNode.parameters.amount === "number"
+					? n8nNode.parameters.amount
+					: 1;
+			setPinDefault(node, "time", amount * 1000);
+		};
+	});
+
+	applyIfBuiltIn("n8n-nodes-base.googleSheets", (entry) => {
+		const baseConfigure = entry.configure;
+		entry.configure = (node, n8nNode, diag, board, ci) => {
+			const op = n8nNode.parameters.operation;
+			if (op === "append" || op === "appendOrUpdate") {
+				node.name = "data_google_sheets_append_rows";
+			} else if (op === "update") {
+				node.name = "data_google_sheets_write_range";
+			}
+			baseConfigure?.(node, n8nNode, diag, board, ci);
+		};
+	});
+
+	applyIfBuiltIn("n8n-nodes-base.set", (entry) => {
+		const baseConfigure = entry.configure;
+		entry.configure = (node, n8nNode, diag, board, ci) => {
+			baseConfigure?.(node, n8nNode, diag, board, ci);
+			const assignments = n8nNode.parameters.assignments as
+				| { assignments?: Array<{ name: string }> }
+				| undefined;
+			if (assignments?.assignments?.length) {
+				const fieldNames = assignments.assignments
+					.map((a) => a.name)
+					.join(", ");
+				node.comment = `Sets fields: ${fieldNames}. Chain multiple struct_set nodes for each field.`;
+			}
+		};
+	});
+
+	applyIfBuiltIn("n8n-nodes-base.httpRequest", (entry) => {
+		const baseConfigure = entry.configure;
+		entry.configure = (node, n8nNode, diag, board, ci) => {
+			baseConfigure?.(node, n8nNode, diag, board, ci);
+			const url =
+				typeof n8nNode.parameters.url === "string"
+					? n8nNode.parameters.url
+					: "";
+			const method =
+				typeof n8nNode.parameters.method === "string"
+					? String(n8nNode.parameters.method).toUpperCase()
+					: "GET";
+			if (url) node.comment = `HTTP ${method} ${url}`;
+		};
+	});
+}
+
+function applyLegacySetup(
+	registry: Record<string, NodeMapping>,
+	resolvedMappings: ResolvedN8nMappingDef[],
+): void {
+	for (const [type, setup] of Object.entries(BUILTIN_LEGACY_SETUP)) {
+		if (registry[type]) {
+			registry[type].setupPins = setup;
+		}
+	}
+
+	for (const mapping of resolvedMappings) {
+		if (!mapping.name.startsWith("model_")) {
+			continue;
+		}
+
+		if (registry[mapping.n8n.type]) {
+			registry[mapping.n8n.type].setupPins = setupModelBuilderPins;
+		}
 	}
 }
 
-// Merge legacy setupPins into the registry
-for (const [type, setup] of Object.entries(LEGACY_SETUP)) {
-	if (NODE_REGISTRY[type]) {
-		NODE_REGISTRY[type].setupPins = setup;
+function createNodeRegistry(
+	mappingOverrides: N8nManualMappingOverrides = N8N_MAPPING_OVERRIDES,
+): Record<string, NodeMapping> {
+	const resolvedMappings = resolveN8nMappingDefs(mappingOverrides);
+	const registry: Record<string, NodeMapping> = {};
+
+	for (const mapping of resolvedMappings) {
+		const { n8n, flow } = mapping;
+		const isLayer = flow.mode === "layer";
+		const primaryCatalog = isLayer
+			? (flow as FlowLayerDef).nodes.find((node) => node.primary)?.catalog ??
+				(flow as FlowLayerDef).nodes[0].catalog
+			: (flow as FlowDirectDef).catalog;
+
+		registry[n8n.type] = {
+			catalog: primaryCatalog,
+			category: getMappingCategory(mapping),
+			type: isLayer ? "composition" : "direct",
+			isEvent: n8n.isEvent,
+			skipDefaultExecPins: flow.skipExecPins,
+			fallbackConfigure: buildFallbackConfigure(n8n, flow),
+			configure: buildConfigure(n8n, flow),
+		};
 	}
+
+	applyBuiltInSpecialCases(registry, resolvedMappings);
+	applyLegacySetup(registry, resolvedMappings);
+
+	return registry;
 }
 
 export function translateN8n(
 	workflow: N8nWorkflow,
 	catalog?: INode[],
+	options: TranslateN8nOptions = {},
 ): TranslationResult {
 	const diagnostics: TranslationDiagnostic[] = [];
 	const board = createEmptyBoard(
@@ -1477,10 +1509,17 @@ export function translateN8n(
 		`Imported from n8n workflow${workflow.id ? ` (${workflow.id})` : ""}`,
 	);
 	const catalogIndex = catalog ? buildCatalogIndex(catalog) : undefined;
+	const nodeRegistry = createNodeRegistry(options.mappingOverrides);
 
 	info(diagnostics, `Starting translation of n8n workflow: ${workflow.name}`);
 	if (catalogIndex) {
 		info(diagnostics, `Using catalog with ${catalogIndex.size} node definitions`);
+	}
+	if (Object.keys(options.mappingOverrides ?? {}).length > 0) {
+		info(
+			diagnostics,
+			`Applied ${Object.keys(options.mappingOverrides ?? {}).length} manual n8n mapping override(s)`,
+		);
 	}
 
 	// Build name→node lookup for connections
@@ -1638,7 +1677,7 @@ export function translateN8n(
 			}
 		}
 
-		const mapping = NODE_REGISTRY[n8nNode.type];
+		const mapping = nodeRegistry[n8nNode.type];
 
 		if (mapping) {
 			let flowNode: INode;
@@ -2073,6 +2112,8 @@ function createNodeFallback(
 	} else {
 		addDefaultParameterPins(flowNode, n8nNode, diagnostics);
 	}
+
+	mapping.fallbackConfigure?.(flowNode, n8nNode, diagnostics);
 
 	return flowNode;
 }

@@ -119,9 +119,7 @@ pub(crate) async fn execute_imported_code(
     }
 
     let final_code = if wrap_main && code.contains("def main(") {
-        format!(
-            "{code}\n\n_r = main(**inputs)\nif isinstance(_r, dict):\n    outputs.update(_r)\n"
-        )
+        wrap_main_call(&code)
     } else {
         code
     };
@@ -176,4 +174,23 @@ pub(crate) async fn execute_imported_code(
     }
 
     Ok(())
+}
+
+#[cfg(any(feature = "execute", test))]
+fn wrap_main_call(code: &str) -> String {
+    format!(
+        "{code}\n\n_r = main(inputs)\nif isinstance(_r, dict):\n    outputs.update(_r)\n"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_main_call;
+
+    #[test]
+    fn wraps_dify_main_with_inputs_dict() {
+        let wrapped = wrap_main_call("def main(inputs):\n    return {}\n");
+        assert!(wrapped.contains("_r = main(inputs)"));
+        assert!(!wrapped.contains("main(**inputs)"));
+    }
 }

@@ -71,3 +71,23 @@ export interface NodeMappingDef {
 	n8n: N8nNodeDef;
 	flow: FlowNodeDef;
 }
+
+export interface N8nManualMappingOverride {
+	name?: string;
+	category?: string;
+	n8n?: Omit<Partial<N8nNodeDef>, "type">;
+	flow: FlowNodeDef;
+}
+
+export type N8nManualMappingOverrides = Record<
+	string,
+	N8nManualMappingOverride
+>;
+
+export interface ResolvedN8nMappingDef {
+	name: string;
+	source: "built-in" | "override";
+	category?: string;
+	n8n: N8nNodeDef;
+	flow: FlowNodeDef;
+}

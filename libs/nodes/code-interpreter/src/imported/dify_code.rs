@@ -18,7 +18,7 @@ impl NodeLogic for DifyCodeNode {
             "dify_code",
             "Dify Code",
             "Execute Python code imported from a Dify workflow.\n\
-             Expects a `def main(**kwargs)` function.\n\
+             Expects a `def main(inputs)` function.\n\
              Input/output pins are auto-generated from the schema.",
             "Code/Dify",
         );
@@ -35,10 +35,10 @@ impl NodeLogic for DifyCodeNode {
         node.add_input_pin(
             "code",
             "Code",
-            "Python source (def main(**kwargs) → dict)",
+            "Python source (def main(inputs) -> dict)",
             VariableType::String,
         )
-        .set_default_value(Some(json!("def main():\n    return {}\n")));
+        .set_default_value(Some(json!("def main(inputs):\n    return {}\n")));
 
         node.add_input_pin(
             "packages",

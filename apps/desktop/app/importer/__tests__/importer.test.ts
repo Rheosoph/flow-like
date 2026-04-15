@@ -12,9 +12,10 @@ import {
 	createPin,
 	createVariable,
 	findPinByName,
-} from "../lib/board-builder";
+} from "@tm9657/flow-like-ui/lib/importer/board-builder";
 import type {
 	DifyWorkflow,
+	N8nManualMappingOverrides,
 	N8nWorkflow,
 	TranslationResult,
 } from "@tm9657/flow-like-ui";
@@ -23,6 +24,12 @@ const FIXTURES = resolve(__dirname, "fixtures");
 
 function loadFixture(name: string): string {
 	return readFileSync(resolve(FIXTURES, name), "utf-8");
+}
+
+function decodePinDefault(pin: IPin): unknown {
+	if (!pin.default_value) return undefined;
+	const decoded = new TextDecoder().decode(new Uint8Array(pin.default_value));
+	return JSON.parse(decoded);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +90,42 @@ describe("detectFormat", () => {
 		const result = detectFormat(JSON.stringify({ foo: "bar", baz: 42 }));
 		expect(result.format).toBe("unknown");
 		expect(result.parsed).toBeNull();
+	});
+
+	it("parses Dify YAML arrays and block scalars", () => {
+		const raw = `kind: app
+app:
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: node-1
+        type: start
+        data:
+          title: Start
+          desc: |
+            first line
+            second line
+      - id: node-2
+        type: end
+        data:
+          title: End
+    edges:
+      - source: node-1
+        target: node-2
+`;
+
+		const result = detectFormat(raw);
+		expect(result.format).toBe("dify");
+		expect(result.parsed).not.toBeNull();
+
+		const parsed = result.parsed as DifyWorkflow;
+		const nodes = parsed.workflow.graph.nodes;
+		expect(Array.isArray(nodes)).toBe(true);
+		expect(nodes).toHaveLength(2);
+		expect(nodes[0]?.id).toBe("node-1");
+		expect(nodes[0]?.data?.desc).toBe("first line\nsecond line");
+		expect(parsed.workflow.graph.edges).toHaveLength(1);
 	});
 
 	it("detects n8n with minimal structure (nodes + connections, no type prefix)", () => {
@@ -460,6 +503,69 @@ describe("translateDify — Data Pipeline", () => {
 		expect(docNode!.name).toBe("markitdown_convert");
 	});
 
+	it("deduplicates prompt pin names for repeated roles", () => {
+		const workflow = {
+			app: {
+				name: "Prompt Role Duplicates",
+				mode: "workflow",
+			},
+			workflow: {
+				graph: {
+					nodes: [
+						{
+							id: "start",
+							data: {
+								title: "Start",
+								variables: [],
+							},
+							type: "start",
+							x: 0,
+							y: 0,
+						},
+						{
+							id: "llm",
+							data: {
+								model: { name: "gpt-4.1", provider: "openai" },
+								prompt_template: [
+									{ role: "user", text: "First" },
+									{ role: "user", text: "Second" },
+								],
+								title: "LLM",
+							},
+							type: "llm",
+							x: 100,
+							y: 0,
+						},
+						{
+							id: "end",
+							data: {
+								outputs: [],
+								title: "End",
+							},
+							type: "end",
+							x: 200,
+							y: 0,
+						},
+					],
+					edges: [
+						{ id: "edge-1", source: "start", target: "llm" },
+						{ id: "edge-2", source: "llm", target: "end" },
+					],
+				},
+			},
+		} as unknown as DifyWorkflow;
+
+		const translation = translateDify(workflow);
+		const llmNode = Object.values(translation.board.nodes).find(
+			(node) => node.friendly_name === "LLM",
+		);
+		expect(llmNode).toBeDefined();
+
+		const pins = Object.values(llmNode!.pins);
+		expect(pins.find((pin) => pin.name === "prompt_user")).toBeDefined();
+		expect(pins.find((pin) => pin.name === "prompt_user_2")).toBeDefined();
+	});
+
 	it("code node maps to dify_code", () => {
 		const nodes = Object.values(result.board.nodes);
 		const codeNode = nodes.find((n) => n.friendly_name === "Transform Data");
@@ -774,6 +880,29 @@ function buildMockCatalog(): INode[] {
 			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
 			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
 		]),
+		// email_smtp_connect
+		makeCatalogNode("email_smtp_connect", [
+			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
+			{ name: "host", friendlyName: "Host", pinType: IPinType.Input, dataType: IVariableType.String, defaultValue: "smtp.example.com" },
+			{ name: "port", friendlyName: "Port", pinType: IPinType.Input, dataType: IVariableType.Integer, defaultValue: 587 },
+			{ name: "username", friendlyName: "Username", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "password", friendlyName: "Password", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "encryption", friendlyName: "Encryption", pinType: IPinType.Input, dataType: IVariableType.String, defaultValue: "StartTls" },
+			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
+			{ name: "connection", friendlyName: "Connection", pinType: IPinType.Output, dataType: IVariableType.Struct },
+		]),
+		// email_smtp_send
+		makeCatalogNode("email_smtp_send", [
+			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
+			{ name: "connection", friendlyName: "Connection", pinType: IPinType.Input, dataType: IVariableType.Struct },
+			{ name: "from", friendlyName: "From", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "to", friendlyName: "To", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "subject", friendlyName: "Subject", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "body_text", friendlyName: "Body (text)", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "body_html", friendlyName: "Body (HTML)", pinType: IPinType.Input, dataType: IVariableType.String },
+			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
+			{ name: "message_id", friendlyName: "Message ID", pinType: IPinType.Output, dataType: IVariableType.String },
+		]),
 		// log_info (for Set node mapping)
 		makeCatalogNode("log_info", [
 			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
@@ -969,9 +1098,142 @@ describe("catalog-driven translation", () => {
 			(p) => p.name === "time" && p.pin_type === IPinType.Input,
 		);
 		expect(timePin).toBeDefined();
-		// default_value should be JSON-encoded 5000 (5s * 1000ms)
-		const decoded = new TextDecoder().decode(new Uint8Array(timePin!.default_value!));
-		expect(JSON.parse(decoded)).toBe(5000);
+		expect(decodePinDefault(timePin!)).toBe(5000);
+	});
+
+	it("lets manual mapping overrides replace a built-in mapping with a layer", () => {
+		const overrides: N8nManualMappingOverrides = {
+			"n8n-nodes-base.wait": {
+				flow: {
+					mode: "layer",
+					skipExecPins: true,
+					nodes: [
+						{ id: "entry", catalog: "control_sequence", primary: true },
+						{
+							id: "log",
+							catalog: "log_info",
+							offset: [300, 0],
+							nameSuffix: "(Mapped)",
+						},
+					],
+					connections: [["entry:exec_out", "log:exec_in"]],
+					defaults: {
+						"log:message": "$time",
+						"log:toast": true,
+					},
+				},
+			},
+		};
+
+		const workflow: N8nWorkflow = {
+			name: "Override wait mapping",
+			nodes: [
+				{
+					id: "wait1",
+					name: "Wait",
+					type: "n8n-nodes-base.wait",
+					position: [100, 100],
+					parameters: { amount: 7 },
+					typeVersion: 1,
+				},
+			],
+			connections: {},
+		};
+
+		const result = translateN8n(workflow, mockCatalog, {
+			mappingOverrides: overrides,
+		});
+		expect(result.status).not.toBe("error");
+		expect(result.stats.composed).toBe(1);
+		expect(result.stats.todo).toBe(0);
+
+		const nodes = Object.values(result.board.nodes);
+		expect(nodes.find((node) => node.name === "delay")).toBeUndefined();
+
+		const primaryNode = nodes.find((node) => node.name === "control_sequence");
+		const logNode = nodes.find((node) => node.name === "log_info");
+		expect(primaryNode).toBeDefined();
+		expect(logNode).toBeDefined();
+		expect(Object.keys(result.board.layers)).toHaveLength(1);
+
+		const messagePin = Object.values(logNode!.pins).find(
+			(pin) => pin.name === "message" && pin.pin_type === IPinType.Input,
+		);
+		expect(messagePin).toBeDefined();
+		expect(decodePinDefault(messagePin!)).toBe(7);
+	});
+
+	it("default Gmail override seeds Gmail SMTP defaults", () => {
+		const workflow: N8nWorkflow = {
+			name: "Gmail override",
+			nodes: [
+				{
+					id: "gmail1",
+					name: "Send Email Alert",
+					type: "n8n-nodes-base.gmail",
+					position: [100, 100],
+					parameters: {
+						sendTo: "support@example.com",
+						subject: "Alert",
+						message: "Attention required",
+					},
+					typeVersion: 1,
+				},
+			],
+			connections: {},
+		};
+
+		const result = translateN8n(workflow, mockCatalog);
+		const smtpConnect = Object.values(result.board.nodes).find(
+			(node) => node.name === "email_smtp_connect",
+		);
+		const smtpSend = Object.values(result.board.nodes).find(
+			(node) => node.name === "email_smtp_send",
+		);
+
+		expect(smtpConnect).toBeDefined();
+		expect(smtpSend).toBeDefined();
+		expect(decodePinDefault(findPinByName(smtpConnect!, "host", IPinType.Input)!)).toBe(
+			"smtp.gmail.com",
+		);
+		expect(decodePinDefault(findPinByName(smtpConnect!, "port", IPinType.Input)!)).toBe(
+			587,
+		);
+		expect(
+			decodePinDefault(findPinByName(smtpConnect!, "encryption", IPinType.Input)!),
+		).toBe("StartTls");
+		expect(decodePinDefault(findPinByName(smtpSend!, "to", IPinType.Input)!)).toBe(
+			"support@example.com",
+		);
+	});
+
+	it("default respondToWebhook override keeps the configured response body in fallback mode", () => {
+		const workflow: N8nWorkflow = {
+			name: "Respond override",
+			nodes: [
+				{
+					id: "respond1",
+					name: "Send Response",
+					type: "n8n-nodes-base.respondToWebhook",
+					position: [100, 100],
+					parameters: {
+						respondWith: "json",
+						responseBody: "={{ $json }}",
+					},
+					typeVersion: 1,
+				},
+			],
+			connections: {},
+		};
+
+		const result = translateN8n(workflow);
+		const responseNode = Object.values(result.board.nodes).find(
+			(node) => node.name === "log_info",
+		);
+		expect(responseNode).toBeDefined();
+		expect(
+			decodePinDefault(findPinByName(responseNode!, "message", IPinType.Input)!),
+		).toBe("={{ $json }}");
 	});
 
 	it("all catalog-placed nodes have unique pin IDs (cloned, not shared)", () => {
@@ -1120,8 +1382,7 @@ describe("catalog-driven translation", () => {
 		const fieldPin = Object.values(getField.pins).find(
 			(p) => p.name === "field" && p.pin_type === IPinType.Input,
 		)!;
-		const decoded = new TextDecoder().decode(new Uint8Array(fieldPin.default_value!));
-		expect(JSON.parse(decoded)).toBe("data");
+		expect(decodePinDefault(fieldPin)).toBe("data");
 	});
 
 	it("composition nodes are grouped into a named layer", () => {
@@ -1191,8 +1452,7 @@ describe("catalog-driven translation", () => {
 			(p) => p.name === "var_ref",
 		);
 		expect(varRefPin).toBeDefined();
-		const decoded = new TextDecoder().decode(new Uint8Array(varRefPin!.default_value!));
-		expect(JSON.parse(decoded)).toBe(credVar!.id);
+		expect(decodePinDefault(varRefPin!)).toBe(credVar!.id);
 	});
 
 	it("AI agent: model builder connects to agent_from_model via ai_languageModel", () => {
@@ -1271,7 +1531,6 @@ describe("catalog-driven translation", () => {
 			(p) => p.name === "model_id" && p.pin_type === IPinType.Input,
 		);
 		expect(modelIdPin).toBeDefined();
-		const decoded = new TextDecoder().decode(new Uint8Array(modelIdPin!.default_value!));
-		expect(JSON.parse(decoded)).toBe("gemini-2.0-flash");
+		expect(decodePinDefault(modelIdPin!)).toBe("gemini-2.0-flash");
 	});
 });

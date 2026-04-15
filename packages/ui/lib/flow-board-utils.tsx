@@ -1066,8 +1066,6 @@ export async function handlePaste(
 					offset: [cursorPosition.x, cursorPosition.y, 0],
 				});
 				await executeCommand(command);
-
-				const warnings = result.diagnostics.filter((d) => d.level === "error" || d.level === "warn");
 				if (result.status === "partial") {
 					toastSuccess(
 						`Imported ${result.stats.totalNodes} nodes from ${detection.format} (${result.stats.todo} need manual setup)`,
