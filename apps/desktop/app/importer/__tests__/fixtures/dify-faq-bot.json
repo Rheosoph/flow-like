@@ -1,0 +1,253 @@
+{
+	"version": "0.1.4",
+	"kind": "app",
+	"app": {
+		"name": "Customer FAQ Bot",
+		"mode": "workflow",
+		"description": "Answers customer questions using knowledge base",
+		"icon": "robot",
+		"icon_background": "#FFEAD5"
+	},
+	"workflow": {
+		"environment_variables": [
+			{
+				"id": "env-1",
+				"name": "OPENAI_API_KEY",
+				"value_type": "secret",
+				"value": "",
+				"description": "OpenAI API key for LLM calls"
+			},
+			{
+				"id": "env-2",
+				"name": "MAX_TOKENS",
+				"value_type": "number",
+				"value": 2048,
+				"description": "Maximum tokens for LLM response"
+			}
+		],
+		"conversation_variables": [
+			{
+				"id": "conv-1",
+				"name": "chat_history",
+				"value_type": "string",
+				"value": ""
+			}
+		],
+		"graph": {
+			"nodes": [
+				{
+					"id": "node-start",
+					"type": "custom",
+					"position": { "x": 80, "y": 282 },
+					"data": {
+						"type": "start",
+						"title": "Start",
+						"variables": [
+							{
+								"variable": "user_query",
+								"label": "User Query",
+								"type": "paragraph",
+								"required": true,
+								"max_length": 2000
+							},
+							{
+								"variable": "language",
+								"label": "Language",
+								"type": "select",
+								"options": ["en", "es", "fr", "de"],
+								"default": "en"
+							}
+						]
+					}
+				},
+				{
+					"id": "node-classify",
+					"type": "custom",
+					"position": { "x": 328, "y": 282 },
+					"data": {
+						"type": "question-classifier",
+						"title": "Classify Intent",
+						"desc": "Classify the user query into categories",
+						"model": {
+							"provider": "openai",
+							"name": "gpt-4o-mini",
+							"mode": "chat"
+						},
+						"classes": [
+							{ "id": "class-1", "name": "billing" },
+							{ "id": "class-2", "name": "technical" },
+							{ "id": "class-3", "name": "general" }
+						]
+					}
+				},
+				{
+					"id": "node-kb",
+					"type": "custom",
+					"position": { "x": 576, "y": 182 },
+					"data": {
+						"type": "knowledge-retrieval",
+						"title": "Search Knowledge Base",
+						"desc": "Retrieve relevant docs from knowledge base",
+						"dataset_ids": ["ds-faq-001", "ds-docs-002"],
+						"retrieval_mode": "semantic",
+						"top_k": 5,
+						"score_threshold": 0.7
+					}
+				},
+				{
+					"id": "node-llm",
+					"type": "custom",
+					"position": { "x": 824, "y": 282 },
+					"data": {
+						"type": "llm",
+						"title": "Generate Answer",
+						"desc": "Generate response using retrieved context",
+						"model": {
+							"provider": "openai",
+							"name": "gpt-4o",
+							"mode": "chat"
+						},
+						"prompt_template": [
+							{
+								"role": "system",
+								"text": "You are a helpful customer support assistant. Use the provided context to answer questions accurately. If you don't know the answer, say so."
+							},
+							{
+								"role": "user",
+								"text": "Context: {{#node-kb.results#}}\n\nQuestion: {{#node-start.user_query#}}\n\nPlease answer in {{#node-start.language#}}."
+							}
+						],
+						"temperature": 0.3,
+						"max_tokens": 2048
+					}
+				},
+				{
+					"id": "node-if",
+					"type": "custom",
+					"position": { "x": 1072, "y": 282 },
+					"data": {
+						"type": "if-else",
+						"title": "Check Response Quality",
+						"desc": "Route based on confidence",
+						"conditions": [
+							{
+								"comparison_operator": "contains",
+								"variable_selector": ["node-llm", "llm_output"],
+								"value": "I don't know"
+							}
+						]
+					}
+				},
+				{
+					"id": "node-template",
+					"type": "custom",
+					"position": { "x": 1320, "y": 182 },
+					"data": {
+						"type": "template-transform",
+						"title": "Format Success Response",
+						"template": "✅ Here's what I found:\n\n{{result}}"
+					}
+				},
+				{
+					"id": "node-http",
+					"type": "custom",
+					"position": { "x": 1320, "y": 382 },
+					"data": {
+						"type": "http-request",
+						"title": "Escalate to Human",
+						"url": "https://api.example.com/escalate",
+						"method": "POST"
+					}
+				},
+				{
+					"id": "node-end",
+					"type": "custom",
+					"position": { "x": 1568, "y": 282 },
+					"data": {
+						"type": "end",
+						"title": "End",
+						"outputs": [
+							{
+								"variable": "answer",
+								"label": "Answer",
+								"value_selector_type": "string"
+							},
+							{
+								"variable": "escalated",
+								"label": "Was Escalated",
+								"value_selector_type": "boolean"
+							}
+						]
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "edge-1",
+					"source": "node-start",
+					"sourceHandle": "source",
+					"target": "node-classify",
+					"targetHandle": "target"
+				},
+				{
+					"id": "edge-2",
+					"source": "node-classify",
+					"sourceHandle": "source",
+					"target": "node-kb",
+					"targetHandle": "target"
+				},
+				{
+					"id": "edge-3",
+					"source": "node-kb",
+					"sourceHandle": "source",
+					"target": "node-llm",
+					"targetHandle": "target"
+				},
+				{
+					"id": "edge-4",
+					"source": "node-llm",
+					"sourceHandle": "source",
+					"target": "node-if",
+					"targetHandle": "target"
+				},
+				{
+					"id": "edge-5",
+					"source": "node-if",
+					"sourceHandle": "false",
+					"target": "node-template",
+					"targetHandle": "target",
+					"data": {
+						"sourceType": "if-else",
+						"targetType": "template-transform"
+					}
+				},
+				{
+					"id": "edge-6",
+					"source": "node-if",
+					"sourceHandle": "true",
+					"target": "node-http",
+					"targetHandle": "target",
+					"data": {
+						"sourceType": "if-else",
+						"targetType": "http-request"
+					}
+				},
+				{
+					"id": "edge-7",
+					"source": "node-template",
+					"sourceHandle": "source",
+					"target": "node-end",
+					"targetHandle": "target"
+				},
+				{
+					"id": "edge-8",
+					"source": "node-http",
+					"sourceHandle": "source",
+					"target": "node-end",
+					"targetHandle": "target"
+				}
+			],
+			"viewport": { "x": 0, "y": 0, "zoom": 0.8 }
+		}
+	}
+}

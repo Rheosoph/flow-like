@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 
+pub mod imported;
 pub mod pyodide;
 
 include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
