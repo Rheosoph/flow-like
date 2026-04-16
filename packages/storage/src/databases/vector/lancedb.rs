@@ -1,4 +1,4 @@
-use arrow_array::{RecordBatch, RecordBatchIterator};
+use arrow_array::RecordBatch;
 use datafusion::prelude::*;
 use flow_like_types::Cacheable;
 use flow_like_types::async_trait;
@@ -27,7 +27,7 @@ use lancedb::{
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
-use crate::arrow_utils::{ValueBatchIterator, value_to_batch_iterator_with_fields};
+use crate::arrow_utils::{ValueBatchReader, value_to_batch_reader_with_fields};
 
 use super::VectorStore;
 
@@ -245,11 +245,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn insert_record_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        let schema = batch.schema();
-        let items = RecordBatchIterator::new(
-            vec![Ok::<RecordBatch, arrow_schema::ArrowError>(batch)].into_iter(),
-            schema,
-        );
+        let items = vec![batch];
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -279,7 +275,7 @@ impl LanceDBVectorStore {
         }
     }
 
-    async fn write_batch_iterator(&self, items: Vec<Value>) -> Result<ValueBatchIterator> {
+    async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
         let fields = if let Some(table) = &self.table {
             let schema = table.schema().await?;
             Some(schema.fields().iter().cloned().collect())
@@ -287,7 +283,7 @@ impl LanceDBVectorStore {
             None
         };
 
-        value_to_batch_iterator_with_fields(items, fields)
+        value_to_batch_reader_with_fields(items, fields)
     }
 }
 
@@ -474,7 +470,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
-        let items = self.write_batch_iterator(items).await?;
+        let items = self.write_batch_reader(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -499,13 +495,13 @@ impl VectorStore for LanceDBVectorStore {
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
             .to_owned()
-            .execute(Box::new(items))
+            .execute(items)
             .await?;
         Ok(())
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
-        let items = self.write_batch_iterator(items).await?;
+        let items = self.write_batch_reader(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);

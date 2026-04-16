@@ -14,6 +14,27 @@ fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
 }
 
+#[cfg(feature = "delta")]
+fn delta_table_provider(
+    table: &flow_like_storage::deltalake::DeltaTable,
+) -> flow_like_types::Result<std::sync::Arc<dyn flow_like_storage::datafusion::datasource::TableProvider>> {
+    use flow_like_storage::deltalake::delta_datafusion::{
+        DeltaScanConfigBuilder, DeltaTableProvider,
+    };
+
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| flow_like_types::anyhow!("Failed to get Delta snapshot: {}", e))?;
+    let scan_config = DeltaScanConfigBuilder::new()
+        .build(snapshot.snapshot())
+        .map_err(|e| flow_like_types::anyhow!("Failed to build Delta scan config: {}", e))?;
+
+    Ok(std::sync::Arc::new(
+        DeltaTableProvider::try_new(snapshot.snapshot().clone(), table.log_store(), scan_config)
+            .map_err(|e| flow_like_types::anyhow!("Failed to create Delta provider: {}", e))?,
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DeltaSchemaField {
     pub name: String,
@@ -162,10 +183,9 @@ impl NodeLogic for RegisterDeltaTableNode {
                 .map_err(|e| flow_like_types::anyhow!("Failed to open Delta table: {}", e))?;
 
             let actual_version = delta_table.version().unwrap_or(0);
+            let table_provider = delta_table_provider(&delta_table)?;
 
-            cached_session
-                .ctx
-                .register_table(&table_name, std::sync::Arc::new(delta_table))?;
+            cached_session.ctx.register_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -340,9 +360,8 @@ impl NodeLogic for DeltaTimeTravelNode {
                 .map_err(|e| flow_like_types::anyhow!("Failed to load Delta table: {}", e))?;
 
             let loaded_version = delta_table.version().unwrap_or(0);
-            cached_session
-                .ctx
-                .register_table(&table_name, std::sync::Arc::new(delta_table))?;
+            let table_provider = delta_table_provider(&delta_table)?;
+            cached_session.ctx.register_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -914,7 +933,7 @@ impl NodeLogic for WriteDeltaTableNode {
         #[cfg(feature = "delta")]
         {
             use flow_like_storage::deltalake::protocol::SaveMode;
-            use flow_like_storage::deltalake::{DeltaOps, DeltaTable, DeltaTableBuilder};
+            use flow_like_storage::deltalake::{DeltaTable, DeltaTableBuilder};
 
             context.deactivate_exec_pin("exec_out").await?;
 
@@ -965,24 +984,23 @@ impl NodeLogic for WriteDeltaTableNode {
                 _ => return Err(flow_like_types::anyhow!("Invalid write mode: {}", mode)),
             };
 
-            let ops = match DeltaTableBuilder::from_url(url.clone())?
+            let table = match DeltaTableBuilder::from_url(url.clone())?
                 .with_storage_backend(object_store.clone(), url.clone())
                 .load()
                 .await
             {
-                Ok(table) => DeltaOps::from(table),
+                Ok(table) => table,
                 Err(_) => {
-                    let table = DeltaTableBuilder::from_url(url.clone())?
+                    DeltaTableBuilder::from_url(url.clone())?
                         .with_storage_backend(object_store.clone(), url)
                         .build()
                         .map_err(|e| {
                             flow_like_types::anyhow!("Failed to create Delta table: {}", e)
-                        })?;
-                    DeltaOps::from(table)
+                        })?
                 }
             };
 
-            let mut write_builder = ops.write(batches).with_save_mode(write_mode);
+            let mut write_builder = table.write(batches).with_save_mode(write_mode);
 
             if !partition_cols.is_empty() {
                 write_builder = write_builder.with_partition_columns(partition_cols);
@@ -1137,9 +1155,7 @@ impl NodeLogic for RegisterIcebergTableNode {
 
             let metadata_location = format!("{}/{}", warehouse_path.path, metadata_file);
 
-            let file_io = FileIO::from_path(&metadata_location)?
-                .build()
-                .map_err(|e| flow_like_types::anyhow!("Failed to build FileIO: {}", e))?;
+            let file_io = FileIO::new_with_fs();
 
             let table_ident = TableIdent::from_strs(vec![&table_name])?;
 
@@ -1289,9 +1305,7 @@ impl NodeLogic for IcebergTableInfoNode {
 
             let metadata_location = format!("{}/{}", warehouse_path.path, metadata_file);
 
-            let file_io = FileIO::from_path(&metadata_location)?
-                .build()
-                .map_err(|e| flow_like_types::anyhow!("Failed to build FileIO: {}", e))?;
+            let file_io = FileIO::new_with_fs();
 
             let table_ident = TableIdent::from_strs(vec!["info_table"])?;
 
@@ -1502,9 +1516,7 @@ impl NodeLogic for IcebergTimeTravelNode {
 
             let metadata_location = format!("{}/{}", warehouse_path.path, metadata_file);
 
-            let file_io = FileIO::from_path(&metadata_location)?
-                .build()
-                .map_err(|e| flow_like_types::anyhow!("Failed to build FileIO: {}", e))?;
+            let file_io = FileIO::new_with_fs();
 
             let table_ident = TableIdent::from_strs(vec![&table_name])?;
 

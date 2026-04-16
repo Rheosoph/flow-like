@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::FieldRef;
-use arrow_array::{RecordBatch, RecordBatchIterator};
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use arrow_schema::{DataType, Field};
 use flow_like_types::{
     Result, Value, anyhow,
@@ -9,12 +9,7 @@ use flow_like_types::{
 };
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 
-pub type ValueBatchIterator = RecordBatchIterator<
-    std::iter::Map<
-        std::array::IntoIter<RecordBatch, 1>,
-        fn(RecordBatch) -> Result<RecordBatch, arrow_schema::ArrowError>,
-    >,
->;
+pub type ValueBatchReader = Box<dyn RecordBatchReader + Send>;
 
 pub fn value_to_record_batch(records: Vec<Value>) -> Result<RecordBatch> {
     value_to_record_batch_with_fields(records, None)
@@ -75,20 +70,22 @@ where
     Err(anyhow!("Unable to determine vector dimension from records"))
 }
 
-pub fn value_to_batch_iterator(records: Vec<Value>) -> Result<ValueBatchIterator> {
-    value_to_batch_iterator_with_fields(records, None)
+pub fn value_to_batch_reader(records: Vec<Value>) -> Result<ValueBatchReader> {
+    value_to_batch_reader_with_fields(records, None)
 }
 
-pub fn value_to_batch_iterator_with_fields(
+pub fn value_to_batch_reader_with_fields(
     records: Vec<Value>,
     fields: Option<Vec<FieldRef>>,
-) -> Result<ValueBatchIterator> {
+) -> Result<ValueBatchReader> {
     let batch = value_to_record_batch_with_fields(records, fields)?;
     let schema = batch.schema();
-    let iterator: ValueBatchIterator =
-        RecordBatchIterator::new([batch].into_iter().map(Ok), schema);
+    let reader: ValueBatchReader = Box::new(RecordBatchIterator::new(
+        [batch].into_iter().map(Ok),
+        schema,
+    ));
 
-    Ok(iterator)
+    Ok(reader)
 }
 
 pub fn record_batch_to_value(record_batch: &RecordBatch) -> Result<Vec<Value>> {

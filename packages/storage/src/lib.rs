@@ -2,6 +2,7 @@ pub mod android_store;
 pub mod arrow_utils;
 pub mod databases;
 pub mod files;
+pub mod lancedb_write_options;
 
 pub use arrow;
 pub use arrow_array;
@@ -9,6 +10,7 @@ pub use arrow_schema;
 pub use blake3;
 pub use datafusion;
 pub use lance;
+pub use lance_file;
 pub use lance_io;
 pub use lancedb;
 pub use num_cpus;

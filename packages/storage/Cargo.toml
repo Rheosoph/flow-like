@@ -6,16 +6,16 @@ edition = "2024"
 [dependencies]
 flow-like-types.workspace = true
 object_store = {version="0.12.4", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"] }
-# Using lancedb branch with lance v3.0.0-beta.1 which includes iOS fp16kernels fix (PR #5747)
 # fp16kernels are not supported on Windows (lance skips compiling the C kernels for MSVC)
-lancedb = { git = "https://github.com/lancedb/lancedb.git", branch = "codex/update-lance-3-0-0-beta-1", features = ["polars", "remote", "aws", "azure", "gcs"]}
-lance-io = { git = "https://github.com/lance-format/lance.git", tag = "v3.0.0-beta.1" }
-lance = { git = "https://github.com/lance-format/lance.git", tag = "v3.0.0-beta.1", default-features = false }
+lancedb = { version = "=0.27.2", features = ["polars", "remote", "aws", "azure", "gcs"] }
+lance-io = { version = "=4.0.0" }
+lance = { version = "=4.0.0", default-features = false }
+lance-file = { version = "=4.0.0" }
 polars = "0.39.2"
 polars-arrow = "0.39.2"
-arrow-array = "57.2"
-arrow-schema = {version="57.2", features = ["serde"] }
-arrow = "57.2"
+arrow-array = "=57.2.0"
+arrow-schema = { version = "=57.2.0", features = ["serde"] }
+arrow = "=57.2.0"
 serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
 blake3 = {workspace=true, features = ["rayon"]}
 futures.workspace = true
@@ -27,25 +27,25 @@ futures-util = "0.3.31"
 urlencoding.workspace = true
 schemars.workspace = true
 base64.workspace = true
-datafusion = { version = "51", default-features = false, features = ["recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"]}
+datafusion = { version = "=52.5.0", default-features = false, features = ["recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"] }
 num_cpus = "1.16"
 percent-encoding.workspace = true
 infer = "0.19.0"
 rig-core.workspace = true
 rmcp.workspace = true
 
-# Data lake formats - Delta Lake support (v0.30 compatible with Arrow 57 + DataFusion 51)
-deltalake = { version = "0.30", optional = true, default-features = false, features = ["datafusion", "rustls"] }
+# Data lake formats - Delta Lake 0.31.x aligns with Arrow 57 and DataFusion 52.
+deltalake = { version = "=0.31.1", optional = true, default-features = false, features = ["datafusion", "rustls"] }
 
 # Federation support for query push-down to remote databases
-datafusion-federation = { version = "0.4", optional = true }
+datafusion-federation = { version = "=0.4.14", optional = true }
 
-# Iceberg support from TM9657 fork (compatible with DataFusion 51)
-iceberg = { git = "https://github.com/TM9657/iceberg-rust.git", branch = "main", optional = true }
-iceberg-datafusion = { git = "https://github.com/TM9657/iceberg-rust.git", branch = "main", optional = true }
+# Iceberg 0.9.x aligns with Arrow 57 and DataFusion 52.
+iceberg = { version = "=0.9.0", optional = true }
+iceberg-datafusion = { version = "=0.9.0", optional = true }
 
 [target.'cfg(all(any(target_os = "macos", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-lancedb = { git = "https://github.com/lancedb/lancedb.git", branch = "codex/update-lance-3-0-0-beta-1", features = ["fp16kernels"]}
+lancedb = { version = "=0.27.2", features = ["fp16kernels"] }
 
 [features]
 tauri = []

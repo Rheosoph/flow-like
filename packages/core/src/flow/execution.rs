@@ -8,7 +8,7 @@ use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
 use context::ExecutionContext;
-use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator};
+use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use flow_like_storage::arrow_schema::{FieldRef, SchemaRef};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -240,10 +240,10 @@ impl LogMeta {
 
         // Try to open and add to existing table first
         if let Ok(table) = db.open_table("runs").execute().await {
-            let iter = RecordBatchIterator::new(
+            let iter: Box<dyn RecordBatchReader + Send> = Box::new(RecordBatchIterator::new(
                 vec![arrow_batch.clone()].into_iter().map(Ok),
                 schema.clone(),
-            );
+            ));
             let mut add = table.add(iter);
             if let Some(opts) = write_options {
                 add = add.write_options(opts.clone());
@@ -260,8 +260,11 @@ impl LogMeta {
         }
 
         // Create table with data (either didn't exist or was dropped due to corruption)
-        let iter = RecordBatchIterator::new(vec![arrow_batch].into_iter().map(Ok), schema.clone());
-        let mut builder = db.create_table("runs", Box::new(iter));
+        let iter: Box<dyn RecordBatchReader + Send> = Box::new(RecordBatchIterator::new(
+            vec![arrow_batch].into_iter().map(Ok),
+            schema.clone(),
+        ));
+        let mut builder = db.create_table("runs", iter);
         if let Some(opts) = write_options {
             builder = builder.write_options(opts.clone());
         }
@@ -503,10 +506,10 @@ impl PreparedFlush {
 
         // On Android, datasets can get into inconsistent states due to SELinux blocking hard_link().
         // Try to open existing table, or create new one with data directly.
-        let iter = RecordBatchIterator::new(
+        let iter: Box<dyn RecordBatchReader + Send> = Box::new(RecordBatchIterator::new(
             vec![self.arrow_batch.clone()].into_iter().map(Ok),
             self.schema.clone(),
-        );
+        ));
 
         match db.open_table(&self.run_id).execute().await {
             Ok(table) => {
@@ -527,7 +530,11 @@ impl PreparedFlush {
                 }
 
                 // Create the table WITH data in one step (avoids create_empty + add issue)
-                let mut builder = db.create_table(&self.run_id, Box::new(iter));
+                let iter: Box<dyn RecordBatchReader + Send> = Box::new(RecordBatchIterator::new(
+                    vec![self.arrow_batch.clone()].into_iter().map(Ok),
+                    self.schema.clone(),
+                ));
+                let mut builder = db.create_table(&self.run_id, iter);
                 if let Some(opts) = &self.write_options {
                     builder = builder.write_options(opts.clone());
                 }

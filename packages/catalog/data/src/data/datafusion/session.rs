@@ -4,6 +4,12 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
+#[cfg(feature = "federation")]
+use flow_like_storage::datafusion::execution::session_state::SessionStateBuilder;
+#[cfg(feature = "federation")]
+use flow_like_storage::datafusion_federation::{
+    FederatedQueryPlanner, default_optimizer_rules,
+};
 use flow_like_storage::num_cpus;
 use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json};
 use serde::{Deserialize, Serialize};
@@ -82,6 +88,23 @@ fn build_session_config(
         .with_parquet_pruning(parquet_pruning)
         .with_parquet_bloom_filter_pruning(parquet_pruning)
         .with_parquet_page_index_pruning(parquet_pruning)
+}
+
+#[cfg(feature = "federation")]
+fn create_session_context(config: SessionConfig) -> SessionContext {
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_optimizer_rules(default_optimizer_rules())
+        .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
+        .with_default_features()
+        .build();
+
+    SessionContext::new_with_state(state)
+}
+
+#[cfg(not(feature = "federation"))]
+fn create_session_context(config: SessionConfig) -> SessionContext {
+    SessionContext::new_with_config(config)
 }
 
 #[crate::register_node]
@@ -240,17 +263,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
                 collect_statistics,
             );
 
-            // Note: Federation support (query push-down to external databases) requires
-            // datafusion-federation 0.4.7+ which needs DataFusion 50+.
-            // When upgrading to DataFusion 50+, enable federation feature and use:
-            // let rules = datafusion_federation::default_optimizer_rules();
-            // let state = SessionStateBuilder::new()
-            //     .with_config(config)
-            //     .with_optimizer_rules(rules)
-            //     .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
-            //     .with_default_features()
-            //     .build();
-            let ctx = SessionContext::new_with_config(config);
+            let ctx = create_session_context(config);
 
             let cached = CachedDataFusionSession { ctx: Arc::new(ctx) };
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
@@ -275,6 +288,17 @@ mod tests {
     use flow_like::flow::pin::PinType;
     use flow_like::flow::variable::VariableType;
     use flow_like_types::json::to_value;
+    #[cfg(feature = "sqlite-federation")]
+    use std::{sync::Arc, time::Duration};
+
+    #[cfg(feature = "sqlite-federation")]
+    use datafusion_table_providers::{
+        sql::{
+            db_connection_pool::{DbConnectionPool, Mode, sqlitepool::SqliteConnectionPoolFactory},
+            sql_provider_datafusion::SqlTable,
+        },
+        sqlite::DynSqliteConnectionPool,
+    };
 
     #[test]
     fn test_datafusion_session_serialization() {
@@ -384,5 +408,71 @@ mod tests {
         assert!(!config.parquet_pruning());
         assert!(!config.parquet_bloom_filter_pruning());
         assert!(!config.parquet_page_index_pruning());
+    }
+
+    #[cfg(feature = "federation")]
+    #[test]
+    fn test_create_session_context_uses_federated_query_planner() {
+        let ctx = create_session_context(SessionConfig::new());
+        let planner = format!("{:?}", ctx.state().query_planner());
+
+        assert!(
+            planner.contains("FederatedQueryPlanner"),
+            "unexpected planner: {planner}"
+        );
+    }
+
+    #[cfg(feature = "sqlite-federation")]
+    #[tokio::test]
+    async fn test_create_session_context_pushes_down_sqlite_queries() {
+        let pool = SqliteConnectionPoolFactory::new(
+            ":memory:",
+            Mode::Memory,
+            Duration::from_millis(5_000),
+        )
+        .build()
+        .await
+        .unwrap();
+
+        let conn = pool.connect().await.unwrap();
+        let conn = conn.as_async().unwrap();
+        conn.execute(
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, region TEXT)",
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO customers (id, name, region) VALUES
+             (1, 'Acme Corp', 'West'),
+             (2, 'TechStart', 'East'),
+             (3, 'Global Inc', 'West')",
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let sqltable_pool: Arc<DynSqliteConnectionPool> = Arc::new(pool);
+        let table = Arc::new(SqlTable::new("sqlite", &sqltable_pool, "customers").await.unwrap());
+        let table_provider = table.create_federated_table_provider().unwrap();
+
+        let ctx = create_session_context(SessionConfig::new());
+        ctx.register_table("customers", Arc::new(table_provider))
+            .unwrap();
+
+        let query =
+            "SELECT name FROM customers WHERE region = 'West' ORDER BY name";
+        let optimized_plan = ctx.sql(query).await.unwrap().into_optimized_plan().unwrap();
+        let optimized_plan_text = format!("{optimized_plan:?}");
+
+        assert!(
+            optimized_plan_text.contains("Federated"),
+            "unexpected optimized plan: {optimized_plan_text}"
+        );
+
+        let batches = ctx.sql(query).await.unwrap().collect().await.unwrap();
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(total_rows, 2);
     }
 }

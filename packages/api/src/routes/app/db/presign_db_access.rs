@@ -62,12 +62,12 @@ pub struct PresignDbAccessResponse {
 /// based on the requested access mode and user's role permissions.
 ///
 /// # Access Modes
-/// - `read`: Read-only access (requires ReadFiles permission)
-/// - `write`: Read-write access (requires WriteFiles permission)
+/// - `read`: Read-only access to the user's own database
+/// - `write`: Read-write access to the user's own database
 ///
 /// # Security
-/// - Credentials are temporary and scoped to the specific app
-/// - Access is restricted based on user permissions
+/// - Only requires project membership (user-scoped data, not project-scoped)
+/// - Credentials are temporary and scoped to the user's database path
 /// - Different storage providers (S3, Azure, GCP, R2) use appropriate presigning mechanisms
 ///
 /// # Example Response (AWS/R2)
