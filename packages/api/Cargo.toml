@@ -17,7 +17,9 @@ pin-project-lite = "0.2.16"
 tower.workspace = true
 flow-like = { workspace = true, features = ["openapi"] }
 flow-like-types.workspace = true
-flow-like-storage.workspace = true
+flow-like-storage = { workspace = true, features = ["graph"] }
+flow-like-catalog-core.workspace = true
+uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
 flow-like-wasm = { workspace = true, features = ["openapi"] }

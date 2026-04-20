@@ -194,9 +194,15 @@ pub async fn delete_sink(
         .await?;
 
     if let Some(sink) = sink {
-        // Delete from external scheduler if it's a cron sink
+        // Delete from external scheduler if it's a cron sink (best-effort)
         if sink.sink_type == sink_types::CRON {
-            delete_external_schedule(state, event_id).await?;
+            if let Err(e) = delete_external_schedule(state, event_id).await {
+                tracing::warn!(
+                    event_id = %event_id,
+                    error = %e,
+                    "Failed to delete external schedule during sink cleanup, proceeding with DB deletion"
+                );
+            }
         }
 
         // Delete from database

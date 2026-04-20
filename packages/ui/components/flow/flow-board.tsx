@@ -117,6 +117,9 @@ import {
 	connectPinsCommand,
 	disconnectPinsCommand,
 	moveNodeCommand,
+	removeCommentCommand,
+	removeLayerCommand,
+	removeNodeCommand,
 	updateNodeCommand,
 	upsertCommentCommand,
 	upsertVariableCommand,
@@ -259,7 +262,13 @@ export function FlowBoard({
 	);
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
-	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
+	const {
+		screenToFlowPosition,
+		getViewport,
+		setViewport,
+		fitView,
+		getNodes,
+	} =
 		useReactFlow();
 
 	const [nodes, setNodes] = useNodesState<any>([]);
@@ -281,6 +290,7 @@ export function FlowBoard({
 		payload?: object;
 		isRemote: boolean;
 	} | null>(null);
+	const deleteSelectionInFlightRef = useRef(false);
 	const [existingRuntimeVars, setExistingRuntimeVars] = useState<
 		Map<string, RuntimeVariableValue>
 	>(new Map());
@@ -1411,6 +1421,119 @@ export function FlowBoard({
 		],
 	);
 
+	const deleteSelectedElements = useCallback(async () => {
+		if (
+			deleteSelectionInFlightRef.current ||
+			typeof version !== "undefined" ||
+			!board.data
+		) {
+			return;
+		}
+
+		const selectedNodeIds = new Set(
+			getNodes()
+				.filter((node) => node.selected)
+				.map((node) => node.id),
+		);
+		const selectedEdgeIds = new Set(
+			edges.filter((edge) => edge.selected).map((edge) => edge.id),
+		);
+
+		if (selectedNodeIds.size === 0 && selectedEdgeIds.size === 0) {
+			return;
+		}
+
+		const isHandleOwnedBySelectedNode = (handleId: string | undefined) => {
+			if (!handleId) {
+				return false;
+			}
+
+			if (handleId.startsWith("ref_in_")) {
+				return selectedNodeIds.has(handleId.replace("ref_in_", ""));
+			}
+
+			if (handleId.startsWith("ref_out_")) {
+				return selectedNodeIds.has(handleId.replace("ref_out_", ""));
+			}
+
+			const [, pinOwner] = pinCache.get(handleId) || [];
+			return pinOwner ? selectedNodeIds.has(pinOwner.id) : false;
+		};
+
+		const commands: IGenericCommand[] = [];
+
+		for (const node of getNodes().filter((currentNode) => currentNode.selected)) {
+			if (node.data?.node) {
+				commands.push(
+					removeNodeCommand({
+						node: node.data.node as INode,
+						connected_nodes: [],
+					}),
+				);
+				continue;
+			}
+
+			if (node.data?.comment) {
+				commands.push(
+					removeCommentCommand({
+						comment: node.data.comment as IComment,
+					}),
+				);
+				continue;
+			}
+
+			if (node.type === "layerNode" && node.data?.layer) {
+				commands.push(
+					removeLayerCommand({
+						child_layers: [],
+						layer: node.data.layer as ILayer,
+						layer_nodes: [],
+						layers: [],
+						nodes: [],
+						preserve_nodes: false,
+					}),
+				);
+			}
+		}
+
+		for (const edge of edges.filter((currentEdge) => currentEdge.selected)) {
+			if (
+				isHandleOwnedBySelectedNode(edge.sourceHandle) ||
+				isHandleOwnedBySelectedNode(edge.targetHandle)
+			) {
+				continue;
+			}
+
+			const [fromPin, fromNode] = pinCache.get(edge.sourceHandle ?? "") || [];
+			const [toPin, toNode] = pinCache.get(edge.targetHandle ?? "") || [];
+
+			if (!fromPin || !fromNode || !toPin || !toNode) {
+				continue;
+			}
+
+			commands.push(
+				disconnectPinsCommand({
+					from_node: fromNode.id,
+					from_pin: fromPin.id,
+					to_node: toNode.id,
+					to_pin: toPin.id,
+				}),
+			);
+		}
+
+		if (commands.length === 0) {
+			return;
+		}
+
+		deleteSelectionInFlightRef.current = true;
+		try {
+			selected.current.clear();
+			await executeCommands(commands);
+		} finally {
+			deleteSelectionInFlightRef.current = false;
+		}
+	}, [board.data, edges, executeCommands, getNodes, pinCache, version]);
+
 	useKeyboardShortcuts({
 		board,
 		catalog,
@@ -1418,6 +1541,7 @@ export function FlowBoard({
 		appId,
 		boardId,
 		mousePositionRef,
+		onDeleteSelection: deleteSelectedElements,
 		placeNode,
 		undo,
 		redo,
@@ -2795,6 +2919,7 @@ export function FlowBoard({
 									)}
 									<ReactFlow
 										suppressHydrationWarning
+										deleteKeyCode={null}
 										onContextMenu={onContextMenuCB}
 										nodesDraggable={typeof version === "undefined"}
 										nodesConnectable={typeof version === "undefined"}

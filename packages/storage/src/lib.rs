@@ -31,3 +31,7 @@ pub use iceberg_datafusion;
 // Federation support for query push-down to remote databases
 #[cfg(feature = "federation")]
 pub use datafusion_federation;
+
+// Graph query engine
+#[cfg(feature = "graph")]
+pub use lance_graph;

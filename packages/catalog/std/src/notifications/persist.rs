@@ -106,6 +106,9 @@ pub async fn persist_notification(
     if hub_url.is_empty() {
         return Ok(false);
     }
+    if !hub_url.starts_with("http://") && !hub_url.starts_with("https://") {
+        return Ok(false);
+    }
 
     let app_id = context
         .execution_cache

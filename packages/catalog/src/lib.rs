@@ -39,8 +39,10 @@ pub use flow_like_catalog_core::NodeLogic;
 
 // Re-export core types and utilities
 pub use flow_like_catalog_core::{
-    Attachment, BoundingBox, CachedDB, FlowPath, FlowPathRuntime, FlowPathStore, NodeDBConnection,
-    NodeImage, NodeImageWrapper, register_node,
+    Attachment, BoundingBox, CachedDB, DEFAULT_GRAPH_NEIGHBORS_DIRECTION,
+    DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE, FlowPath,
+    FlowPathRuntime, FlowPathStore, NodeDBConnection, NodeImage, NodeImageWrapper,
+    register_node,
 };
 
 // Re-export standard library

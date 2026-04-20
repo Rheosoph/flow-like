@@ -34,6 +34,11 @@ infer = "0.19.0"
 rig-core.workspace = true
 rmcp.workspace = true
 
+# Graph query engine
+lance-graph = { git = "https://github.com/TM9657/lance-graph", branch = "main", default-features = false, optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["time", "sync"], optional = true }
+
 # Data lake formats - Delta Lake 0.31.x aligns with Arrow 57 and DataFusion 52.
 deltalake = { version = "=0.31.1", optional = true, default-features = false, features = ["datafusion", "rustls"] }
 
@@ -56,8 +61,11 @@ delta = ["deltalake"]
 iceberg = ["dep:iceberg", "dep:iceberg-datafusion"]
 all-lakes = ["delta", "iceberg"]
 
+# Graph query engine
+graph = ["dep:lance-graph", "dep:serde_json", "dep:tokio"]
+
 # Federation feature for query push-down
 federation = ["datafusion-federation"]
 
 # Full feature set
-full = ["all-lakes", "federation"]
+full = ["all-lakes", "federation", "graph"]

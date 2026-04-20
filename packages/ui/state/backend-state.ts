@@ -15,6 +15,7 @@ import type {
 import type { IBitState } from "./backend-state/bit-state";
 import type { IBoardState } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
+import type { IGraphState } from "./backend-state/graph-state";
 import {
 	EmptyAIState,
 	EmptyApiKeyState,
@@ -24,6 +25,7 @@ import {
 	EmptyBoardState,
 	EmptyDatabaseState,
 	EmptyEventState,
+	EmptyGraphState,
 	EmptyHelperState,
 	EmptyRoleState,
 	EmptyRouteState,
@@ -86,6 +88,7 @@ export type {
 	IWidgetState,
 	IUsageState,
 	IAnalyticsState,
+	IGraphState,
 };
 
 export type { SinkType } from "./backend-state/sink-state";
@@ -129,6 +132,7 @@ export type {
 	IPrerunEventResponse,
 } from "./backend-state/types";
 export * from "./backend-state/db-state";
+export * from "./backend-state/graph-state";
 export type {
 	IUserWidgetInfo,
 	IUserTemplateInfo,
@@ -156,6 +160,7 @@ export interface IBackendState {
 	eventState: IEventState;
 	aiState: IAIState;
 	dbState: IDatabaseState;
+	graphState: IGraphState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -201,6 +206,7 @@ const serverBackend: IBackendState = {
 	eventState: new EmptyEventState(),
 	aiState: new EmptyAIState(),
 	dbState: new EmptyDatabaseState(),
+	graphState: new EmptyGraphState(),
 	widgetState: new Proxy(
 		{},
 		{

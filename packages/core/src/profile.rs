@@ -363,7 +363,10 @@ impl Profile {
 
     pub async fn add_bit(&mut self, bit: &Bit) {
         let bit_id = format!("{}:{}", bit.hub, bit.id);
-        let bit_exists = self.bits.iter().any(|reference| reference == &bit_id);
+        let bit_exists = self
+            .bits
+            .iter()
+            .any(|reference| reference.split(':').last() == Some(bit.id.as_str()));
         if bit_exists {
             return;
         }
@@ -371,7 +374,7 @@ impl Profile {
     }
 
     pub fn remove_bit(&mut self, bit: &Bit) {
-        let bit_id = format!("{}:{}", bit.hub, bit.id);
-        self.bits.retain(|reference| reference != &bit_id);
+        self.bits
+            .retain(|reference| reference.split(':').last() != Some(bit.id.as_str()));
     }
 }

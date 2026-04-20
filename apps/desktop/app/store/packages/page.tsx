@@ -190,7 +190,7 @@ function ProjectCard({
 				projectPath: project.path,
 			});
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(getErrorMessage(err));
 		} finally {
 			setOpening(false);
 		}
@@ -204,7 +204,7 @@ function ProjectCard({
 			});
 			toast.success(`Loaded ${count} node(s) into catalog`);
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(getErrorMessage(err));
 		} finally {
 			setLoading(false);
 		}
@@ -427,7 +427,7 @@ function SettingsDialog() {
 			await invoke("developer_save_settings", { devSettings: settings });
 			toast.success("Settings saved");
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(getErrorMessage(err));
 		} finally {
 			setSaving(false);
 		}
@@ -564,7 +564,7 @@ function MyProjectsContent() {
 			toast.success(`Added ${projectName}`);
 			await fetchProjects();
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(getErrorMessage(err));
 		} finally {
 			setIsAdding(false);
 		}
@@ -576,7 +576,7 @@ function MyProjectsContent() {
 			toast.success("Project removed");
 			await fetchProjects();
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(getErrorMessage(err));
 		}
 	};
 

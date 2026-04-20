@@ -323,36 +323,37 @@ export class EventState implements IEventState {
 	}
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
+
+		if (!isOffline) {
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				throw new Error(
+					"Profile, auth or query client not set. Cannot delete event.",
+				);
+			}
+
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/events/${eventId}`,
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		}
+
+		try {
 			await invoke("delete_event", {
 				appId: appId,
 				eventId: eventId,
 			});
-			return;
+		} catch (e) {
+			if (isOffline) throw e;
+			console.warn("[EventState] Local event deletion failed (non-fatal):", e);
 		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			throw new Error(
-				"Profile, auth or query client not set. Cannot delete event.",
-			);
-		}
-
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}/events/${eventId}`,
-			{
-				method: "DELETE",
-			},
-			this.backend.auth,
-		);
-		await invoke("delete_event", {
-			appId: appId,
-			eventId: eventId,
-		});
 	}
 	async validateEvent(
 		appId: string,

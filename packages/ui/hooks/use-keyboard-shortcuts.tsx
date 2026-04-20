@@ -15,6 +15,7 @@ interface UseKeyboardShortcutsProps {
 	appId: string;
 	boardId: string;
 	mousePositionRef: RefObject<{ x: number; y: number }>;
+	onDeleteSelection: () => Promise<void>;
 	placeNode: (
 		node: INode,
 		position?: { x: number; y: number },
@@ -32,6 +33,7 @@ export function useKeyboardShortcuts({
 	appId,
 	boardId,
 	mousePositionRef,
+	onDeleteSelection,
 	placeNode,
 	undo,
 	redo,
@@ -71,6 +73,22 @@ export function useKeyboardShortcuts({
 				target.tagName === "TEXTAREA" ||
 				target.isContentEditable
 			) {
+				return;
+			}
+
+			if (
+				(event.key === "Backspace" || event.key === "Delete") &&
+				!event.metaKey &&
+				!event.ctrlKey &&
+				!event.altKey
+			) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (typeof version !== "undefined") {
+					toastError("Cannot change old version", <XIcon />);
+					return;
+				}
+				await onDeleteSelection();
 				return;
 			}
 
@@ -222,6 +240,7 @@ export function useKeyboardShortcuts({
 			rollbackRedo,
 			appId,
 			invalidateBoard,
+			onDeleteSelection,
 		],
 	);
 

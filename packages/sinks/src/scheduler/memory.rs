@@ -214,9 +214,7 @@ impl SchedulerBackend for InMemoryScheduler {
 
     async fn delete_schedule(&self, event_id: &str) -> SchedulerResult<()> {
         let mut schedules = self.schedules.write();
-        schedules
-            .remove(event_id)
-            .ok_or_else(|| SchedulerError::NotFound(event_id.to_string()))?;
+        schedules.remove(event_id);
         Ok(())
     }
 

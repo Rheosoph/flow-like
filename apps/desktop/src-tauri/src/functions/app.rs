@@ -25,6 +25,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 pub mod sharing;
 pub mod tables;
+pub mod graph;
 
 async fn presign_meta(
     app_handle: &AppHandle,

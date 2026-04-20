@@ -1,0 +1,124 @@
+"use client";
+
+import { Play, Table2, Network } from "lucide-react";
+import { useCallback, useState } from "react";
+import { Button } from "../button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../tabs";
+import { ScrollArea } from "../scroll-area";
+
+export interface GraphQueryPanelProps {
+	onRunCypher: (query: string) => void;
+	results: unknown[] | null;
+	loading?: boolean;
+	error?: string | null;
+}
+
+export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQueryPanelProps) {
+	const [query, setQuery] = useState("");
+	const [activeTab, setActiveTab] = useState("table");
+
+	const handleRun = useCallback(() => {
+		if (query.trim()) {
+			onRunCypher(query.trim());
+		}
+	}, [query, onRunCypher]);
+
+	const handleKeyDown = useCallback(
+		(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+			if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+				e.preventDefault();
+				handleRun();
+			}
+		},
+		[handleRun],
+	);
+
+	return (
+		<div className="flex flex-col border rounded-lg bg-background overflow-hidden">
+			<div className="p-3 border-b space-y-2">
+				<div className="flex items-center justify-between">
+					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+						Cypher Query
+					</p>
+					<Button size="sm" onClick={handleRun} disabled={loading || !query.trim()}>
+						<Play className="h-3.5 w-3.5 mr-1" />
+						{loading ? "Running..." : "Run"}
+					</Button>
+				</div>
+				<textarea
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					onKeyDown={handleKeyDown}
+					placeholder='MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100'
+					className="w-full min-h-[80px] max-h-[200px] rounded-md border bg-muted/50 px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+					spellCheck={false}
+				/>
+			</div>
+			{error && (
+				<div className="px-3 py-2 bg-destructive/10 text-destructive text-xs border-b">
+					{error}
+				</div>
+			)}
+			{results && results.length > 0 && (
+				<div className="flex-1 min-h-0">
+					<Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
+						<TabsList className="mx-3 mt-2 w-fit">
+							<TabsTrigger value="table" className="text-xs gap-1">
+								<Table2 className="h-3.5 w-3.5" />
+								Table
+							</TabsTrigger>
+							<TabsTrigger value="json" className="text-xs gap-1">
+								<Network className="h-3.5 w-3.5" />
+								JSON
+							</TabsTrigger>
+						</TabsList>
+						<TabsContent value="table" className="flex-1 m-0 p-3 min-h-0">
+							<ScrollArea className="max-h-[300px]">
+								<div className="border rounded overflow-auto">
+									<table className="w-full text-xs">
+										<thead>
+											<tr className="bg-muted/50">
+												{results[0] && typeof results[0] === "object" && results[0] !== null
+													? Object.keys(results[0]).map((key) => (
+															<th key={key} className="px-3 py-2 text-left font-medium text-muted-foreground">
+																{key}
+															</th>
+														))
+													: <th className="px-3 py-2 text-left font-medium text-muted-foreground">Value</th>}
+											</tr>
+										</thead>
+										<tbody>
+											{results.map((row, i) => (
+												<tr key={i} className="border-t">
+													{typeof row === "object" && row !== null
+														? Object.values(row).map((val, j) => (
+																<td key={j} className="px-3 py-1.5 max-w-[200px] truncate">
+																	{typeof val === "object" ? JSON.stringify(val) : String(val ?? "")}
+																</td>
+															))
+														: <td className="px-3 py-1.5">{String(row)}</td>}
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							</ScrollArea>
+						</TabsContent>
+						<TabsContent value="json" className="flex-1 m-0 p-3 min-h-0">
+							<ScrollArea className="max-h-[300px]">
+								<pre className="text-xs font-mono bg-muted/50 rounded p-3 whitespace-pre-wrap">
+									{JSON.stringify(results, null, 2)}
+								</pre>
+							</ScrollArea>
+						</TabsContent>
+					</Tabs>
+				</div>
+			)}
+			{results && results.length === 0 && (
+				<div className="p-4 text-center text-sm text-muted-foreground">
+					Query returned no results
+				</div>
+			)}
+		</div>
+	);
+}

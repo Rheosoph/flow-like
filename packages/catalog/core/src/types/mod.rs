@@ -3,6 +3,7 @@ pub mod bounding_box;
 pub mod class_prediction;
 pub mod db_connection;
 pub mod flow_path;
+pub mod graph_overlay;
 pub mod keypoint;
 pub mod node_image;
 pub mod segmentation_mask;

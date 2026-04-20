@@ -13,6 +13,7 @@ import {
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
+	type IGraphState,
 	type IHelperState,
 	type IPageState,
 	type IProfile,
@@ -45,6 +46,7 @@ import {
 	WebBoardState,
 	WebDatabaseState,
 	WebEventState,
+	WebGraphState,
 	WebHelperState,
 	WebPageState,
 	WebRegistryState,
@@ -78,6 +80,7 @@ export class WebBackend implements IBackendState {
 	userState: IUserState;
 	aiState: IAIState;
 	dbState: IDatabaseState;
+	graphState: IGraphState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -111,6 +114,7 @@ export class WebBackend implements IBackendState {
 		this.userState = new WebUserState(this.backendRef);
 		this.aiState = new WebAIState(this.backendRef);
 		this.dbState = new WebDatabaseState(this.backendRef);
+		this.graphState = new WebGraphState(this.backendRef);
 		this.widgetState = new WebWidgetState(this.backendRef);
 		this.pageState = new WebPageState(this.backendRef);
 		this.registryState = new WebRegistryState(this.backendRef);

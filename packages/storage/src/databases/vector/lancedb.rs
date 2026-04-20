@@ -258,8 +258,8 @@ impl LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!("[LanceDB] Error creating table '{}' from record batch: {err:#}", self.table_name);
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -302,7 +302,7 @@ pub fn record_batches_to_vec(batches: Option<Vec<RecordBatch>>) -> Result<Vec<Va
                 items.append(&mut values);
             }
             Err(err) => {
-                println!("Error converting batch to value: {:?}", err);
+                eprintln!("[LanceDB] Error converting batch to value: {err:#}");
             }
         }
     }
@@ -483,8 +483,8 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!("[LanceDB] Error creating table '{}' for upsert: {err:#}", self.table_name);
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -514,8 +514,8 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!("[LanceDB] Error creating table '{}' for insert: {err:#}", self.table_name);
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -1027,6 +1027,70 @@ mod tests {
                 name: "Bob".to_string(),
                 tag: None,
             }));
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_buffered_upsert_deduplicates_same_id_before_flush() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let inner = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let mut db = BufferedVectorStore::new(inner, 10);
+
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice", "tag": "alpha"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice Updated", "tag": "beta"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.upsert(
+            vec![json!({"id": 2, "name": "Bob", "tag": "gamma"})],
+            "id".to_string(),
+        )
+        .await?;
+
+        db.flush().await?;
+
+        let mut rows: Vec<NullableFieldRow> = db
+            .list(
+                Some(vec![
+                    "id".to_string(),
+                    "name".to_string(),
+                    "tag".to_string(),
+                ]),
+                10,
+                0,
+            )
+            .await?
+            .into_iter()
+            .map(from_value)
+            .collect::<Result<_, _>>()?;
+
+        rows.sort_by_key(|row| row.id);
+
+        assert_eq!(
+            rows,
+            vec![
+                NullableFieldRow {
+                    id: 1,
+                    name: "Alice Updated".to_string(),
+                    tag: Some("beta".to_string()),
+                },
+                NullableFieldRow {
+                    id: 2,
+                    name: "Bob".to_string(),
+                    tag: Some("gamma".to_string()),
+                },
+            ]
+        );
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
