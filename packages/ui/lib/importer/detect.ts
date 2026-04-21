@@ -1,5 +1,9 @@
 import type { DifyWorkflow, ImportFormat, N8nWorkflow } from "./types";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function detectFormat(input: string): {
 	format: ImportFormat;
 	parsed: N8nWorkflow | DifyWorkflow | null;
@@ -10,8 +14,10 @@ export function detectFormat(input: string): {
 	// Try JSON first
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 		try {
-			const parsed = JSON.parse(trimmed);
-			return classifyParsed(parsed);
+			const parsed: unknown = JSON.parse(trimmed);
+			return isRecord(parsed)
+				? classifyParsed(parsed)
+				: { format: "unknown", parsed: null };
 		} catch {
 			return { format: "unknown", parsed: null, error: "Invalid JSON" };
 		}
@@ -20,7 +26,7 @@ export function detectFormat(input: string): {
 	// Try YAML (Dify exports as YAML)
 	try {
 		const parsed = parseSimpleYaml(trimmed);
-		if (parsed && typeof parsed === "object") {
+		if (isRecord(parsed)) {
 			return classifyParsed(parsed);
 		}
 	} catch {
@@ -108,7 +114,7 @@ function parseSimpleYaml(input: string): Record<string, unknown> | null {
 			startIndex,
 			getIndent(lines[startIndex]),
 		);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		if (!isRecord(parsed)) {
 			return null;
 		}
 

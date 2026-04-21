@@ -11,7 +11,6 @@ import {
 	Button,
 	Card,
 	CardContent,
-	CardHeader,
 	CardTitle,
 	Dialog,
 	DialogContent,
@@ -969,18 +968,17 @@ export default function Id({
 					)}
 
 					<Card
-						className={`h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
+						className={`relative h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
 					>
-						<CardHeader className="pb-0 pt-4 px-4 hidden md:block">
-							<div className="flex items-center justify-between">
-								<div className="flex-1" />
+						<div className="pointer-events-none absolute right-4 top-4 z-20 hidden md:block">
+							<div className="pointer-events-auto">
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<Button
 											variant="ghost"
 											size="sm"
 											onClick={() => setIsMaximized(!isMaximized)}
-											className="h-8 w-8 p-0"
+											className="h-8 w-8 p-0 bg-background/80 backdrop-blur-sm"
 										>
 											{isMaximized ? (
 												<Minimize2Icon className="w-4 h-4" />
@@ -994,11 +992,11 @@ export default function Id({
 									</TooltipContent>
 								</Tooltip>
 							</div>
-						</CardHeader>
+						</div>
 						<CardContent className="flex-1 p-0 overflow-hidden min-h-0">
 							{hasActivePublicationRequest &&
 								!currentRoute?.includes("/publication") && (
-									<div className="px-6 pt-4">
+									<div className="px-6 pt-4 pr-16">
 										<AppPublicationBanner
 											requests={publicationRequests.data ?? []}
 											onNavigate={() => {
@@ -1010,7 +1008,7 @@ export default function Id({
 							{currentRoute?.includes("/storage") ||
 							currentRoute?.includes("/explore") ? (
 								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 p-6 overflow-auto">
+									<div className="flex-1 min-h-0 overflow-hidden p-6 pt-4 pr-16">
 										<Suspense
 											fallback={
 												<div className="space-y-4">
@@ -1025,8 +1023,8 @@ export default function Id({
 									</div>
 								</div>
 							) : (
-								<ScrollArea className="h-full overflow-y-auto">
-									<div className="p-6">
+								<div className="h-full overflow-y-auto">
+									<div className="p-6 pt-4 pr-16">
 										<Suspense
 											fallback={
 												<div className="space-y-4">
@@ -1039,7 +1037,7 @@ export default function Id({
 											{children}
 										</Suspense>
 									</div>
-								</ScrollArea>
+								</div>
 							)}
 						</CardContent>
 					</Card>
