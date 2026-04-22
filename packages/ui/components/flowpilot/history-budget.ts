@@ -74,10 +74,14 @@ function summarizeOlderMessages(messages: CopilotMessage[]): string[] {
 		const prefix = message.role === "user" ? "User" : "Assistant";
 		const artifacts: string[] = [];
 		if ((message.executedCommands?.length ?? 0) > 0) {
-			artifacts.push(`${message.executedCommands?.length ?? 0} workflow changes applied`);
+			artifacts.push(
+				`${message.executedCommands?.length ?? 0} workflow changes applied`,
+			);
 		}
 		if ((message.appliedComponents?.length ?? 0) > 0) {
-			artifacts.push(`${message.appliedComponents?.length ?? 0} UI components applied`);
+			artifacts.push(
+				`${message.appliedComponents?.length ?? 0} UI components applied`,
+			);
 		}
 		if ((message.images?.length ?? 0) > 0) {
 			artifacts.push(`${message.images?.length ?? 0} image attachments`);
@@ -114,7 +118,9 @@ function buildStructuredSummary(options: HistoryBudgetOptions): string | null {
 		);
 	}
 	if (options.currentComponentsCount > 0 && options.agentMode !== "board") {
-		focusLines.push(`Current UI component count: ${options.currentComponentsCount}`);
+		focusLines.push(
+			`Current UI component count: ${options.currentComponentsCount}`,
+		);
 	}
 	if (options.runContext) {
 		focusLines.push(
@@ -124,7 +130,9 @@ function buildStructuredSummary(options: HistoryBudgetOptions): string | null {
 	sections.push(`## Current Focus\n${focusLines.join("\n")}`);
 
 	if (acceptedWork.length > 0) {
-		sections.push(`## Accepted Changes\n${acceptedWork.map((line) => `- ${line}`).join("\n")}`);
+		sections.push(
+			`## Accepted Changes\n${acceptedWork.map((line) => `- ${line}`).join("\n")}`,
+		);
 	}
 
 	if (olderMessages.length > 0) {
@@ -170,7 +178,8 @@ export function buildBudgetedHistory(
 
 	while (
 		history.length > 1 &&
-		history.reduce((sum, message) => sum + message.content.length, 0) > maxTotalChars
+		history.reduce((sum, message) => sum + message.content.length, 0) >
+			maxTotalChars
 	) {
 		history = [history[0], ...history.slice(2)];
 	}

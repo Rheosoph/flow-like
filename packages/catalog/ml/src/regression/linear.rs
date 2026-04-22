@@ -30,7 +30,6 @@ use linfa::traits::Fit;
 use linfa_linear::{FittedLinearRegression, LinearRegression};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

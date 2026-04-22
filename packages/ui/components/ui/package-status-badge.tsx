@@ -1,6 +1,12 @@
 "use client";
 
-import { AlertCircle, CheckCircle, Download, Loader2, RefreshCw } from "lucide-react";
+import {
+	AlertCircle,
+	CheckCircle,
+	Download,
+	Loader2,
+	RefreshCw,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Badge } from "./badge";
 

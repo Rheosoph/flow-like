@@ -1,54 +1,72 @@
 export const ptWhitelabel = {
 	"whitelabel.meta.title": "White-Label & OEM | Flow-Like",
-	"whitelabel.meta.description": "Distribua o Flow-Like com a sua marca. Temas completos, modos de implantação embed/headless/híbrido, SSO, medição de uso e acesso ao SDK para parceiros OEM.",
+	"whitelabel.meta.description":
+		"Distribua o Flow-Like com a sua marca. Temas completos, modos de implantação embed/headless/híbrido, SSO, medição de uso e acesso ao SDK para parceiros OEM.",
 	"whitelabel.hero.tagline": "White-Label & OEM",
 	"whitelabel.hero.headline": "A Sua Marca.",
 	"whitelabel.hero.headline.highlight": "O Nosso Motor.",
-	"whitelabel.hero.description": "Integre automação de workflows, agentes de IA e dashboards no seu produto — totalmente com a sua marca. Dos tokens de design ao modo de implantação, cada superfície é sua para controlar.",
+	"whitelabel.hero.description":
+		"Integre automação de workflows, agentes de IA e dashboards no seu produto — totalmente com a sua marca. Dos tokens de design ao modo de implantação, cada superfície é sua para controlar.",
 	"whitelabel.hero.cta": "Falar com Vendas",
 	"whitelabel.hero.cta.docs": "Ler a Documentação",
 	"whitelabel.modes.tagline": "Modos de Implantação",
 	"whitelabel.modes.headline": "Escolha Como Distribuir",
-	"whitelabel.modes.description": "Três arquiteturas de implantação para corresponder à sua estratégia de produto. Combine à vontade por cliente.",
+	"whitelabel.modes.description":
+		"Três arquiteturas de implantação para corresponder à sua estratégia de produto. Combine à vontade por cliente.",
 	"whitelabel.modes.embed.title": "Incorporado",
-	"whitelabel.modes.embed.desc": "Integre o Flow-Like na sua aplicação existente como iframe ou web component. Os seus utilizadores nunca saem da sua interface.",
+	"whitelabel.modes.embed.desc":
+		"Integre o Flow-Like na sua aplicação existente como iframe ou web component. Os seus utilizadores nunca saem da sua interface.",
 	"whitelabel.modes.embed.feat1": "SDKs de iframe & Web Component",
 	"whitelabel.modes.embed.feat2": "Autenticação por passthrough de sessão",
 	"whitelabel.modes.embed.feat3": "Event bus para comunicação pai ↔ filho",
 	"whitelabel.modes.headless.title": "Headless",
-	"whitelabel.modes.headless.desc": "Use a API do motor diretamente. Construa a sua própria UI ou execute automações sem frontend visível.",
+	"whitelabel.modes.headless.desc":
+		"Use a API do motor diretamente. Construa a sua própria UI ou execute automações sem frontend visível.",
 	"whitelabel.modes.headless.feat1": "API REST + WebSocket completa",
 	"whitelabel.modes.headless.feat2": "SDKs para TypeScript, Python, Rust",
-	"whitelabel.modes.headless.feat3": "Acione workflows a partir de qualquer sistema",
+	"whitelabel.modes.headless.feat3":
+		"Acione workflows a partir de qualquer sistema",
 	"whitelabel.modes.hybrid.title": "Híbrido",
-	"whitelabel.modes.hybrid.desc": "Use a nossa UI polida para design de workflows. API headless para execução e dashboards personalizados.",
+	"whitelabel.modes.hybrid.desc":
+		"Use a nossa UI polida para design de workflows. API headless para execução e dashboards personalizados.",
 	"whitelabel.modes.hybrid.feat1": "Editor visual com a sua marca",
 	"whitelabel.modes.hybrid.feat2": "Pipeline de execução orientado por API",
 	"whitelabel.modes.hybrid.feat3": "O melhor dos dois mundos",
 	"whitelabel.theming.tagline": "Controlo Total de Temas",
 	"whitelabel.theming.headline": "Cada Pixel, a Sua Marca",
-	"whitelabel.theming.description": "Os tokens de design propagam-se por todos os componentes. Altere cores, tipografia, raios de borda e espaçamento com um único ficheiro de configuração — ou use o editor visual de temas.",
+	"whitelabel.theming.description":
+		"Os tokens de design propagam-se por todos os componentes. Altere cores, tipografia, raios de borda e espaçamento com um único ficheiro de configuração — ou use o editor visual de temas.",
 	"whitelabel.theming.tokens.title": "Tokens de Design",
-	"whitelabel.theming.tokens.desc": "Cores, espaçamento, tipografia, raios — tudo configurável via propriedades CSS personalizadas ou a API de temas.",
+	"whitelabel.theming.tokens.desc":
+		"Cores, espaçamento, tipografia, raios — tudo configurável via propriedades CSS personalizadas ou a API de temas.",
 	"whitelabel.theming.logo.title": "Logo & Recursos",
-	"whitelabel.theming.logo.desc": "Substitua logos, favicons e ecrãs de splash em implantações desktop, web e incorporadas.",
+	"whitelabel.theming.logo.desc":
+		"Substitua logos, favicons e ecrãs de splash em implantações desktop, web e incorporadas.",
 	"whitelabel.theming.domains.title": "Domínios Personalizados",
-	"whitelabel.theming.domains.desc": "Sirva a plataforma a partir do seu próprio domínio com provisionamento TLS automático e verificação DNS.",
+	"whitelabel.theming.domains.desc":
+		"Sirva a plataforma a partir do seu próprio domínio com provisionamento TLS automático e verificação DNS.",
 	"whitelabel.theming.email.title": "Email & Notificações",
-	"whitelabel.theming.email.desc": "Emails transacionais com a sua marca, notificações in-app e payloads de webhook com a sua identidade.",
+	"whitelabel.theming.email.desc":
+		"Emails transacionais com a sua marca, notificações in-app e payloads de webhook com a sua identidade.",
 	"whitelabel.oem.tagline": "Construído para Parceiros OEM",
 	"whitelabel.oem.headline": "Ferramentas OEM de Nível Empresarial",
-	"whitelabel.oem.description": "Tudo o que precisa para disponibilizar automação como funcionalidade dentro do seu próprio produto.",
+	"whitelabel.oem.description":
+		"Tudo o que precisa para disponibilizar automação como funcionalidade dentro do seu próprio produto.",
 	"whitelabel.oem.sso.title": "SSO & Passthrough de Autenticação",
-	"whitelabel.oem.sso.desc": "Delegação de autenticação baseada em SAML, OIDC e JWT. Os seus utilizadores autenticam-se através do seu fornecedor de identidade — o Flow-Like confia no token.",
+	"whitelabel.oem.sso.desc":
+		"Delegação de autenticação baseada em SAML, OIDC e JWT. Os seus utilizadores autenticam-se através do seu fornecedor de identidade — o Flow-Like confia no token.",
 	"whitelabel.oem.metering.title": "Medição de Uso",
-	"whitelabel.oem.metering.desc": "Contagens de execução por tenant, chamadas API e utilização de armazenamento — expostos via API para o seu sistema de faturação.",
+	"whitelabel.oem.metering.desc":
+		"Contagens de execução por tenant, chamadas API e utilização de armazenamento — expostos via API para o seu sistema de faturação.",
 	"whitelabel.oem.isolation.title": "Isolamento de Tenants",
-	"whitelabel.oem.isolation.desc": "Limites rígidos de namespace entre tenants. Armazenamento, filas de execução e políticas de acesso separados.",
+	"whitelabel.oem.isolation.desc":
+		"Limites rígidos de namespace entre tenants. Armazenamento, filas de execução e políticas de acesso separados.",
 	"whitelabel.oem.sdk.title": "SDK & Acesso à API",
-	"whitelabel.oem.sdk.desc": "SDKs para TypeScript, Python e Rust com interfaces tipadas. Especificação OpenAPI disponível para geração de código.",
+	"whitelabel.oem.sdk.desc":
+		"SDKs para TypeScript, Python e Rust com interfaces tipadas. Especificação OpenAPI disponível para geração de código.",
 	"whitelabel.cta.headline": "Pronto para Distribuir com a Sua Marca?",
-	"whitelabel.cta.description": "Entre em contacto com a nossa equipa de parcerias para discutir licenciamento OEM, preços por volume e onboarding personalizado.",
+	"whitelabel.cta.description":
+		"Entre em contacto com a nossa equipa de parcerias para discutir licenciamento OEM, preços por volume e onboarding personalizado.",
 	"whitelabel.cta.button": "Contactar Parcerias",
 	"whitelabel.cta.docs": "Explorar a Documentação do SDK",
 } as const;

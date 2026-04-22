@@ -17,7 +17,6 @@ use futures::TryStreamExt;
 use mail_parser::{MessageParser, MimeHeaders};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::mail::imap::{ImapConnection, inbox::ImapInbox};
 

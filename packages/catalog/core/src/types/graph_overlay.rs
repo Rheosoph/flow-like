@@ -1,5 +1,5 @@
-use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::JsonSchema;
+use flow_like_types::json::{Deserialize, Serialize};
 
 pub const DEFAULT_GRAPH_OVERLAY_LIMIT: usize = 100;
 pub const DEFAULT_GRAPH_QUERY_LIMIT: usize = 100;
@@ -71,11 +71,7 @@ pub enum NodeSize {
     #[serde(rename = "by-degree")]
     ByDegree { min: f32, max: f32 },
     #[serde(rename = "by-column")]
-    ByColumn {
-        column: String,
-        min: f32,
-        max: f32,
-    },
+    ByColumn { column: String, min: f32, max: f32 },
 }
 
 impl Default for NodeSize {
@@ -162,7 +158,9 @@ pub const RESERVED_TABLE_PREFIX: &str = "__";
 pub const RESERVED_TABLE_SUFFIX: &str = "__";
 
 pub fn is_reserved_table(name: &str) -> bool {
-    name.starts_with(RESERVED_TABLE_PREFIX) && name.ends_with(RESERVED_TABLE_SUFFIX) && name.len() > 4
+    name.starts_with(RESERVED_TABLE_PREFIX)
+        && name.ends_with(RESERVED_TABLE_SUFFIX)
+        && name.len() > 4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

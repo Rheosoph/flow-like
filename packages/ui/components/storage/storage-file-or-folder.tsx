@@ -18,7 +18,7 @@ import {
 	Settings,
 	Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { type INode, type IStorageItem, humanFileSize } from "../../lib";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -494,7 +494,10 @@ function OpenWithMenu({
 					>
 						{app.name}
 						{app.is_default && (
-							<Badge variant="secondary" className="ml-2 text-[10px] px-1 py-0 h-4">
+							<Badge
+								variant="secondary"
+								className="ml-2 text-[10px] px-1 py-0 h-4"
+							>
 								Default
 							</Badge>
 						)}

@@ -59,7 +59,10 @@ export class RouteState implements IAppRouteState {
 				return remoteData;
 			} catch (error) {
 				if (local.length === 0) throw error;
-				console.warn("[RouteSync] Forced route fetch failed, falling back to local routes:", error);
+				console.warn(
+					"[RouteSync] Forced route fetch failed, falling back to local routes:",
+					error,
+				);
 				return local;
 			}
 		}
@@ -93,10 +96,10 @@ export class RouteState implements IAppRouteState {
 		appId: string,
 		path: string,
 	): Promise<IRouteMapping | null> {
-		const local = await invoke<IRouteMapping | null>(
-			"get_app_route_by_path",
-			{ appId, path },
-		);
+		const local = await invoke<IRouteMapping | null>("get_app_route_by_path", {
+			appId,
+			path,
+		});
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.canSync() || !this.backend.queryClient) {
@@ -126,10 +129,9 @@ export class RouteState implements IAppRouteState {
 	}
 
 	async getDefaultRoute(appId: string): Promise<IRouteMapping | null> {
-		const local = await invoke<IRouteMapping | null>(
-			"get_default_app_route",
-			{ appId },
-		);
+		const local = await invoke<IRouteMapping | null>("get_default_app_route", {
+			appId,
+		});
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.canSync() || !this.backend.queryClient) {

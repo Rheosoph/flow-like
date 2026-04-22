@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
 	Breadcrumb,
@@ -11,7 +12,6 @@ import {
 	Button,
 	Card,
 	CardContent,
-	CardHeader,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -40,6 +40,12 @@ import {
 	useInvoke,
 	useMobileHeader,
 } from "@tm9657/flow-like-ui";
+import { AppPublicationBanner } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-banner";
+import {
+	type AppPublicationRequestItem,
+	type RawAppPublicationRequestItem,
+	normalizeAppPublicationRequests,
+} from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChartAreaIcon,
@@ -70,13 +76,6 @@ import {
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import {
-	normalizeAppPublicationRequests,
-	type AppPublicationRequestItem,
-	type RawAppPublicationRequestItem,
-} from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
-import { AppPublicationBanner } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-banner";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {

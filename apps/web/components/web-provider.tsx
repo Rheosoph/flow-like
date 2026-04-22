@@ -60,9 +60,9 @@ import {
 	WebUserState,
 	WebWidgetState,
 } from "@/lib/web-states";
+import { WebAnalyticsState } from "@/lib/web-states/analytics-state";
 import type { WebBackendRef } from "@/lib/web-states/api-utils";
 import { WebSalesState } from "@/lib/web-states/sales-state";
-import { WebAnalyticsState } from "@/lib/web-states/analytics-state";
 
 export class WebBackend implements IBackendState {
 	appState: IAppState;

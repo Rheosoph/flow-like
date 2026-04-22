@@ -2,14 +2,14 @@
 
 import { Check } from "lucide-react";
 import { useState } from "react";
-import type {
-	NodeLabelMapping,
-	EdgeLabelMapping,
-} from "../../../../state/backend-state/graph-state";
-import { getPresets, applyPreset, type DomainPreset } from "../presets";
-import { getGraphIcon } from "../icons";
-import { Card } from "../../card";
 import { cn } from "../../../../lib/utils";
+import type {
+	EdgeLabelMapping,
+	NodeLabelMapping,
+} from "../../../../state/backend-state/graph-state";
+import { Card } from "../../card";
+import { getGraphIcon } from "../icons";
+import { type DomainPreset, applyPreset, getPresets } from "../presets";
 
 export interface PresetPickerProps {
 	nodes: NodeLabelMapping[];

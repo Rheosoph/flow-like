@@ -31,7 +31,6 @@ use linfa::traits::Fit;
 use linfa_bayes::GaussianNb;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

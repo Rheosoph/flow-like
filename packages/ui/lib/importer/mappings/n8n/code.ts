@@ -5,6 +5,8 @@ const def: N8nNodeDef = {
 	parameters: {
 		code: "parameters.jsCode",
 	},
-	warnings: ["n8n Code node contains JavaScript; manual conversion to Python is required."],
+	warnings: [
+		"n8n Code node contains JavaScript; manual conversion to Python is required.",
+	],
 };
 export default def;

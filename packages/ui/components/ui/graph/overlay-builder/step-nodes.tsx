@@ -1,15 +1,25 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
-import type { NodeLabelMapping, LabelStyle, PropertyColumn } from "../../../../state/backend-state/graph-state";
+import type {
+	LabelStyle,
+	NodeLabelMapping,
+	PropertyColumn,
+} from "../../../../state/backend-state/graph-state";
 import { Button } from "../../button";
+import { Card } from "../../card";
 import { Input } from "../../input";
 import { Label } from "../../label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../select";
-import { Card } from "../../card";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../select";
+import { Separator } from "../../separator";
 import { ColumnPicker } from "./column-picker";
 import { StyleEditor } from "./style-editor";
-import { Separator } from "../../separator";
 
 export interface StepNodesProps {
 	nodes: NodeLabelMapping[];
@@ -24,7 +34,12 @@ const DEFAULT_STYLE: LabelStyle = {
 	size: { mode: "fixed", value: 10 },
 };
 
-export function StepNodes({ nodes, tables, tableColumns, onChange }: StepNodesProps) {
+export function StepNodes({
+	nodes,
+	tables,
+	tableColumns,
+	onChange,
+}: StepNodesProps) {
 	const addNode = () => {
 		onChange([
 			...nodes,
@@ -82,7 +97,9 @@ export function StepNodes({ nodes, tables, tableColumns, onChange }: StepNodesPr
 						return (
 							<Card key={i} className="p-4 space-y-3">
 								<div className="flex items-center justify-between">
-									<span className="text-xs font-medium text-muted-foreground">Node #{i + 1}</span>
+									<span className="text-xs font-medium text-muted-foreground">
+										Node #{i + 1}
+									</span>
 									<Button
 										variant="ghost"
 										size="icon"
@@ -107,14 +124,23 @@ export function StepNodes({ nodes, tables, tableColumns, onChange }: StepNodesPr
 										<Label className="text-xs">Table</Label>
 										<Select
 											value={node.table}
-											onValueChange={(v) => updateNode(i, { table: v, id_column: "", display_column: undefined, property_columns: [] })}
+											onValueChange={(v) =>
+												updateNode(i, {
+													table: v,
+													id_column: "",
+													display_column: undefined,
+													property_columns: [],
+												})
+											}
 										>
 											<SelectTrigger className="h-8 text-xs">
 												<SelectValue placeholder="Select table" />
 											</SelectTrigger>
 											<SelectContent>
 												{tables.map((t) => (
-													<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>
+													<SelectItem key={t} value={t} className="text-xs">
+														{t}
+													</SelectItem>
 												))}
 											</SelectContent>
 										</Select>
@@ -133,7 +159,9 @@ export function StepNodes({ nodes, tables, tableColumns, onChange }: StepNodesPr
 										<ColumnPicker
 											columns={colNames}
 											value={node.display_column ?? ""}
-											onChange={(v) => updateNode(i, { display_column: v || undefined })}
+											onChange={(v) =>
+												updateNode(i, { display_column: v || undefined })
+											}
 											placeholder="Optional"
 										/>
 									</div>
@@ -152,7 +180,9 @@ export function StepNodes({ nodes, tables, tableColumns, onChange }: StepNodesPr
 													type="button"
 													onClick={() => togglePropertyColumn(i, col)}
 													className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-														node.property_columns.some((c) => c.name === col.name)
+														node.property_columns.some(
+															(c) => c.name === col.name,
+														)
 															? "bg-primary text-primary-foreground border-primary"
 															: "bg-muted hover:bg-accent"
 													}`}

@@ -182,7 +182,10 @@ function parseYamlObject(
 
 		if (rawValue === "") {
 			const nextIndex = nextMeaningfulLine(lines, index + 1);
-			if (nextIndex < lines.length && getIndent(lines[nextIndex]) > lineIndent) {
+			if (
+				nextIndex < lines.length &&
+				getIndent(lines[nextIndex]) > lineIndent
+			) {
 				const [child, afterChild] = parseYamlBlock(
 					lines,
 					nextIndex,
@@ -220,14 +223,21 @@ function parseYamlArray(
 		const line = lines[index];
 		const lineIndent = getIndent(line);
 		const trimmedLine = line.trim();
-		if (lineIndent < indent || lineIndent !== indent || !trimmedLine.startsWith("- ")) {
+		if (
+			lineIndent < indent ||
+			lineIndent !== indent ||
+			!trimmedLine.startsWith("- ")
+		) {
 			break;
 		}
 
 		const value = trimmedLine.slice(2).trim();
 		if (value === "") {
 			const nextIndex = nextMeaningfulLine(lines, index + 1);
-			if (nextIndex < lines.length && getIndent(lines[nextIndex]) > lineIndent) {
+			if (
+				nextIndex < lines.length &&
+				getIndent(lines[nextIndex]) > lineIndent
+			) {
 				const [child, afterChild] = parseYamlBlock(
 					lines,
 					nextIndex,
@@ -354,7 +364,10 @@ function parseYamlBlockScalar(
 	}
 
 	const text = values.join("\n");
-	return [style === ">" ? text.replace(/([^\n])\n(?=[^\n])/g, "$1 ") : text, index];
+	return [
+		style === ">" ? text.replace(/([^\n])\n(?=[^\n])/g, "$1 ") : text,
+		index,
+	];
 }
 
 function nextMeaningfulLine(lines: string[], startIndex: number): number {

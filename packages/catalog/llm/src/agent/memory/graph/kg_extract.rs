@@ -185,9 +185,7 @@ Text:
         context
             .set_pin_value("extracted_edges", json!(placeholder_edges))
             .await?;
-        context
-            .set_pin_value("entity_count", json!(0i64))
-            .await?;
+        context.set_pin_value("entity_count", json!(0i64)).await?;
 
         // Log the extraction prompt for debugging
         tracing::debug!(

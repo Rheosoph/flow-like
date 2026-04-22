@@ -77,8 +77,7 @@ export const svIntegrations = {
 		"PDF-analys, Excel/CSV-bearbetning, bildmanipulering, OCR och dokumentgenerering.",
 	"integrations.cat.files.count": "10+ format",
 	"integrations.custom.tagline": "Utöka med Valfritt Språk",
-	"integrations.custom.headline":
-		"Bygg Anpassade Noder på Några Minuter",
+	"integrations.custom.headline": "Bygg Anpassade Noder på Några Minuter",
 	"integrations.custom.description":
 		"Flow-Like kör anpassade noder som WASM-moduler — sandlådade, portabla och snabba. Skriv i ditt föredragna språk, kompilera till WASM och det fungerar överallt där Flow-Like körs.",
 	"integrations.custom.lang.title": "Stödda Språk",

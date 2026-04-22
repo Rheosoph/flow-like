@@ -70,93 +70,92 @@ export const ProviderSelector = memo(function ProviderSelector({
 
 	return (
 		<div className={cn("flex items-center gap-1.5", className)}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant={provider === "bits" ? "secondary" : "ghost"}
+						size="sm"
+						className={cn(
+							"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
+							provider === "bits" &&
+								"bg-accent border border-primary/20 shadow-sm",
+						)}
+						onClick={() => handleProviderChange("bits")}
+						disabled={disabled}
+					>
+						<LayersIcon className="w-3.5 h-3.5" />
+						<span className="hidden sm:inline">Bits</span>
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom" className="text-xs">
+					Use configured model bits
+				</TooltipContent>
+			</Tooltip>
+
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant={provider === "copilot" ? "secondary" : "ghost"}
+						size="sm"
+						className={cn(
+							"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
+							provider === "copilot" &&
+								"bg-accent border border-primary/20 shadow-sm",
+							copilotConnecting && "animate-pulse",
+						)}
+						onClick={() => handleProviderChange("copilot")}
+						disabled={disabled || copilotConnecting || copilotUnavailable}
+					>
+						<GithubIcon className="w-3.5 h-3.5" />
+						<span className="hidden sm:inline">Copilot</span>
+						{copilotRunning && provider === "copilot" && (
+							<span className="relative flex h-1.5 w-1.5">
+								<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+								<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
+							</span>
+						)}
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom" className="text-xs max-w-50">
+					{copilotRunning ? (
+						<div>
+							<div className="font-medium">GitHub Copilot Connected</div>
+							{copilotAuthStatus?.authenticated && copilotAuthStatus.login && (
+								<div className="text-muted-foreground mt-0.5">
+									Signed in as {copilotAuthStatus.login}
+								</div>
+							)}
+						</div>
+					) : copilotUnavailable ? (
+						"GitHub Copilot is currently desktop-only in FlowPilot"
+					) : isTauriEnv ? (
+						"Use GitHub Copilot (local)"
+					) : (
+						"GitHub Copilot is unavailable in this environment"
+					)}
+				</TooltipContent>
+			</Tooltip>
+
+			{/* Disconnect button when Copilot is running */}
+			{copilotRunning && provider === "copilot" && (
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							variant={provider === "bits" ? "secondary" : "ghost"}
-							size="sm"
-							className={cn(
-								"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
-								provider === "bits" &&
-									"bg-accent border border-primary/20 shadow-sm",
-							)}
-							onClick={() => handleProviderChange("bits")}
-							disabled={disabled}
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6 text-muted-foreground hover:text-destructive"
+							onClick={onStopCopilot}
+							disabled={disabled || copilotConnecting}
 						>
-							<LayersIcon className="w-3.5 h-3.5" />
-							<span className="hidden sm:inline">Bits</span>
+							<ServerIcon className="w-3 h-3" />
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent side="bottom" className="text-xs">
-						Use configured model bits
+						Disconnect Copilot
 					</TooltipContent>
 				</Tooltip>
-
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							variant={provider === "copilot" ? "secondary" : "ghost"}
-							size="sm"
-							className={cn(
-								"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
-								provider === "copilot" &&
-									"bg-accent border border-primary/20 shadow-sm",
-								copilotConnecting && "animate-pulse",
-							)}
-							onClick={() => handleProviderChange("copilot")}
-							disabled={disabled || copilotConnecting || copilotUnavailable}
-						>
-							<GithubIcon className="w-3.5 h-3.5" />
-							<span className="hidden sm:inline">Copilot</span>
-							{copilotRunning && provider === "copilot" && (
-								<span className="relative flex h-1.5 w-1.5">
-									<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-									<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
-								</span>
-							)}
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" className="text-xs max-w-50">
-						{copilotRunning ? (
-							<div>
-								<div className="font-medium">GitHub Copilot Connected</div>
-								{copilotAuthStatus?.authenticated &&
-									copilotAuthStatus.login && (
-										<div className="text-muted-foreground mt-0.5">
-											Signed in as {copilotAuthStatus.login}
-										</div>
-									)}
-							</div>
-						) : copilotUnavailable ? (
-							"GitHub Copilot is currently desktop-only in FlowPilot"
-						) : isTauriEnv ? (
-							"Use GitHub Copilot (local)"
-						) : (
-							"GitHub Copilot is unavailable in this environment"
-						)}
-					</TooltipContent>
-				</Tooltip>
-
-				{/* Disconnect button when Copilot is running */}
-				{copilotRunning && provider === "copilot" && (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-6 w-6 text-muted-foreground hover:text-destructive"
-								onClick={onStopCopilot}
-								disabled={disabled || copilotConnecting}
-							>
-								<ServerIcon className="w-3 h-3" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom" className="text-xs">
-							Disconnect Copilot
-						</TooltipContent>
-					</Tooltip>
-				)}
-			</div>
+			)}
+		</div>
 	);
 });
 

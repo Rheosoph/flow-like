@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -39,7 +42,10 @@ pub struct SearchNodesPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/search", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/search",
+    skip(state, user, payload)
+)]
 pub async fn search_nodes(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

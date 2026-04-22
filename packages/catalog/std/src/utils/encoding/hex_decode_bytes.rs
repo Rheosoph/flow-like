@@ -27,26 +27,16 @@ impl NodeLogic for HexDecodeBytesNode {
         );
         node.add_icon("/flow/icons/hash.svg");
 
-        node.add_input_pin(
-            "input",
-            "Input",
-            "Hex-encoded string",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "output",
-            "Decoded",
-            "Decoded raw bytes",
-            VariableType::Byte,
-        )
-        .set_value_type(ValueType::Array);
+        node.add_input_pin("input", "Input", "Hex-encoded string", VariableType::String);
+        node.add_output_pin("output", "Decoded", "Decoded raw bytes", VariableType::Byte)
+            .set_value_type(ValueType::Array);
 
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let input: String = context.evaluate_pin("input").await?;
-        if input.len() % 2 != 0 {
+        if !input.len().is_multiple_of(2) {
             return Err(flow_like_types::anyhow!("Hex string has odd length"));
         }
         let bytes: Vec<u8> = (0..input.len())

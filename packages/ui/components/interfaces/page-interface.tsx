@@ -91,9 +91,7 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					return {
@@ -411,8 +409,12 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.layout !== undefined && {
+									layout: { literalJson: JSON.stringify(configOrLayout) },
+								}),
+								...(updateValue.config !== undefined && {
+									config: { literalJson: JSON.stringify(configOrLayout) },
+								}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -824,7 +826,8 @@ function PageInterfaceInner({
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
-		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
+		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning)
+			return;
 		void writePageSurfaceCache(appId, page, surface);
 	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
@@ -1042,11 +1045,8 @@ function PageInterfaceInner({
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
-				await executePageEvent(
-					page.onLoadEventId,
-					"onLoad",
-					undefined,
-					() => setLoadEventPhase("running"),
+				await executePageEvent(page.onLoadEventId, "onLoad", undefined, () =>
+					setLoadEventPhase("running"),
 				);
 			} finally {
 				setLoadEventPhase("idle");
@@ -1107,7 +1107,8 @@ function PageInterfaceInner({
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
-	const shouldHoldForCachedState = Boolean(cacheSource?.cache) && isCacheLoading;
+	const shouldHoldForCachedState =
+		Boolean(cacheSource?.cache) && isCacheLoading;
 	const canRenderFromCache = Boolean(cacheSource?.cache && cachedSurface);
 	const shouldShowLoading =
 		(isLoading && !canRenderFromCache) ||
@@ -1161,7 +1162,8 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings = activeSurface?.canvasSettings ?? page?.canvasSettings;
+	const runtimeCanvasSettings =
+		activeSurface?.canvasSettings ?? page?.canvasSettings;
 
 	const canvasStyle: React.CSSProperties = {
 		backgroundColor: runtimeCanvasSettings?.backgroundColor,

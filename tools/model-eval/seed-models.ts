@@ -7,8 +7,8 @@
  */
 import { resolve } from "path";
 import { config } from "dotenv";
+import { disconnect, upsertLlmModel } from "./db";
 import { fetchModelsWithCache } from "./fetch";
-import { upsertLlmModel, disconnect } from "./db";
 
 const ROOT_DIR = resolve(import.meta.dir, "../..");
 config({ path: resolve(ROOT_DIR, ".env") });

@@ -128,8 +128,10 @@ impl NodeLogic for KgSummarizeNode {
         ));
 
         // Group nodes by label
-        let mut label_groups: std::collections::HashMap<String, Vec<&flow_like_storage::databases::graph::SubgraphNode>> =
-            std::collections::HashMap::new();
+        let mut label_groups: std::collections::HashMap<
+            String,
+            Vec<&flow_like_storage::databases::graph::SubgraphNode>,
+        > = std::collections::HashMap::new();
         for node in &subgraph.nodes {
             label_groups
                 .entry(node.label.clone())

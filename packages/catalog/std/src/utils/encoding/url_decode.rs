@@ -26,18 +26,8 @@ impl NodeLogic for UrlDecodeNode {
         );
         node.add_icon("/flow/icons/hash.svg");
 
-        node.add_input_pin(
-            "input",
-            "Input",
-            "URL-encoded string",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "output",
-            "Decoded",
-            "Decoded string",
-            VariableType::String,
-        );
+        node.add_input_pin("input", "Input", "URL-encoded string", VariableType::String);
+        node.add_output_pin("output", "Decoded", "Decoded string", VariableType::String);
 
         node
     }

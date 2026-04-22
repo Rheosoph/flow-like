@@ -1,11 +1,20 @@
 "use client";
 
-import type { LabelStyle, NodeSize } from "../../../../state/backend-state/graph-state";
+import type {
+	LabelStyle,
+	NodeSize,
+} from "../../../../state/backend-state/graph-state";
 import { Input } from "../../input";
 import { Label } from "../../label";
 import { ScrollArea } from "../../scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../select";
-import { GRAPH_ICONS, getGraphIcon, type IconKey } from "../icons";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../select";
+import { GRAPH_ICONS, type IconKey, getGraphIcon } from "../icons";
 
 export interface StyleEditorProps {
 	style: LabelStyle;
@@ -13,7 +22,9 @@ export interface StyleEditorProps {
 }
 
 function formatIconName(key: string): string {
-	return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
+	return key
+		.replace(/([a-z])([A-Z])/g, "$1 $2")
+		.replace(/^./, (c) => c.toUpperCase());
 }
 
 export function StyleEditor({ style, onChange }: StyleEditorProps) {
@@ -46,15 +57,19 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 					onValueChange={(v) => onChange({ ...style, icon: v })}
 				>
 					<SelectTrigger className="h-8 text-xs">
-						{style.icon ? (() => {
-							const Icon = getGraphIcon(style.icon);
-							return (
-								<span className="flex items-center gap-1.5">
-									<Icon className="h-3.5 w-3.5" />
-									{formatIconName(style.icon)}
-								</span>
-							);
-						})() : <SelectValue placeholder="Select icon" />}
+						{style.icon ? (
+							(() => {
+								const Icon = getGraphIcon(style.icon);
+								return (
+									<span className="flex items-center gap-1.5">
+										<Icon className="h-3.5 w-3.5" />
+										{formatIconName(style.icon)}
+									</span>
+								);
+							})()
+						) : (
+							<SelectValue placeholder="Select icon" />
+						)}
 					</SelectTrigger>
 					<SelectContent position="popper" className="max-h-60">
 						<ScrollArea className="max-h-56">
@@ -89,9 +104,15 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="fixed" className="text-xs">Fixed</SelectItem>
-						<SelectItem value="by-degree" className="text-xs">By Degree</SelectItem>
-						<SelectItem value="by-column" className="text-xs">By Column</SelectItem>
+						<SelectItem value="fixed" className="text-xs">
+							Fixed
+						</SelectItem>
+						<SelectItem value="by-degree" className="text-xs">
+							By Degree
+						</SelectItem>
+						<SelectItem value="by-column" className="text-xs">
+							By Column
+						</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -137,7 +158,9 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 				<Input
 					type="number"
 					value={style.width ?? 2}
-					onChange={(e) => onChange({ ...style, width: Number(e.target.value) })}
+					onChange={(e) =>
+						onChange({ ...style, width: Number(e.target.value) })
+					}
 					className="h-8 text-xs"
 					min={1}
 					max={20}

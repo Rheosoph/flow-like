@@ -3,13 +3,11 @@ use flow_like::flow::{
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
-use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "federation")]
 use flow_like_storage::datafusion::execution::session_state::SessionStateBuilder;
+use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "federation")]
-use flow_like_storage::datafusion_federation::{
-    FederatedQueryPlanner, default_optimizer_rules,
-};
+use flow_like_storage::datafusion_federation::{FederatedQueryPlanner, default_optimizer_rules};
 use flow_like_storage::num_cpus;
 use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json};
 use serde::{Deserialize, Serialize};
@@ -453,15 +451,18 @@ mod tests {
         .unwrap();
 
         let sqltable_pool: Arc<DynSqliteConnectionPool> = Arc::new(pool);
-        let table = Arc::new(SqlTable::new("sqlite", &sqltable_pool, "customers").await.unwrap());
+        let table = Arc::new(
+            SqlTable::new("sqlite", &sqltable_pool, "customers")
+                .await
+                .unwrap(),
+        );
         let table_provider = table.create_federated_table_provider().unwrap();
 
         let ctx = create_session_context(SessionConfig::new());
         ctx.register_table("customers", Arc::new(table_provider))
             .unwrap();
 
-        let query =
-            "SELECT name FROM customers WHERE region = 'West' ORDER BY name";
+        let query = "SELECT name FROM customers WHERE region = 'West' ORDER BY name";
         let optimized_plan = ctx.sql(query).await.unwrap().into_optimized_plan().unwrap();
         let optimized_plan_text = format!("{optimized_plan:?}");
 

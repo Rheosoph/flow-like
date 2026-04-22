@@ -1,5 +1,10 @@
-import type { IBoard, INode, IPin } from "../schema";
-import { ICommentType, IPinType, IValueType, IVariableType } from "../schema";
+import type { IBoard, INode, IPin } from "@tm9657/flow-like-ui";
+import {
+	ICommentType,
+	IPinType,
+	IValueType,
+	IVariableType,
+} from "@tm9657/flow-like-ui";
 import {
 	type CatalogIndex,
 	addCommentToBoard,
@@ -25,6 +30,12 @@ import {
 	setPinDefault,
 	warn,
 } from "./board-builder";
+import { MAPPING_DEFS } from "@tm9657/flow-like-ui/lib/importer/mappings";
+import type {
+	FlowDirectDef,
+	FlowLayerDef,
+	ParameterRule,
+} from "@tm9657/flow-like-ui/lib/importer/mappings/types";
 import type {
 	N8nNode,
 	N8nWorkflow,
@@ -32,8 +43,6 @@ import type {
 	TranslationDiagnostic,
 	TranslationResult,
 } from "./types";
-import { MAPPING_DEFS } from "./mappings";
-import type { FlowDirectDef, FlowLayerDef, ParameterRule } from "./mappings/types";
 
 interface NodeMapping {
 	catalog: string;
@@ -77,7 +86,11 @@ function composeCompanion(
 	if (!companion) return undefined;
 	if (configure) configure(companion);
 	addNodeToBoard(board, companion);
-	const outPin = findPinByName(companion, companionOutputPinName, IPinType.Output);
+	const outPin = findPinByName(
+		companion,
+		companionOutputPinName,
+		IPinType.Output,
+	);
 	const inPin = findPinByName(mainNode, mainInputPinName, IPinType.Input);
 	if (outPin && inPin) connectPins(companion, outPin, mainNode, inPin);
 	return companion;
@@ -411,9 +424,7 @@ function setupStructSetPins(
 		| { assignments?: Array<{ name: string; value: unknown; type: string }> }
 		| undefined;
 	if (assignments?.assignments && assignments.assignments.length > 0) {
-		const fieldNames = assignments.assignments
-			.map((a) => a.name)
-			.join(", ");
+		const fieldNames = assignments.assignments.map((a) => a.name).join(", ");
 		node.comment = `Sets fields: ${fieldNames}. Chain multiple struct_set nodes for each field.`;
 	}
 }
@@ -594,7 +605,8 @@ function setupGoogleSheetsPins(
 		description: "ID of the spreadsheet",
 		pinType: IPinType.Input,
 		dataType: IVariableType.String,
-		defaultValue: (n8nNode.parameters.documentId as Record<string, unknown>)?.value ?? "",
+		defaultValue:
+			(n8nNode.parameters.documentId as Record<string, unknown>)?.value ?? "",
 	});
 	node.pins[sheetIdPin.id] = sheetIdPin;
 
@@ -709,7 +721,8 @@ function setupCodePins(
 	const inputsPin = createPin({
 		name: "inputs",
 		friendlyName: "Inputs",
-		description: "Arbitrary JSON/Struct data exposed as the `inputs` dict inside Python",
+		description:
+			"Arbitrary JSON/Struct data exposed as the `inputs` dict inside Python",
 		pinType: IPinType.Input,
 		dataType: IVariableType.Struct,
 	});
@@ -757,7 +770,8 @@ function setupCodePins(
 	const errorExec = createPin({
 		name: "exec_error",
 		friendlyName: "Error",
-		description: "Activated when execution raises an unhandled exception or times out",
+		description:
+			"Activated when execution raises an unhandled exception or times out",
 		pinType: IPinType.Output,
 		dataType: IVariableType.Execution,
 	});
@@ -1046,13 +1060,9 @@ function extractParams(
 ): Record<string, unknown> {
 	const result: Record<string, unknown> = {};
 	for (const [key, rule] of Object.entries(paramDefs)) {
-		const r: ParameterRule =
-			typeof rule === "string" ? { path: rule } : rule;
+		const r: ParameterRule = typeof rule === "string" ? { path: rule } : rule;
 		let value = getNestedValue(n8nNode, r.path);
-		if (
-			(value === undefined || value === null || value === "") &&
-			r.fallback
-		) {
+		if ((value === undefined || value === null || value === "") && r.fallback) {
 			value = getNestedValue(n8nNode, r.fallback);
 		}
 		if (value === undefined || value === null) value = r.default;
@@ -1060,8 +1070,7 @@ function extractParams(
 			value = value.toUpperCase();
 		if (r.transform === "lowercase" && typeof value === "string")
 			value = value.toLowerCase();
-		if (r.transform === "number" && value !== undefined)
-			value = Number(value);
+		if (r.transform === "number" && value !== undefined) value = Number(value);
 		result[key] = value;
 	}
 	return result;
@@ -1094,7 +1103,10 @@ function emitMappingWarnings(
 }
 
 function buildConfigure(
-	n8nDef: { parameters?: Record<string, string | ParameterRule>; warnings?: string[] },
+	n8nDef: {
+		parameters?: Record<string, string | ParameterRule>;
+		warnings?: string[];
+	},
 	flowDef: FlowDirectDef | FlowLayerDef,
 ): NodeMapping["configure"] {
 	if (flowDef.mode === "direct") {
@@ -1152,8 +1164,7 @@ function buildConfigure(
 				const targetNode = nodeMap.get(nodeId);
 				if (targetNode && pin) {
 					const resolved = resolveDefault(value, params);
-					if (resolved !== undefined)
-						setPinDefault(targetNode, pin, resolved);
+					if (resolved !== undefined) setPinDefault(targetNode, pin, resolved);
 				}
 			}
 		}
@@ -1191,8 +1202,8 @@ for (const [name, def] of Object.entries(MAPPING_DEFS)) {
 	const { n8n, flow } = def;
 	const isLayer = flow.mode === "layer";
 	const primaryCatalog = isLayer
-		? (flow as FlowLayerDef).nodes.find((n) => n.primary)?.catalog ??
-			(flow as FlowLayerDef).nodes[0].catalog
+		? ((flow as FlowLayerDef).nodes.find((n) => n.primary)?.catalog ??
+			(flow as FlowLayerDef).nodes[0].catalog)
 		: (flow as FlowDirectDef).catalog;
 
 	NODE_REGISTRY[n8n.type] = {
@@ -1404,8 +1415,7 @@ const LEGACY_SETUP: Record<string, NodeMapping["setupPins"]> = {
 		const op = n8nNode.parameters.operation;
 		if (op === "append" || op === "appendOrUpdate")
 			node.name = "data_google_sheets_append_rows";
-		else if (op === "update")
-			node.name = "data_google_sheets_write_range";
+		else if (op === "update") node.name = "data_google_sheets_write_range";
 		const execIn = createPin({
 			name: "exec_in",
 			friendlyName: "▶",
@@ -1447,7 +1457,10 @@ export function translateN8n(
 
 	info(diagnostics, `Starting translation of n8n workflow: ${workflow.name}`);
 	if (catalogIndex) {
-		info(diagnostics, `Using catalog with ${catalogIndex.size} node definitions`);
+		info(
+			diagnostics,
+			`Using catalog with ${catalogIndex.size} node definitions`,
+		);
 	}
 
 	// Build name→node lookup for connections
@@ -1462,7 +1475,9 @@ export function translateN8n(
 	// Pre-scan: find AI sub-nodes attached via ai_* connections (output parsers, tools, memory, etc.)
 	// These should not create standalone TODO layers — they're absorbed into the agent composition
 	const aiSubNodes = new Set<string>();
-	for (const [sourceName, connectionTypes] of Object.entries(workflow.connections)) {
+	for (const [sourceName, connectionTypes] of Object.entries(
+		workflow.connections,
+	)) {
 		for (const connType of Object.keys(connectionTypes)) {
 			if (connType.startsWith("ai_") && connType !== "ai_languageModel") {
 				aiSubNodes.add(sourceName);
@@ -1502,9 +1517,10 @@ export function translateN8n(
 			};
 			const colorIdx =
 				typeof params.color === "number" ? params.color : undefined;
-			const color = colorIdx ? (stickyColors[colorIdx] ?? "#FFF9B1") : "#FFF9B1";
-			const width =
-				typeof params.width === "number" ? params.width : undefined;
+			const color = colorIdx
+				? (stickyColors[colorIdx] ?? "#FFF9B1")
+				: "#FFF9B1";
+			const width = typeof params.width === "number" ? params.width : undefined;
 			const height =
 				typeof params.height === "number" ? params.height : undefined;
 
@@ -1534,7 +1550,10 @@ export function translateN8n(
 		}
 
 		// AI Agent/Chain nodes → composition with builder chain
-		if (N8N_AGENT_TYPES.has(n8nNode.type) && catalogIndex?.has("agent_invoke")) {
+		if (
+			N8N_AGENT_TYPES.has(n8nNode.type) &&
+			catalogIndex?.has("agent_invoke")
+		) {
 			const nodesBefore = new Set(Object.keys(board.nodes));
 			const cloned = cloneNodeFromCatalog(catalogIndex, "agent_invoke", {
 				friendlyName: n8nNode.name,
@@ -1555,8 +1574,13 @@ export function translateN8n(
 
 				if (systemPrompt) {
 					const setPrompt = composeCompanion(
-						board, catalogIndex, "agent_set_system_prompt", cloned,
-						"agent_out", "agent", `${n8nNode.name} (Prompt)`,
+						board,
+						catalogIndex,
+						"agent_set_system_prompt",
+						cloned,
+						"agent_out",
+						"agent",
+						`${n8nNode.name} (Prompt)`,
 						(sp) => setPinDefault(sp, "system_prompt", systemPrompt),
 					);
 					if (setPrompt) {
@@ -1566,8 +1590,13 @@ export function translateN8n(
 				}
 
 				const fromModel = composeCompanion(
-					board, catalogIndex, "agent_from_model", feedsInto,
-					"agent_out", feedsIntoPinName, `${n8nNode.name} (Builder)`,
+					board,
+					catalogIndex,
+					"agent_from_model",
+					feedsInto,
+					"agent_out",
+					feedsIntoPinName,
+					`${n8nNode.name} (Builder)`,
 				);
 
 				if (fromModel) {
@@ -1611,7 +1640,11 @@ export function translateN8n(
 			let flowNode: INode;
 
 			// Catalog path: clone from real catalog (pins are always correct)
-			if (catalogIndex && mapping.configure && catalogIndex.has(mapping.catalog)) {
+			if (
+				catalogIndex &&
+				mapping.configure &&
+				catalogIndex.has(mapping.catalog)
+			) {
 				const nodesBefore = new Set(Object.keys(board.nodes));
 
 				const cloned = cloneNodeFromCatalog(catalogIndex, mapping.catalog, {
@@ -1628,7 +1661,13 @@ export function translateN8n(
 
 				if (cloned) {
 					flowNode = cloned;
-					mapping.configure(flowNode, n8nNode, diagnostics, board, catalogIndex);
+					mapping.configure(
+						flowNode,
+						n8nNode,
+						diagnostics,
+						board,
+						catalogIndex,
+					);
 				} else {
 					// Should not happen since we checked catalogIndex.has() above
 					flowNode = createNodeFallback(mapping, n8nNode, diagnostics, board);
@@ -1693,9 +1732,8 @@ export function translateN8n(
 			// Unknown node → create TODO layer
 			todoCount++;
 			const paramKeys = Object.keys(n8nNode.parameters);
-			const paramSummary = paramKeys.length > 0
-				? `Parameters: ${paramKeys.join(", ")}`
-				: "";
+			const paramSummary =
+				paramKeys.length > 0 ? `Parameters: ${paramKeys.join(", ")}` : "";
 			const layer = createTodoLayer({
 				name: `TODO: ${n8nNode.name}`,
 				comment: `n8n node "${n8nNode.type}" has no flow-like equivalent. Implement as WASM node or compose from existing nodes.${paramSummary ? `\n${paramSummary}` : ""}`,
@@ -1805,7 +1843,11 @@ export function translateN8n(
 								const [fmX, fmY] = fromModel.coordinates ?? [0, 0];
 								sourceFlowNode.coordinates = [fmX - 300, fmY, 0];
 							}
-							const outPin = findPinByName(sourceFlowNode, "model", IPinType.Output);
+							const outPin = findPinByName(
+								sourceFlowNode,
+								"model",
+								IPinType.Output,
+							);
 							const inPin = findPinByName(fromModel, "model", IPinType.Input);
 							if (outPin && inPin) {
 								connectPins(sourceFlowNode, outPin, fromModel, inPin);
@@ -1823,7 +1865,12 @@ export function translateN8n(
 							const sourceDataOut = findFirstDataOutputPin(sourceFlowNode);
 							const targetDataIn = findFirstDataInputPin(targetFlowNode);
 							if (sourceDataOut && targetDataIn) {
-								connectPins(sourceFlowNode, sourceDataOut, targetFlowNode, targetDataIn);
+								connectPins(
+									sourceFlowNode,
+									sourceDataOut,
+									targetFlowNode,
+									targetDataIn,
+								);
 								connectionCount++;
 							}
 						}
@@ -1874,7 +1921,13 @@ export function translateN8n(
 	// Phase 3: Translate credentials to secret variables with Get Variable nodes
 	let variableCount = 0;
 	const credentialsSeen = new Map<string, string>();
-	const AUTH_PIN_NAMES = ["api_key", "token", "password", "secret", "credentials"];
+	const AUTH_PIN_NAMES = [
+		"api_key",
+		"token",
+		"password",
+		"secret",
+		"credentials",
+	];
 
 	for (const n8nNode of workflow.nodes) {
 		if (!n8nNode.credentials) continue;
@@ -1952,7 +2005,11 @@ export function translateN8n(
 
 				// Wire variable_get output to auth pin on target node
 				if (getVarNode) {
-					const valueOut = findPinByName(getVarNode, "value_ref", IPinType.Output);
+					const valueOut = findPinByName(
+						getVarNode,
+						"value_ref",
+						IPinType.Output,
+					);
 					if (valueOut) {
 						let authPin: IPin | undefined;
 						for (const name of AUTH_PIN_NAMES) {
@@ -1999,8 +2056,7 @@ export function translateN8n(
 		diagnostics,
 		stats: {
 			totalNodes: workflow.nodes.filter(
-				(n) =>
-					!n.disabled && n.type !== "n8n-nodes-base.stickyNote",
+				(n) => !n.disabled && n.type !== "n8n-nodes-base.stickyNote",
 			).length,
 			directMapped: directCount,
 			composed: composedCount,
@@ -2050,8 +2106,7 @@ function resolveSourceExecPin(
 ): IPin | undefined {
 	const execOutPins = Object.values(node.pins).filter(
 		(p) =>
-			p.pin_type === IPinType.Output &&
-			p.data_type === IVariableType.Execution,
+			p.pin_type === IPinType.Output && p.data_type === IVariableType.Execution,
 	);
 	if (execOutPins.length === 0) return undefined;
 

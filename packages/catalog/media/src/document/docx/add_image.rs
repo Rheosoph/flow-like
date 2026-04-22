@@ -149,7 +149,7 @@ impl NodeLogic for DocxAddImageNode {
                     r#"<Default Extension="{}" ContentType="{}"/>"#,
                     img_ext, ct_type
                 );
-                ct_xml = ct_xml.replace("<Types ", &"<Types ".to_string());
+                ct_xml = ct_xml.replace("<Types ", "<Types ");
                 ct_xml = ct_xml.replace("</Types>", &format!("{}\n</Types>", entry));
             }
             files.insert(ct_key, ct_xml.into_bytes());

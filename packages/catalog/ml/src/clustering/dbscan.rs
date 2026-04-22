@@ -28,7 +28,6 @@ use linfa::prelude::Transformer;
 use linfa_clustering::Dbscan;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

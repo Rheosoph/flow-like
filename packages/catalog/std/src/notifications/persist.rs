@@ -148,7 +148,12 @@ pub async fn persist_notification(
             node_id: node_id.clone(),
         };
 
-        let response = client.post(&url).bearer_auth(token).json(&body).send().await;
+        let response = client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await;
 
         match response {
             Ok(resp) if resp.status().is_success() => return Ok(true),
@@ -174,10 +179,11 @@ pub async fn persist_notification(
     }
 
     // For other-user targeting without a valid app, skip (can't verify membership)
-    if let Some(ref target) = params.target_user_sub {
-        if target != "local" && !target.is_empty() {
-            return Ok(false);
-        }
+    if let Some(ref target) = params.target_user_sub
+        && target != "local"
+        && !target.is_empty()
+    {
+        return Ok(false);
     }
 
     // Fallback: user-scoped endpoint (offline projects / no board context)

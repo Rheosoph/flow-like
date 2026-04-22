@@ -1,15 +1,26 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
-import type { EdgeLabelMapping, NodeLabelMapping, LabelStyle, PropertyColumn } from "../../../../state/backend-state/graph-state";
+import type {
+	EdgeLabelMapping,
+	LabelStyle,
+	NodeLabelMapping,
+	PropertyColumn,
+} from "../../../../state/backend-state/graph-state";
 import { Button } from "../../button";
+import { Card } from "../../card";
 import { Input } from "../../input";
 import { Label } from "../../label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../select";
-import { Card } from "../../card";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../select";
+import { Separator } from "../../separator";
 import { ColumnPicker } from "./column-picker";
 import { StyleEditor } from "./style-editor";
-import { Separator } from "../../separator";
 
 export interface StepEdgesProps {
 	edges: EdgeLabelMapping[];
@@ -26,7 +37,13 @@ const DEFAULT_EDGE_STYLE: LabelStyle = {
 	width: 2,
 };
 
-export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: StepEdgesProps) {
+export function StepEdges({
+	edges,
+	nodes,
+	tables,
+	tableColumns,
+	onChange,
+}: StepEdgesProps) {
 	const nodeLabels = nodes.map((n) => n.label).filter(Boolean);
 
 	const getNodeColumns = (label: string): string[] => {
@@ -78,7 +95,8 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 				<div>
 					<h3 className="text-sm font-medium mb-1">Edge Mappings</h3>
 					<p className="text-xs text-muted-foreground">
-						Each mapping turns a table into a graph edge label connecting two node labels.
+						Each mapping turns a table into a graph edge label connecting two
+						node labels.
 					</p>
 				</div>
 				<Button size="sm" variant="outline" onClick={addEdge}>
@@ -95,7 +113,9 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 						return (
 							<Card key={i} className="p-4 space-y-3">
 								<div className="flex items-center justify-between">
-									<span className="text-xs font-medium text-muted-foreground">Edge #{i + 1}</span>
+									<span className="text-xs font-medium text-muted-foreground">
+										Edge #{i + 1}
+									</span>
 									<Button
 										variant="ghost"
 										size="icon"
@@ -120,14 +140,23 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 										<Label className="text-xs">Table</Label>
 										<Select
 											value={edge.table}
-											onValueChange={(v) => updateEdge(i, { table: v, src_column: "", dst_column: "", property_columns: [] })}
+											onValueChange={(v) =>
+												updateEdge(i, {
+													table: v,
+													src_column: "",
+													dst_column: "",
+													property_columns: [],
+												})
+											}
 										>
 											<SelectTrigger className="h-8 text-xs">
 												<SelectValue placeholder="Select table" />
 											</SelectTrigger>
 											<SelectContent>
 												{tables.map((t) => (
-													<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>
+													<SelectItem key={t} value={t} className="text-xs">
+														{t}
+													</SelectItem>
 												))}
 											</SelectContent>
 										</Select>
@@ -154,14 +183,21 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 										<Label className="text-xs">Source Label</Label>
 										<Select
 											value={edge.src_label}
-											onValueChange={(v) => updateEdge(i, { src_label: v, src_node_column: undefined })}
+											onValueChange={(v) =>
+												updateEdge(i, {
+													src_label: v,
+													src_node_column: undefined,
+												})
+											}
 										>
 											<SelectTrigger className="h-8 text-xs">
 												<SelectValue placeholder="Source node label" />
 											</SelectTrigger>
 											<SelectContent>
 												{nodeLabels.map((l) => (
-													<SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+													<SelectItem key={l} value={l} className="text-xs">
+														{l}
+													</SelectItem>
 												))}
 											</SelectContent>
 										</Select>
@@ -170,40 +206,59 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 										<Label className="text-xs">Target Label</Label>
 										<Select
 											value={edge.dst_label}
-											onValueChange={(v) => updateEdge(i, { dst_label: v, dst_node_column: undefined })}
+											onValueChange={(v) =>
+												updateEdge(i, {
+													dst_label: v,
+													dst_node_column: undefined,
+												})
+											}
 										>
 											<SelectTrigger className="h-8 text-xs">
 												<SelectValue placeholder="Target node label" />
 											</SelectTrigger>
 											<SelectContent>
 												{nodeLabels.map((l) => (
-													<SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+													<SelectItem key={l} value={l} className="text-xs">
+														{l}
+													</SelectItem>
 												))}
 											</SelectContent>
 										</Select>
 									</div>
-									{edge.src_label && getNodeColumns(edge.src_label).length > 0 && (
-										<div className="space-y-1.5">
-											<Label className="text-xs">Source Join Column</Label>
-											<ColumnPicker
-												columns={getNodeColumns(edge.src_label)}
-												value={edge.src_node_column ?? ""}
-												onChange={(v) => updateEdge(i, { src_node_column: v || undefined })}
-												placeholder={nodes.find((n) => n.label === edge.src_label)?.id_column || "Node ID column"}
-											/>
-										</div>
-									)}
-									{edge.dst_label && getNodeColumns(edge.dst_label).length > 0 && (
-										<div className="space-y-1.5">
-											<Label className="text-xs">Target Join Column</Label>
-											<ColumnPicker
-												columns={getNodeColumns(edge.dst_label)}
-												value={edge.dst_node_column ?? ""}
-												onChange={(v) => updateEdge(i, { dst_node_column: v || undefined })}
-												placeholder={nodes.find((n) => n.label === edge.dst_label)?.id_column || "Node ID column"}
-											/>
-										</div>
-									)}
+									{edge.src_label &&
+										getNodeColumns(edge.src_label).length > 0 && (
+											<div className="space-y-1.5">
+												<Label className="text-xs">Source Join Column</Label>
+												<ColumnPicker
+													columns={getNodeColumns(edge.src_label)}
+													value={edge.src_node_column ?? ""}
+													onChange={(v) =>
+														updateEdge(i, { src_node_column: v || undefined })
+													}
+													placeholder={
+														nodes.find((n) => n.label === edge.src_label)
+															?.id_column || "Node ID column"
+													}
+												/>
+											</div>
+										)}
+									{edge.dst_label &&
+										getNodeColumns(edge.dst_label).length > 0 && (
+											<div className="space-y-1.5">
+												<Label className="text-xs">Target Join Column</Label>
+												<ColumnPicker
+													columns={getNodeColumns(edge.dst_label)}
+													value={edge.dst_node_column ?? ""}
+													onChange={(v) =>
+														updateEdge(i, { dst_node_column: v || undefined })
+													}
+													placeholder={
+														nodes.find((n) => n.label === edge.dst_label)
+															?.id_column || "Node ID column"
+													}
+												/>
+											</div>
+										)}
 								</div>
 
 								{cols.length > 0 && (
@@ -219,7 +274,9 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 													type="button"
 													onClick={() => togglePropertyColumn(i, col)}
 													className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-														edge.property_columns.some((c) => c.name === col.name)
+														edge.property_columns.some(
+															(c) => c.name === col.name,
+														)
 															? "bg-primary text-primary-foreground border-primary"
 															: "bg-muted hover:bg-accent"
 													}`}
@@ -242,7 +299,8 @@ export function StepEdges({ edges, nodes, tables, tableColumns, onChange }: Step
 					})}
 					{edges.length === 0 && (
 						<p className="text-sm text-muted-foreground text-center py-8">
-							No edge mappings yet. Click &quot;Add Edge&quot; to connect node labels.
+							No edge mappings yet. Click &quot;Add Edge&quot; to connect node
+							labels.
 						</p>
 					)}
 				</div>

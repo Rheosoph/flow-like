@@ -46,12 +46,18 @@ export class RegistryState implements IRegistryState {
 	async searchPackages(filters?: SearchFilters): Promise<SearchResults> {
 		if (!this.backend.profile || !this.backend.auth) {
 			await this.ensureInit();
-			return invoke("registry_search_packages", { filters: filters ?? {}, token: this.currentToken });
+			return invoke("registry_search_packages", {
+				filters: filters ?? {},
+				token: this.currentToken,
+			});
 		}
 		try {
 			return await this.fetchSearch(filters);
 		} catch {
-			return invoke("registry_search_packages", { filters: filters ?? {}, token: this.currentToken });
+			return invoke("registry_search_packages", {
+				filters: filters ?? {},
+				token: this.currentToken,
+			});
 		}
 	}
 
@@ -70,13 +76,15 @@ export class RegistryState implements IRegistryState {
 		const params = new URLSearchParams();
 		if (filters?.query) params.set("query", filters.query);
 		if (filters?.category) params.set("category", filters.category);
-		if (filters?.keywords?.length) params.set("keywords", filters.keywords.join(","));
+		if (filters?.keywords?.length)
+			params.set("keywords", filters.keywords.join(","));
 		if (filters?.author) params.set("author", filters.author);
 		if (filters?.verifiedOnly) params.set("verified_only", "true");
 		if (filters?.includeDeprecated) params.set("include_deprecated", "true");
 		if (filters?.includeDisabled) params.set("include_disabled", "true");
 		if (filters?.sortBy) params.set("sort_by", filters.sortBy);
-		if (filters?.sortDesc !== undefined) params.set("sort_desc", String(filters.sortDesc));
+		if (filters?.sortDesc !== undefined)
+			params.set("sort_desc", String(filters.sortDesc));
 		if (filters?.offset) params.set("offset", String(filters.offset));
 		if (filters?.limit) params.set("limit", String(filters.limit));
 		if (filters?.language) params.set("language", filters.language);
@@ -105,7 +113,11 @@ export class RegistryState implements IRegistryState {
 		version?: string,
 	): Promise<CachedPackage> {
 		await this.ensureInit();
-		return invoke("registry_install_package", { packageId, version, token: this.currentToken });
+		return invoke("registry_install_package", {
+			packageId,
+			version,
+			token: this.currentToken,
+		});
 	}
 
 	async uninstallPackage(packageId: string): Promise<void> {
@@ -133,7 +145,11 @@ export class RegistryState implements IRegistryState {
 		version?: string,
 	): Promise<CachedPackage> {
 		await this.ensureInit();
-		return invoke("registry_update_package", { packageId, version, token: this.currentToken });
+		return invoke("registry_update_package", {
+			packageId,
+			version,
+			token: this.currentToken,
+		});
 	}
 
 	async checkForUpdates(): Promise<PackageUpdate[]> {
@@ -215,7 +231,11 @@ export class RegistryState implements IRegistryState {
 		return invoke("registry_set_auth_token", { token });
 	}
 
-	async getPackageComments(packageId: string, offset?: number, limit?: number): Promise<PackageCommentsResponse> {
+	async getPackageComments(
+		packageId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<PackageCommentsResponse> {
 		if (!this.backend.profile || !this.backend.auth) {
 			return { comments: [], total: 0, offset: 0, limit: 20 };
 		}
@@ -231,7 +251,10 @@ export class RegistryState implements IRegistryState {
 		);
 	}
 
-	async upsertPackageComment(packageId: string, body: UpsertPackageCommentRequest): Promise<UpsertPackageCommentResponse> {
+	async upsertPackageComment(
+		packageId: string,
+		body: UpsertPackageCommentRequest,
+	): Promise<UpsertPackageCommentResponse> {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("You must be logged in to leave a review.");
 		}
@@ -243,7 +266,10 @@ export class RegistryState implements IRegistryState {
 		);
 	}
 
-	async deletePackageComment(packageId: string, commentId: string): Promise<void> {
+	async deletePackageComment(
+		packageId: string,
+		commentId: string,
+	): Promise<void> {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("You must be logged in.");
 		}

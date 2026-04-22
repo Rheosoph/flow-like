@@ -384,10 +384,7 @@ function StepDetail({
 				/>
 				{!isLast && (
 					<div
-						className={cn(
-							"w-0.5 flex-1 mt-1",
-							intensityLineColor(intensity),
-						)}
+						className={cn("w-0.5 flex-1 mt-1", intensityLineColor(intensity))}
 					/>
 				)}
 			</div>
@@ -476,14 +473,18 @@ function ModelCallRow({ call }: { call: IModelCallEntry }) {
 		<div className="flex items-center justify-between text-xs py-0.5 gap-2">
 			<ModelBadge model={call.model || "unknown"} />
 			<div className="flex items-center gap-2 text-muted-foreground shrink-0">
-				<span className={cn("tabular-nums font-medium", intensityColor(intensity))}>
+				<span
+					className={cn("tabular-nums font-medium", intensityColor(intensity))}
+				>
 					{formatTokenCount(call.usage.total_tokens)} tok
 				</span>
 				{call.usage.cost != null && (
 					<span className="tabular-nums">{formatCost(call.usage.cost)}</span>
 				)}
 				{call.duration_ms != null && (
-					<span className="tabular-nums">{formatDuration(call.duration_ms)}</span>
+					<span className="tabular-nums">
+						{formatDuration(call.duration_ms)}
+					</span>
 				)}
 			</div>
 		</div>
@@ -643,10 +644,7 @@ export function UsageStats({
 						<div className="space-y-2 text-xs">
 							<div className="flex items-center gap-2">
 								<ZapIcon
-									className={cn(
-										"w-3.5 h-3.5",
-										intensityColor(totalIntensity),
-									)}
+									className={cn("w-3.5 h-3.5", intensityColor(totalIntensity))}
 								/>
 								<span className="font-medium">
 									{formatTokenCountFull(aggregated.totalTokens)} total tokens
@@ -695,10 +693,7 @@ export function UsageStats({
 			</TooltipProvider>
 
 			<Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-				<SheetContent
-					side="right"
-					className="w-md sm:w-lg lg:w-xl sm:max-w-xl"
-				>
+				<SheetContent side="right" className="w-md sm:w-lg lg:w-xl sm:max-w-xl">
 					<SheetHeader className="px-2 shrink-0">
 						<SheetTitle className="flex items-center gap-2">
 							<ZapIcon className="w-4 h-4" />

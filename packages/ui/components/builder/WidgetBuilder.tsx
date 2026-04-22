@@ -691,7 +691,12 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 				? { customCss: presignedCanvasSettings.customCss }
 				: undefined,
 		}),
-		[surfaceId, presignedComponents, components, presignedCanvasSettings.customCss],
+		[
+			surfaceId,
+			presignedComponents,
+			components,
+			presignedCanvasSettings.customCss,
+		],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1049,9 +1054,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 					return { ...prev, ...filtered };
 				});
@@ -1304,8 +1307,12 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							...component,
 							component: {
 								...componentData,
-								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.layout !== undefined && {
+									layout: { literalJson: JSON.stringify(configOrLayout) },
+								}),
+								...(updateValue.config !== undefined && {
+									config: { literalJson: JSON.stringify(configOrLayout) },
+								}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;

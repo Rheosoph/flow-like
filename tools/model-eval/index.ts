@@ -1,10 +1,16 @@
 #!/usr/bin/env bun
 import { resolve } from "path";
-import { readFile, writeFile } from "fs/promises";
 import { config } from "dotenv";
+import { readFile, writeFile } from "fs/promises";
+import {
+	computeTier,
+	disconnect,
+	fetchBitsWithModel,
+	updateBitParameters,
+	upsertLlmModel,
+} from "./db";
 import { fetchModelsWithCache } from "./fetch";
-import { computeClassification, buildTodoList } from "./normalize";
-import { fetchBitsWithModel, updateBitParameters, upsertLlmModel, computeTier, disconnect } from "./db";
+import { buildTodoList, computeClassification } from "./normalize";
 import type { AAModel, ModelClassification, TodoEntry } from "./types";
 
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -26,9 +32,16 @@ if (!dbUrl) {
 
 const TODO_PATH = resolve(import.meta.dir, "todo.json");
 const CLASSIFICATION_KEYS: (keyof ModelClassification)[] = [
-	"coding", "cost", "creativity", "factuality",
-	"function_calling", "multilinguality", "openness",
-	"reasoning", "safety", "speed",
+	"coding",
+	"cost",
+	"creativity",
+	"factuality",
+	"function_calling",
+	"multilinguality",
+	"openness",
+	"reasoning",
+	"safety",
+	"speed",
 ];
 
 // ANSI colors
@@ -50,7 +63,9 @@ function formatDiff(
 	releaseDate?: string | null,
 ): string {
 	const lines: string[] = [];
-	lines.push(`${BOLD}${CYAN}── ${modelName}${RESET} ${DIM}(${slug}) bit:${bitId}${RESET}`);
+	lines.push(
+		`${BOLD}${CYAN}── ${modelName}${RESET} ${DIM}(${slug}) bit:${bitId}${RESET}`,
+	);
 
 	if (!oldClass) {
 		lines.push(`  ${GREEN}+ NEW classification${RESET}`);
@@ -72,13 +87,17 @@ function formatDiff(
 			const color = newVal > oldVal ? GREEN : RED;
 			const delta = (newVal - oldVal).toFixed(2);
 			const sign = newVal > oldVal ? "+" : "";
-			lines.push(`  ${color}${arrow} ${key}: ${oldVal} → ${newVal} (${sign}${delta})${RESET}`);
+			lines.push(
+				`  ${color}${arrow} ${key}: ${oldVal} → ${newVal} (${sign}${delta})${RESET}`,
+			);
 		}
 	}
 
 	if (tierChange && tierChange.oldTier !== tierChange.newTier) {
 		hasChanges = true;
-		lines.push(`  ${YELLOW}⚙ tier: ${tierChange.oldTier} → ${tierChange.newTier}${RESET}`);
+		lines.push(
+			`  ${YELLOW}⚙ tier: ${tierChange.oldTier} → ${tierChange.newTier}${RESET}`,
+		);
 	} else if (tierChange) {
 		lines.push(`  ${DIM}  tier: ${tierChange.oldTier}${RESET}`);
 	}
@@ -94,7 +113,9 @@ function formatDiff(
 	return lines.join("\n");
 }
 
-async function loadExistingTodos(): Promise<Map<string, Partial<ModelClassification>>> {
+async function loadExistingTodos(): Promise<
+	Map<string, Partial<ModelClassification>>
+> {
 	const overrides = new Map<string, Partial<ModelClassification>>();
 	try {
 		const raw = await readFile(TODO_PATH, "utf-8");
@@ -102,7 +123,12 @@ async function loadExistingTodos(): Promise<Map<string, Partial<ModelClassificat
 		for (const entry of todos) {
 			const partial: Partial<ModelClassification> = {};
 			const manual = entry as unknown as Record<string, unknown>;
-			for (const key of ["creativity", "multilinguality", "openness", "safety"] as const) {
+			for (const key of [
+				"creativity",
+				"multilinguality",
+				"openness",
+				"safety",
+			] as const) {
 				if (typeof manual[key] === "number" && (manual[key] as number) > 0) {
 					partial[key] = manual[key] as number;
 				}
@@ -119,7 +145,9 @@ async function loadExistingTodos(): Promise<Map<string, Partial<ModelClassificat
 
 async function main() {
 	if (DRY_RUN) {
-		console.log(`${BOLD}${YELLOW}=== Model Evaluation Pipeline (DRY RUN) ===${RESET}\n`);
+		console.log(
+			`${BOLD}${YELLOW}=== Model Evaluation Pipeline (DRY RUN) ===${RESET}\n`,
+		);
 	} else {
 		console.log("=== Model Evaluation Pipeline ===\n");
 	}
@@ -148,7 +176,9 @@ async function main() {
 		}
 		console.log(`[db] Upserted ${upsertCount} LlmModel records`);
 	} else {
-		console.log(`${DIM}[dry-run] Skipping LlmModel upserts (${models.length} models)${RESET}`);
+		console.log(
+			`${DIM}[dry-run] Skipping LlmModel upserts (${models.length} models)${RESET}`,
+		);
 	}
 
 	// Step 4: Fetch bits and compute classifications
@@ -186,7 +216,10 @@ async function main() {
 
 		const isLocal = Boolean(bit.downloadLink?.trim());
 		const overrides = todoOverrides.get(slug);
-		const oldClassification = (bit.parameters?.model_classification as ModelClassification | undefined) ?? null;
+		const oldClassification =
+			(bit.parameters?.model_classification as
+				| ModelClassification
+				| undefined) ?? null;
 
 		const { classification, missingFields } = computeClassification(
 			aaModel,
@@ -200,10 +233,13 @@ async function main() {
 		const tierResult = computeTier(bit.parameters, classification.cost);
 
 		if (DRY_RUN) {
-			const classUnchanged = oldClassification && CLASSIFICATION_KEYS.every(
-				(k) => (oldClassification[k] ?? 0) === classification[k],
-			);
-			const tierUnchanged = !tierResult || tierResult.oldTier === tierResult.newTier;
+			const classUnchanged =
+				oldClassification &&
+				CLASSIFICATION_KEYS.every(
+					(k) => (oldClassification[k] ?? 0) === classification[k],
+				);
+			const tierUnchanged =
+				!tierResult || tierResult.oldTier === tierResult.newTier;
 
 			if (classUnchanged && tierUnchanged) {
 				unchangedCount++;
@@ -216,11 +252,26 @@ async function main() {
 					new: classification,
 					tierChange: tierResult,
 				});
-				console.log(formatDiff(slug, aaModel.name, bit.id, oldClassification, classification, tierResult, aaModel.release_date));
+				console.log(
+					formatDiff(
+						slug,
+						aaModel.name,
+						bit.id,
+						oldClassification,
+						classification,
+						tierResult,
+						aaModel.release_date,
+					),
+				);
 				console.log();
 			}
 		} else {
-			await updateBitParameters(bit.id, classification, bit.parameters, aaModel.release_date);
+			await updateBitParameters(
+				bit.id,
+				classification,
+				bit.parameters,
+				aaModel.release_date,
+			);
 		}
 
 		updatedCount++;
@@ -242,7 +293,9 @@ async function main() {
 		// Write preview JSON
 		const previewPath = resolve(ROOT_DIR, "tmp", "dry-run-preview.json");
 		await writeFile(previewPath, JSON.stringify(dryRunChanges, null, 2));
-		console.log(`\n  Preview written to ${DIM}tmp/dry-run-preview.json${RESET}`);
+		console.log(
+			`\n  Preview written to ${DIM}tmp/dry-run-preview.json${RESET}`,
+		);
 	} else {
 		console.log(`[db] Updated ${updatedCount} bits, skipped ${skippedCount}`);
 	}
@@ -253,11 +306,17 @@ async function main() {
 		await writeFile(TODO_PATH, JSON.stringify(todos, null, 2));
 		console.log(`\n[todo] Wrote ${todos.length} entries to todo.json`);
 	} else {
-		console.log(`\n${DIM}[dry-run] Would write ${todos.length} todo entries${RESET}`);
+		console.log(
+			`\n${DIM}[dry-run] Would write ${todos.length} todo entries${RESET}`,
+		);
 	}
 
 	await disconnect();
-	console.log(DRY_RUN ? `\n${BOLD}${YELLOW}=== Dry run complete — no DB writes ===${RESET}` : "\n=== Done ===");
+	console.log(
+		DRY_RUN
+			? `\n${BOLD}${YELLOW}=== Dry run complete — no DB writes ===${RESET}`
+			: "\n=== Done ===",
+	);
 }
 
 main().catch((err) => {

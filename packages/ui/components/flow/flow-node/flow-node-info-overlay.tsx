@@ -24,6 +24,7 @@ import {
 	useState,
 } from "react";
 import { type IBoard, cn } from "../../../lib";
+import { NODE_PERMISSION_LABELS } from "../../../lib/permission/node-permission";
 import type { INode } from "../../../lib/schema/flow/node";
 import { type IPin, IPinType } from "../../../lib/schema/flow/pin";
 import { Badge } from "../../ui/badge";
@@ -33,7 +34,6 @@ import { Separator } from "../../ui/separator";
 import { Sheet, SheetContent, SheetHeader } from "../../ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { typeToColor } from "../utils";
-import { NODE_PERMISSION_LABELS } from "../../../lib/permission/node-permission";
 
 export interface FlowNodeInfoOverlayHandle {
 	openNodeInfo: (node: INode) => void;
@@ -180,7 +180,12 @@ const OverviewSection = memo(({ node }: { node: INode }) => {
 OverviewSection.displayName = "OverviewSection";
 
 function formatPermission(perm: string): { label: string; icon: string } {
-	return NODE_PERMISSION_LABELS[perm as keyof typeof NODE_PERMISSION_LABELS] ?? { label: perm, icon: "🔒" };
+	return (
+		NODE_PERMISSION_LABELS[perm as keyof typeof NODE_PERMISSION_LABELS] ?? {
+			label: perm,
+			icon: "🔒",
+		}
+	);
 }
 
 const PermissionsSection = memo(({ node }: { node: INode }) => {
@@ -278,28 +283,29 @@ const CopySchemaButton = memo(
 			});
 		}, [schema, unrefValue]);
 
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					variant="ghost"
-					size="icon"
-					className="h-5 w-5 md:h-6 md:w-6"
-					onClick={handleCopy}
-				>
-					{copied ? (
-						<CheckIcon className="w-3 h-3 text-emerald-500" />
-					) : (
-						<CopyIcon className="w-3 h-3" />
-					)}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p className="text-xs">{copied ? "Copied!" : "Copy Schema"}</p>
-			</TooltipContent>
-		</Tooltip>
-	);
-});
+		return (
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon"
+						className="h-5 w-5 md:h-6 md:w-6"
+						onClick={handleCopy}
+					>
+						{copied ? (
+							<CheckIcon className="w-3 h-3 text-emerald-500" />
+						) : (
+							<CopyIcon className="w-3 h-3" />
+						)}
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>
+					<p className="text-xs">{copied ? "Copied!" : "Copy Schema"}</p>
+				</TooltipContent>
+			</Tooltip>
+		);
+	},
+);
 CopySchemaButton.displayName = "CopySchemaButton";
 
 const PinInfo = memo(

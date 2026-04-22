@@ -143,7 +143,9 @@ export function useStoreData(
 			if (result.alreadyMember) {
 				toast.info("You already own this app!");
 				await apps.refetch?.();
-				await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(() => {});
+				await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(
+					() => {},
+				);
 				router.push(`/use?id=${id}`);
 				return;
 			}
@@ -159,7 +161,16 @@ export function useStoreData(
 		} finally {
 			setIsPurchasing(false);
 		}
-	}, [id, isPurchasing, ensureAuthenticated, backend.appState, apps, events, routes, router]);
+	}, [
+		id,
+		isPurchasing,
+		ensureAuthenticated,
+		backend.appState,
+		apps,
+		events,
+		routes,
+		router,
+	]);
 
 	const onJoinOrRequest = useCallback(async () => {
 		if (!appData || !id) return;
@@ -196,12 +207,24 @@ export function useStoreData(
 			);
 			toast.success("Joined app! You can now access it.");
 			await apps.refetch?.();
-			await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(() => {});
+			await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(
+				() => {},
+			);
 			await router.push(`/use?id=${appData.id}`);
 		} catch (e) {
 			toast.error("Failed to request to join app. Please try again later.");
 		}
-	}, [appData, id, ensureAuthenticated, backend.appState, apps, events, routes, router, onBuy]);
+	}, [
+		appData,
+		id,
+		ensureAuthenticated,
+		backend.appState,
+		apps,
+		events,
+		routes,
+		router,
+		onBuy,
+	]);
 
 	const hasThumbnail = !!metaData?.thumbnail;
 	const coverUrl = metaData?.thumbnail || "/placeholder-thumbnail.webp";

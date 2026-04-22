@@ -135,9 +135,7 @@ async fn maybe_refresh_oauth_tokens(
         .await
         {
             Ok(response) => {
-                let new_expires_at = response
-                    .expires_in
-                    .map(|ei| now + ei as u64);
+                let new_expires_at = response.expires_in.map(|ei| now + ei as u64);
 
                 let new_value = serde_json::json!({
                     "access_token": response.access_token,
@@ -167,25 +165,23 @@ async fn maybe_refresh_oauth_tokens(
         }
     }
 
-    if any_refreshed {
-        if let Ok(json_str) = serde_json::to_string(&tokens) {
-            use crate::routes::app::events::db::encrypt_token;
-            let encrypted = encrypt_token(&json_str, &state.encryption_key);
+    if any_refreshed && let Ok(json_str) = serde_json::to_string(&tokens) {
+        use crate::routes::app::events::db::encrypt_token;
+        let encrypted = encrypt_token(&json_str, &state.encryption_key);
 
-            let update = event_sink::ActiveModel {
-                id: Set(sink_id.to_string()),
-                oauth_tokens_encrypted: Set(Some(encrypted)),
-                updated_at: Set(chrono::Utc::now().naive_utc()),
-                ..Default::default()
-            };
+        let update = event_sink::ActiveModel {
+            id: Set(sink_id.to_string()),
+            oauth_tokens_encrypted: Set(Some(encrypted)),
+            updated_at: Set(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        };
 
-            if let Err(err) = update.update(&state.db).await {
-                tracing::error!(
-                    sink = %sink_id,
-                    error = %err,
-                    "Failed to persist refreshed OAuth tokens to EventSink"
-                );
-            }
+        if let Err(err) = update.update(&state.db).await {
+            tracing::error!(
+                sink = %sink_id,
+                error = %err,
+                "Failed to persist refreshed OAuth tokens to EventSink"
+            );
         }
     }
 

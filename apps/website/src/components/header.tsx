@@ -95,7 +95,8 @@ function getLocalizedPath(currentLang: Lang, targetLang: Lang) {
 }
 
 function localizeHref(lang: Lang, href: string): string {
-	if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:")) return href;
+	if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:"))
+		return href;
 	return `/${lang}${href}`;
 }
 
@@ -135,18 +136,26 @@ function useGitHubStars() {
 			const cached = sessionStorage.getItem(CACHE_KEY);
 			if (cached) {
 				const { count, ts } = JSON.parse(cached);
-				if (Date.now() - ts < CACHE_TTL) { setStars(count); return; }
+				if (Date.now() - ts < CACHE_TTL) {
+					setStars(count);
+					return;
+				}
 			}
 		} catch {}
 		fetch("https://api.github.com/repos/TM9657/flow-like", {
 			headers: { Accept: "application/vnd.github.v3+json" },
 		})
-			.then(r => r.ok ? r.json() : Promise.reject())
-			.then(data => {
+			.then((r) => (r.ok ? r.json() : Promise.reject()))
+			.then((data) => {
 				const count = data?.stargazers_count;
 				if (typeof count === "number" && count > 0) {
 					setStars(count);
-					try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ count, ts: Date.now() })); } catch {}
+					try {
+						sessionStorage.setItem(
+							CACHE_KEY,
+							JSON.stringify({ count, ts: Date.now() }),
+						);
+					} catch {}
 				}
 			})
 			.catch(() => {});
@@ -154,7 +163,10 @@ function useGitHubStars() {
 	return stars;
 }
 
-function DropdownLink({ item, onClose }: { item: DropdownItem; onClose: () => void }) {
+function DropdownLink({
+	item,
+	onClose,
+}: { item: DropdownItem; onClose: () => void }) {
 	return (
 		<a
 			href={item.href}
@@ -168,19 +180,27 @@ function DropdownLink({ item, onClose }: { item: DropdownItem; onClose: () => vo
 			onClick={onClose}
 		>
 			{item.icon && (
-				<div className={`p-1.5 rounded-md shrink-0 transition-colors duration-200 ${
-					item.highlight ? "bg-primary/10 text-primary" : "bg-muted/60 text-foreground/60 group-hover:bg-muted group-hover:text-foreground"
-				}`}>
+				<div
+					className={`p-1.5 rounded-md shrink-0 transition-colors duration-200 ${
+						item.highlight
+							? "bg-primary/10 text-primary"
+							: "bg-muted/60 text-foreground/60 group-hover:bg-muted group-hover:text-foreground"
+					}`}
+				>
 					<item.icon className="w-3.5 h-3.5" />
 				</div>
 			)}
 			<div className="flex-1 min-w-0">
 				<div className="flex items-center gap-1.5">
-					<span className="font-medium text-sm leading-tight">{item.label}</span>
+					<span className="font-medium text-sm leading-tight">
+						{item.label}
+					</span>
 					{item.external && <LuExternalLink className="w-3 h-3 opacity-40" />}
 				</div>
 				{item.description && (
-					<p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+					<p className="text-xs text-muted-foreground mt-0.5 leading-snug">
+						{item.description}
+					</p>
 				)}
 			</div>
 		</a>
@@ -197,21 +217,31 @@ function NavDropdown({
 	const { open, setOpen, handleMouseEnter, handleMouseLeave } = useHoverMenu();
 
 	return (
-		<div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+		<div
+			className="relative"
+			onMouseEnter={handleMouseEnter}
+			onMouseLeave={handleMouseLeave}
+		>
 			<button
 				type="button"
 				className="flex items-center gap-1 text-sm font-medium text-foreground/70 hover:text-foreground transition-colors duration-300 px-3 py-2"
 				onClick={() => setOpen(!open)}
 			>
 				{label}
-				<ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? "rotate-180" : ""}`} />
+				<ChevronDown
+					className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+				/>
 			</button>
 
 			{open && (
 				<div className="absolute top-full left-0 pt-2 z-50">
 					<div className="bg-background/95 backdrop-blur-lg border border-border/50 rounded-xl shadow-xl shadow-black/10 p-2 min-w-60">
 						{items.map((item) => (
-							<DropdownLink key={item.href} item={item} onClose={() => setOpen(false)} />
+							<DropdownLink
+								key={item.href}
+								item={item}
+								onClose={() => setOpen(false)}
+							/>
 						))}
 					</div>
 				</div>
@@ -224,14 +254,20 @@ function NavSolutionsDropdown({ groups }: { groups: SolutionsGroup[] }) {
 	const { open, setOpen, handleMouseEnter, handleMouseLeave } = useHoverMenu();
 
 	return (
-		<div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+		<div
+			className="relative"
+			onMouseEnter={handleMouseEnter}
+			onMouseLeave={handleMouseLeave}
+		>
 			<button
 				type="button"
 				className="flex items-center gap-1 text-sm font-medium text-foreground/70 hover:text-foreground transition-colors duration-300 px-3 py-2"
 				onClick={() => setOpen(!open)}
 			>
 				Solutions
-				<ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? "rotate-180" : ""}`} />
+				<ChevronDown
+					className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+				/>
 			</button>
 
 			{open && (
@@ -248,7 +284,11 @@ function NavSolutionsDropdown({ groups }: { groups: SolutionsGroup[] }) {
 									</p>
 									<div className="space-y-0.5">
 										{group.items.map((item) => (
-											<DropdownLink key={item.href} item={item} onClose={() => setOpen(false)} />
+											<DropdownLink
+												key={item.href}
+												item={item}
+												onClose={() => setOpen(false)}
+											/>
 										))}
 									</div>
 								</div>
@@ -265,7 +305,11 @@ function LanguageSelector({ currentLang }: { currentLang: Lang }) {
 	const { open, setOpen, handleMouseEnter, handleMouseLeave } = useHoverMenu();
 
 	return (
-		<div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+		<div
+			className="relative"
+			onMouseEnter={handleMouseEnter}
+			onMouseLeave={handleMouseLeave}
+		>
 			<button
 				type="button"
 				onClick={() => setOpen(!open)}
@@ -274,27 +318,31 @@ function LanguageSelector({ currentLang }: { currentLang: Lang }) {
 			>
 				<span className="text-base leading-none">{langFlags[currentLang]}</span>
 				<span className="uppercase text-xs font-medium">{currentLang}</span>
-				<ChevronDown className={`w-3 h-3 transition-transform duration-300 ${open ? "rotate-180" : ""}`} />
+				<ChevronDown
+					className={`w-3 h-3 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+				/>
 			</button>
 
 			{open && (
 				<div className="absolute top-full right-0 pt-2 z-50">
 					<div className="bg-background/95 backdrop-blur-lg border border-border/50 rounded-xl shadow-xl shadow-black/10 p-2 min-w-45 max-h-80 overflow-y-auto">
-						{(Object.entries(languages) as [Lang, string][]).map(([code, name]) => (
-							<a
-								key={code}
-								href={getLocalizedPath(currentLang, code)}
-								className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-300 ${
-									code === currentLang
-										? "bg-primary/10 text-primary font-medium"
-										: "text-foreground/70 hover:bg-muted/50 hover:text-foreground"
-								}`}
-								onClick={() => setOpen(false)}
-							>
-								<span className="text-lg">{langFlags[code]}</span>
-								<span>{name}</span>
-							</a>
-						))}
+						{(Object.entries(languages) as [Lang, string][]).map(
+							([code, name]) => (
+								<a
+									key={code}
+									href={getLocalizedPath(currentLang, code)}
+									className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-300 ${
+										code === currentLang
+											? "bg-primary/10 text-primary font-medium"
+											: "text-foreground/70 hover:bg-muted/50 hover:text-foreground"
+									}`}
+									onClick={() => setOpen(false)}
+								>
+									<span className="text-lg">{langFlags[code]}</span>
+									<span>{name}</span>
+								</a>
+							),
+						)}
 					</div>
 				</div>
 			)}
@@ -517,7 +565,13 @@ function MobileMenu({
 								<span className="text-sm">GitHub</span>
 								{stars !== null && (
 									<span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[11px] font-semibold tabular-nums text-amber-500/80">
-										<svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+										<svg
+											className="w-3 h-3 text-amber-400"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+										>
+											<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+										</svg>
 										{stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
 									</span>
 								)}

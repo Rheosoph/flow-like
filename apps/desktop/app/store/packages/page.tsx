@@ -1,5 +1,6 @@
 "use client";
 
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -34,18 +35,7 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-	useBackend,
-	useInvoke,
 } from "@tm9657/flow-like-ui";
-import type {
-	DeveloperProject,
-	DeveloperSettings,
-	PackageInspection,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
-import {
-	EDITOR_OPTIONS,
-	TEMPLATE_LANGUAGES,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
 import {
 	Avatar,
 	AvatarFallback,
@@ -55,7 +45,16 @@ import {
 	hashToGradient,
 	useThemeInfo,
 } from "@tm9657/flow-like-ui/hooks/use-theme-gradient";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
+import type {
+	DeveloperProject,
+	DeveloperSettings,
+	PackageInspection,
+} from "@tm9657/flow-like-ui/lib/schema/developer";
+import {
+	EDITOR_OPTIONS,
+	TEMPLATE_LANGUAGES,
+} from "@tm9657/flow-like-ui/lib/schema/developer";
 import {
 	AlertCircle,
 	AlertTriangle,
@@ -91,7 +90,6 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import {
 	usePackageStatus,
 	usePackageStatusMap,
@@ -212,7 +210,8 @@ function ProjectCard({
 
 	const nodeCount = inspection?.nodes?.length ?? 0;
 	const lintCounts = useMemo(
-		() => (inspection?.nodes ? countBySeverity(lintNodes(inspection.nodes)) : null),
+		() =>
+			inspection?.nodes ? countBySeverity(lintNodes(inspection.nodes)) : null,
 		[inspection?.nodes],
 	);
 
@@ -258,12 +257,18 @@ function ProjectCard({
 					{lintCounts && lintCounts.errors > 0 && (
 						<Tooltip>
 							<TooltipTrigger>
-								<Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 gap-1">
+								<Badge
+									variant="destructive"
+									className="text-[10px] px-1.5 py-0 h-4 gap-1"
+								>
 									<AlertCircle className="h-2.5 w-2.5" />
 									{lintCounts.errors}
 								</Badge>
 							</TooltipTrigger>
-							<TooltipContent>{lintCounts.errors} lint error{lintCounts.errors !== 1 ? "s" : ""}</TooltipContent>
+							<TooltipContent>
+								{lintCounts.errors} lint error
+								{lintCounts.errors !== 1 ? "s" : ""}
+							</TooltipContent>
 						</Tooltip>
 					)}
 					{lintCounts && lintCounts.errors === 0 && lintCounts.warnings > 0 && (
@@ -274,7 +279,10 @@ function ProjectCard({
 									{lintCounts.warnings}
 								</Badge>
 							</TooltipTrigger>
-							<TooltipContent>{lintCounts.warnings} lint warning{lintCounts.warnings !== 1 ? "s" : ""}</TooltipContent>
+							<TooltipContent>
+								{lintCounts.warnings} lint warning
+								{lintCounts.warnings !== 1 ? "s" : ""}
+							</TooltipContent>
 						</Tooltip>
 					)}
 					<div className="flex items-center gap-1 ml-auto shrink-0">
@@ -740,7 +748,13 @@ function InstalledPackageCard({
 	onUpdate: () => void;
 	isUpdating: boolean;
 	isUninstalling: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
+	compileStatus?:
+		| "idle"
+		| "downloading"
+		| "compiling"
+		| "ready"
+		| "error"
+		| "stale";
 }) {
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
@@ -753,11 +767,18 @@ function InstalledPackageCard({
 	const thumbnail = pkg.metadata?.thumbnail;
 
 	return (
-		<Link href={`/store/packages?id=${pkg.id}`} className="group relative flex flex-row rounded-lg border border-border/40 border-dashed bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg cursor-pointer">
+		<Link
+			href={`/store/packages?id=${pkg.id}`}
+			className="group relative flex flex-row rounded-lg border border-border/40 border-dashed bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg cursor-pointer"
+		>
 			{/* Left gradient accent */}
 			<div className="relative w-28 shrink-0 overflow-hidden">
 				{thumbnail ? (
-					<img src={thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" />
+					<img
+						src={thumbnail}
+						alt=""
+						className="absolute inset-0 w-full h-full object-cover"
+					/>
 				) : (
 					<div
 						className="absolute inset-0"
@@ -771,7 +792,11 @@ function InstalledPackageCard({
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Avatar className="w-10 h-10 rounded-lg shadow-md border-2 border-background/20 bg-background/30 backdrop-blur-sm">
 						{icon ? (
-							<AvatarImage src={icon} alt={displayName} className="rounded-lg" />
+							<AvatarImage
+								src={icon}
+								alt={displayName}
+								className="rounded-lg"
+							/>
 						) : null}
 						<AvatarFallback className="rounded-lg text-xs font-mono font-bold bg-background/20 text-white/80">
 							<Package className="h-5 w-5" />
@@ -801,7 +826,10 @@ function InstalledPackageCard({
 							<PackageStatusBadge status={compileStatus} />
 						)}
 						{updateAvailable && (
-							<Badge variant="secondary" className="gap-0.5 text-[10px] px-1.5 py-0.5">
+							<Badge
+								variant="secondary"
+								className="gap-0.5 text-[10px] px-1.5 py-0.5"
+							>
 								<AlertCircle className="h-2.5 w-2.5" />
 								Update
 							</Badge>
@@ -834,7 +862,11 @@ function InstalledPackageCard({
 								size="icon"
 								variant="ghost"
 								className="h-6 w-6 rounded-full text-primary hover:text-primary hover:bg-primary/10"
-								onClick={(e) => { e.preventDefault(); e.stopPropagation(); onUpdate(); }}
+								onClick={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									onUpdate();
+								}}
 								disabled={isUpdating}
 							>
 								{isUpdating ? (
@@ -848,7 +880,11 @@ function InstalledPackageCard({
 							size="icon"
 							variant="ghost"
 							className="h-6 w-6 rounded-full text-destructive hover:text-destructive hover:bg-destructive/10"
-							onClick={(e) => { e.preventDefault(); e.stopPropagation(); onUninstall(); }}
+							onClick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+								onUninstall();
+							}}
 							disabled={isUninstalling}
 						>
 							{isUninstalling ? (
@@ -896,7 +932,9 @@ function InstalledContent() {
 	const availableUpdates = useQuery({
 		queryKey: ["available-updates"],
 		queryFn: async () => {
-			return invoke<PackageUpdate[]>("registry_check_for_updates", { token: auth.user?.access_token });
+			return invoke<PackageUpdate[]>("registry_check_for_updates", {
+				token: auth.user?.access_token,
+			});
 		},
 		enabled: registryReady.data === true,
 	});
@@ -907,7 +945,11 @@ function InstalledContent() {
 			version,
 		}: { packageId: string; version?: string }) => {
 			setUpdatingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_update_package", { packageId, version, token: auth.user?.access_token });
+			await invoke("registry_update_package", {
+				packageId,
+				version,
+				token: auth.user?.access_token,
+			});
 		},
 		onSuccess: (
 			_: void,
@@ -1042,7 +1084,9 @@ function InstalledContent() {
 				</div>
 			)}
 
-			{(registryReady.isLoading || installedPackages.isLoading || (!registryReady.isSuccess && !registryReady.isError)) ? (
+			{registryReady.isLoading ||
+			installedPackages.isLoading ||
+			(!registryReady.isSuccess && !registryReady.isError) ? (
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 					{Array.from({ length: 6 }).map((_, i) => (
 						<div
@@ -1061,9 +1105,7 @@ function InstalledContent() {
 			) : filteredPackages.length === 0 ? (
 				<EmptyState
 					icons={[Download, Package, Sparkles]}
-					title={
-						searchQuery ? "No matching packages" : "No packages installed"
-					}
+					title={searchQuery ? "No matching packages" : "No packages installed"}
 					description={
 						searchQuery
 							? "Try a different search term"

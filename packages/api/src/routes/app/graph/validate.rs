@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -39,7 +42,10 @@ pub struct ValidationResult {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/validate", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/validate",
+    skip(state, user)
+)]
 pub async fn validate_overlay(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

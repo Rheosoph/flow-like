@@ -13,7 +13,10 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../../hooks";
-import { hashToGradient, useThemeInfo } from "../../../hooks/use-theme-gradient";
+import {
+	hashToGradient,
+	useThemeInfo,
+} from "../../../hooks/use-theme-gradient";
 import { useBackend } from "../../../state/backend-state";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -634,7 +637,9 @@ function InlineTemplatePreview({
 							return (
 								<div
 									className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0"
-									style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+									style={{
+										background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
+									}}
 								>
 									<LayoutTemplate className="h-5 w-5 text-white/80" />
 								</div>
@@ -733,7 +738,9 @@ function QuickTemplateItem({
 					return (
 						<div
 							className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0 transition-opacity group-hover:opacity-80"
-							style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+							style={{
+								background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
+							}}
 						>
 							<LayoutTemplate className="h-5 w-5 text-white/80 group-hover:text-white transition-colors" />
 						</div>
@@ -843,7 +850,9 @@ function BrowserPreviewPane({
 								return (
 									<div
 										className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0"
-										style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+										style={{
+											background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
+										}}
 									>
 										<LayoutTemplate className="h-6 w-6 text-white/80" />
 									</div>
@@ -959,7 +968,9 @@ function BrowserTemplateCard({
 							return (
 								<div
 									className="absolute inset-0"
-									style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+									style={{
+										background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
+									}}
 								/>
 							);
 						})()}
@@ -1053,7 +1064,9 @@ function BrowserTemplateRow({
 					return (
 						<div
 							className="h-12 w-12 rounded-lg flex items-center justify-center shrink-0"
-							style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+							style={{
+								background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
+							}}
 						>
 							<LayoutTemplate className="h-6 w-6 text-white/80" />
 						</div>

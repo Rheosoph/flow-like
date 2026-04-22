@@ -20,7 +20,7 @@ use rig::completion::{Completion, ToolDefinition};
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
-use std::{fmt, sync::Arc, time::Instant};
+use std::{fmt, time::Instant};
 
 #[crate::register_node]
 #[derive(Default)]

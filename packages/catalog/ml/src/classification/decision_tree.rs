@@ -31,7 +31,6 @@ use linfa::traits::Fit;
 use linfa_trees::DecisionTree as LinfaDecisionTree;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{delete, get, post, put},
+    routing::{get, post},
 };
 
 use crate::state::AppState;
@@ -12,8 +12,8 @@ pub mod get_overlay;
 pub mod list_overlays;
 pub mod neighbors;
 pub mod sample;
-pub mod search;
 pub mod schema;
+pub mod search;
 pub mod sql;
 pub mod subgraph;
 pub mod update_overlay;
@@ -21,7 +21,10 @@ pub mod validate;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(list_overlays::list_overlays).post(create_overlay::create_overlay))
+        .route(
+            "/",
+            get(list_overlays::list_overlays).post(create_overlay::create_overlay),
+        )
         .route(
             "/{overlay_id}",
             get(get_overlay::get_overlay)

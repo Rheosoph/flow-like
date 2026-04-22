@@ -40,9 +40,9 @@ function buildPreviewSurface(
 	const rootComponentId =
 		componentsRecord["root"] != null
 			? "root"
-			: components.find((c) => !referencedChildIds.has(c.id))?.id ??
+			: (components.find((c) => !referencedChildIds.has(c.id))?.id ??
 				components[0]?.id ??
-				"root";
+				"root");
 
 	return {
 		id: "preview",
@@ -168,7 +168,8 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 							onClick={() => setShowWarnings((v) => !v)}
 						>
 							<AlertTriangleIcon className="h-3 w-3" />
-							{warnings.length} auto-fix{warnings.length !== 1 ? "es" : ""} applied
+							{warnings.length} auto-fix{warnings.length !== 1 ? "es" : ""}{" "}
+							applied
 							<ChevronDown
 								className={`h-2.5 w-2.5 transition-transform ${showWarnings ? "rotate-180" : ""}`}
 							/>

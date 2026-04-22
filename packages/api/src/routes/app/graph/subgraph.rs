@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -52,7 +55,10 @@ fn default_depth() -> usize {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/subgraph", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/subgraph",
+    skip(state, user, payload)
+)]
 pub async fn subgraph(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -66,11 +72,8 @@ pub async fn subgraph(
     let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
     let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
 
-    let seeds: Vec<(String, flow_like_types::Value)> = payload
-        .seeds
-        .into_iter()
-        .map(|s| (s.label, s.id))
-        .collect();
+    let seeds: Vec<(String, flow_like_types::Value)> =
+        payload.seeds.into_iter().map(|s| (s.label, s.id)).collect();
 
     let result = store
         .subgraph(

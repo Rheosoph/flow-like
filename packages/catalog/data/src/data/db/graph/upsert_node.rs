@@ -103,15 +103,16 @@ impl NodeLogic for UpsertGraphNodeNode {
             })?;
 
         let rows = vec![value];
-        let batch =
-            flow_like_storage::arrow_utils::value_to_record_batch(rows)?;
+        let batch = flow_like_storage::arrow_utils::value_to_record_batch(rows)?;
 
         let schema = batch.schema();
         let reader: Box<dyn flow_like_storage::arrow::record_batch::RecordBatchReader + Send> =
-            Box::new(flow_like_storage::arrow::record_batch::RecordBatchIterator::new(
-                vec![Ok(batch)],
-                schema,
-            ));
+            Box::new(
+                flow_like_storage::arrow::record_batch::RecordBatchIterator::new(
+                    vec![Ok(batch)],
+                    schema,
+                ),
+            );
         let mut merger = table.merge_insert(&[&id_column]);
         merger
             .when_matched_update_all(None)

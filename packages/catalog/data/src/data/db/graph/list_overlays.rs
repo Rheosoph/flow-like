@@ -95,7 +95,9 @@ impl NodeLogic for ListGraphOverlaysNode {
                 .callbacks
                 .build_user_database
                 .clone()
-                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(user_dir)
+                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
+                user_dir
+            )
         } else {
             let board_dir = context_cache.get_storage(false)?;
             let board_dir = board_dir.child("db");

@@ -3,7 +3,6 @@ import {
 	type IBoard,
 	type IEvent,
 	type IEventState,
-	IExecutionMode,
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
@@ -193,7 +192,10 @@ export class EventState implements IEventState {
 				return remoteData;
 			} catch (error) {
 				if (events.length === 0) throw error;
-				console.warn("[EventSync] Forced event fetch failed, falling back to local events:", error);
+				console.warn(
+					"[EventSync] Forced event fetch failed, falling back to local events:",
+					error,
+				);
 				return events;
 			}
 		}
@@ -831,18 +833,18 @@ export class EventState implements IEventState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/events/${eventId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/events/${eventId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunEventResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunEventResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

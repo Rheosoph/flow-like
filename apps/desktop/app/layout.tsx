@@ -57,9 +57,9 @@ import { ThemeLoader } from "../components/theme-loader";
 import ToastProvider from "../components/toast-provider";
 import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
+import { initBlobOffload } from "../lib/init-blob-offload";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
-import { initBlobOffload } from "../lib/init-blob-offload";
 
 initBlobOffload();
 

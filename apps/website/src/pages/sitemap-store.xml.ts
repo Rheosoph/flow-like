@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { searchPackages, searchApps, isStoreEnabled } from "../lib/registry";
+import { isStoreEnabled, searchApps, searchPackages } from "../lib/registry";
 
 export const prerender = false;
 
@@ -14,7 +14,12 @@ export const GET: APIRoute = async () => {
 	const site = "https://flow-like.com";
 	const now = new Date().toISOString();
 
-	let urls: { loc: string; lastmod: string; priority: string; changefreq: string }[] = [];
+	const urls: {
+		loc: string;
+		lastmod: string;
+		priority: string;
+		changefreq: string;
+	}[] = [];
 
 	try {
 		const [pkgRes, apps] = await Promise.all([

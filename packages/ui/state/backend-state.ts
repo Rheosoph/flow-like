@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type { IProfile } from "../types";
 import type { IAIState } from "./backend-state/ai-state";
+import type { IAnalyticsState } from "./backend-state/analytics-state";
 import type { IApiKeyState } from "./backend-state/api-key-state";
 import type { IApiState } from "./backend-state/api-state";
 import type {
@@ -15,7 +16,6 @@ import type {
 import type { IBitState } from "./backend-state/bit-state";
 import type { IBoardState } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
-import type { IGraphState } from "./backend-state/graph-state";
 import {
 	EmptyAIState,
 	EmptyApiKeyState,
@@ -36,6 +36,7 @@ import {
 } from "./backend-state/empty-states";
 import { EmptyUsageState } from "./backend-state/empty-states";
 import type { IEventState } from "./backend-state/event-state";
+import type { IGraphState } from "./backend-state/graph-state";
 import type { IHelperState } from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
 import type { IRegistryState } from "./backend-state/registry-state";
@@ -49,7 +50,6 @@ import type {
 import type { IStorageState } from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
-import type { IAnalyticsState } from "./backend-state/analytics-state";
 import type { IUsageState } from "./backend-state/usage-state";
 import type { IUserState } from "./backend-state/user-state";
 import type { IWidgetState } from "./backend-state/widget-state";

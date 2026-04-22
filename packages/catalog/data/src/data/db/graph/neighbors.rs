@@ -126,7 +126,11 @@ impl NodeLogic for GraphNeighborsNode {
             .await
             .unwrap_or_else(|_| "both".to_string());
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
-        let limit = if limit > 0 { Some(limit as usize) } else { None };
+        let limit = if limit > 0 {
+            Some(limit as usize)
+        } else {
+            None
+        };
 
         let direction = match direction_str.to_lowercase().as_str() {
             "outgoing" | "out" => TraversalDirection::Outgoing,
@@ -137,7 +141,10 @@ impl NodeLogic for GraphNeighborsNode {
         let store = super::load_graph_store(context, &conn.cache_key).await?;
         let id_value = flow_like_types::Value::String(node_id);
 
-        match store.neighbors(&label, id_value, depth, direction, limit).await {
+        match store
+            .neighbors(&label, id_value, depth, direction, limit)
+            .await
+        {
             Ok(result) => {
                 context
                     .set_pin_value("result_nodes", json!(result.nodes))

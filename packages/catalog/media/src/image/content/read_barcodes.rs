@@ -13,7 +13,7 @@ use flow_like_types::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BarcodePoint {

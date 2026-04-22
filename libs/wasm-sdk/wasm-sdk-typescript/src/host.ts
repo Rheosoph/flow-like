@@ -149,7 +149,10 @@ export class MockHostBridge implements HostBridge {
 		return true;
 	}
 
-	private _pendingWrites: Record<string, { flowPath: FlowPath; chunks: Uint8Array[] }> = {};
+	private _pendingWrites: Record<
+		string,
+		{ flowPath: FlowPath; chunks: Uint8Array[] }
+	> = {};
 
 	storageWriteStart(flowPath: FlowPath, _totalSize: number): string | null {
 		const id = `mock-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;

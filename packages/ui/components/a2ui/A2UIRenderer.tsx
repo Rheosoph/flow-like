@@ -55,9 +55,7 @@ export function A2UIRenderer({
 			backgroundImage: canvasSettings?.backgroundImage
 				? `url(${canvasSettings.backgroundImage})`
 				: undefined,
-			backgroundSize: canvasSettings?.backgroundImage
-				? "cover"
-				: undefined,
+			backgroundSize: canvasSettings?.backgroundImage ? "cover" : undefined,
 			backgroundPosition: canvasSettings?.backgroundImage
 				? "center"
 				: undefined,

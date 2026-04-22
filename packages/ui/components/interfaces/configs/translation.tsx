@@ -49,7 +49,10 @@ function computeSinkAvailability(
 	eventType: string,
 	hub?: IHub | null,
 	canExecuteLocally?: boolean,
-	staticConfig?: { availability: "local" | "remote" | "both"; description?: string } | null,
+	staticConfig?: {
+		availability: "local" | "remote" | "both";
+		description?: string;
+	} | null,
 ): { availability: "local" | "remote" | "both"; description?: string } | null {
 	const sinkType = EVENT_TYPE_TO_SINK_MAP[eventType];
 	const supportsLocal = canExecuteLocally ?? false;
@@ -186,7 +189,12 @@ export function EventTypeConfiguration({
 		// If this event type has a sink requirement, check availability
 		if (foundConfig?.withSink?.includes(type)) {
 			const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
-			const sinkConfig = computeSinkAvailability(type, hub, canExecuteLocally, staticCfg);
+			const sinkConfig = computeSinkAvailability(
+				type,
+				hub,
+				canExecuteLocally,
+				staticCfg,
+			);
 			return sinkConfig !== null;
 		}
 		// Event types without sinks are always available

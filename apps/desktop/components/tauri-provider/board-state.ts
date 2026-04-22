@@ -6,7 +6,7 @@ import {
 	type IBoardState,
 	ICommentType,
 	IConnectionMode,
-	IExecutionMode,
+	type IExecutionMode,
 	type IExecutionStage,
 	type IGenericCommand,
 	type IHub,
@@ -1930,18 +1930,18 @@ export class BoardState implements IBoardState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/board/${boardId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/board/${boardId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunBoardResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunBoardResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { CheckIcon, ChevronsUpDown, Clock } from "lucide-react";
 
+import { cn } from "../../../lib/utils";
 import {
 	Alert,
 	AlertDescription,
@@ -31,10 +32,9 @@ import {
 	SelectValue,
 	Separator,
 } from "../../ui";
-import type { SinkExecutionTarget } from "./http";
 import { Calendar } from "../../ui/calendar";
-import { cn } from "../../../lib/utils";
 import type { IConfigInterfaceProps } from "../interfaces";
+import type { SinkExecutionTarget } from "./http";
 
 /* -----------------------------------------------------------------------------
    Lightweight cron humanizer (no deps)
@@ -371,9 +371,21 @@ const IANA_TIMEZONES: string[] = (() => {
 	try {
 		return Intl.supportedValuesOf("timeZone");
 	} catch {
-		return ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-			"Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Tokyo", "Asia/Shanghai",
-			"Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland"];
+		return [
+			"UTC",
+			"America/New_York",
+			"America/Chicago",
+			"America/Denver",
+			"America/Los_Angeles",
+			"Europe/London",
+			"Europe/Berlin",
+			"Europe/Paris",
+			"Asia/Tokyo",
+			"Asia/Shanghai",
+			"Asia/Kolkata",
+			"Australia/Sydney",
+			"Pacific/Auckland",
+		];
 	}
 })();
 
@@ -524,7 +536,8 @@ export function CronJobConfig({
 		}
 	}, [expression, timezone]);
 
-	const sinkExecution = (config?.sink_execution as SinkExecutionTarget) || undefined;
+	const sinkExecution =
+		(config?.sink_execution as SinkExecutionTarget) || undefined;
 
 	const supportsRemote = hub?.domain != null;
 	const supportsLocal = canExecuteLocally ?? false;
@@ -661,7 +674,10 @@ export function CronJobConfig({
 								variant="outline"
 								role="combobox"
 								aria-expanded={tzOpen}
-								className={cn("flex-1 justify-between", !tzValid && timezone && "border-destructive")}
+								className={cn(
+									"flex-1 justify-between",
+									!tzValid && timezone && "border-destructive",
+								)}
 								disabled={!isEditing}
 							>
 								{timezone || "Select timezone..."}
@@ -678,8 +694,9 @@ export function CronJobConfig({
 								<CommandList>
 									<CommandEmpty>No timezone found.</CommandEmpty>
 									<CommandGroup>
-										{IANA_TIMEZONES
-											.filter((tz) => tz.toLowerCase().includes(tzSearch.toLowerCase()))
+										{IANA_TIMEZONES.filter((tz) =>
+											tz.toLowerCase().includes(tzSearch.toLowerCase()),
+										)
 											.slice(0, 50)
 											.map((tz) => (
 												<CommandItem
@@ -691,7 +708,12 @@ export function CronJobConfig({
 														setTzSearch("");
 													}}
 												>
-													<CheckIcon className={cn("mr-2 h-4 w-4", timezone === tz ? "opacity-100" : "opacity-0")} />
+													<CheckIcon
+														className={cn(
+															"mr-2 h-4 w-4",
+															timezone === tz ? "opacity-100" : "opacity-0",
+														)}
+													/>
 													{tz}
 												</CommandItem>
 											))}
@@ -887,8 +909,7 @@ export function CronJobConfig({
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">
 						<Clock className="h-4 w-4" />
 						<span>
-							Last ran{" "}
-							<strong>{formatRelativeTime(config.last_fired)}</strong>
+							Last ran <strong>{formatRelativeTime(config.last_fired)}</strong>
 							{" — "}
 							{new Intl.DateTimeFormat("en-GB", {
 								timeZone: timezone,

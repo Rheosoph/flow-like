@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 // Mock @tauri-apps/api/core before importing our module
 const invokeResults = new Map<string, unknown>();
@@ -20,10 +20,7 @@ mock.module("dexie", () => ({
 	__esModule: true,
 }));
 
-const {
-	dexieTauriBlobOffload,
-	configureBlobOffload,
-} = await import("./index");
+const { dexieTauriBlobOffload, configureBlobOffload } = await import("./index");
 
 const PLUGIN_PREFIX = "plugin:flow-like-dexie-blob-offload|";
 const BLOB_MARKER = "__fl_blob__";
@@ -74,7 +71,9 @@ function setupMockBackend() {
 
 	invokeResults.set(
 		`${PLUGIN_PREFIX}blob_get_batch`,
-		(args: { refs: Array<{ key: string; blob_ref: { hash: string; mac: string } }> }) => {
+		(args: {
+			refs: Array<{ key: string; blob_ref: { hash: string; mac: string } }>;
+		}) => {
 			return args.refs.map((entry) => {
 				const blob = storedBlobs.get(entry.blob_ref.hash);
 				if (!blob || blob.mac !== entry.blob_ref.mac)
@@ -157,7 +156,8 @@ function createMockDBCore() {
 			}
 			return { numFailures: 0, failures: {}, results: [] };
 		},
-		get: async (req: { key: unknown; trans: unknown }) => rows.get(req.key as number) ?? undefined,
+		get: async (req: { key: unknown; trans: unknown }) =>
+			rows.get(req.key as number) ?? undefined,
 		getMany: async (req: { keys: unknown[]; trans: unknown }) =>
 			req.keys.map((k) => rows.get(k as number) ?? undefined),
 		query: async (_req: unknown) => ({
@@ -171,7 +171,7 @@ function createMockDBCore() {
 		stack: "dbcore" as const,
 		table: (_name: string) => table,
 		cmp: (a: any, b: any) => (a === b ? 0 : a < b ? -1 : 1),
-		MIN_KEY: -Infinity,
+		MIN_KEY: Number.NEGATIVE_INFINITY,
 		MAX_KEY: [[]],
 		schema: { name: "testdb", tables: [] },
 		_rows: rows,
@@ -219,7 +219,10 @@ describe("dexieTauriBlobOffload", () => {
 		expect(raw.content).toHaveProperty(BLOB_MARKER);
 
 		// Reading via the middleware should rehydrate
-		const result = (await table.get({ key: 1 } as any)) as Record<string, unknown>;
+		const result = (await table.get({ key: 1 } as any)) as Record<
+			string,
+			unknown
+		>;
 		expect(result.content).toBe(largeStr);
 	});
 
@@ -240,7 +243,10 @@ describe("dexieTauriBlobOffload", () => {
 		const raw = core._rows.get(1) as Record<string, unknown>;
 		expect(raw.data).toHaveProperty(BLOB_MARKER);
 
-		const result = (await table.get({ key: 1 } as any)) as Record<string, unknown>;
+		const result = (await table.get({ key: 1 } as any)) as Record<
+			string,
+			unknown
+		>;
 		expect(result.data).toEqual(largeArr);
 	});
 

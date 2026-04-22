@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -41,10 +44,8 @@ pub async fn list_overlays(
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let defs = lancegraph::list_overlays(&connection).await?;
 
-    let overlays: Vec<flow_like_catalog_core::GraphOverlay> = defs
-        .into_iter()
-        .map(|d| def_to_overlay(d))
-        .collect();
+    let overlays: Vec<flow_like_catalog_core::GraphOverlay> =
+        defs.into_iter().map(def_to_overlay).collect();
 
     Ok(Json(overlays))
 }

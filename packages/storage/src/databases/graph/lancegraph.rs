@@ -228,12 +228,7 @@ impl LanceGraphStore {
 
 #[async_trait]
 impl GraphStore for LanceGraphStore {
-    async fn cypher(
-        &self,
-        query: &str,
-        params: Value,
-        limit: Option<usize>,
-    ) -> Result<Vec<Value>> {
+    async fn cypher(&self, query: &str, params: Value, limit: Option<usize>) -> Result<Vec<Value>> {
         let limit = self.enforce_limit(limit);
         let params_map: HashMap<String, serde_json::Value> = match params {
             Value::Object(map) => map.into_iter().collect(),
@@ -296,7 +291,10 @@ impl GraphStore for LanceGraphStore {
             let is_src = edge.src_label == label;
             let is_dst = edge.dst_label == label;
 
-            if matches!(direction, TraversalDirection::Outgoing | TraversalDirection::Both) && is_src
+            if matches!(
+                direction,
+                TraversalDirection::Outgoing | TraversalDirection::Both
+            ) && is_src
             {
                 query_infos.push((
                     format!(
@@ -308,7 +306,10 @@ impl GraphStore for LanceGraphStore {
                     true,
                 ));
             }
-            if matches!(direction, TraversalDirection::Incoming | TraversalDirection::Both) && is_dst
+            if matches!(
+                direction,
+                TraversalDirection::Incoming | TraversalDirection::Both
+            ) && is_dst
             {
                 query_infos.push((
                     format!(
@@ -358,9 +359,9 @@ impl GraphStore for LanceGraphStore {
         let depth = depth.min(self.safety.max_depth);
         let limit = self.enforce_limit(limit);
 
-		if seeds.is_empty() {
-			return self.full_subgraph(limit).await;
-		}
+        if seeds.is_empty() {
+            return self.full_subgraph(limit).await;
+        }
 
         let mut all_nodes = Vec::new();
         let mut all_edges = Vec::new();
@@ -569,21 +570,24 @@ impl LanceGraphStore {
                 // Respect edge-level overrides (src_node_column / dst_node_column)
                 // to stay consistent with what build_graph_config passes to lance-graph.
                 for edge in &self.overlay.edges {
-                    if edge.src_label == label {
-                        if let Some(ref col) = edge.src_node_column {
-                            return Ok(col.clone());
-                        }
+                    if edge.src_label == label
+                        && let Some(ref col) = edge.src_node_column
+                    {
+                        return Ok(col.clone());
                     }
-                    if edge.dst_label == label {
-                        if let Some(ref col) = edge.dst_node_column {
-                            return Ok(col.clone());
-                        }
+                    if edge.dst_label == label
+                        && let Some(ref col) = edge.dst_node_column
+                    {
+                        return Ok(col.clone());
                     }
                 }
                 return Ok(node.id_column.clone());
             }
         }
-        Err(anyhow!("Label '{}' not found in overlay node mappings", label))
+        Err(anyhow!(
+            "Label '{}' not found in overlay node mappings",
+            label
+        ))
     }
 
     fn find_display_column_for_label(&self, label: &str) -> Option<String> {
@@ -609,10 +613,10 @@ impl LanceGraphStore {
             columns.push(node.id_column.clone());
         }
 
-        if let Some(display_column) = node.display_column.clone() {
-            if seen_columns.insert(display_column.clone()) {
-                columns.push(display_column);
-            }
+        if let Some(display_column) = node.display_column.clone()
+            && seen_columns.insert(display_column.clone())
+        {
+            columns.push(display_column);
         }
 
         Ok(columns)
@@ -692,7 +696,7 @@ impl LanceGraphStore {
 
     async fn load_nodes_for_label(&self, label: &str, limit: usize) -> Result<Vec<SubgraphNode>> {
         let rows = self.sample(label, limit).await?;
-		self.rows_to_nodes(label, rows)
+        self.rows_to_nodes(label, rows)
     }
 
     async fn full_subgraph(&self, limit: usize) -> Result<SubgraphResult> {
@@ -927,32 +931,42 @@ async fn resolve_property_names(
     always_include: &[String],
 ) -> Result<Vec<String>> {
     let mut prop_names = if !configured.is_empty() {
-        configured.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
+        configured
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>()
+    } else if let Some(columns) = schema_cache.get(table_name) {
+        columns.clone()
     } else {
-        if let Some(columns) = schema_cache.get(table_name) {
-            columns.clone()
-        } else {
-            let table = connection
-                .open_table(table_name)
-                .execute()
-                .await
-                .map_err(|e| anyhow!("Failed to open table '{}' while resolving graph properties: {}", table_name, e))?;
+        let table = connection
+            .open_table(table_name)
+            .execute()
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to open table '{}' while resolving graph properties: {}",
+                    table_name,
+                    e
+                )
+            })?;
 
-            let schema = table
-                .schema()
-                .await
-                .map_err(|e| anyhow!("Failed to read schema for '{}' while resolving graph properties: {}", table_name, e))?;
+        let schema = table.schema().await.map_err(|e| {
+            anyhow!(
+                "Failed to read schema for '{}' while resolving graph properties: {}",
+                table_name,
+                e
+            )
+        })?;
 
-            let columns = schema
-                .fields()
-                .iter()
-                .filter(|field| include_default_property(field.data_type()))
-                .map(|field| field.name().clone())
-                .collect::<Vec<_>>();
+        let columns = schema
+            .fields()
+            .iter()
+            .filter(|field| include_default_property(field.data_type()))
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
 
-            schema_cache.insert(table_name.to_string(), columns.clone());
-            columns
-        }
+        schema_cache.insert(table_name.to_string(), columns.clone());
+        columns
     };
 
     let mut seen = HashSet::new();
@@ -967,7 +981,10 @@ async fn resolve_property_names(
     Ok(prop_names)
 }
 
-async fn build_graph_config(connection: &Connection, overlay: &GraphOverlayDef) -> Result<GraphConfig> {
+async fn build_graph_config(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+) -> Result<GraphConfig> {
     let mut builder = GraphConfig::builder();
     let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -1001,33 +1018,30 @@ async fn build_graph_config(connection: &Connection, overlay: &GraphOverlayDef) 
             .into_iter()
             .collect::<Vec<_>>();
         let prop_names = resolve_property_names(
-			connection,
-			&node.table,
-			&node.property_columns,
-			&mut schema_cache,
-			&excluded,
-			&always_include,
-		)
-		.await?;
-        let mapping = lance_graph::NodeMapping::new(&node.label, id_col)
-            .with_properties(prop_names);
+            connection,
+            &node.table,
+            &node.property_columns,
+            &mut schema_cache,
+            &excluded,
+            &always_include,
+        )
+        .await?;
+        let mapping =
+            lance_graph::NodeMapping::new(&node.label, id_col).with_properties(prop_names);
         builder = builder.with_node_mapping(mapping);
     }
 
     for edge in &overlay.edges {
-        let excluded = HashSet::from([
-            edge.src_column.clone(),
-            edge.dst_column.clone(),
-        ]);
+        let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
         let prop_names = resolve_property_names(
-			connection,
-			&edge.table,
-			&edge.property_columns,
-			&mut schema_cache,
-			&excluded,
-			&[],
-		)
-		.await?;
+            connection,
+            &edge.table,
+            &edge.property_columns,
+            &mut schema_cache,
+            &excluded,
+            &[],
+        )
+        .await?;
         let mapping =
             lance_graph::RelationshipMapping::new(&edge.label, &edge.src_column, &edge.dst_column)
                 .with_properties(prop_names);
@@ -1112,10 +1126,9 @@ pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) ->
         vec![
             Arc::new(StringArray::from(vec![overlay.id.as_str()])),
             Arc::new(StringArray::from(vec![overlay.name.as_str()])),
-            Arc::new(StringArray::from(vec![overlay
-                .description
-                .as_deref()
-                .unwrap_or("")])),
+            Arc::new(StringArray::from(vec![
+                overlay.description.as_deref().unwrap_or(""),
+            ])),
             Arc::new(StringArray::from(vec![def_json.as_str()])),
             Arc::new(StringArray::from(vec![overlay.updated_at.as_str()])),
         ],
@@ -1144,10 +1157,7 @@ pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) ->
             .when_matched_update_all(None)
             .when_not_matched_insert_all();
         let reader: Box<dyn arrow::record_batch::RecordBatchReader + Send> = Box::new(
-            arrow::record_batch::RecordBatchIterator::new(
-                vec![Ok(batch.clone())],
-                schema.clone(),
-            ),
+            arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch.clone())], schema.clone()),
         );
         merger
             .execute(reader)

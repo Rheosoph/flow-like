@@ -1,14 +1,14 @@
 use flow_like::flow_like_storage::{
     Path,
-    databases::graph::{GraphStore, TraversalDirection},
     databases::graph::lancegraph::{
-        self, GraphOverlayDef, LanceGraphStore, NodeMappingDef, EdgeMappingDef,
+        self, EdgeMappingDef, GraphOverlayDef, LanceGraphStore, NodeMappingDef,
     },
+    databases::graph::{GraphStore, TraversalDirection},
     lancedb::Connection,
 };
 use flow_like_catalog::{
-    DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT,
-    DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE,
+    DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,
+    DEFAULT_GRAPH_SAMPLE_SIZE,
 };
 use flow_like_types::create_id;
 use serde::Deserialize;
@@ -254,11 +254,8 @@ pub async fn graph_subgraph(
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
     let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
     let store = LanceGraphStore::new(conn, overlay, None).await?;
-    let seeds: Vec<(String, serde_json::Value)> = payload
-        .seeds
-        .into_iter()
-        .map(|s| (s.label, s.id))
-        .collect();
+    let seeds: Vec<(String, serde_json::Value)> =
+        payload.seeds.into_iter().map(|s| (s.label, s.id)).collect();
     let result = store
         .subgraph(
             seeds,

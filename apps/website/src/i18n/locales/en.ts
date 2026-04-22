@@ -426,14 +426,20 @@ export const en = {
 		"Flow-Like boards are stored as plain JSON. All catalog nodes are open source. The runtime, file format, and API surface are versioned and documented — with migration tooling included.",
 
 	// ───── Index V2: Meta ─────
-	"v2.meta.title": "Flow-Like | Open Source Engine for Automations, AI Agents, Dashboards & Applications",
-	"v2.meta.description": "One open-source engine for automations, AI agents, dashboards, and full applications. Rust-powered. Runs on your hardware — or ours. Free forever for individuals.",
-	"v2.meta.keywords": "open source workflow engine,automation platform,AI agents,dashboard builder,application builder,self-hosted automation,local-first,rust workflow engine,visual programming,type-safe workflows",
-	"v2.meta.ogAlt": "Flow-Like — Open Source Engine for Automations, AI Agents, Dashboards & Applications",
+	"v2.meta.title":
+		"Flow-Like | Open Source Engine for Automations, AI Agents, Dashboards & Applications",
+	"v2.meta.description":
+		"One open-source engine for automations, AI agents, dashboards, and full applications. Rust-powered. Runs on your hardware — or ours. Free forever for individuals.",
+	"v2.meta.keywords":
+		"open source workflow engine,automation platform,AI agents,dashboard builder,application builder,self-hosted automation,local-first,rust workflow engine,visual programming,type-safe workflows",
+	"v2.meta.ogAlt":
+		"Flow-Like — Open Source Engine for Automations, AI Agents, Dashboards & Applications",
 
 	// ───── Index V2: Hero ─────
-	"v2.hero.headline": "What would you build if the platform wasn't the bottleneck?",
-	"v2.hero.sub": "One open-source engine for automations, AI agents, dashboards, and full applications.",
+	"v2.hero.headline":
+		"What would you build if the platform wasn't the bottleneck?",
+	"v2.hero.sub":
+		"One open-source engine for automations, AI agents, dashboards, and full applications.",
 	"v2.hero.sub2": "Rust-powered. Runs on your hardware — or ours.",
 	"v2.hero.cta.download": "Download Studio",
 	"v2.hero.cta.web": "Try Web App",
@@ -447,19 +453,27 @@ export const en = {
 	"v2.build.heading": "What you can build",
 	"v2.build.auto.pill": "Automations",
 	"v2.build.auto.title": "Replace the scripts nobody dares touch",
-	"v2.build.auto.p1": "You know that script someone wrote two years ago? The one that copies data between three systems on a cron job, and nobody dares touch it because the person who wrote it left and didn't document anything?",
-	"v2.build.auto.p2": "Flow-Like is how you replace them. Visual workflows where you can see what's happening, type-safe connections that won't let you wire things up wrong, and error handling you configure once instead of discovering you need after something fails on a Friday afternoon.",
-	"v2.build.auto.p3": "It works the same whether it's a personal project running on your laptop or a pipeline the entire company depends on.",
-	"v2.build.auto.caption": "Webhook → Filter → Transform → Database → Notification",
+	"v2.build.auto.p1":
+		"You know that script someone wrote two years ago? The one that copies data between three systems on a cron job, and nobody dares touch it because the person who wrote it left and didn't document anything?",
+	"v2.build.auto.p2":
+		"Flow-Like is how you replace them. Visual workflows where you can see what's happening, type-safe connections that won't let you wire things up wrong, and error handling you configure once instead of discovering you need after something fails on a Friday afternoon.",
+	"v2.build.auto.p3":
+		"It works the same whether it's a personal project running on your laptop or a pipeline the entire company depends on.",
+	"v2.build.auto.caption":
+		"Webhook → Filter → Transform → Database → Notification",
 	"v2.build.ai.pill": "AI Agents & Pipelines",
 	"v2.build.ai.title": "Make the whole pipeline visible",
-	"v2.build.ai.p1": "Agent workflows live on a canvas — every LLM call, tool invocation, branching decision, and human-in-the-loop gate laid out in front of you. Every call logged with prompt, response, tokens, latency, and cost.",
-	"v2.build.ai.p2": "Built-in RAG with vector search. OpenAI, Anthropic, or fully local via llama.cpp. Guardrails and PII detection are nodes on the canvas, not config you hope someone remembered to set.",
+	"v2.build.ai.p1":
+		"Agent workflows live on a canvas — every LLM call, tool invocation, branching decision, and human-in-the-loop gate laid out in front of you. Every call logged with prompt, response, tokens, latency, and cost.",
+	"v2.build.ai.p2":
+		"Built-in RAG with vector search. OpenAI, Anthropic, or fully local via llama.cpp. Guardrails and PII detection are nodes on the canvas, not config you hope someone remembered to set.",
 	"v2.build.ai.caption": "Execution trace — prompt, tokens, latency, cost",
 	"v2.build.dash.pill": "Dashboards & Analytics",
 	"v2.build.dash.title": "Real-time data, one pipeline",
-	"v2.build.dash.p1": "Flow-Like connects to Postgres, MySQL, Snowflake, MongoDB, S3, MQTT, Kafka, REST APIs, and a couple hundred other sources — pulling data in real time, in the same pipeline. Dashboards are interactive, role-aware, and work offline on mobile.",
-	"v2.build.dash.p2": "Build anomaly detection right into the data flow instead of buying another tool to bolt on top.",
+	"v2.build.dash.p1":
+		"Flow-Like connects to Postgres, MySQL, Snowflake, MongoDB, S3, MQTT, Kafka, REST APIs, and a couple hundred other sources — pulling data in real time, in the same pipeline. Dashboards are interactive, role-aware, and work offline on mobile.",
+	"v2.build.dash.p2":
+		"Build anomaly detection right into the data flow instead of buying another tool to bolt on top.",
 	"v2.build.dash.link": "→ More on how we think about BI",
 	"v2.build.dash.sources": "Sources",
 	"v2.build.dash.engine": "Engine",
@@ -471,8 +485,10 @@ export const en = {
 	"v2.build.dash.uptime": "Uptime",
 	"v2.build.app.pill": "Full Applications",
 	"v2.build.app.title": "Ship things, not just automate them",
-	"v2.build.app.p1": "Add interfaces directly to any workflow — forms, tables, dashboards, full application UIs. Ship as a web app, native desktop for Windows, macOS, and Linux, or mobile for iOS and Android.",
-	"v2.build.app.p2": "The line between \"automation\" and \"product\" doesn't have to exist.",
+	"v2.build.app.p1":
+		"Add interfaces directly to any workflow — forms, tables, dashboards, full application UIs. Ship as a web app, native desktop for Windows, macOS, and Linux, or mobile for iOS and Android.",
+	"v2.build.app.p2":
+		'The line between "automation" and "product" doesn\'t have to exist.',
 	"v2.build.app.link": "→ Whitelabel & OEM",
 	"v2.build.app.caption": "Canvas + running application — same project",
 
@@ -483,28 +499,36 @@ export const en = {
 	"v2.combine.chip.app": "Applications",
 	"v2.combine.chip.result": "One Project",
 	"v2.combine.heading": "Or combine all of them.",
-	"v2.combine.p1": "One project that automates a process, feeds it through an AI pipeline, visualizes results on a live dashboard, and wraps everything in an application your team actually uses. Not four tools wired together — one project, one deployment.",
-	"v2.combine.p2": "Why should you have to choose between automating and building? Between analyzing and shipping? You shouldn't.",
+	"v2.combine.p1":
+		"One project that automates a process, feeds it through an AI pipeline, visualizes results on a live dashboard, and wraps everything in an application your team actually uses. Not four tools wired together — one project, one deployment.",
+	"v2.combine.p2":
+		"Why should you have to choose between automating and building? Between analyzing and shipping? You shouldn't.",
 	"v2.combine.link": "→ See how we compare",
 
 	// ───── Index V2: How It Works ─────
 	"v2.how.heading": "How it works",
 	"v2.how.canvas.title": "The Canvas",
-	"v2.how.canvas.p1": "You drag nodes onto a canvas and connect them. Every pin is typed — if something doesn't match, the editor catches it right there, before anything runs.",
-	"v2.how.canvas.p2": "It sounds simple using it is. But under the surface there's a full type system making sure your workflow actually makes sense before you ever hit the run button.",
+	"v2.how.canvas.p1":
+		"You drag nodes onto a canvas and connect them. Every pin is typed — if something doesn't match, the editor catches it right there, before anything runs.",
+	"v2.how.canvas.p2":
+		"It sounds simple using it is. But under the surface there's a full type system making sure your workflow actually makes sense before you ever hit the run button.",
 	"v2.how.canvas.chip1": "Type-checked pins",
 	"v2.how.canvas.chip2": "Built-in version history",
 	"v2.how.canvas.chip3": "Branch & rollback",
 	"v2.how.pilot.badge": "AI-Powered",
 	"v2.how.pilot.title": "FlowPilot",
-	"v2.how.pilot.p1": "Tell FlowPilot what you're trying to do in plain language. It'll draft a workflow — typed, connected, ready to tweak and run.",
-	"v2.how.pilot.p2": "It's also handy for making sense of flows someone else built, or figuring out why an execution didn't go the way you expected. Less chatbot, more colleague who already read the docs.",
+	"v2.how.pilot.p1":
+		"Tell FlowPilot what you're trying to do in plain language. It'll draft a workflow — typed, connected, ready to tweak and run.",
+	"v2.how.pilot.p2":
+		"It's also handy for making sense of flows someone else built, or figuring out why an execution didn't go the way you expected. Less chatbot, more colleague who already read the docs.",
 	"v2.how.pilot.chip1": "Natural language → workflow",
 	"v2.how.pilot.chip2": "Debug assistant",
 	"v2.how.pilot.chip3": "Doc-aware context",
 	"v2.how.dev.title": "For developers",
-	"v2.how.dev.p1": "Typed DAG, protobuf serialization, file-based projects on an object store abstraction. Your project moves between local filesystem, S3, R2, GCP, and Azure Blob without changing anything.",
-	"v2.how.dev.p2": "Custom nodes in 15+ languages — all sandboxed via WebAssembly. Full Rust SDK if you want to go deep. The visual editor is the fast way in, but there's no ceiling.",
+	"v2.how.dev.p1":
+		"Typed DAG, protobuf serialization, file-based projects on an object store abstraction. Your project moves between local filesystem, S3, R2, GCP, and Azure Blob without changing anything.",
+	"v2.how.dev.p2":
+		"Custom nodes in 15+ languages — all sandboxed via WebAssembly. Full Rust SDK if you want to go deep. The visual editor is the fast way in, but there's no ceiling.",
 	"v2.how.dev.more": "+7 more",
 	"v2.how.dev.chip1": "Full Rust SDK",
 	"v2.how.dev.chip2": "WASM sandboxed",
@@ -513,11 +537,14 @@ export const en = {
 
 	// ───── Index V2: Runs Everywhere ─────
 	"v2.runs.heading": "Runs everywhere",
-	"v2.runs.sub": "One project. Every target. The same engine runs on a Raspberry Pi and handles millions of events in production.",
+	"v2.runs.sub":
+		"One project. Every target. The same engine runs on a Raspberry Pi and handles millions of events in production.",
 	"v2.runs.device.title": "Your device",
-	"v2.runs.device.desc": "Windows, macOS, Linux. iOS & Android. Offline-first, syncs when connected.",
+	"v2.runs.device.desc":
+		"Windows, macOS, Linux. iOS & Android. Offline-first, syncs when connected.",
 	"v2.runs.infra.title": "Your infrastructure",
-	"v2.runs.infra.desc": "Self-hosted, on-prem, air-gapped, edge. Docker Compose or Kubernetes.",
+	"v2.runs.infra.desc":
+		"Self-hosted, on-prem, air-gapped, edge. Docker Compose or Kubernetes.",
 	"v2.runs.cloud.title": "Any cloud",
 	"v2.runs.cloud.desc": "Managed hosting on any provider — or none at all.",
 	"v2.runs.brand.title": "Your brand",
@@ -526,26 +553,35 @@ export const en = {
 	"v2.runs.perf.events": "events / second",
 	"v2.runs.perf.exec": "per execution",
 	"v2.runs.perf.faster": "faster than typical engines",
-	"v2.runs.perf.note": "Compiled Rust. Your infrastructure costs drop — or you don't need much infrastructure at all.",
+	"v2.runs.perf.note":
+		"Compiled Rust. Your infrastructure costs drop — or you don't need much infrastructure at all.",
 
 	// ───── Index V2: Trusted In Production ─────
 	"v2.trust.heading": "Trusted in production",
-	"v2.trust.p1": "The codebase is open source. Not \"open core\" with the interesting parts behind a paywall — genuinely open. If your security team wants to read every line, they can.",
-	"v2.trust.p2": "We built the architecture for regulated environments from the start because we knew we'd need it.",
+	"v2.trust.p1":
+		'The codebase is open source. Not "open core" with the interesting parts behind a paywall — genuinely open. If your security team wants to read every line, they can.',
+	"v2.trust.p2":
+		"We built the architecture for regulated environments from the start because we knew we'd need it.",
 	"v2.trust.access.title": "Access control",
-	"v2.trust.access.desc": "Role-based permissions with approval workflows, built for organizations where different teams need different levels of access.",
+	"v2.trust.access.desc":
+		"Role-based permissions with approval workflows, built for organizations where different teams need different levels of access.",
 	"v2.trust.audit.title": "Audit trail",
-	"v2.trust.audit.desc": "Every execution logged: who triggered it, what changed, what data moved, when.",
+	"v2.trust.audit.desc":
+		"Every execution logged: who triggered it, what changed, what data moved, when.",
 	"v2.trust.transparency.title": "Transparency",
-	"v2.trust.transparency.desc": "Full SBOM with every release. 2,073 dependencies, all tracked, all licensed.",
+	"v2.trust.transparency.desc":
+		"Full SBOM with every release. 2,073 dependencies, all tracked, all licensed.",
 	"v2.trust.transparency.link": "→ SBOM",
 	"v2.trust.sovereignty.title": "Data sovereignty",
-	"v2.trust.sovereignty.desc": "Self-host everything. Your data stays where you put it. Zero telemetry in self-hosted deployments.",
+	"v2.trust.sovereignty.desc":
+		"Self-host everything. Your data stays where you put it. Zero telemetry in self-hosted deployments.",
 	"v2.trust.compliance.title": "Compliance",
-	"v2.trust.compliance.desc": "Architecturally aligned with SOC 2 and TISAX controls, continuously assessed via Prowler.",
+	"v2.trust.compliance.desc":
+		"Architecturally aligned with SOC 2 and TISAX controls, continuously assessed via Prowler.",
 	"v2.trust.compliance.link": "→ Request status",
 	"v2.trust.gdpr.title": "GDPR",
-	"v2.trust.gdpr.desc": "EU company, based in Munich. European infrastructure. Data deletion fully supported.",
+	"v2.trust.gdpr.desc":
+		"EU company, based in Munich. European infrastructure. Data deletion fully supported.",
 	"v2.trust.gdpr.link": "→ Data deletion",
 	"v2.trust.badge.opensource": "Open Source",
 	"v2.trust.badge.eu": "EU-Based",
@@ -556,33 +592,44 @@ export const en = {
 	// ───── Index V2: Who's Building ─────
 	"v2.who.heading": "Who's building with Flow-Like",
 	"v2.who.makers.pill": "Makers & individuals",
-	"v2.who.makers.p1": "Some people are automating their smart homes over MQTT. Others are chaining local LLMs into personal AI assistants that actually keep their data private. A few have shipped SaaS tools to their first paying users without writing a line of backend code.",
-	"v2.who.makers.p2": "Free. No account. No limits on local execution. Whatever you make, it's yours.",
+	"v2.who.makers.p1":
+		"Some people are automating their smart homes over MQTT. Others are chaining local LLMs into personal AI assistants that actually keep their data private. A few have shipped SaaS tools to their first paying users without writing a line of backend code.",
+	"v2.who.makers.p2":
+		"Free. No account. No limits on local execution. Whatever you make, it's yours.",
 	"v2.who.teams.heading": "Teams & enterprises",
 	"v2.who.manufacturing.title": "Manufacturing",
-	"v2.who.manufacturing.desc": "PLCs and sensors connected to your ERP, with full traceability from shopfloor to boardroom.",
+	"v2.who.manufacturing.desc":
+		"PLCs and sensors connected to your ERP, with full traceability from shopfloor to boardroom.",
 	"v2.who.finance.title": "Finance",
-	"v2.who.finance.desc": "Automated reconciliation with complete audit trails. SOX, IFRS, GAAP — workflows your auditors can follow.",
+	"v2.who.finance.desc":
+		"Automated reconciliation with complete audit trails. SOX, IFRS, GAAP — workflows your auditors can follow.",
 	"v2.who.office.title": "Office",
-	"v2.who.office.desc": "Document extraction, approval chains, cross-department handoffs without the spreadsheet chaos.",
+	"v2.who.office.desc":
+		"Document extraction, approval chains, cross-department handoffs without the spreadsheet chaos.",
 	"v2.who.ai.title": "AI in production",
-	"v2.who.ai.desc": "Multi-agent systems with guardrails, logging, and the kind of explainability the EU AI Act expects.",
+	"v2.who.ai.desc":
+		"Multi-agent systems with guardrails, logging, and the kind of explainability the EU AI Act expects.",
 	"v2.who.gov.title": "Government & defense",
-	"v2.who.gov.desc": "Air-gapped, sovereign, and built to fuse mission data into one governed operational picture.",
+	"v2.who.gov.desc":
+		"Air-gapped, sovereign, and built to fuse mission data into one governed operational picture.",
 	"v2.who.community.title": "Community",
-	"v2.who.community.desc": "Small, growing, and genuinely helpful. Come say hi.",
+	"v2.who.community.desc":
+		"Small, growing, and genuinely helpful. Come say hi.",
 	"v2.who.community.join": "→ Join the discussions on GitHub",
 	"v2.who.cta.heading": "Don't know where to start?",
-	"v2.who.cta.desc": "We'll build your first automation for you. In 24 hours. You watch how it's done, we hand you everything — code, documentation, running infrastructure.",
+	"v2.who.cta.desc":
+		"We'll build your first automation for you. In 24 hours. You watch how it's done, we hand you everything — code, documentation, running infrastructure.",
 	"v2.who.cta.from": "Starting at",
 	"v2.who.cta.label": "24-Hour Solution",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Start",
 	"v2.start.heading.building": "building.",
-	"v2.start.sub": "Fifteen minutes from now, you could have your first workflow running.",
+	"v2.start.sub":
+		"Fifteen minutes from now, you could have your first workflow running.",
 	"v2.start.individuals.title": "Individuals",
-	"v2.start.individuals.desc": "Download Studio. Free, no account, works offline from the moment you open it.",
+	"v2.start.individuals.desc":
+		"Download Studio. Free, no account, works offline from the moment you open it.",
 	"v2.start.teams.title": "Teams",
 	"v2.start.teams.desc": "Try the web app or self-host on your infrastructure.",
 	"v2.start.teams.webapp": "Open Web App",
@@ -603,15 +650,21 @@ export const en = {
 	// ═══════════════════════════════════════════
 
 	// ───── V3 Meta ─────
-	"v3.meta.title": "Flow-Like — Open-Source Workflow Automation & Solution Engineering Platform",
-	"v3.meta.description": "Build AI agents, data pipelines, automations & apps visually. Open-source, self-hosted, no-code to pro-code. Free for individuals. Try Flow-Like.",
-	"v3.meta.keywords": "open source workflow automation,solution engineering platform,AI agents,data pipelines,dashboard builder,application builder,self-hosted automation,no-code,pro-code,rust workflow engine,visual programming,type-safe workflows",
-	"v3.meta.ogAlt": "Flow-Like — Open-Source Workflow Automation & Solution Engineering Platform",
+	"v3.meta.title":
+		"Flow-Like — Open-Source Workflow Automation & Solution Engineering Platform",
+	"v3.meta.description":
+		"Build AI agents, data pipelines, automations & apps visually. Open-source, self-hosted, no-code to pro-code. Free for individuals. Try Flow-Like.",
+	"v3.meta.keywords":
+		"open source workflow automation,solution engineering platform,AI agents,data pipelines,dashboard builder,application builder,self-hosted automation,no-code,pro-code,rust workflow engine,visual programming,type-safe workflows",
+	"v3.meta.ogAlt":
+		"Flow-Like — Open-Source Workflow Automation & Solution Engineering Platform",
 
 	// ───── V3 §1: Hero ─────
 	"v3.hero.badge": "The Solution Engineering Platform — Now in Alpha",
-	"v3.hero.headline": "One platform. Every solution. From drag-and-drop to production.",
-	"v3.hero.subtitle": "The open-source platform for workflow automation, AI agents, data pipelines, dashboards, and full applications. No-code to pro-code. Free for individuals — forever.",
+	"v3.hero.headline":
+		"One platform. Every solution. From drag-and-drop to production.",
+	"v3.hero.subtitle":
+		"The open-source platform for workflow automation, AI agents, data pipelines, dashboards, and full applications. No-code to pro-code. Free for individuals — forever.",
 	"v3.hero.cta.download": "Download Studio — Free",
 	"v3.hero.cta.web": "Try Web App",
 	"v3.hero.cta.github": "View on GitHub",
@@ -629,77 +682,120 @@ export const en = {
 
 	// ───── V3 §2: Solution Engineering ─────
 	"v3.se.headline": "Start with the problem, not the tool.",
-	"v3.se.subheadline": "Solution engineering means you describe what you need — we handle everything else.",
+	"v3.se.subheadline":
+		"Solution engineering means you describe what you need — we handle everything else.",
 	"v3.se.slider.before": "Tool Sprawl",
 	"v3.se.slider.after": "Solution Engineering",
 	"v3.se.slider.label.before": "separate login",
 	"v3.se.slider.label.after": "one login, one bill, one deploy",
-	"v3.se.description": "You focus on your business logic. Flow-Like manages the rest.",
+	"v3.se.description":
+		"You focus on your business logic. Flow-Like manages the rest.",
 	"v3.se.pillar.infra": "Infrastructure",
-	"v3.se.pillar.infra.desc": "Desktop, cloud, edge, air-gapped — deploy anywhere with one click.",
+	"v3.se.pillar.infra.desc":
+		"Desktop, cloud, edge, air-gapped — deploy anywhere with one click.",
 	"v3.se.pillar.security": "Security",
-	"v3.se.pillar.security.desc": "WASM sandboxing, SBOM, zero telemetry, full audit trail built in.",
+	"v3.se.pillar.security.desc":
+		"WASM sandboxing, SBOM, zero telemetry, full audit trail built in.",
 	"v3.se.pillar.observability": "Observability",
-	"v3.se.pillar.observability.desc": "Every execution logged. Every AI decision traced. Every cost tracked.",
+	"v3.se.pillar.observability.desc":
+		"Every execution logged. Every AI decision traced. Every cost tracked.",
 	"v3.se.pillar.types": "Type Safety",
-	"v3.se.pillar.types.desc": "Typed connections between nodes. Errors caught before execution, not after.",
+	"v3.se.pillar.types.desc":
+		"Typed connections between nodes. Errors caught before execution, not after.",
 	"v3.se.pillar.governance": "Governance",
-	"v3.se.pillar.governance.desc": "Approval gates, version control, role-based access. Enterprise-ready out of the box.",
+	"v3.se.pillar.governance.desc":
+		"Approval gates, version control, role-based access. Enterprise-ready out of the box.",
 	"v3.se.pillar.scaling": "Scaling",
-	"v3.se.pillar.scaling.desc": "From a Raspberry Pi to a production cluster. Same workflow, same engine.",
+	"v3.se.pillar.scaling.desc":
+		"From a Raspberry Pi to a production cluster. Same workflow, same engine.",
 
 	// ───── V3 §3: Use-Case Showcase ─────
 	"v3.showcase.label": "Solution Engineering in Practice",
 	"v3.showcase.headline": "What teams build with Flow-Like.",
-	"v3.showcase.description": "Flow-Like isn't a different tool depending on who you are — it's the same workflow automation engine, used differently. Here's what that looks like for real teams.",
+	"v3.showcase.description":
+		"Flow-Like isn't a different tool depending on who you are — it's the same workflow automation engine, used differently. Here's what that looks like for real teams.",
 
 	"v3.showcase.it.title": "IT Workflow Automation",
 	"v3.showcase.it.subtitle": "Automate onboarding across 5 systems in a day",
-	"v3.showcase.it.scenario": "HR submits a form. Flow-Like provisions accounts in Azure AD, assigns Jira boards, invites to Slack channels, and notifies the manager — all in one visual workflow that anyone on the team can read and modify.",
-	"v3.showcase.it.pro1": "Visual workflows replace undocumented scripts — when someone leaves the team, the logic doesn't leave with them",
-	"v3.showcase.it.pro2": "Built-in error handling and retry logic, not duct-taped together",
-	"v3.showcase.it.pro3": "On-prem or air-gapped deployment if your security team requires it",
-	"v3.showcase.it.note": "Flow-Like is still in alpha. Enterprise support and SLAs are available, but expect to be an early adopter, not a late majority buyer.",
+	"v3.showcase.it.scenario":
+		"HR submits a form. Flow-Like provisions accounts in Azure AD, assigns Jira boards, invites to Slack channels, and notifies the manager — all in one visual workflow that anyone on the team can read and modify.",
+	"v3.showcase.it.pro1":
+		"Visual workflows replace undocumented scripts — when someone leaves the team, the logic doesn't leave with them",
+	"v3.showcase.it.pro2":
+		"Built-in error handling and retry logic, not duct-taped together",
+	"v3.showcase.it.pro3":
+		"On-prem or air-gapped deployment if your security team requires it",
+	"v3.showcase.it.note":
+		"Flow-Like is still in alpha. Enterprise support and SLAs are available, but expect to be an early adopter, not a late majority buyer.",
 
 	"v3.showcase.data.title": "Visual Data Pipeline Builder",
-	"v3.showcase.data.subtitle": "Build ETL pipelines your business team can actually read",
-	"v3.showcase.data.scenario": "Pull daily sales from Postgres, clean and validate, aggregate by region, and push to a live BI dashboard. Every connection is type-checked — schema mismatches are caught before the data pipeline runs, not at 3am.",
-	"v3.showcase.data.pro1": "Type-safe connections across the entire ETL pipeline — no more \"it worked on my machine\"",
-	"v3.showcase.data.pro2": "Non-engineers can read, annotate, and validate pipeline logic on the same canvas",
-	"v3.showcase.data.pro3": "The same data pipeline scales from prototype to production without rewriting in another tool",
-	"v3.showcase.data.note": "If you need deep integration with dbt, Airflow, or Spark ecosystems, check the node library first. Coverage is broad (1,000+ nodes) but not every niche tool has a node yet.",
+	"v3.showcase.data.subtitle":
+		"Build ETL pipelines your business team can actually read",
+	"v3.showcase.data.scenario":
+		"Pull daily sales from Postgres, clean and validate, aggregate by region, and push to a live BI dashboard. Every connection is type-checked — schema mismatches are caught before the data pipeline runs, not at 3am.",
+	"v3.showcase.data.pro1":
+		'Type-safe connections across the entire ETL pipeline — no more "it worked on my machine"',
+	"v3.showcase.data.pro2":
+		"Non-engineers can read, annotate, and validate pipeline logic on the same canvas",
+	"v3.showcase.data.pro3":
+		"The same data pipeline scales from prototype to production without rewriting in another tool",
+	"v3.showcase.data.note":
+		"If you need deep integration with dbt, Airflow, or Spark ecosystems, check the node library first. Coverage is broad (1,000+ nodes) but not every niche tool has a node yet.",
 
 	"v3.showcase.ai.title": "AI Agent Builder",
-	"v3.showcase.ai.subtitle": "Ship agents with guardrails and full observability",
-	"v3.showcase.ai.scenario": "Build a support agent: user message → PII redaction → Claude with RAG → quality gate → response. Every prompt, token count, latency, and cost is logged automatically. Swap models or add guardrails without touching code.",
-	"v3.showcase.ai.pro1": "Full execution trace on every LLM call — the observability most agent frameworks bolt on, Flow-Like builds in",
-	"v3.showcase.ai.pro2": "Model-agnostic: OpenAI, Anthropic, Google, or local via llama.cpp — switch with a node swap",
-	"v3.showcase.ai.pro3": "Built-in RAG with vector search, PII detection, and approval gates as drag-and-drop canvas nodes",
-	"v3.showcase.ai.note": "If you're deep in the LangChain/LangGraph ecosystem, Flow-Like is a different paradigm (visual DAG vs. code-first). Powerful, but a different mental model.",
+	"v3.showcase.ai.subtitle":
+		"Ship agents with guardrails and full observability",
+	"v3.showcase.ai.scenario":
+		"Build a support agent: user message → PII redaction → Claude with RAG → quality gate → response. Every prompt, token count, latency, and cost is logged automatically. Swap models or add guardrails without touching code.",
+	"v3.showcase.ai.pro1":
+		"Full execution trace on every LLM call — the observability most agent frameworks bolt on, Flow-Like builds in",
+	"v3.showcase.ai.pro2":
+		"Model-agnostic: OpenAI, Anthropic, Google, or local via llama.cpp — switch with a node swap",
+	"v3.showcase.ai.pro3":
+		"Built-in RAG with vector search, PII detection, and approval gates as drag-and-drop canvas nodes",
+	"v3.showcase.ai.note":
+		"If you're deep in the LangChain/LangGraph ecosystem, Flow-Like is a different paradigm (visual DAG vs. code-first). Powerful, but a different mental model.",
 
 	"v3.showcase.nocode.title": "No-Code Business Automation",
-	"v3.showcase.nocode.subtitle": "Build what you need without filing an engineering ticket",
-	"v3.showcase.nocode.scenario": "Pull open deals from your CRM every Monday. Have an AI summarize trends and risks. Push a visual report to a Slack channel. All built on the drag-and-drop canvas, no code, no waiting for a sprint slot.",
-	"v3.showcase.nocode.pro1": "Visual, drag-and-drop workflow builder — your domain expertise matters more than coding skill",
-	"v3.showcase.nocode.pro2": "FlowPilot AI assistant helps you build: describe what you want in plain language",
-	"v3.showcase.nocode.pro3": "Same governance and approval gates as engineering-built solutions",
-	"v3.showcase.nocode.note": "Complex integrations may still need an engineer to create a custom node. Flow-Like makes collaboration easy, but it doesn't eliminate the need for technical help on edge cases.",
+	"v3.showcase.nocode.subtitle":
+		"Build what you need without filing an engineering ticket",
+	"v3.showcase.nocode.scenario":
+		"Pull open deals from your CRM every Monday. Have an AI summarize trends and risks. Push a visual report to a Slack channel. All built on the drag-and-drop canvas, no code, no waiting for a sprint slot.",
+	"v3.showcase.nocode.pro1":
+		"Visual, drag-and-drop workflow builder — your domain expertise matters more than coding skill",
+	"v3.showcase.nocode.pro2":
+		"FlowPilot AI assistant helps you build: describe what you want in plain language",
+	"v3.showcase.nocode.pro3":
+		"Same governance and approval gates as engineering-built solutions",
+	"v3.showcase.nocode.note":
+		"Complex integrations may still need an engineer to create a custom node. Flow-Like makes collaboration easy, but it doesn't eliminate the need for technical help on edge cases.",
 
 	"v3.showcase.maker.title": "Self-Hosted Automation for Makers",
-	"v3.showcase.maker.subtitle": "Build a smart home dashboard for free, on a Pi",
-	"v3.showcase.maker.scenario": "Connect MQTT sensors, transform power data into kWh, detect anomalies, and display everything on a mobile dashboard. Runs locally on a Raspberry Pi. No cloud. No subscription. No account.",
-	"v3.showcase.maker.pro1": "Free workflow automation — no execution limits, no account wall, works fully offline",
-	"v3.showcase.maker.pro2": "Runs on a Raspberry Pi, a laptop, or a NAS — not just data center hardware",
-	"v3.showcase.maker.pro3": "Open source you can fork, extend, and contribute to",
-	"v3.showcase.maker.note": "The community is still growing (200+ Discord members). More general-purpose and less home-automation-specific than Home Assistant — but more powerful when you need to combine IoT with data pipelines, AI agents, or custom UIs.",
+	"v3.showcase.maker.subtitle":
+		"Build a smart home dashboard for free, on a Pi",
+	"v3.showcase.maker.scenario":
+		"Connect MQTT sensors, transform power data into kWh, detect anomalies, and display everything on a mobile dashboard. Runs locally on a Raspberry Pi. No cloud. No subscription. No account.",
+	"v3.showcase.maker.pro1":
+		"Free workflow automation — no execution limits, no account wall, works fully offline",
+	"v3.showcase.maker.pro2":
+		"Runs on a Raspberry Pi, a laptop, or a NAS — not just data center hardware",
+	"v3.showcase.maker.pro3":
+		"Open source you can fork, extend, and contribute to",
+	"v3.showcase.maker.note":
+		"The community is still growing (200+ Discord members). More general-purpose and less home-automation-specific than Home Assistant — but more powerful when you need to combine IoT with data pipelines, AI agents, or custom UIs.",
 
 	"v3.showcase.tools.title": "Internal Tool Builder",
 	"v3.showcase.tools.subtitle": "Ship apps in hours, not sprints",
-	"v3.showcase.tools.scenario": "Build a feature request tracker: custom form UI → AI categorization → manager approval gate → auto-create Jira ticket. The internal tool you built in a morning is the same one running in production six months later.",
-	"v3.showcase.tools.pro1": "Build complete applications (UI + logic + integrations) in one project, not three tools",
-	"v3.showcase.tools.pro2": "No \"rewrite for prod\" phase — the platform enforces architecture from the start",
-	"v3.showcase.tools.pro3": "Ship to web, desktop (Win/Mac/Linux), or mobile from the same workflow",
-	"v3.showcase.tools.note": "Flow-Like's UI builder shipped in v0.0.8. It's capable but newer than the workflow engine. For pixel-perfect custom UIs, you may still want a designer writing custom components alongside the canvas.",
+	"v3.showcase.tools.scenario":
+		"Build a feature request tracker: custom form UI → AI categorization → manager approval gate → auto-create Jira ticket. The internal tool you built in a morning is the same one running in production six months later.",
+	"v3.showcase.tools.pro1":
+		"Build complete applications (UI + logic + integrations) in one project, not three tools",
+	"v3.showcase.tools.pro2":
+		'No "rewrite for prod" phase — the platform enforces architecture from the start',
+	"v3.showcase.tools.pro3":
+		"Ship to web, desktop (Win/Mac/Linux), or mobile from the same workflow",
+	"v3.showcase.tools.note":
+		"Flow-Like's UI builder shipped in v0.0.8. It's capable but newer than the workflow engine. For pixel-perfect custom UIs, you may still want a designer writing custom components alongside the canvas.",
 
 	// ───── V3 §4: Proof Belt ─────
 	"v3.proof.stat.nodes": "Nodes",
@@ -707,105 +803,148 @@ export const en = {
 	"v3.proof.stat.execution": "Execution",
 	"v3.proof.stat.faster": "Faster",
 	"v3.proof.stat.rewrite": "Rewrite for Prod",
-	"v3.proof.quote1": "We replaced three separate tools and cut our deployment time by 80%.",
+	"v3.proof.quote1":
+		"We replaced three separate tools and cut our deployment time by 80%.",
 	"v3.proof.quote1.author": "Head of Engineering, Series B SaaS",
-	"v3.proof.quote2": "Our business analysts build automations that used to require a full sprint.",
+	"v3.proof.quote2":
+		"Our business analysts build automations that used to require a full sprint.",
 	"v3.proof.quote2.author": "VP Operations, Manufacturing",
-	"v3.proof.quote3": "Runs on my Pi. No cloud. No subscription. This is what open source should be.",
+	"v3.proof.quote3":
+		"Runs on my Pi. No cloud. No subscription. This is what open source should be.",
 	"v3.proof.quote3.author": "Maker, smart home project",
 
 	// ───── V3 §5: What You Build (Bento) ─────
 	"v3.bento.label": "Solutions You Engineer",
-	"v3.bento.headline": "Workflow Automation for Every Use Case — BI, AI, Data, Apps.",
-	"v3.bento.description": "1,000+ built-in nodes covering the full spectrum. From data pipelines and ETL to customer-facing applications — with infinite room to extend using our developer SDK.",
+	"v3.bento.headline":
+		"Workflow Automation for Every Use Case — BI, AI, Data, Apps.",
+	"v3.bento.description":
+		"1,000+ built-in nodes covering the full spectrum. From data pipelines and ETL to customer-facing applications — with infinite room to extend using our developer SDK.",
 
 	"v3.bento.bi.title": "BI Dashboards & Analytics",
-	"v3.bento.bi.desc": "Interactive dashboards pulling from any data source — real-time, embedded, or standalone. A modern BI alternative built on your workflow engine.",
-	"v3.bento.bi.quote": "We replaced three Tableau licenses with one Flow-Like project.",
+	"v3.bento.bi.desc":
+		"Interactive dashboards pulling from any data source — real-time, embedded, or standalone. A modern BI alternative built on your workflow engine.",
+	"v3.bento.bi.quote":
+		"We replaced three Tableau licenses with one Flow-Like project.",
 
 	"v3.bento.auto.title": "Workflow Automation & RPA",
-	"v3.bento.auto.desc": "Replace brittle scripts and RPA bots with visual, error-handled workflows anyone on the team can follow.",
-	"v3.bento.auto.quote": "HR onboarding went from 3 hours of manual work to one click.",
+	"v3.bento.auto.desc":
+		"Replace brittle scripts and RPA bots with visual, error-handled workflows anyone on the team can follow.",
+	"v3.bento.auto.quote":
+		"HR onboarding went from 3 hours of manual work to one click.",
 
 	"v3.bento.ai.title": "AI Agents & LLM Pipelines",
-	"v3.bento.ai.desc": "Build multi-step AI agent systems on the visual canvas. Every prompt, token, cost, and decision logged with full observability.",
-	"v3.bento.ai.quote": "Full observability — we know exactly why the agent made each decision.",
+	"v3.bento.ai.desc":
+		"Build multi-step AI agent systems on the visual canvas. Every prompt, token, cost, and decision logged with full observability.",
+	"v3.bento.ai.quote":
+		"Full observability — we know exactly why the agent made each decision.",
 
 	"v3.bento.etl.title": "Data Pipelines & ETL",
-	"v3.bento.etl.desc": "Visual ETL/ELT pipeline builder with type-safe connections. Ingest, transform, catalog — no code required.",
-	"v3.bento.etl.quote": "Our data team builds pipelines. Business reads them. No translation needed.",
+	"v3.bento.etl.desc":
+		"Visual ETL/ELT pipeline builder with type-safe connections. Ingest, transform, catalog — no code required.",
+	"v3.bento.etl.quote":
+		"Our data team builds pipelines. Business reads them. No translation needed.",
 
 	"v3.bento.apps.title": "Internal Tools & Applications",
-	"v3.bento.apps.desc": "Ship web, desktop, or mobile interfaces alongside your business logic — from the same project. No separate front-end tool.",
-	"v3.bento.apps.quote": "We shipped an internal tool in a day that would've taken engineering two sprints.",
+	"v3.bento.apps.desc":
+		"Ship web, desktop, or mobile interfaces alongside your business logic — from the same project. No separate front-end tool.",
+	"v3.bento.apps.quote":
+		"We shipped an internal tool in a day that would've taken engineering two sprints.",
 
 	"v3.bento.api.title": "API Integrations & Connectors",
-	"v3.bento.api.desc": "Connect Kafka, MQTT, ERPs, CRMs, REST APIs, and hundreds more. The integration hub for your entire ecosystem.",
+	"v3.bento.api.desc":
+		"Connect Kafka, MQTT, ERPs, CRMs, REST APIs, and hundreds more. The integration hub for your entire ecosystem.",
 	"v3.bento.api.quote": "Connected our ERP to Slack to Jira in an afternoon.",
 
-	"v3.bento.unified.headline": "BI + Automation + AI Agents + Data Pipelines + Applications = One Solution Engineering Project",
-	"v3.bento.unified.desc": "Not six tools wired together — one project, one deployment. Build a data pipeline that feeds an AI agent that powers a dashboard inside a customer-facing app. That's solution engineering.",
-	"v3.bento.unified.tags": "Whitelabel Ready | OEM Licensing | Embed in Your Product",
+	"v3.bento.unified.headline":
+		"BI + Automation + AI Agents + Data Pipelines + Applications = One Solution Engineering Project",
+	"v3.bento.unified.desc":
+		"Not six tools wired together — one project, one deployment. Build a data pipeline that feeds an AI agent that powers a dashboard inside a customer-facing app. That's solution engineering.",
+	"v3.bento.unified.tags":
+		"Whitelabel Ready | OEM Licensing | Embed in Your Product",
 	"v3.bento.explore": "Explore →",
 
 	// ───── V3 §6: Teams ─────
 	"v3.teams.label": "Solution Engineering for Every Team",
 	"v3.teams.headline": "One platform for business, engineering & design teams.",
-	"v3.teams.description": "Business analysts, citizen developers, engineers, and designers — one shared workspace where everyone contributes to the solution in their own language.",
+	"v3.teams.description":
+		"Business analysts, citizen developers, engineers, and designers — one shared workspace where everyone contributes to the solution in their own language.",
 	"v3.teams.tab.business": "Business View",
 	"v3.teams.tab.engineering": "Engineering View",
 	"v3.teams.tab.design": "Design View",
 	"v3.teams.business.title": "Business & Domain Experts",
-	"v3.teams.business.desc": "Define requirements visually. Annotate workflows, set approval gates, validate logic — no code needed. Whether you're a citizen developer or a domain expert, your knowledge drives the solution. FlowPilot AI helps you build what you describe in plain language.",
+	"v3.teams.business.desc":
+		"Define requirements visually. Annotate workflows, set approval gates, validate logic — no code needed. Whether you're a citizen developer or a domain expert, your knowledge drives the solution. FlowPilot AI helps you build what you describe in plain language.",
 	"v3.teams.engineering.title": "Engineers & Architects",
-	"v3.teams.engineering.desc": "Write custom nodes in 15+ languages. Define type contracts, configure infrastructure, own the execution layer — with the full Rust SDK. Low-code when you want speed, pro-code when you need control.",
+	"v3.teams.engineering.desc":
+		"Write custom nodes in 15+ languages. Define type contracts, configure infrastructure, own the execution layer — with the full Rust SDK. Low-code when you want speed, pro-code when you need control.",
 	"v3.teams.design.title": "UX & Interface Designers",
-	"v3.teams.design.desc": "Design front-end interfaces wired directly into the workflow automation engine. Ship dashboards, forms, and apps connected to live data from day one.",
-	"v3.teams.flowpilot.business": "Want me to add a Slack notification when this is approved?",
-	"v3.teams.flowpilot.engineering": "This node has O(n²) complexity. Want me to suggest an optimized version?",
-	"v3.teams.flowpilot.design": "This chart widget is bound to the Aggregator node's output.",
+	"v3.teams.design.desc":
+		"Design front-end interfaces wired directly into the workflow automation engine. Ship dashboards, forms, and apps connected to live data from day one.",
+	"v3.teams.flowpilot.business":
+		"Want me to add a Slack notification when this is approved?",
+	"v3.teams.flowpilot.engineering":
+		"This node has O(n²) complexity. Want me to suggest an optimized version?",
+	"v3.teams.flowpilot.design":
+		"This chart widget is bound to the Aggregator node's output.",
 
 	// ───── V3 §7: Prototype to Production ─────
 	"v3.proto.label": "Zero Rewrite",
-	"v3.proto.headline": "From prototype to production — without rebuilding anything.",
-	"v3.proto.description": "The demo you build on Monday ships on Friday. The workflow engine enforces correct architecture, compliance, and performance from the first node. No rewrite required.",
+	"v3.proto.headline":
+		"From prototype to production — without rebuilding anything.",
+	"v3.proto.description":
+		"The demo you build on Monday ships on Friday. The workflow engine enforces correct architecture, compliance, and performance from the first node. No rewrite required.",
 	"v3.proto.stage1.title": "EXPLORE",
 	"v3.proto.stage1.desc": "Drag, connect, run. Validate in seconds.",
 	"v3.proto.stage2.title": "REFINE",
 	"v3.proto.stage2.desc": "Add error handling, tests, governance.",
 	"v3.proto.stage3.title": "DEPLOYED",
 	"v3.proto.stage3.desc": "One click. Same workflow. No translation.",
-	"v3.proto.statement": "The architecture you ship is the architecture you prototyped. The engine enforces type safety, compliance, and performance from node one. Zero translation layer. Zero rewrite.",
+	"v3.proto.statement":
+		"The architecture you ship is the architecture you prototyped. The engine enforces type safety, compliance, and performance from node one. Zero translation layer. Zero rewrite.",
 
 	// ───── V3 §8: How It Works ─────
 	"v3.how.label": "The Solution Engineering Engine",
 	"v3.how.headline": "A visual workflow engine at its core.",
-	"v3.how.description": "Every solution you engineer — dashboard, AI agent pipeline, or full application — runs on the same type-checked, high-performance Rust workflow engine.",
+	"v3.how.description":
+		"Every solution you engineer — dashboard, AI agent pipeline, or full application — runs on the same type-checked, high-performance Rust workflow engine.",
 
 	"v3.how.canvas.title": "The Visual Workflow Editor",
 	"v3.how.canvas.subtitle": "Type-safe drag-and-drop building",
-	"v3.how.canvas.p1": "Drag nodes onto the canvas, connect them with typed pins, and the visual workflow editor validates every connection before you run. Mismatched data types? Caught instantly — not after your demo crashes.",
-	"v3.how.canvas.p2": "Built-in version history lets you branch, merge, and roll back. Every change tracked, every collaborator visible. No-code for business users, pro-code for engineers — on the same canvas.",
-	"v3.how.canvas.quote": "A full type system making sure your solution makes sense before you ever hit run.",
+	"v3.how.canvas.p1":
+		"Drag nodes onto the canvas, connect them with typed pins, and the visual workflow editor validates every connection before you run. Mismatched data types? Caught instantly — not after your demo crashes.",
+	"v3.how.canvas.p2":
+		"Built-in version history lets you branch, merge, and roll back. Every change tracked, every collaborator visible. No-code for business users, pro-code for engineers — on the same canvas.",
+	"v3.how.canvas.quote":
+		"A full type system making sure your solution makes sense before you ever hit run.",
 
 	"v3.how.pilot.title": "FlowPilot",
 	"v3.how.pilot.subtitle": "AI Copilot for Workflow Automation",
-	"v3.how.pilot.p1": "Describe what you need in plain language. FlowPilot, the built-in AI assistant for workflow building, translates your intent into typed, connected workflows — then helps you debug, optimize, and document them.",
-	"v3.how.pilot.p2": "Context-aware: FlowPilot knows your project's nodes, types, and data sources. Ask it to explain a flow, suggest improvements, or generate new workflow sections.",
-	"v3.how.pilot.quote": "Less chatbot, more colleague who already read the docs.",
-	"v3.how.pilot.user": "Build an ETL data pipeline: pull daily sales from Postgres, clean missing values, push summary to the BI dashboard.",
-	"v3.how.pilot.user.l1": "Build an ETL pipeline: pull daily sales from Postgres,",
+	"v3.how.pilot.p1":
+		"Describe what you need in plain language. FlowPilot, the built-in AI assistant for workflow building, translates your intent into typed, connected workflows — then helps you debug, optimize, and document them.",
+	"v3.how.pilot.p2":
+		"Context-aware: FlowPilot knows your project's nodes, types, and data sources. Ask it to explain a flow, suggest improvements, or generate new workflow sections.",
+	"v3.how.pilot.quote":
+		"Less chatbot, more colleague who already read the docs.",
+	"v3.how.pilot.user":
+		"Build an ETL data pipeline: pull daily sales from Postgres, clean missing values, push summary to the BI dashboard.",
+	"v3.how.pilot.user.l1":
+		"Build an ETL pipeline: pull daily sales from Postgres,",
 	"v3.how.pilot.user.l2": "clean missing values, push summary to BI dashboard.",
-	"v3.how.pilot.response": "Done. 5-node pipeline: Postgres Query → Null Handler → Aggregator → Schema Validator → Dashboard Push. All type-checked.",
-	"v3.how.pilot.resp.l1": "Done. 5-node pipeline: Postgres Query → Null Handler",
+	"v3.how.pilot.response":
+		"Done. 5-node pipeline: Postgres Query → Null Handler → Aggregator → Schema Validator → Dashboard Push. All type-checked.",
+	"v3.how.pilot.resp.l1":
+		"Done. 5-node pipeline: Postgres Query → Null Handler",
 	"v3.how.pilot.resp.l2": "→ Aggregator → Schema Validator → Dashboard Push.",
 	"v3.how.pilot.followup": "Want a Slack alert on failure?",
 
 	"v3.how.engine.title": "The Rust Workflow Engine",
 	"v3.how.engine.subtitle": "~0.6ms execution, 244k events/second",
-	"v3.how.engine.p1": "Compiled Rust workflow engine running a typed DAG with Protobuf serialization. File-based projects on an object store abstraction — local filesystem, S3, R2, GCP, or Azure Blob.",
-	"v3.how.engine.p2": "~0.6ms per execution. 244k events/second. Your infrastructure costs drop — or you don't need much infrastructure at all.",
-	"v3.how.engine.p3": "Custom nodes run in WebAssembly (WASM) sandboxes for isolation and security. The visual editor is your entry point, but there's no ceiling.",
+	"v3.how.engine.p1":
+		"Compiled Rust workflow engine running a typed DAG with Protobuf serialization. File-based projects on an object store abstraction — local filesystem, S3, R2, GCP, or Azure Blob.",
+	"v3.how.engine.p2":
+		"~0.6ms per execution. 244k events/second. Your infrastructure costs drop — or you don't need much infrastructure at all.",
+	"v3.how.engine.p3":
+		"Custom nodes run in WebAssembly (WASM) sandboxes for isolation and security. The visual editor is your entry point, but there's no ceiling.",
 	"v3.how.engine.deepdive": "→ Architecture deep-dive for CTOs & tech leads",
 	"v3.how.engine.badge1": "Compiled Rust",
 	"v3.how.engine.badge2": "Typed DAG",
@@ -815,59 +954,75 @@ export const en = {
 	// ───── V3 §9: Trusted ─────
 	"v3.trust.label": "Trusted in Production",
 	"v3.trust.headline": "Open-source and self-hosted. Genuinely.",
-	"v3.trust.description": "Not \"open core\" with the interesting parts behind a paywall. The entire codebase is open, governance is built in, and you can inspect everything. Self-host on your infrastructure with full data sovereignty.",
+	"v3.trust.description":
+		'Not "open core" with the interesting parts behind a paywall. The entire codebase is open, governance is built in, and you can inspect everything. Self-host on your infrastructure with full data sovereignty.',
 	"v3.trust.access.title": "Access Control",
-	"v3.trust.access.desc": "Role-based permissions with approval workflows. Define who can view, edit, approve, and deploy across teams.",
+	"v3.trust.access.desc":
+		"Role-based permissions with approval workflows. Define who can view, edit, approve, and deploy across teams.",
 	"v3.trust.audit.title": "Audit Trail",
-	"v3.trust.audit.desc": "Full execution trace on every workflow run. Inputs, outputs, decision branches, timestamps, user context.",
+	"v3.trust.audit.desc":
+		"Full execution trace on every workflow run. Inputs, outputs, decision branches, timestamps, user context.",
 	"v3.trust.sbom.title": "SBOM Published",
-	"v3.trust.sbom.desc": "2,073 dependencies, all tracked. Complete software bill of materials with each release.",
+	"v3.trust.sbom.desc":
+		"2,073 dependencies, all tracked. Complete software bill of materials with each release.",
 	"v3.trust.sbom.link": "Verify →",
 	"v3.trust.sovereignty.title": "Data Sovereignty",
-	"v3.trust.sovereignty.desc": "Self-host anywhere. Zero telemetry. Your data stays on your infrastructure.",
+	"v3.trust.sovereignty.desc":
+		"Self-host anywhere. Zero telemetry. Your data stays on your infrastructure.",
 	"v3.trust.sovereignty.link": "Verify →",
 	"v3.trust.compliance.title": "Compliance",
-	"v3.trust.compliance.desc": "SOC 2 aligned, TISAX controls, Prowler assessed. Continuous assessment, not point-in-time.",
+	"v3.trust.compliance.desc":
+		"SOC 2 aligned, TISAX controls, Prowler assessed. Continuous assessment, not point-in-time.",
 	"v3.trust.compliance.link": "Verify →",
 	"v3.trust.gdpr.title": "GDPR Ready",
-	"v3.trust.gdpr.desc": "EU company, Munich. European infrastructure. Full data deletion on request.",
+	"v3.trust.gdpr.desc":
+		"EU company, Munich. European infrastructure. Full data deletion on request.",
 	"v3.trust.gdpr.link": "Verify →",
 	"v3.trust.progress": "checks passed",
 
 	// ───── V3 §10: Use Cases ─────
 	"v3.testimonials.label": "Real-World Use Cases",
-	"v3.testimonials.headline": "From weekend projects to mission-critical workflow automation.",
+	"v3.testimonials.headline":
+		"From weekend projects to mission-critical workflow automation.",
 
 	"v3.testimonials.1.role": "Finance · Data Pipelines",
-	"v3.testimonials.1.story": "A fintech team replaced 14 cron-job Python scripts — none of them documented — with visual pipelines. The business team can now read the logic without engineering help.",
+	"v3.testimonials.1.story":
+		"A fintech team replaced 14 cron-job Python scripts — none of them documented — with visual pipelines. The business team can now read the logic without engineering help.",
 	"v3.testimonials.1.tags": "Finance,Data Pipelines",
 
 	"v3.testimonials.2.role": "Smart Home · Local-First",
-	"v3.testimonials.2.story": "A maker runs solar panels, heat pump, and power consumption dashboards on a Raspberry Pi using Flow-Like — fully offline, no subscriptions, no cloud dependency.",
+	"v3.testimonials.2.story":
+		"A maker runs solar panels, heat pump, and power consumption dashboards on a Raspberry Pi using Flow-Like — fully offline, no subscriptions, no cloud dependency.",
 	"v3.testimonials.2.tags": "Makers,IoT",
 
 	"v3.testimonials.3.role": "Enterprise SaaS · AI Agents",
-	"v3.testimonials.3.story": "An enterprise shipped a customer support agent with full observability — every prompt, every token, every cost logged with a complete, auditable decision trace.",
+	"v3.testimonials.3.story":
+		"An enterprise shipped a customer support agent with full observability — every prompt, every token, every cost logged with a complete, auditable decision trace.",
 	"v3.testimonials.3.tags": "AI Agents,Enterprise",
 
 	"v3.testimonials.4.role": "Manufacturing · Process Automation",
-	"v3.testimonials.4.story": "A 2,000-person manufacturer reduced a 3-hour, 5-system onboarding workflow to a single click — built by IT, readable and approvable by operations without translation.",
+	"v3.testimonials.4.story":
+		"A 2,000-person manufacturer reduced a 3-hour, 5-system onboarding workflow to a single click — built by IT, readable and approvable by operations without translation.",
 	"v3.testimonials.4.tags": "Manufacturing,Automation",
 
 	"v3.testimonials.5.role": "Personal Finance · Cross-Platform",
-	"v3.testimonials.5.story": "A weekend project: a personal finance tracker with AI categorization that runs as both a desktop and a web app — without writing a single line of backend code.",
+	"v3.testimonials.5.story":
+		"A weekend project: a personal finance tracker with AI categorization that runs as both a desktop and a web app — without writing a single line of backend code.",
 	"v3.testimonials.5.tags": "Makers,Applications",
 
 	"v3.testimonials.6.role": "Government · Air-Gapped Deployment",
-	"v3.testimonials.6.story": "A government contractor deployed Flow-Like in an air-gapped environment: zero telemetry, complete SBOM, no modifications required to pass a strict security review.",
+	"v3.testimonials.6.story":
+		"A government contractor deployed Flow-Like in an air-gapped environment: zero telemetry, complete SBOM, no modifications required to pass a strict security review.",
 	"v3.testimonials.6.tags": "Government,Security",
 
 	"v3.testimonials.7.role": "Business Automation · No-Code",
-	"v3.testimonials.7.story": "FlowPilot turns a plain-English description into a working workflow. Non-technical users tweak nodes and ship automations — no knowledge of typed DAGs required.",
+	"v3.testimonials.7.story":
+		"FlowPilot turns a plain-English description into a working workflow. Non-technical users tweak nodes and ship automations — no knowledge of typed DAGs required.",
 	"v3.testimonials.7.tags": "No-Code,Business",
 
 	"v3.testimonials.8.role": "Whitelabel · Developer Revenue",
-	"v3.testimonials.8.story": "Freelance developers whitelabel Flow-Like for clients — each gets a branded automation tool, while the developer earns recurring revenue through OEM licensing.",
+	"v3.testimonials.8.story":
+		"Freelance developers whitelabel Flow-Like for clients — each gets a branded automation tool, while the developer earns recurring revenue through OEM licensing.",
 	"v3.testimonials.8.tags": "Whitelabel,Developer",
 
 	"v3.testimonials.community.stars": "600+ GitHub Stars",
@@ -876,20 +1031,27 @@ export const en = {
 
 	// ───── V3 §11: Developer Playground ─────
 	"v3.dev.label": "Developer SDK & Platform",
-	"v3.dev.headline": "1,000+ built-in nodes. Write custom nodes in 15+ languages.",
+	"v3.dev.headline":
+		"1,000+ built-in nodes. Write custom nodes in 15+ languages.",
 	"v3.dev.feature.rust": "Rust SDK & WASM Sandboxing",
-	"v3.dev.feature.rust.desc": "High-performance nodes in WebAssembly sandboxes. Full type safety, full isolation.",
+	"v3.dev.feature.rust.desc":
+		"High-performance nodes in WebAssembly sandboxes. Full type safety, full isolation.",
 	"v3.dev.feature.langs": "15+ Language Support",
-	"v3.dev.feature.langs.desc": "Rust, Python, TypeScript, Go, Java, C#, Kotlin, C++, and more. Your language, your nodes.",
+	"v3.dev.feature.langs.desc":
+		"Rust, Python, TypeScript, Go, Java, C#, Kotlin, C++, and more. Your language, your nodes.",
 	"v3.dev.feature.nodes": "1,000+ Built-in Nodes",
-	"v3.dev.feature.nodes.desc": "Data connectors, AI models, transformations, UI components, protocol adapters.",
+	"v3.dev.feature.nodes.desc":
+		"Data connectors, AI models, transformations, UI components, protocol adapters.",
 	"v3.dev.feature.open": "Open-Source Core",
-	"v3.dev.feature.open.desc": "Full engine, full SDK, full API. Fork it, embed it, contribute to it.",
+	"v3.dev.feature.open.desc":
+		"Full engine, full SDK, full API. Fork it, embed it, contribute to it.",
 
 	// ───── V3 §12: Deploy ─────
 	"v3.deploy.label": "Multi-Cloud & Edge Deployment",
-	"v3.deploy.headline": "One workflow engine. Every deployment target. Raspberry Pi to production cluster.",
-	"v3.deploy.description": "Your laptop, a customer's data center, edge computing devices, or any cloud. Offline-first, sync when connected. Multi-cloud deployment with a single workflow definition.",
+	"v3.deploy.headline":
+		"One workflow engine. Every deployment target. Raspberry Pi to production cluster.",
+	"v3.deploy.description":
+		"Your laptop, a customer's data center, edge computing devices, or any cloud. Offline-first, sync when connected. Multi-cloud deployment with a single workflow definition.",
 	"v3.deploy.target.desktop": "Desktop",
 	"v3.deploy.target.mobile": "Mobile",
 	"v3.deploy.target.docker": "Docker",
@@ -910,7 +1072,8 @@ export const en = {
 	// ───── V3 §14: Newsletter ─────
 	"v3.newsletter.label": "Stay in the loop",
 	"v3.newsletter.headline": "Get product updates & engineering insights",
-	"v3.newsletter.inline": "No spam — just releases, deep-dives, and the occasional workflow tip. Unsubscribe anytime.",
+	"v3.newsletter.inline":
+		"No spam — just releases, deep-dives, and the occasional workflow tip. Unsubscribe anytime.",
 	"v3.newsletter.privacy": "By subscribing you agree to our Privacy Policy.",
 
 	// ───── V3 §15: FAQ ─────
@@ -921,53 +1084,66 @@ export const en = {
 	"v3.faq.group.compare": "Comparisons",
 
 	"v3.faq.free.q": "Is Flow-Like free?",
-	"v3.faq.free.a": "Yes. Free for individuals with unlimited local execution — no account required, no execution limits, works fully offline. Pro tiers for teams via SaaS or self-hosting. Enterprise gets fixed pricing per use case, unlimited users, unlimited executions.",
+	"v3.faq.free.a":
+		"Yes. Free for individuals with unlimited local execution — no account required, no execution limits, works fully offline. Pro tiers for teams via SaaS or self-hosting. Enterprise gets fixed pricing per use case, unlimited users, unlimited executions.",
 	"v3.faq.free.tags": "everyone",
 
 	"v3.faq.nocode.q": "Do I need to code to use Flow-Like?",
-	"v3.faq.nocode.a": "No. The visual drag-and-drop workflow builder lets you build complete solutions by connecting nodes on a canvas. No-code for business users, pro-code when engineers want to extend. Coding is available but never required.",
+	"v3.faq.nocode.a":
+		"No. The visual drag-and-drop workflow builder lets you build complete solutions by connecting nodes on a canvas. No-code for business users, pro-code when engineers want to extend. Coding is available but never required.",
 	"v3.faq.nocode.tags": "business,hobbyist",
 
 	"v3.faq.offline.q": "Can I use Flow-Like without internet?",
-	"v3.faq.offline.a": "Yes. Flow-Like is offline-first. The desktop studio works without any internet connection. Self-hosted deployments can run fully air-gapped. Sync when connected, or never connect at all.",
+	"v3.faq.offline.a":
+		"Yes. Flow-Like is offline-first. The desktop studio works without any internet connection. Self-hosted deployments can run fully air-gapped. Sync when connected, or never connect at all.",
 	"v3.faq.offline.tags": "maker,enterprise",
 
 	"v3.faq.agents.q": "Can I build AI agents with Flow-Like?",
-	"v3.faq.agents.a": "Yes. Flow-Like is a visual AI agent builder with built-in RAG, vector search, PII detection, model-agnostic LLM nodes, and full observability. Build multi-step agent systems with guardrails on the canvas.",
+	"v3.faq.agents.a":
+		"Yes. Flow-Like is a visual AI agent builder with built-in RAG, vector search, PII detection, model-agnostic LLM nodes, and full observability. Build multi-step agent systems with guardrails on the canvas.",
 	"v3.faq.agents.tags": "ai-builder,developer",
 
 	"v3.faq.models.q": "Which AI models are supported?",
-	"v3.faq.models.a": "OpenAI, Anthropic Claude, Google Gemini, and local models via llama.cpp — all as drag-and-drop canvas nodes. Bring your own API keys or run fully local. Model-agnostic by design.",
+	"v3.faq.models.a":
+		"OpenAI, Anthropic Claude, Google Gemini, and local models via llama.cpp — all as drag-and-drop canvas nodes. Bring your own API keys or run fully local. Model-agnostic by design.",
 	"v3.faq.models.tags": "ai-builder,developer",
 
 	"v3.faq.onprem.q": "Can Flow-Like run fully on-premises?",
-	"v3.faq.onprem.a": "Yes. Designed for on-premise, air-gapped, private cloud, or hybrid deployments. Self-host on your infrastructure — your data never has to leave.",
+	"v3.faq.onprem.a":
+		"Yes. Designed for on-premise, air-gapped, private cloud, or hybrid deployments. Self-host on your infrastructure — your data never has to leave.",
 	"v3.faq.onprem.tags": "enterprise,government",
 
 	"v3.faq.governance.q": "How does Flow-Like handle LLM governance?",
-	"v3.faq.governance.a": "Every LLM call is logged with inputs, outputs, token counts, costs, and timing. Enforce approval gates, rate limits, and model allow-lists at the workflow level. Full audit trail on every AI agent execution.",
+	"v3.faq.governance.a":
+		"Every LLM call is logged with inputs, outputs, token counts, costs, and timing. Enforce approval gates, rate limits, and model allow-lists at the workflow level. Full audit trail on every AI agent execution.",
 	"v3.faq.governance.tags": "enterprise,ai-builder",
 
-	"v3.faq.audit.q": "What does \"audit-ready\" actually mean?",
-	"v3.faq.audit.a": "Every workflow execution generates a full trace: inputs, outputs, decision branches, timestamps, and user context. Export in standard formats for compliance teams. SOC 2 aligned, TISAX controls, continuous Prowler assessment.",
+	"v3.faq.audit.q": 'What does "audit-ready" actually mean?',
+	"v3.faq.audit.a":
+		"Every workflow execution generates a full trace: inputs, outputs, decision branches, timestamps, and user context. Export in standard formats for compliance teams. SOC 2 aligned, TISAX controls, continuous Prowler assessment.",
 	"v3.faq.audit.tags": "enterprise,government",
 
 	"v3.faq.n8n.q": "How does Flow-Like compare to n8n?",
-	"v3.faq.n8n.a": "Both are open-source workflow automation tools. Flow-Like differs in three ways: a Rust-powered engine (~0.6ms vs. Node.js execution), a full type system that validates connections before runtime, and the ability to build not just automations but also BI dashboards, AI agents, data pipelines, and full applications in one project. n8n is excellent for event-driven automation; Flow-Like is a solution engineering platform for teams building more complex systems.",
+	"v3.faq.n8n.a":
+		"Both are open-source workflow automation tools. Flow-Like differs in three ways: a Rust-powered engine (~0.6ms vs. Node.js execution), a full type system that validates connections before runtime, and the ability to build not just automations but also BI dashboards, AI agents, data pipelines, and full applications in one project. n8n is excellent for event-driven automation; Flow-Like is a solution engineering platform for teams building more complex systems.",
 	"v3.faq.n8n.tags": "developer,ai-builder",
 
 	"v3.faq.zapier.q": "How does Flow-Like compare to Zapier or Make?",
-	"v3.faq.zapier.a": "Zapier and Make are cloud-only SaaS automation tools. Flow-Like is open-source, self-hostable, and runs offline. It also goes beyond automation: you can build BI dashboards, AI agents, data pipelines, and full applications on the same canvas. If you need a free, self-hosted alternative with more power, Flow-Like is worth evaluating.",
+	"v3.faq.zapier.a":
+		"Zapier and Make are cloud-only SaaS automation tools. Flow-Like is open-source, self-hostable, and runs offline. It also goes beyond automation: you can build BI dashboards, AI agents, data pipelines, and full applications on the same canvas. If you need a free, self-hosted alternative with more power, Flow-Like is worth evaluating.",
 	"v3.faq.zapier.tags": "business,hobbyist",
 
 	"v3.faq.migrate.q": "Can we migrate existing automations?",
-	"v3.faq.migrate.a": "Yes. Our onboarding includes migration support for RPA bots, Python scripts, and orchestration tools. We'll audit, document, and convert your highest-value workflows.",
+	"v3.faq.migrate.a":
+		"Yes. Our onboarding includes migration support for RPA bots, Python scripts, and orchestration tools. We'll audit, document, and convert your highest-value workflows.",
 	"v3.faq.migrate.tags": "enterprise,developer",
 
 	// ───── V3 §16: CTA ─────
 	"v3.cta.label": "Start Building Solutions",
-	"v3.cta.headline": "What would you build if the platform wasn't the bottleneck?",
-	"v3.cta.description": "Download the Studio and start building — locally, offline, no account required. Or jump into the web app. Free workflow automation for individuals, forever.",
+	"v3.cta.headline":
+		"What would you build if the platform wasn't the bottleneck?",
+	"v3.cta.description":
+		"Download the Studio and start building — locally, offline, no account required. Or jump into the web app. Free workflow automation for individuals, forever.",
 	"v3.cta.individual": "Individual",
 	"v3.cta.individual.desc": "Free forever. No account. Works offline.",
 	"v3.cta.individual.action": "Download Studio — Free",
@@ -981,7 +1157,8 @@ export const en = {
 	"v3.cta.developer.desc": "Full source code. Full SDK. Full API docs.",
 	"v3.cta.developer.action": "View on GitHub",
 	"v3.cta.24h.headline": "The 24-Hour Solution",
-	"v3.cta.24h.desc": "Don't know where to start? We engineer your first automation solution for you — in 24 hours. You watch, we hand you everything: code, docs, running infrastructure.",
+	"v3.cta.24h.desc":
+		"Don't know where to start? We engineer your first automation solution for you — in 24 hours. You watch, we hand you everything: code, docs, running infrastructure.",
 	"v3.cta.24h.action": "Book Your 24-Hour Sprint →",
 	"v3.cta.24h.price": "Starting at €1,999",
 } as const;

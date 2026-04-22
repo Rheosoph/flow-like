@@ -1,7 +1,11 @@
 "use client";
 
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import type { NodeLabelMapping, EdgeLabelMapping, ValidationResult } from "../../../../state/backend-state/graph-state";
+import type {
+	EdgeLabelMapping,
+	NodeLabelMapping,
+	ValidationResult,
+} from "../../../../state/backend-state/graph-state";
 import { Badge } from "../../badge";
 import { Card } from "../../card";
 import { getGraphIcon } from "../icons";
@@ -15,7 +19,14 @@ export interface StepReviewProps {
 	validation: ValidationResult | null;
 }
 
-export function StepReview({ name, description, nodes, edges, defaultLimit, validation }: StepReviewProps) {
+export function StepReview({
+	name,
+	description,
+	nodes,
+	edges,
+	defaultLimit,
+	validation,
+}: StepReviewProps) {
 	return (
 		<div className="space-y-4">
 			<div>
@@ -27,7 +38,9 @@ export function StepReview({ name, description, nodes, edges, defaultLimit, vali
 
 			<Card className="p-4 space-y-2">
 				<div className="flex items-center justify-between">
-					<h4 className="text-sm font-semibold">{name || "Untitled Overlay"}</h4>
+					<h4 className="text-sm font-semibold">
+						{name || "Untitled Overlay"}
+					</h4>
 					<Badge variant="secondary" className="text-[10px]">
 						Limit: {defaultLimit}
 					</Badge>
@@ -46,7 +59,10 @@ export function StepReview({ name, description, nodes, edges, defaultLimit, vali
 						{nodes.map((n) => {
 							const Icon = getGraphIcon(n.style.icon);
 							return (
-								<div key={n.label} className="flex items-center gap-2 rounded-lg border p-2">
+								<div
+									key={n.label}
+									className="flex items-center gap-2 rounded-lg border p-2"
+								>
 									<div
 										className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
 										style={{ backgroundColor: n.style.color }}
@@ -73,8 +89,14 @@ export function StepReview({ name, description, nodes, edges, defaultLimit, vali
 					</p>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{edges.map((e) => (
-							<div key={e.label} className="flex items-center gap-2 rounded-lg border p-2">
-								<div className="w-5 h-1 rounded shrink-0" style={{ backgroundColor: e.style.color }} />
+							<div
+								key={e.label}
+								className="flex items-center gap-2 rounded-lg border p-2"
+							>
+								<div
+									className="w-5 h-1 rounded shrink-0"
+									style={{ backgroundColor: e.style.color }}
+								/>
 								<div className="min-w-0">
 									<p className="text-xs font-medium truncate">{e.label}</p>
 									<p className="text-[10px] text-muted-foreground truncate">
@@ -88,7 +110,9 @@ export function StepReview({ name, description, nodes, edges, defaultLimit, vali
 			)}
 
 			{validation && (
-				<div className={`rounded-lg border p-3 ${validation.ok ? "bg-green-500/10 border-green-500/30" : "bg-destructive/10 border-destructive/30"}`}>
+				<div
+					className={`rounded-lg border p-3 ${validation.ok ? "bg-green-500/10 border-green-500/30" : "bg-destructive/10 border-destructive/30"}`}
+				>
 					<div className="flex items-center gap-2 mb-1">
 						{validation.ok ? (
 							<CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -102,7 +126,10 @@ export function StepReview({ name, description, nodes, edges, defaultLimit, vali
 					{validation.issues.length > 0 && (
 						<ul className="space-y-1 mt-2">
 							{validation.issues.map((issue, i) => (
-								<li key={i} className="text-xs text-muted-foreground flex items-start gap-1.5">
+								<li
+									key={i}
+									className="text-xs text-muted-foreground flex items-start gap-1.5"
+								>
 									<span className="text-destructive mt-0.5">•</span>
 									{issue}
 								</li>

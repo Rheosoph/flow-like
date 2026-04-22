@@ -23,8 +23,10 @@ pub fn value_to_record_batch_with_fields(
     let fields = match fields {
         Some(fields) => fields,
         None => {
-            let mut fields: Vec<FieldRef> =
-                Vec::<FieldRef>::from_samples(&records, TracingOptions::default().allow_null_fields(true))?;
+            let mut fields: Vec<FieldRef> = Vec::<FieldRef>::from_samples(
+                &records,
+                TracingOptions::default().allow_null_fields(true),
+            )?;
 
             for field in &mut fields {
                 if field.name() == "vector" {

@@ -9,7 +9,6 @@ use flow_like::{
     state::NotificationEvent,
 };
 use flow_like_types::async_trait;
-use std::sync::Arc;
 
 /// Node to notify a specific user in the project by their sub (user ID).
 /// Persists the notification via the backend API for push delivery.
@@ -115,10 +114,8 @@ impl NodeLogic for NotifyProjectUserNode {
             .as_ref()
             .map(|c| c.app_id.as_str())
             .unwrap_or("");
-        let resolved_link = build_notification_link(
-            app_id,
-            if link.is_empty() { None } else { Some(&link) },
-        );
+        let resolved_link =
+            build_notification_link(app_id, if link.is_empty() { None } else { Some(&link) });
 
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(false)
@@ -160,7 +157,9 @@ impl NodeLogic for NotifyProjectUserNode {
                 LogLevel::Debug,
             ),
             Ok(false) => context.log_message(
-                &format!("Notification sent locally for user: {user_sub} (no hub/token or offline)"),
+                &format!(
+                    "Notification sent locally for user: {user_sub} (no hub/token or offline)"
+                ),
                 LogLevel::Debug,
             ),
             Err(e) => context.log_message(

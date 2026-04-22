@@ -9,7 +9,6 @@ use flow_like::{
     state::NotificationEvent,
 };
 use flow_like_types::async_trait;
-use std::sync::Arc;
 
 /// Node to notify the user who executed the workflow.
 /// Sends an InterCom notification event that can be displayed locally
@@ -104,10 +103,8 @@ impl NodeLogic for NotifyUserNode {
             .as_ref()
             .map(|c| c.app_id.as_str())
             .unwrap_or("");
-        let resolved_link = build_notification_link(
-            app_id,
-            if link.is_empty() { None } else { Some(&link) },
-        );
+        let resolved_link =
+            build_notification_link(app_id, if link.is_empty() { None } else { Some(&link) });
 
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(show_desktop)

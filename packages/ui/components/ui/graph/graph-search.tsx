@@ -2,8 +2,8 @@
 
 import { Search } from "lucide-react";
 import { useState } from "react";
-import { Input } from "../input";
 import { Button } from "../button";
+import { Input } from "../input";
 
 export interface GraphSearchProps {
 	onSearch: (query: string) => void;

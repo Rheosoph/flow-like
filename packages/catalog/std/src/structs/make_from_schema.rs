@@ -6,7 +6,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 /// Unique identifier prefix for make struct pins to enable special connection rules
 pub const MAKE_STRUCT_PIN_PREFIX: &str = "__make_struct_field__";

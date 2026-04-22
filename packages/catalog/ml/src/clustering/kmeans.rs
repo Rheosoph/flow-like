@@ -29,7 +29,6 @@ use linfa_clustering::KMeans;
 use linfa_nn::distance::L2Dist;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::ml::NodeMLModel;
 

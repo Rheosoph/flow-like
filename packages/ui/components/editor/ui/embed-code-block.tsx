@@ -2,7 +2,7 @@
 
 import { ExternalLink, Play } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "../../../lib/platform";
 import { cn } from "../../../lib/utils";
 
@@ -79,7 +79,10 @@ function detectEmbedType(url: string): EmbedType {
 		)
 			return "youtube";
 		if (matchesDomain(hostname, "vimeo.com")) return "vimeo";
-		if (matchesDomain(hostname, "twitter.com") || matchesDomain(hostname, "x.com"))
+		if (
+			matchesDomain(hostname, "twitter.com") ||
+			matchesDomain(hostname, "x.com")
+		)
 			return "twitter";
 		if (matchesDomain(hostname, "reddit.com")) return "reddit";
 		if (matchesDomain(hostname, "github.com")) return "github";
@@ -96,7 +99,8 @@ function detectEmbedType(url: string): EmbedType {
 function extractYouTubeId(url: string): string | null {
 	try {
 		const u = new URL(url);
-		if (u.hostname.toLowerCase() === "youtu.be") return u.pathname.slice(1).split("/")[0] || null;
+		if (u.hostname.toLowerCase() === "youtu.be")
+			return u.pathname.slice(1).split("/")[0] || null;
 		return u.searchParams.get("v");
 	} catch {
 		return null;
@@ -112,11 +116,19 @@ function extractVimeoId(url: string): string | null {
 	}
 }
 
-function extractSpotifyInfo(url: string): { embedUrl: string; type: string } | null {
+function extractSpotifyInfo(
+	url: string,
+): { embedUrl: string; type: string } | null {
 	try {
 		const u = new URL(url);
-		const match = u.pathname.match(/^\/(track|album|playlist|episode|show)\/([a-zA-Z0-9]+)/);
-		if (match) return { embedUrl: `https://open.spotify.com/embed/${match[1]}/${match[2]}`, type: match[1] };
+		const match = u.pathname.match(
+			/^\/(track|album|playlist|episode|show)\/([a-zA-Z0-9]+)/,
+		);
+		if (match)
+			return {
+				embedUrl: `https://open.spotify.com/embed/${match[1]}/${match[2]}`,
+				type: match[1],
+			};
 		return null;
 	} catch {
 		return null;
@@ -153,8 +165,10 @@ function buildGitHubOgImage(url: string): string | null {
 		if (parts.length < 2) return null;
 		const [owner, repo, ...rest] = parts;
 		const base = `https://opengraph.githubassets.com/1/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-		if (rest[0] === "issues" && rest[1]) return `${base}/issues/${encodeURIComponent(rest[1])}`;
-		if (rest[0] === "pull" && rest[1]) return `${base}/pull/${encodeURIComponent(rest[1])}`;
+		if (rest[0] === "issues" && rest[1])
+			return `${base}/issues/${encodeURIComponent(rest[1])}`;
+		if (rest[0] === "pull" && rest[1])
+			return `${base}/pull/${encodeURIComponent(rest[1])}`;
 		return base;
 	} catch {
 		return null;
@@ -165,9 +179,11 @@ function buildLinkedInEmbedUrl(url: string): string | null {
 	try {
 		const path = new URL(url).pathname;
 		const urnMatch = path.match(/\/feed\/update\/(urn:li:\w+:\d+)/);
-		if (urnMatch) return `https://www.linkedin.com/embed/feed/update/${urnMatch[1]}`;
+		if (urnMatch)
+			return `https://www.linkedin.com/embed/feed/update/${urnMatch[1]}`;
 		const activityMatch = path.match(/activity-(\d+)/);
-		if (activityMatch) return `https://www.linkedin.com/embed/feed/update/urn:li:activity:${activityMatch[1]}`;
+		if (activityMatch)
+			return `https://www.linkedin.com/embed/feed/update/urn:li:activity:${activityMatch[1]}`;
 		return null;
 	} catch {
 		return null;
@@ -243,7 +259,10 @@ interface PlatformConfig {
 	description: (url: string) => string;
 }
 
-function getPlatformConfig(type: EmbedType, url: string): PlatformConfig | null {
+function getPlatformConfig(
+	type: EmbedType,
+	url: string,
+): PlatformConfig | null {
 	const configs: Partial<Record<EmbedType, PlatformConfig>> = {
 		twitter: {
 			name: "X (Twitter)",
@@ -306,7 +325,9 @@ function parseTwitterUrl(url: string): string {
 			if (parts[1] === "status" && parts[2]) return `Post by @${user}`;
 			return `@${user} on X`;
 		}
-	} catch { /* noop */ }
+	} catch {
+		/* noop */
+	}
 	return "Post on X";
 }
 
@@ -320,7 +341,9 @@ function parseRedditUrl(url: string): string {
 			return `r/${sub}`;
 		}
 		if (parts[0] === "u" || parts[0] === "user") return `u/${parts[1]}`;
-	} catch { /* noop */ }
+	} catch {
+		/* noop */
+	}
 	return "Thread on Reddit";
 }
 
@@ -331,13 +354,18 @@ function parseGitHubUrl(url: string): string {
 		if (parts.length >= 2) {
 			const owner = parts[0];
 			const repo = parts[1];
-			if (parts[2] === "issues" && parts[3]) return `${owner}/${repo} #${parts[3]}`;
-			if (parts[2] === "pull" && parts[3]) return `${owner}/${repo} PR #${parts[3]}`;
-			if (parts[2] === "tree" || parts[2] === "blob") return `${owner}/${repo}/${parts.slice(3).join("/")}`;
+			if (parts[2] === "issues" && parts[3])
+				return `${owner}/${repo} #${parts[3]}`;
+			if (parts[2] === "pull" && parts[3])
+				return `${owner}/${repo} PR #${parts[3]}`;
+			if (parts[2] === "tree" || parts[2] === "blob")
+				return `${owner}/${repo}/${parts.slice(3).join("/")}`;
 			return `${owner}/${repo}`;
 		}
 		if (parts.length === 1) return parts[0];
-	} catch { /* noop */ }
+	} catch {
+		/* noop */
+	}
 	return "Repository on GitHub";
 }
 
@@ -483,10 +511,14 @@ function TwitterEmbed({ config }: { config: EmbedConfig }) {
 	const theme = resolvedTheme === "dark" ? "dark" : "light";
 
 	return (
-		<div className={cn(
-			"my-2 overflow-hidden rounded-xl border",
-			resolvedTheme === "dark" ? "border-neutral-700 bg-neutral-900" : "border-neutral-200 bg-white",
-		)}>
+		<div
+			className={cn(
+				"my-2 overflow-hidden rounded-xl border",
+				resolvedTheme === "dark"
+					? "border-neutral-700 bg-neutral-900"
+					: "border-neutral-200 bg-white",
+			)}
+		>
 			<div className="overflow-y-auto" style={{ maxHeight: 500 }}>
 				<iframe
 					ref={iframeRef}
@@ -506,9 +538,16 @@ function TwitterEmbed({ config }: { config: EmbedConfig }) {
 			<div className="flex items-center justify-between px-4 py-2 border-t border-border/30">
 				<div className="flex items-center gap-2">
 					<XIcon className="size-4" />
-					<span className="text-xs text-muted-foreground">{parseTwitterUrl(config.url)}</span>
+					<span className="text-xs text-muted-foreground">
+						{parseTwitterUrl(config.url)}
+					</span>
 				</div>
-				<a href={config.url} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline">
+				<a
+					href={config.url}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
+				>
 					<ExternalLink className="size-3" /> Open
 				</a>
 			</div>
@@ -526,11 +565,18 @@ function RedditEmbed({ config }: { config: EmbedConfig }) {
 	useEffect(() => {
 		const handler = (event: MessageEvent) => {
 			try {
-				const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
-				if (data?.type === "resize.embed" && typeof data.data === "number" && data.data > 0) {
+				const data =
+					typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+				if (
+					data?.type === "resize.embed" &&
+					typeof data.data === "number" &&
+					data.data > 0
+				) {
 					setHeight(Math.min(data.data, 600));
 				}
-			} catch { /* ignore non-JSON messages */ }
+			} catch {
+				/* ignore non-JSON messages */
+			}
 		};
 		window.addEventListener("message", handler);
 		return () => window.removeEventListener("message", handler);
@@ -552,9 +598,16 @@ function RedditEmbed({ config }: { config: EmbedConfig }) {
 			<div className="flex items-center justify-between px-4 py-2 border-t border-orange-500/10">
 				<div className="flex items-center gap-2">
 					<RedditIcon className="size-4 text-orange-500" />
-					<span className="text-xs text-muted-foreground">{parseRedditUrl(config.url)}</span>
+					<span className="text-xs text-muted-foreground">
+						{parseRedditUrl(config.url)}
+					</span>
 				</div>
-				<a href={config.url} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline">
+				<a
+					href={config.url}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
+				>
 					<ExternalLink className="size-3" /> Open
 				</a>
 			</div>
@@ -583,7 +636,9 @@ function GitHubEmbed({ config }: { config: EmbedConfig }) {
 			/>
 			<div className="flex items-center gap-2 px-4 py-3">
 				<GitHubIcon className="size-4 shrink-0 text-foreground" />
-				<span className="text-sm font-medium text-foreground truncate">{description}</span>
+				<span className="text-sm font-medium text-foreground truncate">
+					{description}
+				</span>
 				<ExternalLink className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
 			</div>
 		</a>
@@ -608,9 +663,16 @@ function LinkedInEmbed({ config }: { config: EmbedConfig }) {
 			<div className="flex items-center justify-between px-4 py-2 border-t border-blue-500/10">
 				<div className="flex items-center gap-2">
 					<LinkedInIcon className="size-4 text-blue-600" />
-					<span className="text-xs text-muted-foreground">Post on LinkedIn</span>
+					<span className="text-xs text-muted-foreground">
+						Post on LinkedIn
+					</span>
 				</div>
-				<a href={config.url} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline">
+				<a
+					href={config.url}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
+				>
 					<ExternalLink className="size-3" /> Open
 				</a>
 			</div>
@@ -651,15 +713,22 @@ function BrandedLinkCard({
 				<div className="flex items-center gap-1.5">
 					<span className="text-sm font-semibold text-foreground">{name}</span>
 				</div>
-				<p className="text-xs text-muted-foreground mt-0.5 truncate">{description}</p>
-				<p className="text-xs text-muted-foreground/60 mt-0.5 truncate">{config.url}</p>
+				<p className="text-xs text-muted-foreground mt-0.5 truncate">
+					{description}
+				</p>
+				<p className="text-xs text-muted-foreground/60 mt-0.5 truncate">
+					{config.url}
+				</p>
 			</div>
 			<ExternalLink className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
 		</a>
 	);
 }
 
-function PlatformEmbed({ config, type }: { config: EmbedConfig; type: EmbedType }) {
+function PlatformEmbed({
+	config,
+	type,
+}: { config: EmbedConfig; type: EmbedType }) {
 	const platform = getPlatformConfig(type, config.url);
 	if (!platform) return <GenericEmbed config={config} />;
 
@@ -761,14 +830,11 @@ function useOgMetadata(url: string): { data: OgData | null; loading: boolean } {
 				let ogData: OgData | null = null;
 
 				if (isTauri()) {
-					const { fetch: tauriFetch } = await import(
-						"@tauri-apps/plugin-http"
-					);
+					const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
 					const res = await tauriFetch(url, {
 						method: "GET",
 						headers: {
-							"User-Agent":
-								"Mozilla/5.0 (compatible; FlowLikeBot/1.0)",
+							"User-Agent": "Mozilla/5.0 (compatible; FlowLikeBot/1.0)",
 							Accept: "text/html",
 						},
 					});
@@ -778,8 +844,7 @@ function useOgMetadata(url: string): { data: OgData | null; loading: boolean } {
 					ogData = parseOgFromHtml(html);
 				} else {
 					const apiBase =
-						process.env.NEXT_PUBLIC_API_URL ??
-						"https://api.flow-like.com";
+						process.env.NEXT_PUBLIC_API_URL ?? "https://api.flow-like.com";
 					const res = await fetch(
 						`${apiBase}/api/v1/og?url=${encodeURIComponent(url)}`,
 						{ signal: controller.signal },
@@ -833,16 +898,25 @@ function GenericEmbed({ config }: { config: EmbedConfig }) {
 				<div className="px-4 py-3 space-y-1">
 					<div className="flex items-center gap-2">
 						{faviconUrl && (
-							<img src={faviconUrl} alt="" className="size-4 shrink-0 rounded-sm" loading="lazy" />
+							<img
+								src={faviconUrl}
+								alt=""
+								className="size-4 shrink-0 rounded-sm"
+								loading="lazy"
+							/>
 						)}
 						<span className="text-xs text-muted-foreground">{domainName}</span>
 						<ExternalLink className="size-3 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
 					</div>
 					{og.title && (
-						<p className="text-sm font-medium text-foreground line-clamp-1">{og.title}</p>
+						<p className="text-sm font-medium text-foreground line-clamp-1">
+							{og.title}
+						</p>
 					)}
 					{og.description && (
-						<p className="text-xs text-muted-foreground line-clamp-2">{og.description}</p>
+						<p className="text-xs text-muted-foreground line-clamp-2">
+							{og.description}
+						</p>
 					)}
 				</div>
 			</a>
@@ -858,14 +932,25 @@ function GenericEmbed({ config }: { config: EmbedConfig }) {
 				className="my-2 flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 p-4 hover:bg-muted/30 transition-colors no-underline group"
 			>
 				{faviconUrl && (
-					<img src={faviconUrl} alt="" className="size-6 shrink-0 rounded-sm" loading="lazy" />
+					<img
+						src={faviconUrl}
+						alt=""
+						className="size-6 shrink-0 rounded-sm"
+						loading="lazy"
+					/>
 				)}
 				<div className="min-w-0 flex-1">
-					<p className="text-sm font-medium text-foreground line-clamp-1">{og.title}</p>
+					<p className="text-sm font-medium text-foreground line-clamp-1">
+						{og.title}
+					</p>
 					{og.description && (
-						<p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{og.description}</p>
+						<p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+							{og.description}
+						</p>
 					)}
-					<p className="text-xs text-muted-foreground/60 mt-0.5 truncate">{domainName}</p>
+					<p className="text-xs text-muted-foreground/60 mt-0.5 truncate">
+						{domainName}
+					</p>
 				</div>
 				<ExternalLink className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
 			</a>
@@ -891,7 +976,9 @@ function GenericEmbed({ config }: { config: EmbedConfig }) {
 				{domainName && (
 					<p className="text-sm font-medium text-foreground">{domainName}</p>
 				)}
-				<p className="text-xs text-muted-foreground mt-0.5 truncate">{config.url}</p>
+				<p className="text-xs text-muted-foreground mt-0.5 truncate">
+					{config.url}
+				</p>
 			</div>
 			<ExternalLink className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
 		</a>
@@ -946,24 +1033,60 @@ export function EmbedCodeBlock({ content, className }: EmbedCodeBlockProps) {
 
 	switch (embedType) {
 		case "youtube":
-			return <div className={className}><YouTubeEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<YouTubeEmbed config={config} />
+				</div>
+			);
 		case "vimeo":
-			return <div className={className}><VimeoEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<VimeoEmbed config={config} />
+				</div>
+			);
 		case "spotify":
-			return <div className={className}><SpotifyEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<SpotifyEmbed config={config} />
+				</div>
+			);
 		case "twitter":
-			return <div className={className}><TwitterEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<TwitterEmbed config={config} />
+				</div>
+			);
 		case "reddit":
-			return <div className={className}><RedditEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<RedditEmbed config={config} />
+				</div>
+			);
 		case "github":
-			return <div className={className}><GitHubEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<GitHubEmbed config={config} />
+				</div>
+			);
 		case "linkedin":
-			return <div className={className}><LinkedInEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<LinkedInEmbed config={config} />
+				</div>
+			);
 		case "stackoverflow":
 		case "hackernews":
-			return <div className={className}><PlatformEmbed config={config} type={embedType} /></div>;
+			return (
+				<div className={className}>
+					<PlatformEmbed config={config} type={embedType} />
+				</div>
+			);
 		default:
-			return <div className={className}><GenericEmbed config={config} /></div>;
+			return (
+				<div className={className}>
+					<GenericEmbed config={config} />
+				</div>
+			);
 	}
 }
 

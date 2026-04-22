@@ -366,7 +366,7 @@ impl Profile {
         let bit_exists = self
             .bits
             .iter()
-            .any(|reference| reference.split(':').last() == Some(bit.id.as_str()));
+            .any(|reference| reference.split(':').next_back() == Some(bit.id.as_str()));
         if bit_exists {
             return;
         }
@@ -375,6 +375,6 @@ impl Profile {
 
     pub fn remove_bit(&mut self, bit: &Bit) {
         self.bits
-            .retain(|reference| reference.split(':').last() != Some(bit.id.as_str()));
+            .retain(|reference| reference.split(':').next_back() != Some(bit.id.as_str()));
     }
 }

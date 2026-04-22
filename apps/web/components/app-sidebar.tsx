@@ -6,16 +6,15 @@ import {
 	AnimatedBugIcon,
 	AnimatedDashboardIcon,
 	AnimatedDocsIcon,
+	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
-	AnimatedKeyIcon,
 	AnimatedLibraryIcon,
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
+	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
-	AnimatedExploreAppsIcon,
 	AnimatedThemeIcon,
-	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -67,40 +66,29 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
-	AnimatedSidebarIcon,
 } from "@tm9657/flow-like-ui";
+import { motion } from "framer-motion";
 import {
 	BadgeCheck,
 	BellIcon,
-	BookOpenIcon,
-	BugIcon,
 	Check,
 	ChevronRight,
 	ChevronsUpDown,
 	CreditCard,
 	Edit3Icon,
-	HomeIcon,
 	KeyIcon,
-
 	LogInIcon,
 	LogOut,
 	type LucideIcon,
-	Moon,
 	Plus,
-	SettingsIcon,
-	SidebarCloseIcon,
-	SidebarOpenIcon,
-	Sun,
-	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState, type ComponentType } from "react";
+import { type ComponentType, useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
 import { fetcher } from "../lib/api";
 import { Shortcuts } from "./shortcuts";
 
@@ -341,7 +329,11 @@ function InnerSidebar() {
 					</DropdownMenu>
 
 					<a href="/settings">
-						<MotionSidebarMenuButton tooltip="Settings" initial="initial" whileHover="hover">
+						<MotionSidebarMenuButton
+							tooltip="Settings"
+							initial="initial"
+							whileHover="hover"
+						>
 							<motion.div variants={iconVariants}>
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
@@ -355,7 +347,11 @@ function InnerSidebar() {
 						target="_blank"
 						rel="noopener noreferrer"
 					>
-						<MotionSidebarMenuButton tooltip="Documentation" initial="initial" whileHover="hover">
+						<MotionSidebarMenuButton
+							tooltip="Documentation"
+							initial="initial"
+							whileHover="hover"
+						>
 							<motion.div variants={iconVariants}>
 								<AnimatedDocsIcon className="size-4" />
 							</motion.div>
@@ -364,7 +360,12 @@ function InnerSidebar() {
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
-					<MotionSidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar} initial="initial" whileHover="hover">
+					<MotionSidebarMenuButton
+						tooltip="Toggle Sidebar"
+						onClick={toggleSidebar}
+						initial="initial"
+						whileHover="hover"
+					>
 						<div>
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
@@ -901,7 +902,11 @@ function NavMain({
 											variant={pathname === item.url ? "outline" : "default"}
 											tooltip={item.title}
 										>
-											<MotionLink href={item.url} initial="initial" whileHover="hover">
+											<MotionLink
+												href={item.url}
+												initial="initial"
+												whileHover="hover"
+											>
 												{item.icon && (
 													<motion.div variants={iconVariants}>
 														<item.icon className="size-4" />

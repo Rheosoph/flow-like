@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
 import type { INode, IPin } from "@tm9657/flow-like-ui";
 import { IPinType, IVariableType } from "@tm9657/flow-like-ui";
-import { detectFormat, translateN8n, translateDify } from "@tm9657/flow-like-ui";
+import {
+	detectFormat,
+	translateDify,
+	translateN8n,
+} from "@tm9657/flow-like-ui";
+import type {
+	DifyWorkflow,
+	N8nManualMappingOverrides,
+	N8nWorkflow,
+	TranslationResult,
+} from "@tm9657/flow-like-ui";
 import {
 	addExecPins,
 	connectPins,
@@ -13,12 +22,7 @@ import {
 	createVariable,
 	findPinByName,
 } from "@tm9657/flow-like-ui/lib/importer/board-builder";
-import type {
-	DifyWorkflow,
-	N8nManualMappingOverrides,
-	N8nWorkflow,
-	TranslationResult,
-} from "@tm9657/flow-like-ui";
+import { describe, expect, it } from "vitest";
 
 const FIXTURES = resolve(__dirname, "fixtures");
 
@@ -131,7 +135,15 @@ workflow:
 	it("detects n8n with minimal structure (nodes + connections, no type prefix)", () => {
 		const minimal = JSON.stringify({
 			name: "Minimal",
-			nodes: [{ id: "1", name: "A", type: "custom.thing", position: [0, 0], parameters: {} }],
+			nodes: [
+				{
+					id: "1",
+					name: "A",
+					type: "custom.thing",
+					position: [0, 0],
+					parameters: {},
+				},
+			],
 			connections: { A: { main: [[]] } },
 		});
 		const result = detectFormat(minimal);
@@ -256,7 +268,9 @@ describe("translateN8n — Support Pipeline", () => {
 
 	it("preserves node positions", () => {
 		const nodes = Object.values(result.board.nodes);
-		const webhookNode = nodes.find((n) => n.friendly_name === "Webhook Receiver");
+		const webhookNode = nodes.find(
+			(n) => n.friendly_name === "Webhook Receiver",
+		);
 		expect(webhookNode).toBeDefined();
 		expect(webhookNode!.coordinates![0]).toBe(200);
 		expect(webhookNode!.coordinates![1]).toBe(300);
@@ -264,7 +278,9 @@ describe("translateN8n — Support Pipeline", () => {
 
 	it("HTTP node has request and response pins", () => {
 		const nodes = Object.values(result.board.nodes);
-		const httpNode = nodes.find((n) => n.friendly_name === "Fetch Customer Data");
+		const httpNode = nodes.find(
+			(n) => n.friendly_name === "Fetch Customer Data",
+		);
 		expect(httpNode).toBeDefined();
 		const pins = Object.values(httpNode!.pins);
 		const requestPin = pins.find((p) => p.name === "request");
@@ -320,7 +336,9 @@ describe("translateDify — FAQ Bot", () => {
 	});
 
 	it("maps known node types", () => {
-		expect(result.stats.directMapped + result.stats.composed).toBeGreaterThan(0);
+		expect(result.stats.directMapped + result.stats.composed).toBeGreaterThan(
+			0,
+		);
 	});
 
 	it("creates input variables from start node", () => {
@@ -367,7 +385,9 @@ describe("translateDify — FAQ Bot", () => {
 
 	it("if-else node has true/false execution pins", () => {
 		const nodes = Object.values(result.board.nodes);
-		const ifNode = nodes.find((n) => n.friendly_name === "Check Response Quality");
+		const ifNode = nodes.find(
+			(n) => n.friendly_name === "Check Response Quality",
+		);
 		expect(ifNode).toBeDefined();
 		const pins = Object.values(ifNode!.pins);
 		const truePin = pins.find((p) => p.name === "exec_true");
@@ -379,14 +399,28 @@ describe("translateDify — FAQ Bot", () => {
 
 	it("if-else branching wires true→http and false→template", () => {
 		const nodes = Object.values(result.board.nodes);
-		const ifNode = nodes.find((n) => n.friendly_name === "Check Response Quality")!;
-		const httpNode = nodes.find((n) => n.friendly_name === "Escalate to Human")!;
-		const templateNode = nodes.find((n) => n.friendly_name === "Format Success Response")!;
+		const ifNode = nodes.find(
+			(n) => n.friendly_name === "Check Response Quality",
+		)!;
+		const httpNode = nodes.find(
+			(n) => n.friendly_name === "Escalate to Human",
+		)!;
+		const templateNode = nodes.find(
+			(n) => n.friendly_name === "Format Success Response",
+		)!;
 
-		const truePin = Object.values(ifNode.pins).find((p) => p.name === "exec_true")!;
-		const falsePin = Object.values(ifNode.pins).find((p) => p.name === "exec_false")!;
-		const httpExecIn = Object.values(httpNode.pins).find((p) => p.name === "exec_in")!;
-		const templateExecIn = Object.values(templateNode.pins).find((p) => p.name === "exec_in")!;
+		const truePin = Object.values(ifNode.pins).find(
+			(p) => p.name === "exec_true",
+		)!;
+		const falsePin = Object.values(ifNode.pins).find(
+			(p) => p.name === "exec_false",
+		)!;
+		const httpExecIn = Object.values(httpNode.pins).find(
+			(p) => p.name === "exec_in",
+		)!;
+		const templateExecIn = Object.values(templateNode.pins).find(
+			(p) => p.name === "exec_in",
+		)!;
 
 		// true → http (escalate)
 		expect(truePin.connected_to).toContain(httpExecIn.id);
@@ -409,7 +443,9 @@ describe("translateDify — FAQ Bot", () => {
 
 	it("knowledge-retrieval node has query and results pins", () => {
 		const nodes = Object.values(result.board.nodes);
-		const kbNode = nodes.find((n) => n.friendly_name === "Search Knowledge Base");
+		const kbNode = nodes.find(
+			(n) => n.friendly_name === "Search Knowledge Base",
+		);
 		expect(kbNode).toBeDefined();
 		const pins = Object.values(kbNode!.pins);
 		expect(pins.find((p) => p.name === "search_query")).toBeDefined();
@@ -437,7 +473,9 @@ describe("translateDify — Data Pipeline", () => {
 
 	it("handles iteration node with array pins", () => {
 		const nodes = Object.values(result.board.nodes);
-		const iterNode = nodes.find((n) => n.friendly_name === "Process Each Document");
+		const iterNode = nodes.find(
+			(n) => n.friendly_name === "Process Each Document",
+		);
 		expect(iterNode).toBeDefined();
 		const pins = Object.values(iterNode!.pins);
 		const inputArray = pins.find((p) => p.name === "input_array");
@@ -491,7 +529,9 @@ describe("translateDify — Data Pipeline", () => {
 
 	it("agent node maps to simple_agent", () => {
 		const nodes = Object.values(result.board.nodes);
-		const agentNode = nodes.find((n) => n.friendly_name === "Quality Check Agent");
+		const agentNode = nodes.find(
+			(n) => n.friendly_name === "Quality Check Agent",
+		);
 		expect(agentNode).toBeDefined();
 		expect(agentNode!.name).toBe("simple_agent");
 	});
@@ -637,7 +677,9 @@ describe("board-builder utilities", () => {
 			defaultValue: "hello",
 		});
 		expect(pin.default_value).not.toBeNull();
-		const decoded = new TextDecoder().decode(new Uint8Array(pin.default_value!));
+		const decoded = new TextDecoder().decode(
+			new Uint8Array(pin.default_value!),
+		);
 		expect(JSON.parse(decoded)).toBe("hello");
 	});
 
@@ -658,8 +700,22 @@ describe("board-builder utilities", () => {
 	});
 
 	it("connectPins wires connected_to and depends_on", () => {
-		const n1 = createNode({ name: "a", friendlyName: "A", description: "", category: "", x: 0, y: 0 });
-		const n2 = createNode({ name: "b", friendlyName: "B", description: "", category: "", x: 0, y: 0 });
+		const n1 = createNode({
+			name: "a",
+			friendlyName: "A",
+			description: "",
+			category: "",
+			x: 0,
+			y: 0,
+		});
+		const n2 = createNode({
+			name: "b",
+			friendlyName: "B",
+			description: "",
+			category: "",
+			x: 0,
+			y: 0,
+		});
 		const { outPin } = addExecPins(n1);
 		const { inPin } = addExecPins(n2);
 		connectPins(n1, outPin, n2, inPin);
@@ -668,7 +724,14 @@ describe("board-builder utilities", () => {
 	});
 
 	it("findPinByName returns correct pin", () => {
-		const node = createNode({ name: "x", friendlyName: "X", description: "", category: "", x: 0, y: 0 });
+		const node = createNode({
+			name: "x",
+			friendlyName: "X",
+			description: "",
+			category: "",
+			x: 0,
+			y: 0,
+		});
 		addExecPins(node);
 		const found = findPinByName(node, "exec_in", IPinType.Input);
 		expect(found).toBeDefined();
@@ -716,7 +779,9 @@ describe("end-to-end pipeline", () => {
 		expect(result.stats.todo).toBe(0);
 
 		const nodes = Object.values(result.board.nodes);
-		const ollamaNode = nodes.find((n) => n.name === "ai_generative_build_ollama");
+		const ollamaNode = nodes.find(
+			(n) => n.name === "ai_generative_build_ollama",
+		);
 		const fromModel = nodes.find((n) => n.name === "agent_from_model");
 
 		expect(ollamaNode).toBeDefined();
@@ -800,7 +865,12 @@ describe("end-to-end pipeline", () => {
 		const parsed = JSON.parse(raw) as N8nWorkflow;
 		const result = translateN8n(parsed);
 
-		const pureNodes = new Set(["http_make_request", "data_google_provider", "struct_get", "variable_get"]);
+		const pureNodes = new Set([
+			"http_make_request",
+			"data_google_provider",
+			"struct_get",
+			"variable_get",
+		]);
 		for (const node of Object.values(result.board.nodes)) {
 			if (pureNodes.has(node.name)) continue;
 			const execPins = Object.values(node.pins).filter(
@@ -838,129 +908,493 @@ function buildMockCatalog(): INode[] {
 	return [
 		// http_fetch – impure, needs exec + request/response
 		makeCatalogNode("http_fetch", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "exec_error", friendlyName: "Error", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "request", friendlyName: "Request", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "response", friendlyName: "Response", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_error",
+				friendlyName: "Error",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "request",
+				friendlyName: "Request",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "response",
+				friendlyName: "Response",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// http_make_request – pure companion
 		makeCatalogNode("http_make_request", [
-			{ name: "method", friendlyName: "Method", pinType: IPinType.Input, dataType: IVariableType.String, defaultValue: "GET" },
-			{ name: "url", friendlyName: "URL", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "request", friendlyName: "Request", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "method",
+				friendlyName: "Method",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+				defaultValue: "GET",
+			},
+			{
+				name: "url",
+				friendlyName: "URL",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "request",
+				friendlyName: "Request",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// http_response_to_json – impure, parses JSON body
 		makeCatalogNode("http_response_to_json", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "response", friendlyName: "Response", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "struct", friendlyName: "Struct", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "response",
+				friendlyName: "Response",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "struct",
+				friendlyName: "Struct",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// struct_get – pure, access fields with dot notation
 		makeCatalogNode("struct_get", [
-			{ name: "struct", friendlyName: "Struct", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "field", friendlyName: "Field", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "value", friendlyName: "Value", pinType: IPinType.Output, dataType: IVariableType.Generic },
-			{ name: "found", friendlyName: "Found?", pinType: IPinType.Output, dataType: IVariableType.Boolean },
+			{
+				name: "struct",
+				friendlyName: "Struct",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "field",
+				friendlyName: "Field",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "value",
+				friendlyName: "Value",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Generic,
+			},
+			{
+				name: "found",
+				friendlyName: "Found?",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Boolean,
+			},
 		]),
 		// control_branch
 		makeCatalogNode("control_branch", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "condition", friendlyName: "Condition", pinType: IPinType.Input, dataType: IVariableType.Boolean },
-			{ name: "true", friendlyName: "True", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "false", friendlyName: "False", pinType: IPinType.Output, dataType: IVariableType.Execution },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "condition",
+				friendlyName: "Condition",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Boolean,
+			},
+			{
+				name: "true",
+				friendlyName: "True",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "false",
+				friendlyName: "False",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
 		]),
 		// events_simple
 		makeCatalogNode("events_simple", [
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
 		]),
 		// control_sequence
 		makeCatalogNode("control_sequence", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
 		]),
 		// email_smtp_connect
 		makeCatalogNode("email_smtp_connect", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "host", friendlyName: "Host", pinType: IPinType.Input, dataType: IVariableType.String, defaultValue: "smtp.example.com" },
-			{ name: "port", friendlyName: "Port", pinType: IPinType.Input, dataType: IVariableType.Integer, defaultValue: 587 },
-			{ name: "username", friendlyName: "Username", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "password", friendlyName: "Password", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "encryption", friendlyName: "Encryption", pinType: IPinType.Input, dataType: IVariableType.String, defaultValue: "StartTls" },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "connection", friendlyName: "Connection", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "host",
+				friendlyName: "Host",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+				defaultValue: "smtp.example.com",
+			},
+			{
+				name: "port",
+				friendlyName: "Port",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Integer,
+				defaultValue: 587,
+			},
+			{
+				name: "username",
+				friendlyName: "Username",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "password",
+				friendlyName: "Password",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "encryption",
+				friendlyName: "Encryption",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+				defaultValue: "StartTls",
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "connection",
+				friendlyName: "Connection",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// email_smtp_send
 		makeCatalogNode("email_smtp_send", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "connection", friendlyName: "Connection", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "from", friendlyName: "From", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "to", friendlyName: "To", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "subject", friendlyName: "Subject", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "body_text", friendlyName: "Body (text)", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "body_html", friendlyName: "Body (HTML)", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "message_id", friendlyName: "Message ID", pinType: IPinType.Output, dataType: IVariableType.String },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "connection",
+				friendlyName: "Connection",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "from",
+				friendlyName: "From",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "to",
+				friendlyName: "To",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "subject",
+				friendlyName: "Subject",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "body_text",
+				friendlyName: "Body (text)",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "body_html",
+				friendlyName: "Body (HTML)",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "message_id",
+				friendlyName: "Message ID",
+				pinType: IPinType.Output,
+				dataType: IVariableType.String,
+			},
 		]),
 		// log_info (for Set node mapping)
 		makeCatalogNode("log_info", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "message", friendlyName: "Message", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "toast", friendlyName: "Toast", pinType: IPinType.Input, dataType: IVariableType.Boolean },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "message",
+				friendlyName: "Message",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "toast",
+				friendlyName: "Toast",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Boolean,
+			},
 		]),
 		// control_delay → actually named "delay" in catalog
 		makeCatalogNode("delay", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "time", friendlyName: "Time", pinType: IPinType.Input, dataType: IVariableType.Float },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "time",
+				friendlyName: "Time",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Float,
+			},
 		]),
 		// control_for_each
 		makeCatalogNode("control_for_each", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "loop_body", friendlyName: "Loop", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "items", friendlyName: "Items", pinType: IPinType.Input, dataType: IVariableType.Generic },
-			{ name: "element", friendlyName: "Element", pinType: IPinType.Output, dataType: IVariableType.Generic },
-			{ name: "index", friendlyName: "Index", pinType: IPinType.Output, dataType: IVariableType.Integer },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "loop_body",
+				friendlyName: "Loop",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "items",
+				friendlyName: "Items",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Generic,
+			},
+			{
+				name: "element",
+				friendlyName: "Element",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Generic,
+			},
+			{
+				name: "index",
+				friendlyName: "Index",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Integer,
+			},
 		]),
 		// agent_invoke – impure, invokes an agent
 		makeCatalogNode("agent_invoke", [
-			{ name: "exec_in", friendlyName: "▶", pinType: IPinType.Input, dataType: IVariableType.Execution },
-			{ name: "exec_out", friendlyName: "▶", pinType: IPinType.Output, dataType: IVariableType.Execution },
-			{ name: "agent", friendlyName: "Agent", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "history", friendlyName: "History", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "response", friendlyName: "Response", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "exec_in",
+				friendlyName: "▶",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "exec_out",
+				friendlyName: "▶",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Execution,
+			},
+			{
+				name: "agent",
+				friendlyName: "Agent",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "history",
+				friendlyName: "History",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "response",
+				friendlyName: "Response",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// agent_from_model – creates an agent from an LLM model
 		makeCatalogNode("agent_from_model", [
-			{ name: "model", friendlyName: "Model", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "agent_out", friendlyName: "Agent", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "model",
+				friendlyName: "Model",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "agent_out",
+				friendlyName: "Agent",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// agent_set_system_prompt – sets system prompt on an agent
 		makeCatalogNode("agent_set_system_prompt", [
-			{ name: "agent_in", friendlyName: "Agent In", pinType: IPinType.Input, dataType: IVariableType.Struct },
-			{ name: "system_prompt", friendlyName: "System Prompt", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "agent_out", friendlyName: "Agent Out", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "agent_in",
+				friendlyName: "Agent In",
+				pinType: IPinType.Input,
+				dataType: IVariableType.Struct,
+			},
+			{
+				name: "system_prompt",
+				friendlyName: "System Prompt",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "agent_out",
+				friendlyName: "Agent Out",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// ai_generative_build_gemini – builds a Gemini LLM model
 		makeCatalogNode("ai_generative_build_gemini", [
-			{ name: "endpoint", friendlyName: "Endpoint", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "api_key", friendlyName: "API Key", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "model_id", friendlyName: "Model ID", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "model", friendlyName: "Model", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "endpoint",
+				friendlyName: "Endpoint",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "api_key",
+				friendlyName: "API Key",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "model_id",
+				friendlyName: "Model ID",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "model",
+				friendlyName: "Model",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// ai_generative_build_ollama – builds an Ollama LLM model
 		makeCatalogNode("ai_generative_build_ollama", [
-			{ name: "endpoint", friendlyName: "Endpoint", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "model_id", friendlyName: "Model ID", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "model", friendlyName: "Model", pinType: IPinType.Output, dataType: IVariableType.Struct },
+			{
+				name: "endpoint",
+				friendlyName: "Endpoint",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "model_id",
+				friendlyName: "Model ID",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "model",
+				friendlyName: "Model",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Struct,
+			},
 		]),
 		// variable_get – reads a variable value
 		makeCatalogNode("variable_get", [
-			{ name: "var_ref", friendlyName: "Variable Reference", pinType: IPinType.Input, dataType: IVariableType.String },
-			{ name: "value_ref", friendlyName: "Value", pinType: IPinType.Output, dataType: IVariableType.Generic },
+			{
+				name: "var_ref",
+				friendlyName: "Variable Reference",
+				pinType: IPinType.Input,
+				dataType: IVariableType.String,
+			},
+			{
+				name: "value_ref",
+				friendlyName: "Value",
+				pinType: IPinType.Output,
+				dataType: IVariableType.Generic,
+			},
 		]),
 	];
 }
@@ -1193,18 +1627,20 @@ describe("catalog-driven translation", () => {
 
 		expect(smtpConnect).toBeDefined();
 		expect(smtpSend).toBeDefined();
-		expect(decodePinDefault(findPinByName(smtpConnect!, "host", IPinType.Input)!)).toBe(
-			"smtp.gmail.com",
-		);
-		expect(decodePinDefault(findPinByName(smtpConnect!, "port", IPinType.Input)!)).toBe(
-			587,
-		);
 		expect(
-			decodePinDefault(findPinByName(smtpConnect!, "encryption", IPinType.Input)!),
+			decodePinDefault(findPinByName(smtpConnect!, "host", IPinType.Input)!),
+		).toBe("smtp.gmail.com");
+		expect(
+			decodePinDefault(findPinByName(smtpConnect!, "port", IPinType.Input)!),
+		).toBe(587);
+		expect(
+			decodePinDefault(
+				findPinByName(smtpConnect!, "encryption", IPinType.Input)!,
+			),
 		).toBe("StartTls");
-		expect(decodePinDefault(findPinByName(smtpSend!, "to", IPinType.Input)!)).toBe(
-			"support@example.com",
-		);
+		expect(
+			decodePinDefault(findPinByName(smtpSend!, "to", IPinType.Input)!),
+		).toBe("support@example.com");
 	});
 
 	it("default respondToWebhook override keeps the configured response body in fallback mode", () => {
@@ -1232,7 +1668,9 @@ describe("catalog-driven translation", () => {
 		);
 		expect(responseNode).toBeDefined();
 		expect(
-			decodePinDefault(findPinByName(responseNode!, "message", IPinType.Input)!),
+			decodePinDefault(
+				findPinByName(responseNode!, "message", IPinType.Input)!,
+			),
 		).toBe("={{ $json }}");
 	});
 
@@ -1489,7 +1927,9 @@ describe("catalog-driven translation", () => {
 					main: [[{ node: "My Agent", type: "main", index: 0 }]],
 				},
 				"Gemini Model": {
-					ai_languageModel: [[{ node: "My Agent", type: "ai_languageModel", index: 0 }]],
+					ai_languageModel: [
+						[{ node: "My Agent", type: "ai_languageModel", index: 0 }],
+					],
 				},
 			},
 		};
@@ -1501,7 +1941,9 @@ describe("catalog-driven translation", () => {
 		const agentInvoke = nodes.find((n) => n.name === "agent_invoke");
 		const agentFromModel = nodes.find((n) => n.name === "agent_from_model");
 		const setPrompt = nodes.find((n) => n.name === "agent_set_system_prompt");
-		const geminiNode = nodes.find((n) => n.name === "ai_generative_build_gemini");
+		const geminiNode = nodes.find(
+			(n) => n.name === "ai_generative_build_gemini",
+		);
 
 		expect(agentInvoke).toBeDefined();
 		expect(agentFromModel).toBeDefined();

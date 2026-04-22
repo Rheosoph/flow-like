@@ -1,10 +1,10 @@
 "use client";
 
-import { Play, Table2, Network } from "lucide-react";
+import { Network, Play, Table2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "../button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../tabs";
 import { ScrollArea } from "../scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../tabs";
 
 export interface GraphQueryPanelProps {
 	onRunCypher: (query: string) => void;
@@ -13,7 +13,12 @@ export interface GraphQueryPanelProps {
 	error?: string | null;
 }
 
-export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQueryPanelProps) {
+export function GraphQueryPanel({
+	onRunCypher,
+	results,
+	loading,
+	error,
+}: GraphQueryPanelProps) {
 	const [query, setQuery] = useState("");
 	const [activeTab, setActiveTab] = useState("table");
 
@@ -40,7 +45,11 @@ export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQ
 					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
 						Cypher Query
 					</p>
-					<Button size="sm" onClick={handleRun} disabled={loading || !query.trim()}>
+					<Button
+						size="sm"
+						onClick={handleRun}
+						disabled={loading || !query.trim()}
+					>
 						<Play className="h-3.5 w-3.5 mr-1" />
 						{loading ? "Running..." : "Run"}
 					</Button>
@@ -49,7 +58,7 @@ export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQ
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={handleKeyDown}
-					placeholder='MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100'
+					placeholder="MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100"
 					className="w-full min-h-[80px] max-h-[200px] rounded-md border bg-muted/50 px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
 					spellCheck={false}
 				/>
@@ -61,7 +70,11 @@ export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQ
 			)}
 			{results && results.length > 0 && (
 				<div className="flex-1 min-h-0">
-					<Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
+					<Tabs
+						value={activeTab}
+						onValueChange={setActiveTab}
+						className="h-full flex flex-col"
+					>
 						<TabsList className="mx-3 mt-2 w-fit">
 							<TabsTrigger value="table" className="text-xs gap-1">
 								<Table2 className="h-3.5 w-3.5" />
@@ -78,25 +91,41 @@ export function GraphQueryPanel({ onRunCypher, results, loading, error }: GraphQ
 									<table className="w-full text-xs">
 										<thead>
 											<tr className="bg-muted/50">
-												{results[0] && typeof results[0] === "object" && results[0] !== null
-													? Object.keys(results[0]).map((key) => (
-															<th key={key} className="px-3 py-2 text-left font-medium text-muted-foreground">
-																{key}
-															</th>
-														))
-													: <th className="px-3 py-2 text-left font-medium text-muted-foreground">Value</th>}
+												{results[0] &&
+												typeof results[0] === "object" &&
+												results[0] !== null ? (
+													Object.keys(results[0]).map((key) => (
+														<th
+															key={key}
+															className="px-3 py-2 text-left font-medium text-muted-foreground"
+														>
+															{key}
+														</th>
+													))
+												) : (
+													<th className="px-3 py-2 text-left font-medium text-muted-foreground">
+														Value
+													</th>
+												)}
 											</tr>
 										</thead>
 										<tbody>
 											{results.map((row, i) => (
 												<tr key={i} className="border-t">
-													{typeof row === "object" && row !== null
-														? Object.values(row).map((val, j) => (
-																<td key={j} className="px-3 py-1.5 max-w-[200px] truncate">
-																	{typeof val === "object" ? JSON.stringify(val) : String(val ?? "")}
-																</td>
-															))
-														: <td className="px-3 py-1.5">{String(row)}</td>}
+													{typeof row === "object" && row !== null ? (
+														Object.values(row).map((val, j) => (
+															<td
+																key={j}
+																className="px-3 py-1.5 max-w-[200px] truncate"
+															>
+																{typeof val === "object"
+																	? JSON.stringify(val)
+																	: String(val ?? "")}
+															</td>
+														))
+													) : (
+														<td className="px-3 py-1.5">{String(row)}</td>
+													)}
 												</tr>
 											))}
 										</tbody>

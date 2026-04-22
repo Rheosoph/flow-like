@@ -37,7 +37,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/index`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/index`,
+					userScoped,
+				),
 				{
 					method: "POST",
 					body: JSON.stringify({
@@ -71,7 +74,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}`,
+					userScoped,
+				),
 				{
 					method: "PUT",
 					body: JSON.stringify({
@@ -82,7 +88,12 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_add", { appId, tableName, items, userScoped: userScoped ?? false });
+		return await invoke("db_add", {
+			appId,
+			tableName,
+			items,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async removeItems(
@@ -96,7 +107,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}`,
+					userScoped,
+				),
 				{
 					method: "DELETE",
 					body: JSON.stringify({
@@ -107,7 +121,12 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_delete", { appId, tableName, query, userScoped: userScoped ?? false });
+		return await invoke("db_delete", {
+			appId,
+			tableName,
+			query,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async listItems(
@@ -122,7 +141,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+					userScoped,
+				),
 				{
 					method: "GET",
 				},
@@ -130,7 +152,13 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_list", { appId, tableName, offset, limit, userScoped: userScoped ?? false });
+		return await invoke("db_list", {
+			appId,
+			tableName,
+			offset,
+			limit,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async queryItems(
@@ -146,7 +174,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+					userScoped,
+				),
 				{
 					method: "POST",
 					body: JSON.stringify(query),
@@ -165,13 +196,20 @@ export class DatabaseState implements IDatabaseState {
 		});
 	}
 
-	async getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any> {
+	async getSchema(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<any> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/schema`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/schema`,
+					userScoped,
+				),
 				{
 					method: "GET",
 				},
@@ -186,13 +224,20 @@ export class DatabaseState implements IDatabaseState {
 		});
 	}
 
-	async getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]> {
+	async getIndices(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IIndexConfig[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/indices`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/indices`,
+					userScoped,
+				),
 				{
 					method: "GET",
 				},
@@ -200,7 +245,11 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_indices", { appId, tableName, userScoped: userScoped ?? false });
+		return await invoke("db_indices", {
+			appId,
+			tableName,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async dropIndex(
@@ -214,7 +263,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`,
+					userScoped,
+				),
 				{
 					method: "DELETE",
 				},
@@ -223,7 +275,12 @@ export class DatabaseState implements IDatabaseState {
 			return;
 		}
 
-		await invoke("db_drop_index", { appId, tableName, indexName, userScoped: userScoped ?? false });
+		await invoke("db_drop_index", {
+			appId,
+			tableName,
+			indexName,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async listTables(appId: string): Promise<string[]> {
@@ -260,13 +317,20 @@ export class DatabaseState implements IDatabaseState {
 		return await invoke("db_table_names_user", { appId });
 	}
 
-	async countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number> {
+	async countItems(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<number> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/count`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/count`,
+					userScoped,
+				),
 				{
 					method: "GET",
 				},
@@ -274,7 +338,11 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_count", { appId, tableName, userScoped: userScoped ?? false });
+		return await invoke("db_count", {
+			appId,
+			tableName,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async optimize(
@@ -288,7 +356,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/optimize`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/optimize`,
+					userScoped,
+				),
 				{
 					method: "POST",
 					body: JSON.stringify({ keepVersions: keepVersions ?? false }),
@@ -317,7 +388,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/update`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/update`,
+					userScoped,
+				),
 				{
 					method: "POST",
 					body: JSON.stringify({ filter, updates }),
@@ -326,7 +400,13 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_update", { appId, tableName, filter, updates, userScoped: userScoped ?? false });
+		return await invoke("db_update", {
+			appId,
+			tableName,
+			filter,
+			updates,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async dropColumns(
@@ -340,7 +420,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
+					userScoped,
+				),
 				{
 					method: "DELETE",
 					body: JSON.stringify({ columns }),
@@ -349,7 +432,12 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_drop_columns", { appId, tableName, columns, userScoped: userScoped ?? false });
+		return await invoke("db_drop_columns", {
+			appId,
+			tableName,
+			columns,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async addColumn(
@@ -363,7 +451,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
+					userScoped,
+				),
 				{
 					method: "POST",
 					body: JSON.stringify(column),
@@ -372,7 +463,12 @@ export class DatabaseState implements IDatabaseState {
 			);
 		}
 
-		return await invoke("db_add_column", { appId, tableName, column, userScoped: userScoped ?? false });
+		return await invoke("db_add_column", {
+			appId,
+			tableName,
+			column,
+			userScoped: userScoped ?? false,
+		});
 	}
 
 	async alterColumn(
@@ -387,7 +483,10 @@ export class DatabaseState implements IDatabaseState {
 		if (!isOffline) {
 			return await fetcher(
 				this.backend.profile!,
-				appendScope(`apps/${appId}/db/${parseTableName(tableName)}/columns`, userScoped),
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
+					userScoped,
+				),
 				{
 					method: "PUT",
 					body: JSON.stringify({ column, nullable }),

@@ -19,7 +19,8 @@ function clampByte(value: number): number {
 function parseAngle(value: string): number {
 	if (value.endsWith("deg")) return Number(value.slice(0, -3));
 	if (value.endsWith("grad")) return Number(value.slice(0, -4)) * 0.9;
-	if (value.endsWith("rad")) return (Number(value.slice(0, -3)) * 180) / Math.PI;
+	if (value.endsWith("rad"))
+		return (Number(value.slice(0, -3)) * 180) / Math.PI;
 	if (value.endsWith("turn")) return Number(value.slice(0, -4)) * 360;
 	return Number(value);
 }
@@ -39,7 +40,9 @@ function parseOklchRgb(value: string): [number, number, number] | null {
 	const match = value
 		.trim()
 		.toLowerCase()
-		.match(/^oklch\(\s*([^\s/]+)\s+([^\s/]+)\s+([^\s/)]+)(?:\s*\/\s*[^)]+)?\s*\)$/);
+		.match(
+			/^oklch\(\s*([^\s/]+)\s+([^\s/]+)\s+([^\s/)]+)(?:\s*\/\s*[^)]+)?\s*\)$/,
+		);
 	if (!match) return null;
 
 	const lightness = parseUnitInterval(match[1]);
@@ -55,9 +58,15 @@ function parseOklchRgb(value: string): [number, number, number] | null {
 	const m = Math.pow(lightness - 0.1055613458 * a - 0.0638541728 * b, 3);
 	const s = Math.pow(lightness - 0.0894841775 * a - 1.291485548 * b, 3);
 
-	const r = linearToSrgb(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s);
-	const g = linearToSrgb(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s);
-	const blue = linearToSrgb(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s);
+	const r = linearToSrgb(
+		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+	);
+	const g = linearToSrgb(
+		-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+	);
+	const blue = linearToSrgb(
+		-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+	);
 
 	return [clampByte(r * 255), clampByte(g * 255), clampByte(blue * 255)];
 }
@@ -65,7 +74,11 @@ function parseOklchRgb(value: string): [number, number, number] | null {
 function parseRgbString(value: string): [number, number, number] | null {
 	const match = value.match(/[\d.]+/g);
 	if (!match || match.length < 3) return null;
-	return [clampByte(Number(match[0])), clampByte(Number(match[1])), clampByte(Number(match[2]))];
+	return [
+		clampByte(Number(match[0])),
+		clampByte(Number(match[1])),
+		clampByte(Number(match[2])),
+	];
 }
 
 function resolveThemeMode(): "dark" | "light" {
@@ -121,7 +134,8 @@ export function getGraphTheme(): GraphThemeColors {
 
 	const bgRgb = resolveColorRgb("--background");
 	const fgRgb = resolveColorRgb("--foreground");
-	const isDark = (0.299 * bgRgb[0] + 0.587 * bgRgb[1] + 0.114 * bgRgb[2]) / 255 < 0.5;
+	const isDark =
+		(0.299 * bgRgb[0] + 0.587 * bgRgb[1] + 0.114 * bgRgb[2]) / 255 < 0.5;
 
 	cached = { bgRgb, fgRgb, isDark };
 	lastThemeKey = themeKey;

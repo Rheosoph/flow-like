@@ -383,12 +383,12 @@ pub async fn refresh_oauth_token_for_provider(
 
     let response = match provider_config.auth_method {
         AuthMethod::BasicJson => {
-            let client_secret = provider_config
-                .client_secret
-                .as_deref()
-                .ok_or_else(|| {
-                    format!("Client secret not configured for provider '{}'", provider_id)
-                })?;
+            let client_secret = provider_config.client_secret.as_deref().ok_or_else(|| {
+                format!(
+                    "Client secret not configured for provider '{}'",
+                    provider_id
+                )
+            })?;
             let credentials = flow_like_types::base64::Engine::encode(
                 &flow_like_types::base64::engine::general_purpose::STANDARD,
                 format!("{}:{}", client_id, client_secret),

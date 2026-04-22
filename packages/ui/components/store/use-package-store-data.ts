@@ -116,7 +116,15 @@ export function usePackageStoreData(
 		} finally {
 			setIsRequesting(false);
 		}
-	}, [packageId, profile.data, isRequesting, fetcher, auth, onAccessChanged, onBuy]);
+	}, [
+		packageId,
+		profile.data,
+		isRequesting,
+		fetcher,
+		auth,
+		onAccessChanged,
+		onBuy,
+	]);
 
 	const onGetOrBuy = useCallback(async () => {
 		if (!pkg || !packageId) return;

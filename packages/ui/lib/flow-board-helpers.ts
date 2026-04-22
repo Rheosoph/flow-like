@@ -747,11 +747,7 @@ export function handleEdgesChange({
 							pinCache,
 							deletingNodesRef,
 						) ||
-						isHandleOwnedByDeletingNode(
-							toPinId,
-							pinCache,
-							deletingNodesRef,
-						)
+						isHandleOwnedByDeletingNode(toPinId, pinCache, deletingNodesRef)
 					) {
 						return undefined;
 					}

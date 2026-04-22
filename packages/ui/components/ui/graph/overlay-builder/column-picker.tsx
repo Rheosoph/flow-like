@@ -2,6 +2,7 @@
 
 import { Check, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
+import { cn } from "../../../../lib/utils";
 import { Button } from "../../button";
 import {
 	Command,
@@ -12,7 +13,6 @@ import {
 	CommandList,
 } from "../../command";
 import { Popover, PopoverContent, PopoverTrigger } from "../../popover";
-import { cn } from "../../../../lib/utils";
 
 export interface ColumnPickerProps {
 	columns: string[];
@@ -48,9 +48,14 @@ export function ColumnPicker({
 			</PopoverTrigger>
 			<PopoverContent className="w-[200px] p-0" align="start">
 				<Command>
-					<CommandInput placeholder="Filter columns..." className="h-8 text-xs" />
+					<CommandInput
+						placeholder="Filter columns..."
+						className="h-8 text-xs"
+					/>
 					<CommandList>
-						<CommandEmpty className="text-xs p-2">No column found.</CommandEmpty>
+						<CommandEmpty className="text-xs p-2">
+							No column found.
+						</CommandEmpty>
 						<CommandGroup>
 							{columns.map((col) => (
 								<CommandItem
@@ -63,7 +68,10 @@ export function ColumnPicker({
 									className="text-xs"
 								>
 									<Check
-										className={cn("mr-2 h-3 w-3", value === col ? "opacity-100" : "opacity-0")}
+										className={cn(
+											"mr-2 h-3 w-3",
+											value === col ? "opacity-100" : "opacity-0",
+										)}
 									/>
 									{col}
 								</CommandItem>

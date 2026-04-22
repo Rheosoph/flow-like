@@ -1,12 +1,16 @@
 "use client";
 
-import { X, ArrowRight } from "lucide-react";
-import React, { useState, useCallback } from "react";
+import { ArrowRight, X } from "lucide-react";
+import { useCallback, useState } from "react";
+import type { SubgraphEdge } from "../../../state/backend-state/graph-state";
 import { Button } from "../button";
 import { ScrollArea } from "../scroll-area";
-import type { SubgraphEdge } from "../../../state/backend-state/graph-state";
+import {
+	FieldFilter,
+	PropertyValue,
+	inferValueKind,
+} from "./graph-node-inspector";
 import { getGraphIcon } from "./icons";
-import { inferValueKind, PropertyValue, FieldFilter } from "./graph-node-inspector";
 
 export interface GraphEdgeInspectorProps {
 	edge: SubgraphEdge | null;
@@ -15,13 +19,22 @@ export interface GraphEdgeInspectorProps {
 	onClose: () => void;
 }
 
-export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose }: GraphEdgeInspectorProps) {
+export function GraphEdgeInspector({
+	edge,
+	sourceCaption,
+	targetCaption,
+	onClose,
+}: GraphEdgeInspectorProps) {
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 
 	if (!edge) return null;
 
 	const Icon = getGraphIcon(edge.style?.icon ?? "link");
-	const propEntries = edge.props ? Object.entries(edge.props).filter(([, v]) => v !== null && v !== undefined) : [];
+	const propEntries = edge.props
+		? Object.entries(edge.props).filter(
+				([, v]) => v !== null && v !== undefined,
+			)
+		: [];
 	const allFields = propEntries.map(([k]) => k);
 	const visibleEntries = propEntries.filter(([k]) => !hiddenFields.has(k));
 
@@ -57,7 +70,12 @@ export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose
 							onToggle={handleToggleField}
 						/>
 					)}
-					<Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+					<Button
+						variant="ghost"
+						size="icon"
+						className="h-7 w-7"
+						onClick={onClose}
+					>
 						<X className="h-4 w-4" />
 					</Button>
 				</div>
@@ -67,9 +85,13 @@ export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose
 					{/* Source → Target */}
 					<div className="rounded-md bg-muted/50 px-3 py-2 space-y-1">
 						<div className="flex items-center gap-2 text-sm">
-							<span className="truncate font-medium">{sourceCaption ?? edge.source}</span>
+							<span className="truncate font-medium">
+								{sourceCaption ?? edge.source}
+							</span>
 							<ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-							<span className="truncate font-medium">{targetCaption ?? edge.target}</span>
+							<span className="truncate font-medium">
+								{targetCaption ?? edge.target}
+							</span>
 						</div>
 						<div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
 							<span className="truncate">{edge.source}</span>
@@ -82,7 +104,9 @@ export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
 							ID
 						</p>
-						<p className="text-xs font-mono break-all text-muted-foreground">{edge.id}</p>
+						<p className="text-xs font-mono break-all text-muted-foreground">
+							{edge.id}
+						</p>
 					</div>
 
 					{visibleEntries.length > 0 && (
@@ -101,8 +125,12 @@ export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose
 								{visibleEntries.map(([key, value]) => (
 									<div key={key} className="rounded-md bg-muted/50 px-3 py-2">
 										<div className="flex items-center justify-between mb-0.5">
-											<p className="text-[10px] font-medium text-muted-foreground">{key}</p>
-											<span className="text-[9px] text-muted-foreground/60">{inferValueKind(value).kind}</span>
+											<p className="text-[10px] font-medium text-muted-foreground">
+												{key}
+											</p>
+											<span className="text-[9px] text-muted-foreground/60">
+												{inferValueKind(value).kind}
+											</span>
 										</div>
 										<PropertyValue value={value} propKey={key} />
 									</div>
@@ -111,10 +139,14 @@ export function GraphEdgeInspector({ edge, sourceCaption, targetCaption, onClose
 						</div>
 					)}
 					{propEntries.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">No properties available</p>
+						<p className="text-xs text-muted-foreground italic">
+							No properties available
+						</p>
 					)}
 					{propEntries.length > 0 && visibleEntries.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">All fields hidden — use the filter to show them</p>
+						<p className="text-xs text-muted-foreground italic">
+							All fields hidden — use the filter to show them
+						</p>
 					)}
 				</div>
 			</ScrollArea>

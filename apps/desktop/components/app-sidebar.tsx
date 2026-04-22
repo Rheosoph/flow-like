@@ -3,6 +3,7 @@ import { createId } from "@paralleldrive/cuid2";
 import * as Sentry from "@sentry/nextjs";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	AlertDialog,
@@ -15,18 +16,18 @@ import {
 	AlertDialogTitle,
 	AnimatedBrainIcon,
 	AnimatedBugIcon,
+	AnimatedCodeIcon,
 	AnimatedDashboardIcon,
 	AnimatedDocsIcon,
+	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
-	AnimatedKeyIcon,
 	AnimatedLibraryIcon,
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
+	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
-	AnimatedExploreAppsIcon,
 	AnimatedThemeIcon,
-	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -78,46 +79,40 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
-	AnimatedSidebarIcon,
-	AnimatedCodeIcon,
 } from "@tm9657/flow-like-ui";
 import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+import { motion } from "framer-motion";
 import {
 	BadgeCheck,
 	BarChart3,
 	BellIcon,
-	BookOpenIcon,
-	BugIcon,
 	Check,
 	ChevronRight,
 	ChevronsUpDown,
-	Code2Icon,
 	CreditCard,
 	Edit3Icon,
-	HomeIcon,
 	KeyIcon,
-
 	LogInIcon,
 	LogOut,
 	type LucideIcon,
-	Moon,
 	Plus,
-	SettingsIcon,
-	SidebarCloseIcon,
 	SidebarOpenIcon,
-	Sun,
 	Trash2Icon,
-	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+	type ComponentType,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { fetcher } from "../lib/api";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
@@ -435,7 +430,11 @@ function InnerSidebar() {
 					</DropdownMenu>
 
 					<a href="/settings">
-						<MotionSidebarMenuButton tooltip="Settings" initial="initial" whileHover="hover">
+						<MotionSidebarMenuButton
+							tooltip="Settings"
+							initial="initial"
+							whileHover="hover"
+						>
 							<motion.div variants={iconVariants}>
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
@@ -449,7 +448,11 @@ function InnerSidebar() {
 						target="_blank"
 						rel="noopener noreferrer"
 					>
-						<MotionSidebarMenuButton tooltip="Documentation" initial="initial" whileHover="hover">
+						<MotionSidebarMenuButton
+							tooltip="Documentation"
+							initial="initial"
+							whileHover="hover"
+						>
 							<motion.div variants={iconVariants}>
 								<AnimatedDocsIcon className="size-4" />
 							</motion.div>
@@ -458,7 +461,12 @@ function InnerSidebar() {
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
-					<MotionSidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar} initial="initial" whileHover="hover">
+					<MotionSidebarMenuButton
+						tooltip="Toggle Sidebar"
+						onClick={toggleSidebar}
+						initial="initial"
+						whileHover="hover"
+					>
 						<div>
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
@@ -1032,7 +1040,11 @@ function NavMain({
 											variant={pathname === item.url ? "outline" : "default"}
 											tooltip={item.title}
 										>
-											<MotionLink href={item.url} initial="initial" whileHover="hover">
+											<MotionLink
+												href={item.url}
+												initial="initial"
+												whileHover="hover"
+											>
 												{item.icon && (
 													<motion.div variants={iconVariants}>
 														<item.icon className="size-4" />

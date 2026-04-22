@@ -3,7 +3,7 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import type { LabelStyle } from "../../../state/backend-state/graph-state";
-import { getGraphIcon, GRAPH_ICONS, type IconKey } from "./icons";
+import { GRAPH_ICONS, type IconKey, getGraphIcon } from "./icons";
 
 export interface LegendEntry {
 	label: string;
@@ -15,7 +15,11 @@ export interface LegendEntry {
 export interface GraphLegendProps {
 	entries: LegendEntry[];
 	onToggleVisibility?: (label: string, visible: boolean) => void;
-	onStyleChange?: (label: string, type: "node" | "edge", style: LabelStyle) => void;
+	onStyleChange?: (
+		label: string,
+		type: "node" | "edge",
+		style: LabelStyle,
+	) => void;
 }
 
 function InlineColorPicker({
@@ -99,7 +103,11 @@ function InlineIconPicker({
 	);
 }
 
-export function GraphLegend({ entries, onToggleVisibility, onStyleChange }: GraphLegendProps) {
+export function GraphLegend({
+	entries,
+	onToggleVisibility,
+	onStyleChange,
+}: GraphLegendProps) {
 	const [hidden, setHidden] = useState<Set<string>>(new Set());
 
 	const toggle = (label: string) => {
@@ -137,11 +145,16 @@ export function GraphLegend({ entries, onToggleVisibility, onStyleChange }: Grap
 		<div className="bg-background/80 backdrop-blur-sm rounded-lg border p-3 shadow-sm space-y-3 max-w-[200px]">
 			{nodeEntries.length > 0 && (
 				<div className="space-y-1.5">
-					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Nodes</p>
+					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						Nodes
+					</p>
 					{nodeEntries.map((entry) => {
 						const isHidden = hidden.has(entry.label);
 						return (
-							<div key={`node-${entry.label}`} className="flex items-center gap-2 text-xs">
+							<div
+								key={`node-${entry.label}`}
+								className="flex items-center gap-2 text-xs"
+							>
 								{onStyleChange ? (
 									<div className="flex items-center gap-1 shrink-0">
 										<InlineIconPicker
@@ -165,9 +178,17 @@ export function GraphLegend({ entries, onToggleVisibility, onStyleChange }: Grap
 										})()}
 									</div>
 								)}
-								<span className={isHidden ? "text-muted-foreground line-through" : ""}>{entry.label}</span>
+								<span
+									className={
+										isHidden ? "text-muted-foreground line-through" : ""
+									}
+								>
+									{entry.label}
+								</span>
 								{entry.count !== undefined && (
-									<span className="ml-auto text-muted-foreground">{entry.count}</span>
+									<span className="ml-auto text-muted-foreground">
+										{entry.count}
+									</span>
 								)}
 								<button
 									type="button"
@@ -188,21 +209,37 @@ export function GraphLegend({ entries, onToggleVisibility, onStyleChange }: Grap
 			)}
 			{edgeEntries.length > 0 && (
 				<div className="space-y-1.5">
-					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Edges</p>
+					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						Edges
+					</p>
 					{edgeEntries.map((entry) => {
 						const isHidden = hidden.has(entry.label);
 						return (
-							<div key={`edge-${entry.label}`} className="flex items-center gap-2 text-xs">
+							<div
+								key={`edge-${entry.label}`}
+								className="flex items-center gap-2 text-xs"
+							>
 								{onStyleChange ? (
 									<InlineColorPicker
 										color={entry.style.color}
 										onChange={(color) => handleColorChange(entry, color)}
 									/>
 								) : null}
-								<div className="w-3 h-0.5 shrink-0" style={{ backgroundColor: entry.style.color }} />
-								<span className={isHidden ? "text-muted-foreground line-through" : ""}>{entry.label}</span>
+								<div
+									className="w-3 h-0.5 shrink-0"
+									style={{ backgroundColor: entry.style.color }}
+								/>
+								<span
+									className={
+										isHidden ? "text-muted-foreground line-through" : ""
+									}
+								>
+									{entry.label}
+								</span>
 								{entry.count !== undefined && (
-									<span className="ml-auto text-muted-foreground">{entry.count}</span>
+									<span className="ml-auto text-muted-foreground">
+										{entry.count}
+									</span>
 								)}
 								<button
 									type="button"

@@ -53,8 +53,7 @@ export class WebAppState implements IAppState {
 				rating: comment.rating,
 				userId: comment.userId ?? comment.user_id ?? "",
 				userName: comment.userName ?? comment.user_name ?? undefined,
-				userAvatar:
-					comment.userAvatar ?? comment.user_avatar ?? undefined,
+				userAvatar: comment.userAvatar ?? comment.user_avatar ?? undefined,
 				createdAt: comment.createdAt ?? comment.created_at ?? "",
 				updatedAt: comment.updatedAt ?? comment.updated_at ?? "",
 			})),

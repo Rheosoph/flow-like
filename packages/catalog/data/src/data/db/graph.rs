@@ -5,7 +5,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeGraphConnection;
-use flow_like_types::{Cacheable, Value, async_trait, json::json};
+use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
 
 pub mod cypher;
@@ -44,22 +44,24 @@ pub async fn load_graph_store(
     context: &ExecutionContext,
     cache_key: &str,
 ) -> flow_like_types::Result<Arc<LanceGraphStore>> {
-    let cached = context
-        .cache
-        .read()
-        .await
-        .get(cache_key)
-        .cloned()
-        .ok_or(flow_like_types::anyhow!(
-            "Graph store not found in cache (key: {})",
-            cache_key
-        ))?;
-    let store = cached
-        .as_any()
-        .downcast_ref::<CachedGraphStore>()
-        .ok_or(flow_like_types::anyhow!(
-            "Could not downcast cached value to CachedGraphStore"
-        ))?;
+    let cached =
+        context
+            .cache
+            .read()
+            .await
+            .get(cache_key)
+            .cloned()
+            .ok_or(flow_like_types::anyhow!(
+                "Graph store not found in cache (key: {})",
+                cache_key
+            ))?;
+    let store =
+        cached
+            .as_any()
+            .downcast_ref::<CachedGraphStore>()
+            .ok_or(flow_like_types::anyhow!(
+                "Could not downcast cached value to CachedGraphStore"
+            ))?;
     Ok(store.store.clone())
 }
 
@@ -318,8 +320,7 @@ impl NodeLogic for CreateGraphOverlayNode {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
 
-        let overlay: flow_like_catalog_core::GraphOverlay =
-            context.evaluate_pin("overlay").await?;
+        let overlay: flow_like_catalog_core::GraphOverlay = context.evaluate_pin("overlay").await?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
 
         let context_cache = context
@@ -347,7 +348,9 @@ impl NodeLogic for CreateGraphOverlayNode {
                 .callbacks
                 .build_user_database
                 .clone()
-                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(user_dir)
+                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
+                user_dir
+            )
         } else {
             let board_dir = context_cache.get_storage(false)?;
             let board_dir = board_dir.child("db");

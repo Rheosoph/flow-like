@@ -11,7 +11,11 @@ import type { A2UIComponent, ActionBinding, Style } from "../types";
 export interface InlineWidgetDef {
 	name: string;
 	rootComponentId: string;
-	components: { id: string; component: Record<string, unknown>; style?: Style }[];
+	components: {
+		id: string;
+		component: Record<string, unknown>;
+		style?: Style;
+	}[];
 }
 
 export interface WidgetInstanceComponentProps {
@@ -31,7 +35,9 @@ interface WidgetInstanceContextValue {
 	actionBindings: Record<string, ActionBinding>;
 }
 
-const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(null);
+const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(
+	null,
+);
 
 export function useWidgetInstance(): WidgetInstanceContextValue | null {
 	return useContext(WidgetInstanceContext);
@@ -74,9 +80,7 @@ export function A2UIWidgetInstance({
 			const componentType = childComponent.component.type as string;
 			const Renderer = getComponentRenderer(componentType);
 			if (!Renderer) {
-				console.warn(
-					`Unknown component type: ${componentType}`,
-				);
+				console.warn(`Unknown component type: ${componentType}`);
 				return null;
 			}
 
@@ -86,7 +90,10 @@ export function A2UIWidgetInstance({
 					component={childComponent.component as A2UIComponent}
 					componentId={childId}
 					surfaceId={surfaceId}
-					style={childComponent.style ?? (childComponent.component.style as Style | undefined)}
+					style={
+						childComponent.style ??
+						(childComponent.component.style as Style | undefined)
+					}
 					onAction={onAction}
 					renderChild={(nestedChildId) =>
 						renderWidgetChild(nestedChildId, currentWidgetDef)
@@ -109,11 +116,17 @@ export function A2UIWidgetInstance({
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
 				Widget definition missing rootComponentId
-		</div>
+			</div>
 		);
 	}
 
-	console.log("[A2UI WidgetInstance] rendering:", { instanceId, widgetId, actionBindings, hasInlineDef: !!inlineWidgetDef, rootComponentId: widgetDef?.rootComponentId });
+	console.log("[A2UI WidgetInstance] rendering:", {
+		instanceId,
+		widgetId,
+		actionBindings,
+		hasInlineDef: !!inlineWidgetDef,
+		rootComponentId: widgetDef?.rootComponentId,
+	});
 
 	return (
 		<WidgetInstanceContext.Provider

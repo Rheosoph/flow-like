@@ -153,10 +153,7 @@ impl NodeLogic for KgRetrieveNode {
         // Step 1: Sample nodes from the given label to get seed IDs.
         // In a full implementation this would do vector search on the node table.
         // For now we use the sample endpoint to get representative nodes.
-        let sample_results = match store
-            .sample(&node_label, top_k.max(1) as usize)
-            .await
-        {
+        let sample_results = match store.sample(&node_label, top_k.max(1) as usize).await {
             Ok(r) => r,
             Err(e) => {
                 context
@@ -177,7 +174,10 @@ impl NodeLogic for KgRetrieveNode {
 
         if seeds.is_empty() {
             context
-                .set_pin_value("error_message", json!("No seed nodes found for the given label"))
+                .set_pin_value(
+                    "error_message",
+                    json!("No seed nodes found for the given label"),
+                )
                 .await?;
             context.activate_exec_pin("error").await?;
             return Ok(());
@@ -191,7 +191,10 @@ impl NodeLogic for KgRetrieveNode {
             Ok(sg) => sg,
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Subgraph expansion failed: {e}")))
+                    .set_pin_value(
+                        "error_message",
+                        json!(format!("Subgraph expansion failed: {e}")),
+                    )
                     .await?;
                 context.activate_exec_pin("error").await?;
                 return Ok(());
@@ -202,10 +205,7 @@ impl NodeLogic for KgRetrieveNode {
         let mut text_parts: Vec<String> = Vec::new();
         for node in &subgraph.nodes {
             let caption = node.caption.as_deref().unwrap_or(&node.id);
-            text_parts.push(format!(
-                "[{}:{}] {}",
-                node.label, node.id, caption
-            ));
+            text_parts.push(format!("[{}:{}] {}", node.label, node.id, caption));
         }
         for edge in &subgraph.edges {
             text_parts.push(format!(
@@ -216,9 +216,7 @@ impl NodeLogic for KgRetrieveNode {
         let summary = text_parts.join("\n");
         let node_count = subgraph.nodes.len() as i64;
 
-        context
-            .set_pin_value("context", json!(subgraph))
-            .await?;
+        context.set_pin_value("context", json!(subgraph)).await?;
         context
             .set_pin_value("summary_text", json!(summary))
             .await?;

@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -40,7 +43,10 @@ pub struct SqlPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/sql", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/sql",
+    skip(state, user, payload)
+)]
 pub async fn run_sql(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

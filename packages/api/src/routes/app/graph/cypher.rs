@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -42,7 +45,10 @@ pub struct CypherPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/cypher", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/cypher",
+    skip(state, user, payload)
+)]
 pub async fn run_cypher(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

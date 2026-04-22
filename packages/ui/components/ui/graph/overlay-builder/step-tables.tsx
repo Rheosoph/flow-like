@@ -1,10 +1,9 @@
 "use client";
 
-import { Checkbox } from "../../checkbox";
-import { Label } from "../../label";
-import { ScrollArea } from "../../scroll-area";
 import { Database, User } from "lucide-react";
 import { Badge } from "../../badge";
+import { Checkbox } from "../../checkbox";
+import { ScrollArea } from "../../scroll-area";
 
 export interface TableInfo {
 	name: string;
@@ -27,7 +26,8 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 			<div>
 				<h3 className="text-sm font-medium mb-1">Select Tables</h3>
 				<p className="text-xs text-muted-foreground">
-					Choose which database tables to include in this graph overlay. Selected tables can be mapped as node or edge sources.
+					Choose which database tables to include in this graph overlay.
+					Selected tables can be mapped as node or edge sources.
 				</p>
 			</div>
 			<ScrollArea className="max-h-[400px]">
@@ -46,7 +46,10 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 								<Database className="h-4 w-4 text-muted-foreground shrink-0" />
 								<span className="text-sm truncate flex-1">{t.name}</span>
 								{t.userScoped && (
-									<Badge variant="outline" className="shrink-0 text-[10px] gap-1">
+									<Badge
+										variant="outline"
+										className="shrink-0 text-[10px] gap-1"
+									>
 										<User className="h-3 w-3" />
 										User
 									</Badge>
@@ -55,7 +58,9 @@ export function StepTables({ tables, selected, onToggle }: StepTablesProps) {
 						);
 					})}
 					{tables.length === 0 && (
-						<p className="text-sm text-muted-foreground text-center py-4">No tables found</p>
+						<p className="text-sm text-muted-foreground text-center py-4">
+							No tables found
+						</p>
 					)}
 				</div>
 			</ScrollArea>

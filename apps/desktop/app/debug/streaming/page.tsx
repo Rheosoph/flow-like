@@ -69,10 +69,7 @@ export default function StreamingDebugPage() {
 		setRenderCount(0);
 
 		intervalRef.current = setInterval(() => {
-			const nextPos = Math.min(
-				posRef.current + chunkSize,
-				source.length,
-			);
+			const nextPos = Math.min(posRef.current + chunkSize, source.length);
 			const newContent = source.substring(0, nextPos);
 			posRef.current = nextPos;
 			setContent(newContent);
@@ -102,10 +99,7 @@ export default function StreamingDebugPage() {
 			}
 			lastTime = time;
 
-			const nextPos = Math.min(
-				posRef.current + chunkSize,
-				source.length,
-			);
+			const nextPos = Math.min(posRef.current + chunkSize, source.length);
 			posRef.current = nextPos;
 			setContent(source.substring(0, nextPos));
 			setRenderCount((c) => c + 1);
@@ -199,12 +193,16 @@ export default function StreamingDebugPage() {
 				</label>
 
 				<span className="ml-auto text-xs text-muted-foreground">
-					renders: {renderCount} | chars: {content.length}/{(useCustom ? customMd : SAMPLE_MD).length}
+					renders: {renderCount} | chars: {content.length}/
+					{(useCustom ? customMd : SAMPLE_MD).length}
 					{isStreaming && " | streaming..."}
 				</span>
 			</div>
 
-			<div className="grid flex-1 overflow-hidden" style={{ gridTemplateColumns: useCustom ? "1fr 1fr" : "1fr" }}>
+			<div
+				className="grid flex-1 overflow-hidden"
+				style={{ gridTemplateColumns: useCustom ? "1fr 1fr" : "1fr" }}
+			>
 				{useCustom && (
 					<div className="border-r overflow-auto">
 						<textarea
@@ -221,7 +219,9 @@ export default function StreamingDebugPage() {
 					</div>
 					{content && (
 						<details className="mt-4 text-xs">
-							<summary className="cursor-pointer text-muted-foreground">Raw content ({content.length} chars)</summary>
+							<summary className="cursor-pointer text-muted-foreground">
+								Raw content ({content.length} chars)
+							</summary>
 							<pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
 								{content}
 							</pre>

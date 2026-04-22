@@ -1,7 +1,7 @@
 "use client";
 
 import { useContext } from "react";
-import { DndContext as ReactDndContext, DndProvider } from "react-dnd";
+import { DndProvider, DndContext as ReactDndContext } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { TouchBackend } from "react-dnd-touch-backend";
 
@@ -30,7 +30,11 @@ function DndProviderGuard({ children }: { children: React.ReactNode }) {
 		: undefined;
 
 	return (
-		<DndProvider backend={backend as any} options={options as any} context={window}>
+		<DndProvider
+			backend={backend as any}
+			options={options as any}
+			context={window}
+		>
 			{children}
 		</DndProvider>
 	);

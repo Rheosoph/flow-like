@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -8,7 +11,9 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_NEIGHBORS_DIRECTION;
-use flow_like_storage::databases::graph::{GraphStore, SubgraphResult, TraversalDirection, lancegraph};
+use flow_like_storage::databases::graph::{
+    GraphStore, SubgraphResult, TraversalDirection, lancegraph,
+};
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -53,7 +58,10 @@ fn default_direction() -> String {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph/{overlay_id}/neighbors", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/graph/{overlay_id}/neighbors",
+    skip(state, user, payload)
+)]
 pub async fn neighbors(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -74,7 +82,13 @@ pub async fn neighbors(
     let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
 
     let result = store
-        .neighbors(&payload.label, payload.node_id, payload.depth, direction, payload.limit)
+        .neighbors(
+            &payload.label,
+            payload.node_id,
+            payload.depth,
+            direction,
+            payload.limit,
+        )
         .await?;
 
     Ok(Json(result))

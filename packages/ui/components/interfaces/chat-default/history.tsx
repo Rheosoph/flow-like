@@ -131,9 +131,7 @@ export function ChatHistory({
 		<div className="flex flex-col h-full flex-grow overflow-hidden max-h-full">
 			<div className="relative border-b border-border/20 bg-background/95 backdrop-blur-md">
 				<div className="p-4">
-					<div
-						className="flex items-center justify-between mb-4"
-					>
+					<div className="flex items-center justify-between mb-4">
 						<div className="flex items-center gap-3">
 							<div className="p-2 rounded-lg bg-primary/10 border border-primary/15">
 								<MessageCircleIcon className="w-4 h-4 text-primary" />

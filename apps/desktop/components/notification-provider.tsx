@@ -80,7 +80,7 @@ async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 			onNotificationReceived: mod.onNotificationReceived,
 			onNotificationTapped: mod.onNotificationTapped,
 			onTokenRefresh: mod.onTokenRefresh,
-		} ;
+		};
 	} catch {
 		return null;
 	}
@@ -547,7 +547,7 @@ export default function NotificationProvider({
 										notification.event_id.trim().length > 0
 											? undefined
 											: boardId,
-										target_user_sub: normalizedTargetUserSub,
+									target_user_sub: normalizedTargetUserSub,
 									title: notification.title,
 									description: notification.description,
 									icon: notification.icon,

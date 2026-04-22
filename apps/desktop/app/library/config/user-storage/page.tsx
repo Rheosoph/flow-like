@@ -71,7 +71,13 @@ export default function Page() {
 				targetPrefix: string,
 				files: File[],
 				onProgress?: (progress: number) => void,
-			) => backend.storageState.uploadStorageItemsUser(appId, targetPrefix, files, onProgress),
+			) =>
+				backend.storageState.uploadStorageItemsUser(
+					appId,
+					targetPrefix,
+					files,
+					onProgress,
+				),
 			writeStorageItems: backend.storageState.writeStorageItems?.bind(
 				backend.storageState,
 			),

@@ -88,8 +88,7 @@ export const FlowContextMenuNodes = memo(function FlowContextMenuNodes({
 				))}
 				{items.length > MAX_SEARCH_RESULTS && (
 					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">
-						Showing {MAX_SEARCH_RESULTS} of {items.length} — refine your
-						search
+						Showing {MAX_SEARCH_RESULTS} of {items.length} — refine your search
 					</div>
 				)}
 			</>

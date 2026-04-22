@@ -17,7 +17,9 @@ fn build_store_url(store_ref: &str, path: &str) -> String {
 #[cfg(feature = "delta")]
 fn delta_table_provider(
     table: &flow_like_storage::deltalake::DeltaTable,
-) -> flow_like_types::Result<std::sync::Arc<dyn flow_like_storage::datafusion::datasource::TableProvider>> {
+) -> flow_like_types::Result<
+    std::sync::Arc<dyn flow_like_storage::datafusion::datasource::TableProvider>,
+> {
     use flow_like_storage::deltalake::delta_datafusion::{
         DeltaScanConfigBuilder, DeltaTableProvider,
     };
@@ -185,7 +187,9 @@ impl NodeLogic for RegisterDeltaTableNode {
             let actual_version = delta_table.version().unwrap_or(0);
             let table_provider = delta_table_provider(&delta_table)?;
 
-            cached_session.ctx.register_table(&table_name, table_provider)?;
+            cached_session
+                .ctx
+                .register_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -361,7 +365,9 @@ impl NodeLogic for DeltaTimeTravelNode {
 
             let loaded_version = delta_table.version().unwrap_or(0);
             let table_provider = delta_table_provider(&delta_table)?;
-            cached_session.ctx.register_table(&table_name, table_provider)?;
+            cached_session
+                .ctx
+                .register_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -990,14 +996,10 @@ impl NodeLogic for WriteDeltaTableNode {
                 .await
             {
                 Ok(table) => table,
-                Err(_) => {
-                    DeltaTableBuilder::from_url(url.clone())?
-                        .with_storage_backend(object_store.clone(), url)
-                        .build()
-                        .map_err(|e| {
-                            flow_like_types::anyhow!("Failed to create Delta table: {}", e)
-                        })?
-                }
+                Err(_) => DeltaTableBuilder::from_url(url.clone())?
+                    .with_storage_backend(object_store.clone(), url)
+                    .build()
+                    .map_err(|e| flow_like_types::anyhow!("Failed to create Delta table: {}", e))?,
             };
 
             let mut write_builder = table.write(batches).with_save_mode(write_mode);

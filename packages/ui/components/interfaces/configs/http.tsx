@@ -55,7 +55,8 @@ export function HttpConfig({
 	const path = (config?.path as string) || "/webhook";
 	const method = (config?.method as string) || "POST";
 	const authToken = (config?.auth_token as string | null) || null;
-	const sinkExecution = (config?.sink_execution as SinkExecutionTarget) || undefined;
+	const sinkExecution =
+		(config?.sink_execution as SinkExecutionTarget) || undefined;
 
 	const setValue = (key: string, value: any) => {
 		onConfigUpdate?.({
@@ -85,8 +86,10 @@ export function HttpConfig({
 		return "LOCAL";
 	}, [sinkExecution, supportsBoth, supportsRemote]);
 
-	const showRemoteUrl = effectiveExecution === "REMOTE" || effectiveExecution === "HYBRID";
-	const showLocalUrl = effectiveExecution === "LOCAL" || effectiveExecution === "HYBRID";
+	const showRemoteUrl =
+		effectiveExecution === "REMOTE" || effectiveExecution === "HYBRID";
+	const showLocalUrl =
+		effectiveExecution === "LOCAL" || effectiveExecution === "HYBRID";
 
 	const pathError =
 		path && !path.startsWith("/") ? "Path must start with '/'" : null;
@@ -219,13 +222,25 @@ export function HttpConfig({
 							<TabsTrigger value="local">Local (Desktop)</TabsTrigger>
 						</TabsList>
 						<TabsContent value="remote" className="space-y-3">
-							<UrlPreview url={remoteUrl} method={method} variant="default" authToken={authToken} CurlExample={CurlExample} />
+							<UrlPreview
+								url={remoteUrl}
+								method={method}
+								variant="default"
+								authToken={authToken}
+								CurlExample={CurlExample}
+							/>
 							<p className="text-xs text-muted-foreground">
 								Public endpoint for remote/cloud execution. Available 24/7.
 							</p>
 						</TabsContent>
 						<TabsContent value="local" className="space-y-3">
-							<UrlPreview url={localUrl} method={method} variant="secondary" authToken={authToken} CurlExample={CurlExample} />
+							<UrlPreview
+								url={localUrl}
+								method={method}
+								variant="secondary"
+								authToken={authToken}
+								CurlExample={CurlExample}
+							/>
 							<p className="text-xs text-muted-foreground">
 								Local endpoint for desktop app execution. Only available when
 								the app is running.
@@ -234,14 +249,26 @@ export function HttpConfig({
 					</Tabs>
 				) : showRemoteUrl && remoteUrl ? (
 					<div className="space-y-3">
-						<UrlPreview url={remoteUrl} method={method} variant="default" authToken={authToken} CurlExample={CurlExample} />
+						<UrlPreview
+							url={remoteUrl}
+							method={method}
+							variant="default"
+							authToken={authToken}
+							CurlExample={CurlExample}
+						/>
 						<p className="text-xs text-muted-foreground">
 							Public endpoint for remote/cloud execution. Available 24/7.
 						</p>
 					</div>
 				) : (
 					<div className="space-y-3">
-						<UrlPreview url={localUrl} method={method} variant="secondary" authToken={authToken} CurlExample={CurlExample} />
+						<UrlPreview
+							url={localUrl}
+							method={method}
+							variant="secondary"
+							authToken={authToken}
+							CurlExample={CurlExample}
+						/>
 						<p className="text-xs text-muted-foreground">
 							Local endpoint for desktop app execution. Only available when the
 							app is running.

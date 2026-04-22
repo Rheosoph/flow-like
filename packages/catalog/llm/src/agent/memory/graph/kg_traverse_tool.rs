@@ -103,10 +103,13 @@ impl NodeLogic for KgTraverseToolNode {
             .evaluate_pin("tool_name")
             .await
             .unwrap_or_else(|_| "query_knowledge_graph".to_string());
-        let tool_description: String = context.evaluate_pin("tool_description").await.unwrap_or_else(|_| {
-            "Query the knowledge graph using Cypher. Returns matching nodes and relationships."
-                .to_string()
-        });
+        let tool_description: String = context
+            .evaluate_pin("tool_description")
+            .await
+            .unwrap_or_else(|_| {
+                "Query the knowledge graph using Cypher. Returns matching nodes and relationships."
+                    .to_string()
+            });
 
         // Build the tool schema: the LLM gets a `query` string parameter
         let mut properties: HashMap<String, Box<HistoryJSONSchemaDefine>> = HashMap::new();

@@ -84,6 +84,29 @@ fn default_temporary_dir() -> PathBuf {
         .join("tmp")
 }
 
+// Keep target-specific storage selection in a helper so non-mobile builds do not
+// need conditionally mutable locals that trigger `unused_mut`.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+fn default_storage_dirs() -> (PathBuf, PathBuf, PathBuf) {
+    let root = mobile_storage_root();
+    (root.join("bits"), root.join("projects"), root)
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn default_storage_dirs() -> (PathBuf, PathBuf, PathBuf) {
+    (
+        dirs_next::data_dir()
+            .unwrap_or_default()
+            .join("flow-like")
+            .join("bits"),
+        dirs_next::data_dir()
+            .unwrap_or_default()
+            .join("flow-like")
+            .join("projects"),
+        dirs_next::cache_dir().unwrap_or_default().join("flow-like"),
+    )
+}
+
 fn ensure_dir(p: &PathBuf) -> std::io::Result<()> {
     if !p.exists() {
         std::fs::create_dir_all(p)?;
@@ -198,25 +221,7 @@ impl Settings {
 
         ensure_app_dirs().ok();
 
-        let mut bit_dir = dirs_next::data_dir()
-            .unwrap_or_default()
-            .join("flow-like")
-            .join("bits");
-        let mut project_dir = dirs_next::data_dir()
-            .unwrap_or_default()
-            .join("flow-like")
-            .join("projects");
-        let mut user_dir = dirs_next::cache_dir().unwrap_or_default().join("flow-like");
-
-        if cfg!(any(target_os = "ios", target_os = "android")) {
-            #[cfg(any(target_os = "ios", target_os = "android"))]
-            {
-                let root = mobile_storage_root();
-                bit_dir = root.join("bits");
-                project_dir = root.join("projects");
-                user_dir = root.clone();
-            }
-        }
+        let (bit_dir, project_dir, user_dir) = default_storage_dirs();
 
         println!(
             "Settings::new() bit_dir={:?} project_dir={:?} user_dir={:?}",

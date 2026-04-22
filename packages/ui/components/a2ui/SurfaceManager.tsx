@@ -63,9 +63,7 @@ export function useSurfaceManager() {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					next.set(message.surfaceId, {
@@ -141,7 +139,8 @@ export function useSurfaceManager() {
 						if (updateValue?.type === "createComponent") {
 							const newComponent: SurfaceComponent = {
 								id: componentId,
-								component: updateValue.component as SurfaceComponent["component"],
+								component:
+									updateValue.component as SurfaceComponent["component"],
 								style: updateValue.style as SurfaceComponent["style"],
 							};
 							next.set(surfaceId, {
@@ -349,8 +348,12 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-									...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+									...(updateValue.layout !== undefined && {
+										layout: { literalJson: JSON.stringify(configOrLayout) },
+									}),
+									...(updateValue.config !== undefined && {
+										config: { literalJson: JSON.stringify(configOrLayout) },
+									}),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;

@@ -6,7 +6,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::sync::Arc;
 
 /// Unique identifier prefix for break struct pins to enable special connection rules
 pub const BREAK_STRUCT_PIN_PREFIX: &str = "__break_struct_field__";

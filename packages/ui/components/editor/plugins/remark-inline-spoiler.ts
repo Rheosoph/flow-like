@@ -1,4 +1,4 @@
-import type { Root, Text, PhrasingContent } from "mdast";
+import type { PhrasingContent, Root, Text } from "mdast";
 import { SKIP, visit } from "unist-util-visit";
 
 /**

@@ -57,8 +57,7 @@ pub struct GraphSchemaResult {
 
 #[async_trait]
 pub trait GraphStore: Send + Sync {
-    async fn cypher(&self, query: &str, params: Value, limit: Option<usize>)
-        -> Result<Vec<Value>>;
+    async fn cypher(&self, query: &str, params: Value, limit: Option<usize>) -> Result<Vec<Value>>;
 
     async fn sql(&self, query: &str, limit: Option<usize>) -> Result<Vec<Value>>;
 
@@ -78,8 +77,7 @@ pub trait GraphStore: Send + Sync {
         limit: Option<usize>,
     ) -> Result<SubgraphResult>;
 
-    async fn search_nodes(&self, query: &str, limit: Option<usize>)
-        -> Result<Vec<SubgraphNode>>;
+    async fn search_nodes(&self, query: &str, limit: Option<usize>) -> Result<Vec<SubgraphNode>>;
 
     async fn schema(&self) -> Result<GraphSchemaResult>;
 

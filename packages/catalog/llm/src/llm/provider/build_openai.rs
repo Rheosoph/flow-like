@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use flow_like::{
     bit::{Bit, BitModelClassification, VLMParameters},

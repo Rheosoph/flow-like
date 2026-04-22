@@ -12,14 +12,13 @@ import {
 	XCircle,
 } from "lucide-react";
 import { useCallback, useState } from "react";
+import { formatAbsoluteDateValue } from "../../lib";
 import type {
 	AdminPackageDetailResponse,
 	PackageAdminStatus,
 	PackageReview,
-	PackageReviewer,
 	ReviewRequest,
 } from "../../lib/schema/wasm";
-import { formatAbsoluteDateValue } from "../../lib";
 import {
 	Badge,
 	Button,
@@ -29,6 +28,7 @@ import {
 	CardHeader,
 	CardTitle,
 	Label,
+	RelativeTime,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -37,7 +37,6 @@ import {
 	Separator,
 	Skeleton,
 	Slider,
-	RelativeTime,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -306,7 +305,10 @@ export function AdminPackageDetailView({
 											<Label className="text-muted-foreground">Published</Label>
 											<p>
 												{pkg.publishedAt
-													? formatAbsoluteDateValue(pkg.publishedAt, "Not published")
+													? formatAbsoluteDateValue(
+															pkg.publishedAt,
+															"Not published",
+														)
 													: "Not published"}
 											</p>
 										</div>

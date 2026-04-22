@@ -115,7 +115,11 @@ impl NodeLogic for GraphSubgraphNode {
         let depth: i64 = context.evaluate_pin("depth").await.unwrap_or(1);
         let depth = (depth.max(1) as usize).min(5);
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
-        let limit = if limit > 0 { Some(limit as usize) } else { None };
+        let limit = if limit > 0 {
+            Some(limit as usize)
+        } else {
+            None
+        };
 
         if seed_labels.len() != seed_ids.len() {
             context

@@ -1,8 +1,11 @@
 import type { Surface } from "../components/a2ui/types";
-import { pageLocalState } from "./idb-storage";
 import type { IPage } from "../state/backend-state/page-state";
+import { pageLocalState } from "./idb-storage";
 
-type CacheablePage = Pick<IPage, "id" | "updatedAt" | "cache"> | null | undefined;
+type CacheablePage =
+	| Pick<IPage, "id" | "updatedAt" | "cache">
+	| null
+	| undefined;
 type PageSurfaceCacheRecord = {
 	pageUpdatedAt: string;
 	surface: Surface;
@@ -71,7 +74,7 @@ function clearLegacyPageSurfaceCache(
 export async function readPageSurfaceCache(
 	appId: string | undefined,
 	page: CacheablePage,
-	): Promise<Surface | null> {
+): Promise<Surface | null> {
 	if (!appId || !page?.cache || !page.id) {
 		return null;
 	}

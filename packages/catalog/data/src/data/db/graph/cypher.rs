@@ -65,12 +65,7 @@ impl NodeLogic for CypherQueryNode {
             "Query completed",
             VariableType::Execution,
         );
-        node.add_output_pin(
-            "error",
-            "Error",
-            "Query failed",
-            VariableType::Execution,
-        );
+        node.add_output_pin("error", "Error", "Query failed", VariableType::Execution);
         node.add_output_pin(
             "error_message",
             "Error Message",
@@ -102,7 +97,11 @@ impl NodeLogic for CypherQueryNode {
             .await
             .unwrap_or(flow_like_types::Value::Null);
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
-        let limit = if limit > 0 { Some(limit as usize) } else { None };
+        let limit = if limit > 0 {
+            Some(limit as usize)
+        } else {
+            None
+        };
 
         let store = super::load_graph_store(context, &conn.cache_key).await?;
 

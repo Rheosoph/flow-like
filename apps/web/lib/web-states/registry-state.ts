@@ -14,7 +14,13 @@ import type {
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
 } from "@tm9657/flow-like-ui/lib/schema/wasm";
-import { type WebBackendRef, apiDelete, apiGet, apiPost, apiPut } from "./api-utils";
+import {
+	type WebBackendRef,
+	apiDelete,
+	apiGet,
+	apiPost,
+	apiPut,
+} from "./api-utils";
 
 export class WebRegistryState implements IRegistryState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -43,13 +49,15 @@ export class WebRegistryState implements IRegistryState {
 		const params = new URLSearchParams();
 		if (filters?.query) params.set("query", filters.query);
 		if (filters?.category) params.set("category", filters.category);
-		if (filters?.keywords?.length) params.set("keywords", filters.keywords.join(","));
+		if (filters?.keywords?.length)
+			params.set("keywords", filters.keywords.join(","));
 		if (filters?.author) params.set("author", filters.author);
 		if (filters?.verifiedOnly) params.set("verified_only", "true");
 		if (filters?.includeDeprecated) params.set("include_deprecated", "true");
 		if (filters?.includeDisabled) params.set("include_disabled", "true");
 		if (filters?.sortBy) params.set("sort_by", filters.sortBy);
-		if (filters?.sortDesc !== undefined) params.set("sort_desc", String(filters.sortDesc));
+		if (filters?.sortDesc !== undefined)
+			params.set("sort_desc", String(filters.sortDesc));
 		if (filters?.offset) params.set("offset", String(filters.offset));
 		if (filters?.limit) params.set("limit", String(filters.limit));
 		if (filters?.language) params.set("language", filters.language);
@@ -201,7 +209,11 @@ export class WebRegistryState implements IRegistryState {
 		);
 	}
 
-	async getPackageComments(packageId: string, offset?: number, limit?: number): Promise<PackageCommentsResponse> {
+	async getPackageComments(
+		packageId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<PackageCommentsResponse> {
 		const params = new URLSearchParams();
 		if (offset != null) params.set("offset", String(offset));
 		if (limit != null) params.set("limit", String(limit));
@@ -216,7 +228,10 @@ export class WebRegistryState implements IRegistryState {
 		}
 	}
 
-	async upsertPackageComment(packageId: string, body: UpsertPackageCommentRequest): Promise<UpsertPackageCommentResponse> {
+	async upsertPackageComment(
+		packageId: string,
+		body: UpsertPackageCommentRequest,
+	): Promise<UpsertPackageCommentResponse> {
 		return apiPut<UpsertPackageCommentResponse>(
 			`registry/package/${packageId}/comments`,
 			body,
@@ -224,7 +239,10 @@ export class WebRegistryState implements IRegistryState {
 		);
 	}
 
-	async deletePackageComment(packageId: string, commentId: string): Promise<void> {
+	async deletePackageComment(
+		packageId: string,
+		commentId: string,
+	): Promise<void> {
 		await apiDelete(
 			`registry/package/${packageId}/comments/${commentId}`,
 			this.backend.auth,

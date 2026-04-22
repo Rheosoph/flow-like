@@ -15,7 +15,10 @@ export function AnimatedDashboardIcon({ className }: { className?: string }) {
 			strokeWidth="2"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			className={cn("group-hover/icon:text-sky-400 transition-colors duration-150", className)}
+			className={cn(
+				"group-hover/icon:text-sky-400 transition-colors duration-150",
+				className,
+			)}
 		>
 			{/* Top-left panel */}
 			<motion.rect
@@ -29,7 +32,12 @@ export function AnimatedDashboardIcon({ className }: { className?: string }) {
 					hover: {
 						scaleY: [0, 1.1, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.3, type: "spring", stiffness: 280, damping: 12 },
+						transition: {
+							duration: 0.3,
+							type: "spring",
+							stiffness: 280,
+							damping: 12,
+						},
 					},
 				}}
 				style={{ transformOrigin: "6.5px 3px" }}
@@ -46,7 +54,13 @@ export function AnimatedDashboardIcon({ className }: { className?: string }) {
 					hover: {
 						scaleY: [0, 1.1, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.3, type: "spring", stiffness: 280, damping: 12, delay: 0.1 },
+						transition: {
+							duration: 0.3,
+							type: "spring",
+							stiffness: 280,
+							damping: 12,
+							delay: 0.1,
+						},
 					},
 				}}
 				style={{ transformOrigin: "17.5px 3px" }}
@@ -63,7 +77,13 @@ export function AnimatedDashboardIcon({ className }: { className?: string }) {
 					hover: {
 						scaleY: [0, 1.1, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.3, type: "spring", stiffness: 280, damping: 12, delay: 0.2 },
+						transition: {
+							duration: 0.3,
+							type: "spring",
+							stiffness: 280,
+							damping: 12,
+							delay: 0.2,
+						},
 					},
 				}}
 				style={{ transformOrigin: "6.5px 14px" }}
@@ -80,7 +100,13 @@ export function AnimatedDashboardIcon({ className }: { className?: string }) {
 					hover: {
 						scaleY: [0, 1.1, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.3, type: "spring", stiffness: 280, damping: 12, delay: 0.3 },
+						transition: {
+							duration: 0.3,
+							type: "spring",
+							stiffness: 280,
+							damping: 12,
+							delay: 0.3,
+						},
 					},
 				}}
 				style={{ transformOrigin: "17.5px 12px" }}

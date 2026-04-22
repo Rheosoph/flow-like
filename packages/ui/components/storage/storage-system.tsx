@@ -84,7 +84,9 @@ export function StorageSystem({
 	operations?: StorageOperations;
 	revealInExplorer?: (location: string) => void;
 	openWithApp?: (location: string, appPath?: string) => void;
-	listAppsForFile?: (location: string) => Promise<import("./storage-file-or-folder").AppEntry[]>;
+	listAppsForFile?: (
+		location: string,
+	) => Promise<import("./storage-file-or-folder").AppEntry[]>;
 }>) {
 	// Responsive helper: detect small screens (<= Tailwind 'sm')
 	const useIsSmallScreen = () => {
@@ -341,9 +343,7 @@ export function StorageSystem({
 				return;
 			}
 
-			const url = await storageApi.downloadStorageItems(appId, [
-				file,
-			]);
+			const url = await storageApi.downloadStorageItems(appId, [file]);
 
 			if (url.length === 0 || !url[0]?.url) {
 				toast.error("Failed to load file preview");
@@ -372,12 +372,7 @@ export function StorageSystem({
 				const fileName = preview.file.split("/").pop() || "file";
 				const file = new File([blob], fileName, { type: "text/plain" });
 
-				await storageApi.uploadStorageItems(
-					appId,
-					prefix,
-					[file],
-					undefined,
-				);
+				await storageApi.uploadStorageItems(appId, prefix, [file], undefined);
 
 				await files.refetch();
 			} catch (error) {
@@ -399,9 +394,7 @@ export function StorageSystem({
 				return;
 			}
 
-			const signedUrl = await storageApi.downloadStorageItems(appId, [
-				file,
-			]);
+			const signedUrl = await storageApi.downloadStorageItems(appId, [file]);
 
 			if (signedUrl.length === 0 || !signedUrl[0]?.url) {
 				toast.error("Failed to load file preview");
@@ -886,10 +879,9 @@ export function StorageSystem({
 														deleteFile={async (file) => {
 															try {
 																const filePrefix = `${prefix}/${file}`;
-																await storageApi.deleteStorageItems(
-																	appId,
-																	[filePrefix],
-																);
+																await storageApi.deleteStorageItems(appId, [
+																	filePrefix,
+																]);
 																toast.success("Deleted successfully");
 															} catch (error) {
 																console.error(error);
@@ -900,10 +892,9 @@ export function StorageSystem({
 														}}
 														shareFile={async (file) => {
 															const downloadLinks =
-																await storageApi.downloadStorageItems(
-																	appId,
-																	[file],
-																);
+																await storageApi.downloadStorageItems(appId, [
+																	file,
+																]);
 															if (downloadLinks.length === 0) {
 																return;
 															}
@@ -996,7 +987,7 @@ export function StorageSystem({
 											deleteFile={async (file) => {
 												try {
 													const filePrefix = `${prefix}/${file}`;
-														await storageApi.deleteStorageItems(appId, [
+													await storageApi.deleteStorageItems(appId, [
 														filePrefix,
 													]);
 													toast.success("Deleted successfully");
@@ -1009,10 +1000,7 @@ export function StorageSystem({
 											}}
 											shareFile={async (file) => {
 												const downloadLinks =
-														await storageApi.downloadStorageItems(
-														appId,
-														[file],
-													);
+													await storageApi.downloadStorageItems(appId, [file]);
 												if (downloadLinks.length === 0) {
 													return;
 												}

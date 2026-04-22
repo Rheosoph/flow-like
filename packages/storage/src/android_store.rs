@@ -147,7 +147,9 @@ pub fn android_write_options() -> lancedb::table::WriteOptions {
     use lance_io::object_store::ObjectStoreParams;
 
     let mut options = crate::lancedb_write_options::default_write_options();
-    let write_params = options.lance_write_params.get_or_insert_with(Default::default);
+    let write_params = options
+        .lance_write_params
+        .get_or_insert_with(Default::default);
     write_params.store_params = Some(ObjectStoreParams {
         object_store_wrapper: Some(Arc::new(AndroidSafeWrapper)),
         ..Default::default()

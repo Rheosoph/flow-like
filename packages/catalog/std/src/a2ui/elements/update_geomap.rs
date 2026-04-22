@@ -9,7 +9,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::sync::Arc;
 
 /// Unified GeoMap update node.
 ///

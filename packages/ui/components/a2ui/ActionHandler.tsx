@@ -11,8 +11,8 @@ import {
 	useState,
 } from "react";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
-import type { IBoard } from "../../lib/schema/flow/board";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
+import type { IBoard } from "../../lib/schema/flow/board";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
@@ -48,7 +48,9 @@ function mergeStoredElementValues(
 		const storedValue = storedValues[elementId];
 		if (storedValue !== undefined) {
 			const comp = element as Record<string, unknown>;
-			const componentData = comp.component as Record<string, unknown> | undefined;
+			const componentData = comp.component as
+				| Record<string, unknown>
+				| undefined;
 			if (componentData) {
 				mergedElements[elementId] = {
 					...comp,
@@ -140,10 +142,9 @@ function summarizeBoardElementRefs(board: IBoard) {
 	}
 
 	for (const layer of Object.values(board.layers ?? {})) {
-		const layerNodes =
-			(layer as Record<string, unknown>).nodes as
-				| Record<string, Record<string, unknown>>
-				| undefined;
+		const layerNodes = (layer as Record<string, unknown>).nodes as
+			| Record<string, Record<string, unknown>>
+			| undefined;
 		for (const node of Object.values(layerNodes ?? {})) {
 			collectNodeRefs(node);
 		}
@@ -998,8 +999,13 @@ export function useExecuteAction() {
 					}
 					break;
 				}
-			case "widget_event": {
-					console.log("[A2UI] widget_event triggered:", { context, widgetInstance, appId, boardId });
+				case "widget_event": {
+					console.log("[A2UI] widget_event triggered:", {
+						context,
+						widgetInstance,
+						appId,
+						boardId,
+					});
 					const actionId = context.actionId as string | undefined;
 					if (!actionId) {
 						console.warn("[A2UI] widget_event missing actionId");
@@ -1009,12 +1015,20 @@ export function useExecuteAction() {
 					// Look up the binding from the widget instance's action bindings
 					const binding = widgetInstance?.actionBindings[actionId];
 					if (!binding) {
-						console.warn("[A2UI] widget_event: no binding found for actionId:", actionId, "available bindings:", widgetInstance?.actionBindings);
+						console.warn(
+							"[A2UI] widget_event: no binding found for actionId:",
+							actionId,
+							"available bindings:",
+							widgetInstance?.actionBindings,
+						);
 						break;
 					}
 
 					if (!("workflow" in binding)) {
-						console.warn("[A2UI] widget_event: only workflow bindings are supported for execution, got:", binding);
+						console.warn(
+							"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
+							binding,
+						);
 						break;
 					}
 
@@ -1097,7 +1111,9 @@ export function useExecuteAction() {
 								},
 							};
 
-							const execFn = executionService?.executeBoard ?? backend.boardState.executeBoard;
+							const execFn =
+								executionService?.executeBoard ??
+								backend.boardState.executeBoard;
 							await execFn(
 								effectiveAppId,
 								effectiveBoardId,
@@ -1110,7 +1126,10 @@ export function useExecuteAction() {
 							console.error("[A2UI] Failed to execute widget event:", error);
 						}
 					} else {
-						console.warn("[A2UI] Missing appId or boardId for widget_event:", { appId: effectiveAppId, boardId: effectiveBoardId });
+						console.warn("[A2UI] Missing appId or boardId for widget_event:", {
+							appId: effectiveAppId,
+							boardId: effectiveBoardId,
+						});
 					}
 					break;
 				}

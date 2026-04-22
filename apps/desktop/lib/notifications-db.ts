@@ -74,7 +74,6 @@ export async function markLocalNotificationRead(id: string): Promise<boolean> {
 	return updated > 0;
 }
 
-
 export async function deleteLocalNotification(id: string): Promise<boolean> {
 	const existing = await notificationsDB.notifications.get(id);
 	if (!existing) {

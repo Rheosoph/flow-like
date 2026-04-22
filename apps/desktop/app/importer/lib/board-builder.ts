@@ -1,5 +1,11 @@
 import { createId } from "@paralleldrive/cuid2";
-import type { IBoard, IComment, INode, IPin, IVariable } from "@tm9657/flow-like-ui";
+import type {
+	IBoard,
+	IComment,
+	INode,
+	IPin,
+	IVariable,
+} from "@tm9657/flow-like-ui";
 import {
 	ICommentType,
 	IExecutionMode,

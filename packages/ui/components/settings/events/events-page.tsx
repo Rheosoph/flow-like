@@ -1137,9 +1137,13 @@ function EventConfiguration({
 							className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
 						>
 							{isOffline ? (
-								<><Monitor className="h-3 w-3" /> Local</>
+								<>
+									<Monitor className="h-3 w-3" /> Local
+								</>
 							) : (
-								<><Cloud className="h-3 w-3" /> Online</>
+								<>
+									<Cloud className="h-3 w-3" /> Online
+								</>
 							)}
 						</span>
 					)}
@@ -1168,9 +1172,13 @@ function EventConfiguration({
 						className="gap-2"
 					>
 						{formData.active ? (
-							<><Pause className="h-4 w-4" /> Deactivate</>
+							<>
+								<Pause className="h-4 w-4" /> Deactivate
+							</>
 						) : (
-							<><Play className="h-4 w-4" /> Activate</>
+							<>
+								<Play className="h-4 w-4" /> Activate
+							</>
 						)}
 					</Button>
 				</div>
@@ -1779,9 +1787,9 @@ function EventConfiguration({
 								</CardTitle>
 							</CardHeader>
 							<CardContent
-							className={`space-y-4 flex flex-col items-start ${!isEditing ? "cursor-pointer" : ""}`}
-							onClick={!isEditing ? enterEdit : undefined}
-						>
+								className={`space-y-4 flex flex-col items-start ${!isEditing ? "cursor-pointer" : ""}`}
+								onClick={!isEditing ? enterEdit : undefined}
+							>
 								<EventTranslation
 									appId={appId}
 									eventType={formData.event_type}
@@ -2703,9 +2711,13 @@ function EventsTable({
 										className={`text-xs px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
 									>
 										{isOffline ? (
-											<><Monitor className="h-3 w-3" /> Local</>
+											<>
+												<Monitor className="h-3 w-3" /> Local
+											</>
 										) : (
-											<><Cloud className="h-3 w-3" /> Online</>
+											<>
+												<Cloud className="h-3 w-3" /> Online
+											</>
 										)}
 									</span>
 								)}
@@ -3006,9 +3018,13 @@ function EventsTable({
 																className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
 															>
 																{isOffline ? (
-																	<><Monitor className="h-3 w-3" /> Local</>
+																	<>
+																		<Monitor className="h-3 w-3" /> Local
+																	</>
 																) : (
-																	<><Cloud className="h-3 w-3" /> Online</>
+																	<>
+																		<Cloud className="h-3 w-3" /> Online
+																	</>
 																)}
 															</div>
 															{!sinkActive && (

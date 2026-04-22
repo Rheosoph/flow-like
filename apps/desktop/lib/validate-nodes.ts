@@ -1,7 +1,4 @@
-import type {
-	WasmNodeDefinition,
-	WasmPinDefinition,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
+import type { WasmNodeDefinition } from "@tm9657/flow-like-ui/lib/schema/developer";
 
 export type LintSeverity = "error" | "warning" | "info";
 
@@ -43,14 +40,16 @@ function lintNode(node: WasmNodeDefinition, nodeIndex: number): LintIssue[] {
 		issues.push({
 			...ctx,
 			severity: "error",
-			message: "Impure node has output execution pin(s) but no input execution pin.",
+			message:
+				"Impure node has output execution pin(s) but no input execution pin.",
 		});
 	}
 	if (isImpure && outputExecPins.length === 0) {
 		issues.push({
 			...ctx,
 			severity: "error",
-			message: "Impure node has input execution pin(s) but no output execution pin.",
+			message:
+				"Impure node has input execution pin(s) but no output execution pin.",
 		});
 	}
 
@@ -74,7 +73,8 @@ function lintNode(node: WasmNodeDefinition, nodeIndex: number): LintIssue[] {
 		issues.push({
 			...ctx,
 			severity: "warning",
-			message: "Node has no description. Add one so users understand what it does.",
+			message:
+				"Node has no description. Add one so users understand what it does.",
 		});
 	}
 
@@ -83,7 +83,8 @@ function lintNode(node: WasmNodeDefinition, nodeIndex: number): LintIssue[] {
 		issues.push({
 			...ctx,
 			severity: "warning",
-			message: "No scores defined (privacy, security, performance, etc.). Add scores to rate the node.",
+			message:
+				"No scores defined (privacy, security, performance, etc.). Add scores to rate the node.",
 		});
 	}
 
@@ -92,7 +93,8 @@ function lintNode(node: WasmNodeDefinition, nodeIndex: number): LintIssue[] {
 		issues.push({
 			...ctx,
 			severity: "info",
-			message: "No icon set. Consider adding an icon for better visual identification.",
+			message:
+				"No icon set. Consider adding an icon for better visual identification.",
 		});
 	}
 
@@ -138,7 +140,8 @@ function lintNode(node: WasmNodeDefinition, nodeIndex: number): LintIssue[] {
 		issues.push({
 			...ctx,
 			severity: "warning",
-			message: "Node has no category. Assign a category path (e.g. \"Utils/String\").",
+			message:
+				'Node has no category. Assign a category path (e.g. "Utils/String").',
 		});
 	}
 

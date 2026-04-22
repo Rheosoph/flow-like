@@ -82,7 +82,11 @@ impl NodeLogic for GraphSqlQueryNode {
         let conn: NodeGraphConnection = context.evaluate_pin("graph").await?;
         let query: String = context.evaluate_pin("query").await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
-        let limit = if limit > 0 { Some(limit as usize) } else { None };
+        let limit = if limit > 0 {
+            Some(limit as usize)
+        } else {
+            None
+        };
 
         let store = super::load_graph_store(context, &conn.cache_key).await?;
 

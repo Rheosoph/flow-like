@@ -77,8 +77,7 @@ export const nlIntegrations = {
 		"PDF-parsing, Excel/CSV-verwerking, beeldbewerking, OCR en documentgeneratie.",
 	"integrations.cat.files.count": "10+ formaten",
 	"integrations.custom.tagline": "Uitbreiden met Elke Taal",
-	"integrations.custom.headline":
-		"Bouw Aangepaste Nodes in Enkele Minuten",
+	"integrations.custom.headline": "Bouw Aangepaste Nodes in Enkele Minuten",
 	"integrations.custom.description":
 		"Flow-Like voert aangepaste nodes uit als WASM-modules — gesandboxed, draagbaar en snel. Schrijf in je voorkeurstaal, compileer naar WASM en het werkt overal waar Flow-Like draait.",
 	"integrations.custom.lang.title": "Ondersteunde Talen",

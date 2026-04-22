@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import type { IProfile } from "../../../lib/schema/profile/profile";
-import type { InstalledPackage, RegistryEntry } from "../../../lib/schema/wasm";
+import type { RegistryEntry } from "../../../lib/schema/wasm";
 import { PackageStatus } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
 import { PackageDetailView } from "../../store/package-detail-view";
@@ -141,7 +141,9 @@ export function StorePackageDetail({
 	});
 
 	const handleAccessChanged = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: ["registry-package", packageId] });
+		queryClient.invalidateQueries({
+			queryKey: ["registry-package", packageId],
+		});
 	}, [queryClient, packageId]);
 
 	const {

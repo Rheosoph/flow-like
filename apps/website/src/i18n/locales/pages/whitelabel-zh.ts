@@ -49,8 +49,7 @@ export const zhWhitelabel = {
 		"使用您的品牌标识发送事务性邮件、应用内通知和 Webhook 载荷。",
 	"whitelabel.oem.tagline": "专为 OEM 合作伙伴打造",
 	"whitelabel.oem.headline": "企业级 OEM 工具",
-	"whitelabel.oem.description":
-		"将自动化作为功能集成到您产品中所需的一切。",
+	"whitelabel.oem.description": "将自动化作为功能集成到您产品中所需的一切。",
 	"whitelabel.oem.sso.title": "SSO 与身份验证透传",
 	"whitelabel.oem.sso.desc":
 		"基于 SAML、OIDC 和 JWT 的身份验证委托。您的用户通过您的身份提供商进行认证——Flow-Like 信任该令牌。",

@@ -1,13 +1,14 @@
 "use client";
 
-import { Expand, X, Copy, Check, Eye, EyeOff, Filter } from "lucide-react";
-import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { Button } from "../button";
-import { ScrollArea } from "../scroll-area";
+import { Check, Copy, Expand, Eye, EyeOff, Filter, X } from "lucide-react";
+import type React from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { SubgraphNode } from "../../../state/backend-state/graph-state";
 import { Badge } from "../badge";
+import { Button } from "../button";
 import { Checkbox } from "../checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
-import type { SubgraphNode, SubgraphEdge } from "../../../state/backend-state/graph-state";
+import { ScrollArea } from "../scroll-area";
 import { getGraphIcon } from "./icons";
 
 export interface ConnectionInfo {
@@ -25,7 +26,15 @@ export interface GraphNodeInspectorProps {
 	onConnectionClick?: (nodeId: string) => void;
 }
 
-export type ValueKind = "string" | "number" | "boolean" | "date" | "vector" | "array" | "object" | "unknown";
+export type ValueKind =
+	| "string"
+	| "number"
+	| "boolean"
+	| "date"
+	| "vector"
+	| "array"
+	| "object"
+	| "unknown";
 
 export { inferValueKind, PropertyValue, FieldFilter, CopyButton };
 
@@ -34,14 +43,25 @@ function inferValueKind(value: unknown): { kind: ValueKind; dims?: number } {
 	if (typeof value === "boolean") return { kind: "boolean" };
 	if (typeof value === "number") return { kind: "number" };
 	if (Array.isArray(value)) {
-		if (value.length > 0 && value.every((v) => typeof v === "number" || (typeof v === "string" && Number.isFinite(Number(v))))) {
+		if (
+			value.length > 0 &&
+			value.every(
+				(v) =>
+					typeof v === "number" ||
+					(typeof v === "string" && Number.isFinite(Number(v))),
+			)
+		) {
 			return { kind: "vector", dims: value.length };
 		}
 		return { kind: "array" };
 	}
 	if (typeof value === "object") return { kind: "object" };
 	if (typeof value === "string") {
-		if (/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(value)) {
+		if (
+			/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(
+				value,
+			)
+		) {
 			return { kind: "date" };
 		}
 		return { kind: "string" };
@@ -54,7 +74,11 @@ function ensureNumericArray(v: unknown): number[] {
 	return [];
 }
 
-const Sparkline: React.FC<{ data: number[]; width?: number; height?: number }> = ({ data, width = 120, height = 28 }) => {
+const Sparkline: React.FC<{
+	data: number[];
+	width?: number;
+	height?: number;
+}> = ({ data, width = 120, height = 28 }) => {
 	const ref = useRef<HTMLCanvasElement | null>(null);
 
 	useEffect(() => {
@@ -88,7 +112,9 @@ const Sparkline: React.FC<{ data: number[]; width?: number; height?: number }> =
 			else ctx.lineTo(x, y);
 		}
 
-		ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--primary");
+		ctx.strokeStyle = getComputedStyle(
+			document.documentElement,
+		).getPropertyValue("--primary");
 		ctx.stroke();
 	}, [data, width, height]);
 
@@ -120,14 +146,24 @@ function CopyButton({ text }: { text: string }) {
 			className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-accent shrink-0"
 			title="Copy value"
 		>
-			{copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+			{copied ? (
+				<Check className="h-3 w-3 text-green-500" />
+			) : (
+				<Copy className="h-3 w-3 text-muted-foreground" />
+			)}
 		</button>
 	);
 }
 
-function PropertyValue({ value, propKey }: { value: unknown; propKey: string }) {
+function PropertyValue({
+	value,
+	propKey,
+}: { value: unknown; propKey: string }) {
 	const { kind, dims } = inferValueKind(value);
-	const display = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value ?? "—");
+	const display =
+		typeof value === "object"
+			? JSON.stringify(value, null, 2)
+			: String(value ?? "—");
 
 	switch (kind) {
 		case "boolean":
@@ -159,7 +195,9 @@ function PropertyValue({ value, propKey }: { value: unknown; propKey: string }) 
 		case "number":
 			return (
 				<div className="group flex items-center justify-between">
-					<span className="text-sm font-mono">{typeof value === "number" ? value.toLocaleString() : String(value)}</span>
+					<span className="text-sm font-mono">
+						{typeof value === "number" ? value.toLocaleString() : String(value)}
+					</span>
 					<CopyButton text={display} />
 				</div>
 			);
@@ -178,7 +216,9 @@ function PropertyValue({ value, propKey }: { value: unknown; propKey: string }) 
 			const isLong = json.length > 200;
 			return (
 				<div className="group relative">
-					<pre className={`text-xs font-mono break-all whitespace-pre-wrap bg-muted/30 rounded p-1.5 ${isLong ? "max-h-32 overflow-y-auto" : ""}`}>
+					<pre
+						className={`text-xs font-mono break-all whitespace-pre-wrap bg-muted/30 rounded p-1.5 ${isLong ? "max-h-32 overflow-y-auto" : ""}`}
+					>
 						{json}
 					</pre>
 					<div className="absolute top-1 right-1">
@@ -192,7 +232,9 @@ function PropertyValue({ value, propKey }: { value: unknown; propKey: string }) 
 			const isLong = display.length > 120;
 			return (
 				<div className="group flex items-start justify-between gap-1">
-					<p className={`text-sm break-all ${isLong ? "line-clamp-3" : ""}`}>{display}</p>
+					<p className={`text-sm break-all ${isLong ? "line-clamp-3" : ""}`}>
+						{display}
+					</p>
 					<CopyButton text={display} />
 				</div>
 			);
@@ -243,7 +285,13 @@ function FieldFilter({
 							) : (
 								<Eye className="h-3.5 w-3.5 text-foreground shrink-0" />
 							)}
-							<span className={hiddenFields.has(field) ? "text-muted-foreground line-through" : ""}>
+							<span
+								className={
+									hiddenFields.has(field)
+										? "text-muted-foreground line-through"
+										: ""
+								}
+							>
 								{field}
 							</span>
 						</button>
@@ -254,13 +302,23 @@ function FieldFilter({
 	);
 }
 
-export function GraphNodeInspector({ node, connections, onClose, onExpand, onConnectionClick }: GraphNodeInspectorProps) {
+export function GraphNodeInspector({
+	node,
+	connections,
+	onClose,
+	onExpand,
+	onConnectionClick,
+}: GraphNodeInspectorProps) {
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 
 	if (!node) return null;
 
 	const Icon = getGraphIcon(node.style?.icon ?? "database");
-	const propEntries = node.props ? Object.entries(node.props).filter(([, v]) => v !== null && v !== undefined) : [];
+	const propEntries = node.props
+		? Object.entries(node.props).filter(
+				([, v]) => v !== null && v !== undefined,
+			)
+		: [];
 	const allFields = propEntries.map(([k]) => k);
 	const visibleEntries = propEntries.filter(([k]) => !hiddenFields.has(k));
 
@@ -284,7 +342,9 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 						<Icon className="h-3.5 w-3.5 text-white" />
 					</div>
 					<div className="min-w-0">
-						<h3 className="font-semibold text-sm truncate">{node.caption ?? node.id}</h3>
+						<h3 className="font-semibold text-sm truncate">
+							{node.caption ?? node.id}
+						</h3>
 						<p className="text-xs text-muted-foreground">{node.label}</p>
 					</div>
 				</div>
@@ -297,11 +357,22 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 						/>
 					)}
 					{onExpand && (
-						<Button variant="ghost" size="icon" className="h-7 w-7" onClick={onExpand} title="Expand neighbors (Shift+Click)">
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
+							onClick={onExpand}
+							title="Expand neighbors (Shift+Click)"
+						>
 							<Expand className="h-4 w-4" />
 						</Button>
 					)}
-					<Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+					<Button
+						variant="ghost"
+						size="icon"
+						className="h-7 w-7"
+						onClick={onClose}
+					>
 						<X className="h-4 w-4" />
 					</Button>
 				</div>
@@ -312,7 +383,9 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
 							ID
 						</p>
-						<p className="text-xs font-mono break-all text-muted-foreground">{node.id}</p>
+						<p className="text-xs font-mono break-all text-muted-foreground">
+							{node.id}
+						</p>
 					</div>
 					{visibleEntries.length > 0 && (
 						<div>
@@ -330,8 +403,12 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 								{visibleEntries.map(([key, value]) => (
 									<div key={key} className="rounded-md bg-muted/50 px-3 py-2">
 										<div className="flex items-center justify-between mb-0.5">
-											<p className="text-[10px] font-medium text-muted-foreground">{key}</p>
-											<span className="text-[9px] text-muted-foreground/60">{inferValueKind(value).kind}</span>
+											<p className="text-[10px] font-medium text-muted-foreground">
+												{key}
+											</p>
+											<span className="text-[9px] text-muted-foreground/60">
+												{inferValueKind(value).kind}
+											</span>
 										</div>
 										<PropertyValue value={value} propKey={key} />
 									</div>
@@ -340,10 +417,14 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 						</div>
 					)}
 					{propEntries.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">No properties available</p>
+						<p className="text-xs text-muted-foreground italic">
+							No properties available
+						</p>
 					)}
 					{propEntries.length > 0 && visibleEntries.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">All fields hidden — use the filter to show them</p>
+						<p className="text-xs text-muted-foreground italic">
+							All fields hidden — use the filter to show them
+						</p>
 					)}
 
 					{/* Connections section */}
@@ -354,18 +435,22 @@ export function GraphNodeInspector({ node, connections, onClose, onExpand, onCon
 							</p>
 							<div className="space-y-1">
 								{connections.map((conn, i) => (
-								<button
-									type="button"
-									key={`${conn.direction}-${conn.label}-${conn.targetId}-${i}`}
-									className="w-full rounded-md bg-muted/50 px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent transition-colors text-left cursor-pointer"
-									onClick={() => onConnectionClick?.(conn.targetId)}
-								>
-									<span className={`shrink-0 text-[10px] font-medium ${conn.direction === "outgoing" ? "text-blue-500" : "text-amber-500"}`}>
-										{conn.direction === "outgoing" ? "→" : "←"}
-									</span>
-									<span className="font-medium text-muted-foreground shrink-0">{conn.label}</span>
-									<span className="truncate">{conn.targetCaption}</span>
-								</button>
+									<button
+										type="button"
+										key={`${conn.direction}-${conn.label}-${conn.targetId}-${i}`}
+										className="w-full rounded-md bg-muted/50 px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent transition-colors text-left cursor-pointer"
+										onClick={() => onConnectionClick?.(conn.targetId)}
+									>
+										<span
+											className={`shrink-0 text-[10px] font-medium ${conn.direction === "outgoing" ? "text-blue-500" : "text-amber-500"}`}
+										>
+											{conn.direction === "outgoing" ? "→" : "←"}
+										</span>
+										<span className="font-medium text-muted-foreground shrink-0">
+											{conn.label}
+										</span>
+										<span className="truncate">{conn.targetCaption}</span>
+									</button>
 								))}
 							</div>
 						</div>

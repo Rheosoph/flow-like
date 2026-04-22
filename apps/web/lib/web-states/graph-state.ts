@@ -1,9 +1,9 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
-	GraphSearchPayload,
 	GraphOverlay,
 	GraphSchema,
+	GraphSearchPayload,
 	IGraphState,
 	NeighborsPayload,
 	SqlPayload,

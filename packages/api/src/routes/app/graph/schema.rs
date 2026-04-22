@@ -1,6 +1,9 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::{ScopeParams, resolve_connection},
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{ScopeParams, resolve_connection},
     state::AppState,
 };
 use axum::{
@@ -31,7 +34,10 @@ use flow_like_storage::databases::graph::{GraphStore, lancegraph};
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/graph/{overlay_id}/schema", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/graph/{overlay_id}/schema",
+    skip(state, user)
+)]
 pub async fn graph_schema(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

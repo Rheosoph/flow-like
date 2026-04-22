@@ -537,7 +537,11 @@ const GraphOverlaySection: React.FC<{ appId: string; tables: Table[] }> = ({
 	}, [wizardOpen, tables, backend.dbState, appId]);
 
 	const wizardTables = useMemo<TableInfo[]>(
-		() => tables.map((table) => ({ name: table.name, userScoped: table.userScoped })),
+		() =>
+			tables.map((table) => ({
+				name: table.name,
+				userScoped: table.userScoped,
+			})),
 		[tables],
 	);
 
@@ -900,7 +904,7 @@ const OverlayStyleChip: React.FC<{
 			<span className="truncate">{label}</span>
 		</div>
 	);
-	};
+};
 
 const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 	const backend = useBackend();
@@ -1000,10 +1004,7 @@ const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 					>
 						<StatBlock label="Rows" value={formatCount(count.data)} />
 						{hasVectors && (
-							<StatBlock
-								label="Dimensions"
-								value={formatCount(dimensions)}
-							/>
+							<StatBlock label="Dimensions" value={formatCount(dimensions)} />
 						)}
 						<StatBlock label="Columns" value={formatCount(columnCount)} />
 					</div>
@@ -1080,7 +1081,7 @@ const TableCard: React.FC<TableCardProps> = ({ appId, table, onSelect }) => {
 			</button>
 		</Card>
 	);
-	};
+};
 
 const LoadingState: React.FC = () => (
 	<div className="p-6">
@@ -1174,8 +1175,12 @@ function enrichSubgraphWithStyles(
 	result: SubgraphResult,
 	overlay: GraphOverlay,
 ): SubgraphResult {
-	const nodeStyleMap = new Map(overlay.nodes.map((node) => [node.label, node.style]));
-	const edgeStyleMap = new Map(overlay.edges.map((edge) => [edge.label, edge.style]));
+	const nodeStyleMap = new Map(
+		overlay.nodes.map((node) => [node.label, node.style]),
+	);
+	const edgeStyleMap = new Map(
+		overlay.edges.map((edge) => [edge.label, edge.style]),
+	);
 
 	const defaultStyle = {
 		color: "#6b7280",
@@ -1268,7 +1273,10 @@ const OverlayView: React.FC<{
 		let cancelled = false;
 		(async () => {
 			try {
-				const currentOverlay = await backend.graphState.getOverlay(appId, overlayId);
+				const currentOverlay = await backend.graphState.getOverlay(
+					appId,
+					overlayId,
+				);
 				if (cancelled) return;
 				setOverlay(currentOverlay);
 				const initialLimit = Math.min(
@@ -1474,7 +1482,7 @@ const OverlayView: React.FC<{
 			</div>
 		</div>
 	);
-	};
+};
 
 const ErrorState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
 	<div className="p-6">

@@ -295,11 +295,11 @@ export function UsePageContent({
 
 	const isDirectEventPending = Boolean(
 		!isRoutePending &&
-		appId &&
-		eventId &&
-		!routeMapping &&
-		!resolvedCurrentEvent &&
-		resolvedDirectEventKey !== directEventKey,
+			appId &&
+			eventId &&
+			!routeMapping &&
+			!resolvedCurrentEvent &&
+			resolvedDirectEventKey !== directEventKey,
 	);
 
 	// --- Active event ---
@@ -521,12 +521,7 @@ export function UsePageContent({
 		if (routeLoading || isRoutePending || isDirectEventPending) return false;
 		if (pageEvent?.default_page_id) return false;
 		return true;
-	}, [
-		routeLoading,
-		isRoutePending,
-		isDirectEventPending,
-		pageEvent,
-	]);
+	}, [routeLoading, isRoutePending, isDirectEventPending, pageEvent]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef and sidebarRef are stable refs
 	const inner = useMemo(() => {

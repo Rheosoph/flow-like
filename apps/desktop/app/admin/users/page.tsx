@@ -17,6 +17,7 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
+	GlobalPermission,
 	Input,
 	Label,
 	Select,
@@ -36,7 +37,6 @@ import {
 	useInvoke,
 	useQuery,
 	useQueryClient,
-	GlobalPermission,
 } from "@tm9657/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
 import { formatDistanceToNow } from "date-fns";
@@ -81,13 +81,19 @@ interface ListUsersResponse {
 	limit: number;
 }
 
-const STATUS_VARIANTS: Record<UserStatus, "default" | "secondary" | "destructive" | "outline"> = {
+const STATUS_VARIANTS: Record<
+	UserStatus,
+	"default" | "secondary" | "destructive" | "outline"
+> = {
 	ACTIVE: "default",
 	INACTIVE: "secondary",
 	BANNED: "destructive",
 };
 
-const TIER_VARIANTS: Record<UserTier, "default" | "secondary" | "destructive" | "outline"> = {
+const TIER_VARIANTS: Record<
+	UserTier,
+	"default" | "secondary" | "destructive" | "outline"
+> = {
 	FREE: "outline",
 	PREMIUM: "secondary",
 	PRO: "default",
@@ -248,7 +254,9 @@ function UserRow({
 				<Badge variant={STATUS_VARIANTS[user.status]}>
 					{user.status === "ACTIVE" && <CheckCircle className="h-3 w-3 mr-1" />}
 					{user.status === "BANNED" && <UserX className="h-3 w-3 mr-1" />}
-					{user.status === "INACTIVE" && <AlertTriangle className="h-3 w-3 mr-1" />}
+					{user.status === "INACTIVE" && (
+						<AlertTriangle className="h-3 w-3 mr-1" />
+					)}
 					{user.status.toLowerCase()}
 				</Badge>
 			</TableCell>
@@ -274,7 +282,9 @@ function UserRow({
 			<TableCell className="text-xs text-muted-foreground">
 				{formatCents(user.total_llm_price)}
 			</TableCell>
-			<TableCell className="text-xs text-muted-foreground">{relativeDate}</TableCell>
+			<TableCell className="text-xs text-muted-foreground">
+				{relativeDate}
+			</TableCell>
 			<TableCell>
 				<div className="flex items-center gap-1">
 					<Button
@@ -300,7 +310,11 @@ export default function AdminUsersPage() {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 
-	const profile = useInvoke(backend.userState.getProfile, backend.userState, []);
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+	);
 
 	const [page, setPage] = useState(1);
 	const limit = 25;
@@ -390,185 +404,196 @@ export default function AdminUsersPage() {
 		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
 			<div className="flex-1 overflow-y-auto p-6">
 				<div className="mx-auto max-w-6xl space-y-6">
-			<div className="flex items-center justify-between">
-				<div>
-					<h1 className="text-3xl font-bold flex items-center gap-2">
-						<Users className="h-7 w-7" />
-						User Management
-					</h1>
-					<p className="text-muted-foreground">
-						Manage user accounts, tiers, and permissions
-					</p>
-				</div>
-				<Button onClick={handleRefresh} variant="outline" size="sm">
-					<RefreshCw className="h-4 w-4 mr-2" />
-					Refresh
-				</Button>
-			</div>
-
-			<div className="grid gap-4 sm:grid-cols-3">
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Total Users</CardTitle>
-						<Users className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						{users.isLoading ? (
-							<Skeleton className="h-8 w-16" />
-						) : (
-							<div className="text-2xl font-bold">{users.data?.total ?? 0}</div>
-						)}
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Current Page</CardTitle>
-						<Shield className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						<div className="text-2xl font-bold">
-							{page} / {Math.max(1, totalPages)}
+					<div className="flex items-center justify-between">
+						<div>
+							<h1 className="text-3xl font-bold flex items-center gap-2">
+								<Users className="h-7 w-7" />
+								User Management
+							</h1>
+							<p className="text-muted-foreground">
+								Manage user accounts, tiers, and permissions
+							</p>
 						</div>
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Showing</CardTitle>
-						<CheckCircle className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						<div className="text-2xl font-bold">
-							{users.data?.users.length ?? 0}
-						</div>
-					</CardContent>
-				</Card>
-			</div>
-
-			<Card>
-				<CardHeader>
-					<CardTitle>Users</CardTitle>
-					<CardDescription>
-						{users.data?.total ?? 0} total users
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<div className="flex flex-wrap items-center gap-3 mb-4">
-						<div className="relative flex-1 min-w-[200px] max-w-sm">
-							<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-							<Input
-								placeholder="Search by name, email, username…"
-								value={searchQuery}
-								onChange={(e) => {
-									setSearchQuery(e.target.value);
-									setPage(1);
-								}}
-								className="pl-10"
-							/>
-						</div>
-						<Select
-							value={statusFilter}
-							onValueChange={(v) => {
-								setStatusFilter(v as UserStatus | "all");
-								setPage(1);
-							}}
-						>
-							<SelectTrigger className="w-40">
-								<SelectValue placeholder="Status" />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">All statuses</SelectItem>
-								<SelectItem value="ACTIVE">Active</SelectItem>
-								<SelectItem value="INACTIVE">Inactive</SelectItem>
-								<SelectItem value="BANNED">Banned</SelectItem>
-							</SelectContent>
-						</Select>
-						<Select
-							value={tierFilter}
-							onValueChange={(v) => {
-								setTierFilter(v as UserTier | "all");
-								setPage(1);
-							}}
-						>
-							<SelectTrigger className="w-36">
-								<SelectValue placeholder="Tier" />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">All tiers</SelectItem>
-								<SelectItem value="FREE">Free</SelectItem>
-								<SelectItem value="PREMIUM">Premium</SelectItem>
-								<SelectItem value="PRO">Pro</SelectItem>
-								<SelectItem value="ENTERPRISE">Enterprise</SelectItem>
-							</SelectContent>
-						</Select>
+						<Button onClick={handleRefresh} variant="outline" size="sm">
+							<RefreshCw className="h-4 w-4 mr-2" />
+							Refresh
+						</Button>
 					</div>
 
-					{users.isLoading ? (
-						<div className="space-y-2">
-							{[...Array(8)].map((_, i) => (
-								<Skeleton key={i} className="h-12 w-full" />
-							))}
-						</div>
-					) : (
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>User</TableHead>
-									<TableHead>Status</TableHead>
-									<TableHead>Tier</TableHead>
-									<TableHead>Storage</TableHead>
-									<TableHead>LLM Spend</TableHead>
-									<TableHead>Joined</TableHead>
-									<TableHead>Actions</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{users.data?.users.map((u) => (
-									<UserRow
-										key={u.id}
-										user={u}
-										onUpdateStatus={handleUpdateStatus}
-										onUpdateTier={handleUpdateTier}
-										onUpdatePermission={handleUpdatePermission}
-									/>
-								))}
-								{(users.data?.users.length ?? 0) === 0 && (
-									<TableRow>
-										<TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-											No users found
-										</TableCell>
-									</TableRow>
+					<div className="grid gap-4 sm:grid-cols-3">
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">
+									Total Users
+								</CardTitle>
+								<Users className="h-4 w-4 text-muted-foreground" />
+							</CardHeader>
+							<CardContent>
+								{users.isLoading ? (
+									<Skeleton className="h-8 w-16" />
+								) : (
+									<div className="text-2xl font-bold">
+										{users.data?.total ?? 0}
+									</div>
 								)}
-							</TableBody>
-						</Table>
-					)}
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">
+									Current Page
+								</CardTitle>
+								<Shield className="h-4 w-4 text-muted-foreground" />
+							</CardHeader>
+							<CardContent>
+								<div className="text-2xl font-bold">
+									{page} / {Math.max(1, totalPages)}
+								</div>
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+								<CardTitle className="text-sm font-medium">Showing</CardTitle>
+								<CheckCircle className="h-4 w-4 text-muted-foreground" />
+							</CardHeader>
+							<CardContent>
+								<div className="text-2xl font-bold">
+									{users.data?.users.length ?? 0}
+								</div>
+							</CardContent>
+						</Card>
+					</div>
 
-					{totalPages > 1 && (
-						<div className="flex items-center justify-between mt-4">
-							<div className="text-sm text-muted-foreground">
-								Page {page} of {totalPages}
-							</div>
-							<div className="flex gap-2">
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() => setPage((p) => Math.max(1, p - 1))}
-									disabled={page === 1}
+					<Card>
+						<CardHeader>
+							<CardTitle>Users</CardTitle>
+							<CardDescription>
+								{users.data?.total ?? 0} total users
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div className="flex flex-wrap items-center gap-3 mb-4">
+								<div className="relative flex-1 min-w-[200px] max-w-sm">
+									<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+									<Input
+										placeholder="Search by name, email, username…"
+										value={searchQuery}
+										onChange={(e) => {
+											setSearchQuery(e.target.value);
+											setPage(1);
+										}}
+										className="pl-10"
+									/>
+								</div>
+								<Select
+									value={statusFilter}
+									onValueChange={(v) => {
+										setStatusFilter(v as UserStatus | "all");
+										setPage(1);
+									}}
 								>
-									Previous
-								</Button>
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-									disabled={page === totalPages}
+									<SelectTrigger className="w-40">
+										<SelectValue placeholder="Status" />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="all">All statuses</SelectItem>
+										<SelectItem value="ACTIVE">Active</SelectItem>
+										<SelectItem value="INACTIVE">Inactive</SelectItem>
+										<SelectItem value="BANNED">Banned</SelectItem>
+									</SelectContent>
+								</Select>
+								<Select
+									value={tierFilter}
+									onValueChange={(v) => {
+										setTierFilter(v as UserTier | "all");
+										setPage(1);
+									}}
 								>
-									Next
-								</Button>
+									<SelectTrigger className="w-36">
+										<SelectValue placeholder="Tier" />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="all">All tiers</SelectItem>
+										<SelectItem value="FREE">Free</SelectItem>
+										<SelectItem value="PREMIUM">Premium</SelectItem>
+										<SelectItem value="PRO">Pro</SelectItem>
+										<SelectItem value="ENTERPRISE">Enterprise</SelectItem>
+									</SelectContent>
+								</Select>
 							</div>
-						</div>
-					)}
-				</CardContent>
-			</Card>
+
+							{users.isLoading ? (
+								<div className="space-y-2">
+									{[...Array(8)].map((_, i) => (
+										<Skeleton key={i} className="h-12 w-full" />
+									))}
+								</div>
+							) : (
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead>User</TableHead>
+											<TableHead>Status</TableHead>
+											<TableHead>Tier</TableHead>
+											<TableHead>Storage</TableHead>
+											<TableHead>LLM Spend</TableHead>
+											<TableHead>Joined</TableHead>
+											<TableHead>Actions</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{users.data?.users.map((u) => (
+											<UserRow
+												key={u.id}
+												user={u}
+												onUpdateStatus={handleUpdateStatus}
+												onUpdateTier={handleUpdateTier}
+												onUpdatePermission={handleUpdatePermission}
+											/>
+										))}
+										{(users.data?.users.length ?? 0) === 0 && (
+											<TableRow>
+												<TableCell
+													colSpan={7}
+													className="text-center py-8 text-muted-foreground"
+												>
+													No users found
+												</TableCell>
+											</TableRow>
+										)}
+									</TableBody>
+								</Table>
+							)}
+
+							{totalPages > 1 && (
+								<div className="flex items-center justify-between mt-4">
+									<div className="text-sm text-muted-foreground">
+										Page {page} of {totalPages}
+									</div>
+									<div className="flex gap-2">
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() => setPage((p) => Math.max(1, p - 1))}
+											disabled={page === 1}
+										>
+											Previous
+										</Button>
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() =>
+												setPage((p) => Math.min(totalPages, p + 1))
+											}
+											disabled={page === totalPages}
+										>
+											Next
+										</Button>
+									</div>
+								</div>
+							)}
+						</CardContent>
+					</Card>
 				</div>
 			</div>
 		</main>

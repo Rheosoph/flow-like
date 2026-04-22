@@ -56,7 +56,10 @@ pub struct ReportRunResponse {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/board/{board_id}/runs/report", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/board/{board_id}/runs/report",
+    skip(state, user, body)
+)]
 pub async fn report_run(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -104,9 +107,10 @@ pub async fn report_run(
         if let Some(ref error) = body.error_message {
             update.error_message = Set(Some(error.clone()));
         }
-        update.update(&state.db).await.map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to update run: {}", e))
-        })?;
+        update
+            .update(&state.db)
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
     } else {
         let run = execution_run::ActiveModel {
             id: Set(body.run_id.clone()),
@@ -131,9 +135,9 @@ pub async fn report_run(
             created_at: Set(now),
             updated_at: Set(now),
         };
-        run.insert(&state.db).await.map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to create run: {}", e))
-        })?;
+        run.insert(&state.db)
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("Failed to create run: {}", e)))?;
     }
 
     Ok(Json(ReportRunResponse {

@@ -128,9 +128,7 @@ function StepIndicator() {
 						key={i}
 						className={cn(
 							"h-1 rounded-full transition-all duration-500",
-							i <= step
-								? "w-5 bg-primary/60"
-								: "w-1.5 bg-muted-foreground/15",
+							i <= step ? "w-5 bg-primary/60" : "w-1.5 bg-muted-foreground/15",
 						)}
 					/>
 				))}
@@ -166,10 +164,11 @@ export function PageLoadingSkeleton({
 			</div>
 
 			{/* status area */}
-			<div className="flex flex-col items-center gap-3 pls-enter" style={{ animationDelay: "0.2s" }}>
-				<p className="text-sm font-medium text-foreground/70">
-					{title}
-				</p>
+			<div
+				className="flex flex-col items-center gap-3 pls-enter"
+				style={{ animationDelay: "0.2s" }}
+			>
+				<p className="text-sm font-medium text-foreground/70">{title}</p>
 				<StepIndicator />
 			</div>
 

@@ -44,7 +44,7 @@ export namespace PinType {
 }
 
 /** Alias: prefer DataType over PinType for clarity (in core, PinType means Input/Output). */
-export import DataType = PinType;
+export
 
 export namespace ValueType {
 	export const NORMAL = "Normal";

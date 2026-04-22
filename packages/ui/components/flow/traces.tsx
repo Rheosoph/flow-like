@@ -254,7 +254,9 @@ export function Traces({
 									variant="secondary"
 									onClick={onClearNodeIdFilter}
 								>
-									Node: {board.current?.nodes[nodeIdFilter]?.friendly_name ?? nodeIdFilter.slice(0, 8)}
+									Node:{" "}
+									{board.current?.nodes[nodeIdFilter]?.friendly_name ??
+										nodeIdFilter.slice(0, 8)}
 									<XIcon className="w-3 h-3" />
 								</Badge>
 							)}

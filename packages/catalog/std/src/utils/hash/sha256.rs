@@ -28,12 +28,7 @@ impl NodeLogic for Sha256Node {
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("exec_in", "Execute", "", VariableType::Execution);
-        node.add_input_pin(
-            "input",
-            "Input",
-            "String to hash",
-            VariableType::String,
-        );
+        node.add_input_pin("input", "Input", "String to hash", VariableType::String);
 
         node.add_output_pin("exec_out", "Done", "", VariableType::Execution);
         node.add_output_pin(

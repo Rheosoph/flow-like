@@ -10,14 +10,7 @@ import {
 	ThumbsDownIcon,
 	ThumbsUpIcon,
 } from "lucide-react";
-import {
-	memo,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
 import {
@@ -325,24 +318,36 @@ const MessageActions = ({
 			compact
 				? "absolute bottom-3 right-4 z-10 h-auto w-auto gap-2"
 				: cn(
-					"h-6 w-full",
-					isUser
-						? hasFooterContent
-							? "justify-end px-2 pt-2 mt-2"
-							: "justify-end px-2 mt-0.5"
-						: hasFooterContent
-							? "justify-start mt-2"
-							: "justify-start mt-0.5",
-				),
+						"h-6 w-full",
+						isUser
+							? hasFooterContent
+								? "justify-end px-2 pt-2 mt-2"
+								: "justify-end px-2 mt-0.5"
+							: hasFooterContent
+								? "justify-start mt-2"
+								: "justify-start mt-0.5",
+					),
 		)}
 	>
 		{!isUser && (
 			<>
-				<FeedbackButton onClick={onThumbsUp} isActive={rating > 0} variant="positive">
-					<ThumbsUpIcon className={cn("w-4 h-4", rating > 0 && "fill-current")} />
+				<FeedbackButton
+					onClick={onThumbsUp}
+					isActive={rating > 0}
+					variant="positive"
+				>
+					<ThumbsUpIcon
+						className={cn("w-4 h-4", rating > 0 && "fill-current")}
+					/>
 				</FeedbackButton>
-				<FeedbackButton onClick={onThumbsDown} isActive={rating < 0} variant="negative">
-					<ThumbsDownIcon className={cn("w-4 h-4", rating < 0 && "fill-current")} />
+				<FeedbackButton
+					onClick={onThumbsDown}
+					isActive={rating < 0}
+					variant="negative"
+				>
+					<ThumbsDownIcon
+						className={cn("w-4 h-4", rating < 0 && "fill-current")}
+					/>
 				</FeedbackButton>
 			</>
 		)}
@@ -474,394 +479,398 @@ const AttachmentSection = ({
 	);
 };
 
-export const MessageComponent = memo(function MessageComponent({
-	message,
-	loading,
-	onMessageUpdate,
-}: Readonly<MessageProps>) {
-	const isUser = message.inner.role === IRole.User;
-	const [isExpanded, setIsExpanded] = useState(false);
-	const [showToggle, setShowToggle] = useState(false);
-	const [fullscreenFile, setFullscreenFile] =
-		useState<ProcessedAttachment | null>(null);
-	const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
-	const [showEditDialog, setShowEditDialog] = useState(false);
-	const [showFileDialog, setShowFileDialog] = useState(false);
-	const [dialogSelectedFile, setDialogSelectedFile] =
-		useState<ProcessedAttachment | null>(null);
-	const contentRef = useRef<HTMLDivElement>(null);
+export const MessageComponent = memo(
+	function MessageComponent({
+		message,
+		loading,
+		onMessageUpdate,
+	}: Readonly<MessageProps>) {
+		const isUser = message.inner.role === IRole.User;
+		const [isExpanded, setIsExpanded] = useState(false);
+		const [showToggle, setShowToggle] = useState(false);
+		const [fullscreenFile, setFullscreenFile] =
+			useState<ProcessedAttachment | null>(null);
+		const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
+		const [showEditDialog, setShowEditDialog] = useState(false);
+		const [showFileDialog, setShowFileDialog] = useState(false);
+		const [dialogSelectedFile, setDialogSelectedFile] =
+			useState<ProcessedAttachment | null>(null);
+		const contentRef = useRef<HTMLDivElement>(null);
 
-	const maxCollapsedHeight = "4rem";
+		const maxCollapsedHeight = "4rem";
 
-	const getDisplayFileName = useCallback((name: string) => {
-		try {
-			const decoded = decodeURIComponent(name);
-			const parts = decoded.split(/[/\\]/);
-			return parts[parts.length - 1];
-		} catch {
-			return name;
-		}
-	}, []);
-
-	const messageContent = useMemo(() => {
-		if (typeof message.inner.content === "string") {
-			return { text: message.inner.content, attachments: message.files ?? [] };
-		}
-
-		let text = "";
-		const attachments: IAttachment[] = [];
-
-		for (const part of message.inner.content) {
-			if (part.text) {
-				text += `${part.text}\n`;
-				continue;
+		const getDisplayFileName = useCallback((name: string) => {
+			try {
+				const decoded = decodeURIComponent(name);
+				const parts = decoded.split(/[/\\]/);
+				return parts[parts.length - 1];
+			} catch {
+				return name;
 			}
-			if (part.image_url?.url) attachments.push(part.image_url?.url);
-		}
+		}, []);
 
-		return { text, attachments: [...attachments, ...(message.files ?? [])] };
-	}, [message.inner.content, message.files]);
+		const messageContent = useMemo(() => {
+			if (typeof message.inner.content === "string") {
+				return {
+					text: message.inner.content,
+					attachments: message.files ?? [],
+				};
+			}
 
-	const processedAttachments = useProcessedAttachments(
-		messageContent.attachments,
-	);
+			let text = "";
+			const attachments: IAttachment[] = [];
 
-	const hiddenFilesCount = useMemo(() => {
-		const audioFiles = processedAttachments.filter(
-			(file) => file.type === "audio",
+			for (const part of message.inner.content) {
+				if (part.text) {
+					text += `${part.text}\n`;
+					continue;
+				}
+				if (part.image_url?.url) attachments.push(part.image_url?.url);
+			}
+
+			return { text, attachments: [...attachments, ...(message.files ?? [])] };
+		}, [message.inner.content, message.files]);
+
+		const processedAttachments = useProcessedAttachments(
+			messageContent.attachments,
 		);
-		const imageFiles = processedAttachments.filter(
-			(file) => file.type === "image",
-		);
-		const videoFiles = processedAttachments.filter(
-			(file) => file.type === "video",
-		);
-		const documentFiles = processedAttachments.filter(
-			(file) => !["audio", "image", "video"].includes(file.type),
-		);
 
-		const hiddenAudio = audioFiles.slice(1);
-		const hiddenImages = imageFiles.slice(4);
-		const hiddenVideo = videoFiles.slice(1);
-		const hiddenDocuments = documentFiles.slice(3);
+		const hiddenFilesCount = useMemo(() => {
+			const audioFiles = processedAttachments.filter(
+				(file) => file.type === "audio",
+			);
+			const imageFiles = processedAttachments.filter(
+				(file) => file.type === "image",
+			);
+			const videoFiles = processedAttachments.filter(
+				(file) => file.type === "video",
+			);
+			const documentFiles = processedAttachments.filter(
+				(file) => !["audio", "image", "video"].includes(file.type),
+			);
 
-		return (
-			hiddenAudio.length +
-			hiddenImages.length +
-			hiddenVideo.length +
-			hiddenDocuments.length
-		);
-	}, [processedAttachments]);
+			const hiddenAudio = audioFiles.slice(1);
+			const hiddenImages = imageFiles.slice(4);
+			const hiddenVideo = videoFiles.slice(1);
+			const hiddenDocuments = documentFiles.slice(3);
 
-	useEffect(() => {
-		if (!isUser || !contentRef.current) return;
+			return (
+				hiddenAudio.length +
+				hiddenImages.length +
+				hiddenVideo.length +
+				hiddenDocuments.length
+			);
+		}, [processedAttachments]);
 
-		const el = contentRef.current;
-		const maxHeight = Number.parseFloat(maxCollapsedHeight) * 16;
+		useEffect(() => {
+			if (!isUser || !contentRef.current) return;
 
-		if (el.scrollHeight > maxHeight) {
-			setShowToggle(true);
-			return;
-		}
+			const el = contentRef.current;
+			const maxHeight = Number.parseFloat(maxCollapsedHeight) * 16;
 
-		const observer = new ResizeObserver(() => {
 			if (el.scrollHeight > maxHeight) {
 				setShowToggle(true);
-				observer.disconnect();
+				return;
 			}
-		});
-		observer.observe(el);
 
-		return () => observer.disconnect();
-	}, [message.inner, isUser]);
-
-	const handleFileClick = useCallback((file: ProcessedAttachment) => {
-		if (canPreviewFile(file)) {
-			// Open file dialog with this file selected
-			setDialogSelectedFile(file);
-			setShowFileDialog(true);
-		} else {
-			// Download non-previewable files
-			downloadFile(file);
-		}
-	}, []);
-
-	const copyToClipboard = useCallback(() => {
-		if (messageContent.text) {
-			navigator.clipboard
-				.writeText(messageContent.text)
-				.then(() => toast.success("Message copied to clipboard"))
-				.catch((err) => console.error("Failed to copy message: ", err));
-		}
-	}, [messageContent.text]);
-
-	const upsertFeedback = useCallback(
-		async (rating: number) => {
-			if (!onMessageUpdate) return;
-
-			const currentRating = message.rating ?? 0;
-			const newRating = currentRating === rating ? 0 : rating;
-
-			try {
-				await onMessageUpdate(message.id, {
-					rating: newRating,
-					ratingSettings:
-						newRating === 0 ? undefined : message.ratingSettings,
-				});
-
-				if (newRating > 0) {
-					toast.success("Thanks for the feedback! ❤️");
-				} else if (newRating < 0) {
-					setShowFeedbackDialog(true);
+			const observer = new ResizeObserver(() => {
+				if (el.scrollHeight > maxHeight) {
+					setShowToggle(true);
+					observer.disconnect();
 				}
-			} catch (e) {
-				console.error("[Chat] Failed to update feedback:", e);
-				toast.error("Failed to submit feedback");
+			});
+			observer.observe(el);
+
+			return () => observer.disconnect();
+		}, [message.inner, isUser]);
+
+		const handleFileClick = useCallback((file: ProcessedAttachment) => {
+			if (canPreviewFile(file)) {
+				// Open file dialog with this file selected
+				setDialogSelectedFile(file);
+				setShowFileDialog(true);
+			} else {
+				// Download non-previewable files
+				downloadFile(file);
 			}
-		},
-		[message.id, message.rating, message.ratingSettings, onMessageUpdate],
-	);
+		}, []);
 
-	const handleFeedbackSubmit = useCallback(
-		async (data: {
-			comment: string;
-			includeChatHistory: boolean;
-			canContact: boolean;
-		}) => {
-			if (!onMessageUpdate) return;
-
-			try {
-				await onMessageUpdate(message.id, {
-					ratingSettings: {
-						comment: data.comment.trim(),
-						includeChatHistory: data.includeChatHistory,
-						canContact: data.canContact,
-					},
-				});
-				toast.success("Feedback submitted successfully!");
-			} catch (e) {
-				console.error("[Chat] Failed to submit feedback:", e);
-				toast.error("Failed to submit feedback");
+		const copyToClipboard = useCallback(() => {
+			if (messageContent.text) {
+				navigator.clipboard
+					.writeText(messageContent.text)
+					.then(() => toast.success("Message copied to clipboard"))
+					.catch((err) => console.error("Failed to copy message: ", err));
 			}
-		},
-		[message.id, onMessageUpdate],
-	);
+		}, [messageContent.text]);
 
-	const handleEditSave = useCallback(
-		(content: string) => {
-			if (!onMessageUpdate) return;
+		const upsertFeedback = useCallback(
+			async (rating: number) => {
+				if (!onMessageUpdate) return;
 
-			const trimmedContent = content.trim();
-			if (trimmedContent !== messageContent.text) {
-				onMessageUpdate(message.id, {
-					inner: {
-						...message.inner,
-						content: trimmedContent,
-					},
-				});
-				toast.success("Message updated successfully!");
-			}
-		},
-		[messageContent.text, message.id, message.inner, onMessageUpdate],
-	);
+				const currentRating = message.rating ?? 0;
+				const newRating = currentRating === rating ? 0 : rating;
 
-	const gaveMoreFeedback = useMemo(() => {
-		return Boolean(
-			message.ratingSettings &&
-				(message.ratingSettings.comment ||
-					message.ratingSettings.includeChatHistory ||
-					message.ratingSettings.canContact),
+				try {
+					await onMessageUpdate(message.id, {
+						rating: newRating,
+						ratingSettings:
+							newRating === 0 ? undefined : message.ratingSettings,
+					});
+
+					if (newRating > 0) {
+						toast.success("Thanks for the feedback! ❤️");
+					} else if (newRating < 0) {
+						setShowFeedbackDialog(true);
+					}
+				} catch (e) {
+					console.error("[Chat] Failed to update feedback:", e);
+					toast.error("Failed to submit feedback");
+				}
+			},
+			[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 		);
-	}, [message.ratingSettings]);
 
-	const planSteps = useMemo(() => {
-		if (isUser || !message.plan_steps) {
-			return [];
-		}
+		const handleFeedbackSubmit = useCallback(
+			async (data: {
+				comment: string;
+				includeChatHistory: boolean;
+				canContact: boolean;
+			}) => {
+				if (!onMessageUpdate) return;
 
-		return message.plan_steps.filter((step) => {
-			const isEmptyFallbackStep =
-				step.id === "step-0" &&
-				step.title === "Thinking" &&
-				!(step.description?.trim()) &&
-				!(step.reasoning?.trim());
+				try {
+					await onMessageUpdate(message.id, {
+						ratingSettings: {
+							comment: data.comment.trim(),
+							includeChatHistory: data.includeChatHistory,
+							canContact: data.canContact,
+						},
+					});
+					toast.success("Feedback submitted successfully!");
+				} catch (e) {
+					console.error("[Chat] Failed to submit feedback:", e);
+					toast.error("Failed to submit feedback");
+				}
+			},
+			[message.id, onMessageUpdate],
+		);
 
-			return !isEmptyFallbackStep;
-		});
-	}, [isUser, message.plan_steps]);
+		const handleEditSave = useCallback(
+			(content: string) => {
+				if (!onMessageUpdate) return;
 
-	const currentPlanStepId =
-		message.current_step_id &&
-		planSteps.some((step) => step.id === message.current_step_id)
-			? message.current_step_id
-			: undefined;
+				const trimmedContent = content.trim();
+				if (trimmedContent !== messageContent.text) {
+					onMessageUpdate(message.id, {
+						inner: {
+							...message.inner,
+							content: trimmedContent,
+						},
+					});
+					toast.success("Message updated successfully!");
+				}
+			},
+			[messageContent.text, message.id, message.inner, onMessageUpdate],
+		);
 
-	const usageStats = !isUser ? (message.usage_stats ?? []) : [];
-	const hasUsageStats = usageStats.length > 0;
-	const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
-	const compactUserActions = isUser && !hasFooterContent;
+		const gaveMoreFeedback = useMemo(() => {
+			return Boolean(
+				message.ratingSettings &&
+					(message.ratingSettings.comment ||
+						message.ratingSettings.includeChatHistory ||
+						message.ratingSettings.canContact),
+			);
+		}, [message.ratingSettings]);
 
-	return (
-		<>
-			<div
-				className={cn(
-					"max-w-5xl flex gap-1 flex-col transition-all duration-300 ease-in-out",
-					isUser ? "items-end" : "items-start",
-				)}
-			>
+		const planSteps = useMemo(() => {
+			if (isUser || !message.plan_steps) {
+				return [];
+			}
+
+			return message.plan_steps.filter((step) => {
+				const isEmptyFallbackStep =
+					step.id === "step-0" &&
+					step.title === "Thinking" &&
+					!step.description?.trim() &&
+					!step.reasoning?.trim();
+
+				return !isEmptyFallbackStep;
+			});
+		}, [isUser, message.plan_steps]);
+
+		const currentPlanStepId =
+			message.current_step_id &&
+			planSteps.some((step) => step.id === message.current_step_id)
+				? message.current_step_id
+				: undefined;
+
+		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
+		const hasUsageStats = usageStats.length > 0;
+		const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
+		const compactUserActions = isUser && !hasFooterContent;
+
+		return (
+			<>
 				<div
 					className={cn(
-						"rounded-xl rounded-tr-sm p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
-						compactUserActions && "relative",
-						isUser
-							? "bg-muted dark:bg-muted/30 text-foreground max-w-3xl"
-							: "bg-background text-foreground max-w-full w-full pb-0",
+						"max-w-5xl flex gap-1 flex-col transition-all duration-300 ease-in-out",
+						isUser ? "items-end" : "items-start",
 					)}
 				>
-					{!isUser && planSteps.length > 0 && (
-						<PlanSteps
-							steps={planSteps}
-							currentStepId={currentPlanStepId}
-						/>
-					)}
 					<div
-						ref={contentRef}
 						className={cn(
-							"text-sm leading-relaxed whitespace-break-spaces text-wrap max-w-full w-full",
-							compactUserActions && "pr-10",
-							isUser && !isExpanded && "overflow-hidden",
+							"rounded-xl rounded-tr-sm p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							compactUserActions && "relative",
+							isUser
+								? "bg-muted dark:bg-muted/30 text-foreground max-w-3xl"
+								: "bg-background text-foreground max-w-full w-full pb-0",
 						)}
-						style={
-							isUser && !isExpanded
-								? { maxHeight: maxCollapsedHeight }
-								: undefined
-						}
 					>
-						{loading && !isUser && messageContent.text === "" ? (
-							<div className="flex items-center gap-1.5 py-1">
-								<div className="flex gap-1">
-									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
-									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
-									<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+						{!isUser && planSteps.length > 0 && (
+							<PlanSteps steps={planSteps} currentStepId={currentPlanStepId} />
+						)}
+						<div
+							ref={contentRef}
+							className={cn(
+								"text-sm leading-relaxed whitespace-break-spaces text-wrap max-w-full w-full",
+								compactUserActions && "pr-10",
+								isUser && !isExpanded && "overflow-hidden",
+							)}
+							style={
+								isUser && !isExpanded
+									? { maxHeight: maxCollapsedHeight }
+									: undefined
+							}
+						>
+							{loading && !isUser && messageContent.text === "" ? (
+								<div className="flex items-center gap-1.5 py-1">
+									<div className="flex gap-1">
+										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
+										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
+										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+									</div>
+									<span className="text-xs text-muted-foreground ml-1">
+										Thinking...
+									</span>
 								</div>
-								<span className="text-xs text-muted-foreground ml-1">Thinking...</span>
-							</div>
-						) : loading && !isUser && messageContent.text !== "" ? (
-							<StreamingTextEditor content={messageContent.text} />
-						) : (
-							<TextEditor
-								initialContent={messageContent.text}
-								isMarkdown={true}
-								editable={false}
+							) : loading && !isUser && messageContent.text !== "" ? (
+								<StreamingTextEditor content={messageContent.text} />
+							) : (
+								<TextEditor
+									initialContent={messageContent.text}
+									isMarkdown={true}
+									editable={false}
+								/>
+							)}
+						</div>{" "}
+						{isUser && showToggle && (
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() => setIsExpanded(!isExpanded)}
+								className="h-auto p-0 text-xs text-foreground hover:text-foreground/80 mt-1"
+							>
+								{isExpanded ? (
+									<>
+										<ChevronUp className="w-3 h-3 mr-1" />
+										Show less
+									</>
+								) : (
+									<>
+										<ChevronDown className="w-3 h-3 mr-1" />
+										Show more
+									</>
+								)}
+							</Button>
+						)}
+						<AttachmentSection
+							files={processedAttachments}
+							onFileClick={handleFileClick}
+							onFullscreen={setFullscreenFile}
+						/>
+						{hasUsageStats && (
+							<UsageStats stats={usageStats} className="mt-1" />
+						)}
+						{!loading && (
+							<MessageActions
+								isUser={isUser}
+								hasFooterContent={hasFooterContent}
+								compact={compactUserActions}
+								rating={message.rating ?? 0}
+								gaveMoreFeedback={gaveMoreFeedback}
+								onThumbsUp={() => upsertFeedback(1)}
+								onThumbsDown={() => upsertFeedback(-1)}
+								onFeedbackClick={() => setShowFeedbackDialog(true)}
+								onEdit={() => setShowEditDialog(true)}
+								onCopy={copyToClipboard}
+								allFiles={processedAttachments}
+								hiddenFilesCount={hiddenFilesCount}
+								onFileClick={handleFileClick}
 							/>
 						)}
-					</div>{" "}
-					{isUser && showToggle && (
-						<Button
-							variant="ghost"
-							size="sm"
-							onClick={() => setIsExpanded(!isExpanded)}
-							className="h-auto p-0 text-xs text-foreground hover:text-foreground/80 mt-1"
-						>
-							{isExpanded ? (
-								<>
-									<ChevronUp className="w-3 h-3 mr-1" />
-									Show less
-								</>
-							) : (
-								<>
-									<ChevronDown className="w-3 h-3 mr-1" />
-									Show more
-								</>
-							)}
-						</Button>
-					)}
-					<AttachmentSection
-						files={processedAttachments}
-						onFileClick={handleFileClick}
-						onFullscreen={setFullscreenFile}
-					/>
-					{hasUsageStats && (
-						<UsageStats stats={usageStats} className="mt-1" />
-					)}
-					{!loading && (
-						<MessageActions
-							isUser={isUser}
-							hasFooterContent={hasFooterContent}
-							compact={compactUserActions}
-							rating={message.rating ?? 0}
-							gaveMoreFeedback={gaveMoreFeedback}
-							onThumbsUp={() => upsertFeedback(1)}
-							onThumbsDown={() => upsertFeedback(-1)}
-							onFeedbackClick={() => setShowFeedbackDialog(true)}
-
-							onEdit={() => setShowEditDialog(true)}
-							onCopy={copyToClipboard}
-							allFiles={processedAttachments}
-							hiddenFilesCount={hiddenFilesCount}
-							onFileClick={handleFileClick}
-						/>
-					)}
-				</div>
-			</div>{" "}
-			{fullscreenFile && (
-				<Dialog
-					open={!!fullscreenFile}
-					onOpenChange={() => setFullscreenFile(null)}
-				>
-					<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 bg-black border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!">
-						<div className="relative w-full h-full flex flex-col">
-							<div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-start p-4 bg-linear-to-b from-black/80 to-transparent pointer-events-none">
-								<p className="text-white text-sm font-medium truncate">
-									{getDisplayFileName(fullscreenFile.name)}
-								</p>
+					</div>
+				</div>{" "}
+				{fullscreenFile && (
+					<Dialog
+						open={!!fullscreenFile}
+						onOpenChange={() => setFullscreenFile(null)}
+					>
+						<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 bg-black border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!">
+							<div className="relative w-full h-full flex flex-col">
+								<div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-start p-4 bg-linear-to-b from-black/80 to-transparent pointer-events-none">
+									<p className="text-white text-sm font-medium truncate">
+										{getDisplayFileName(fullscreenFile.name)}
+									</p>
+								</div>
+								<div className="flex-1 flex items-center justify-center w-full h-full">
+									<FileDialogPreview file={fullscreenFile} />
+								</div>
 							</div>
-							<div className="flex-1 flex items-center justify-center w-full h-full">
-								<FileDialogPreview file={fullscreenFile} />
-							</div>
-						</div>
-					</DialogContent>
-				</Dialog>
-			)}
-			<FullscreenEditDialog
-				open={showEditDialog}
-				onOpenChange={setShowEditDialog}
-				content={messageContent.text}
-				onSave={handleEditSave}
-			/>
-			<FeedbackDialog
-				open={showFeedbackDialog}
-				onOpenChange={setShowFeedbackDialog}
-				initialComment={message.ratingSettings?.comment ?? ""}
-				initialIncludeChatHistory={
-					message.ratingSettings?.includeChatHistory ?? false
-				}
-				initialCanContact={message.ratingSettings?.canContact ?? false}
-				onSubmit={handleFeedbackSubmit}
-			/>
-			{processedAttachments.length > 0 && (
-				<FileDialog
-					files={processedAttachments}
-					handleFileClick={handleFileClick}
-					open={showFileDialog}
-					onOpenChange={setShowFileDialog}
-					initialSelectedFile={dialogSelectedFile}
-					trigger={null}
+						</DialogContent>
+					</Dialog>
+				)}
+				<FullscreenEditDialog
+					open={showEditDialog}
+					onOpenChange={setShowEditDialog}
+					content={messageContent.text}
+					onSave={handleEditSave}
 				/>
-			)}
-		</>
-	);
-}, (prev, next) => {
-	return (
-		prev.message.inner.content === next.message.inner.content &&
-		prev.message.files === next.message.files &&
-		prev.message.rating === next.message.rating &&
-		prev.message.ratingSettings === next.message.ratingSettings &&
-		prev.message.plan_steps === next.message.plan_steps &&
-		prev.message.current_step_id === next.message.current_step_id &&
-		prev.message.usage_stats === next.message.usage_stats &&
-		prev.loading === next.loading &&
-		prev.onMessageUpdate === next.onMessageUpdate
-	);
-});
+				<FeedbackDialog
+					open={showFeedbackDialog}
+					onOpenChange={setShowFeedbackDialog}
+					initialComment={message.ratingSettings?.comment ?? ""}
+					initialIncludeChatHistory={
+						message.ratingSettings?.includeChatHistory ?? false
+					}
+					initialCanContact={message.ratingSettings?.canContact ?? false}
+					onSubmit={handleFeedbackSubmit}
+				/>
+				{processedAttachments.length > 0 && (
+					<FileDialog
+						files={processedAttachments}
+						handleFileClick={handleFileClick}
+						open={showFileDialog}
+						onOpenChange={setShowFileDialog}
+						initialSelectedFile={dialogSelectedFile}
+						trigger={null}
+					/>
+				)}
+			</>
+		);
+	},
+	(prev, next) => {
+		return (
+			prev.message.inner.content === next.message.inner.content &&
+			prev.message.files === next.message.files &&
+			prev.message.rating === next.message.rating &&
+			prev.message.ratingSettings === next.message.ratingSettings &&
+			prev.message.plan_steps === next.message.plan_steps &&
+			prev.message.current_step_id === next.message.current_step_id &&
+			prev.message.usage_stats === next.message.usage_stats &&
+			prev.loading === next.loading &&
+			prev.onMessageUpdate === next.onMessageUpdate
+		);
+	},
+);
 MessageComponent.displayName = "MessageComponent";

@@ -1,4 +1,8 @@
-import type { LabelStyle, NodeLabelMapping, EdgeLabelMapping } from "../../../state/backend-state/graph-state";
+import type {
+	EdgeLabelMapping,
+	LabelStyle,
+	NodeLabelMapping,
+} from "../../../state/backend-state/graph-state";
 
 interface PresetRule {
 	patterns: string[];
@@ -102,7 +106,11 @@ const PRESETS: DomainPreset[] = [
 		name: "Docs & Knowledge",
 		description: "Documents, topics, and authorship",
 		nodeRules: [
-			{ patterns: ["document", "doc", "page"], icon: "fileText", color: "#6366f1" },
+			{
+				patterns: ["document", "doc", "page"],
+				icon: "fileText",
+				color: "#6366f1",
+			},
 			{ patterns: ["topic", "tag", "concept"], icon: "tag", color: "#8b5cf6" },
 			{ patterns: ["author", "user"], icon: "user", color: "#3b82f6" },
 		],
@@ -117,7 +125,11 @@ const PRESETS: DomainPreset[] = [
 		name: "Incidents & Events",
 		description: "Incidents, events, and actors",
 		nodeRules: [
-			{ patterns: ["incident", "alert"], icon: "alertTriangle", color: "#ef4444" },
+			{
+				patterns: ["incident", "alert"],
+				icon: "alertTriangle",
+				color: "#ef4444",
+			},
 			{ patterns: ["event"], icon: "activity", color: "#f97316" },
 			{ patterns: ["actor", "user", "person"], icon: "user", color: "#3b82f6" },
 		],

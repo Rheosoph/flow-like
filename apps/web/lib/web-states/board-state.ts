@@ -120,10 +120,7 @@ export class WebBoardState implements IBoardState {
 
 	async getCatalog(appId: string): Promise<INode[]> {
 		try {
-			return await apiGet<INode[]>(
-				`apps/${appId}/nodes`,
-				this.backend.auth,
-			);
+			return await apiGet<INode[]>(`apps/${appId}/nodes`, this.backend.auth);
 		} catch {
 			return [];
 		}

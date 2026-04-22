@@ -46,10 +46,9 @@ import { MessageContent } from "./MessageContent";
 import { PendingCommandsView } from "./PendingCommandsView";
 import { PendingComponentsView } from "./PendingComponentsView";
 import { PlanStepsView } from "./PlanStepsView";
-import { buildBudgetedHistory } from "./history-budget";
-import { validateComponents, validateCanvasSettings } from "./validateComponents";
 import { ModelSelector, ProviderSelector } from "./ProviderSelector";
 import { StatusPill } from "./StatusPill";
+import { buildBudgetedHistory } from "./history-budget";
 import type {
 	AIProvider,
 	AgentMode,
@@ -59,6 +58,10 @@ import type {
 	LoadingPhase,
 	UnifiedPlanStep,
 } from "./types";
+import {
+	validateCanvasSettings,
+	validateComponents,
+} from "./validateComponents";
 
 import type {
 	CanvasSettings,
@@ -821,7 +824,8 @@ export function FlowPilot({
 						try {
 							const components = JSON.parse(componentsMatch[1]);
 							if (Array.isArray(components) && components.length > 0) {
-								const { components: validatedBatch, warnings } = validateComponents(components);
+								const { components: validatedBatch, warnings } =
+									validateComponents(components);
 								if (validatedBatch.length > 0) {
 									setPendingComponents((prev) => [...prev, ...validatedBatch]);
 								}
@@ -1750,9 +1754,7 @@ const EmptyState = memo(function EmptyState({
 			<p className="text-sm font-medium text-foreground mt-3 mb-1">
 				How can I help?
 			</p>
-			<p className="text-xs text-muted-foreground max-w-50">
-				{description}
-			</p>
+			<p className="text-xs text-muted-foreground max-w-50">{description}</p>
 			<div className="flex flex-wrap gap-2 justify-center pt-4">
 				{suggestions.map((suggestion, i) => (
 					<motion.button

@@ -258,7 +258,10 @@ impl LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    eprintln!("[LanceDB] Error creating table '{}' from record batch: {err:#}", self.table_name);
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' from record batch: {err:#}",
+                        self.table_name
+                    );
                     return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
@@ -483,7 +486,10 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    eprintln!("[LanceDB] Error creating table '{}' for upsert: {err:#}", self.table_name);
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' for upsert: {err:#}",
+                        self.table_name
+                    );
                     return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
@@ -514,7 +520,10 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    eprintln!("[LanceDB] Error creating table '{}' for insert: {err:#}", self.table_name);
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' for insert: {err:#}",
+                        self.table_name
+                    );
                     return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }

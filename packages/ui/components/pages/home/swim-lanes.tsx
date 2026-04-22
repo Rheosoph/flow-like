@@ -158,7 +158,10 @@ export function HomeSwimlanes() {
 						router={router}
 					/>
 				))}
-				<LibraryAppsSection recentLibraryApps={recentLibraryApps} router={router} />
+				<LibraryAppsSection
+					recentLibraryApps={recentLibraryApps}
+					router={router}
+				/>
 				<LatestUserAppsSection
 					apps={apps}
 					latestApps={latestApps}
@@ -184,7 +187,9 @@ function LibraryAppsSection({
 		<section className="space-y-4">
 			<div className="flex items-center justify-between gap-4">
 				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">From Your Library</h2>
+					<h2 className="text-2xl font-bold text-foreground">
+						From Your Library
+					</h2>
 					<p className="text-muted-foreground">
 						Jump back into the apps you updated most recently.
 					</p>
@@ -234,14 +239,19 @@ function LatestUserAppsSection({
 		return (
 			<section className="space-y-4">
 				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">Latest Community Apps</h2>
+					<h2 className="text-2xl font-bold text-foreground">
+						Latest Community Apps
+					</h2>
 					<p className="text-muted-foreground">
 						Freshly published apps from the community.
 					</p>
 				</div>
 				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 					{Array.from({ length: 6 }).map((_, index) => (
-						<Skeleton key={`latest-app-skeleton-${index}`} className="h-93.75 w-full rounded-lg" />
+						<Skeleton
+							key={`latest-app-skeleton-${index}`}
+							className="h-93.75 w-full rounded-lg"
+						/>
 					))}
 				</div>
 			</section>
@@ -252,7 +262,9 @@ function LatestUserAppsSection({
 		<section className="space-y-4">
 			<div className="flex items-center justify-between gap-4">
 				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">Latest Community Apps</h2>
+					<h2 className="text-2xl font-bold text-foreground">
+						Latest Community Apps
+					</h2>
 					<p className="text-muted-foreground">
 						Freshly published apps from the community.
 					</p>
@@ -269,7 +281,8 @@ function LatestUserAppsSection({
 			</div>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 				{latestApps.data.map(([app, metadata]) => {
-					const isOwned = apps.data?.some(([ownedApp]) => ownedApp.id === app.id) ?? false;
+					const isOwned =
+						apps.data?.some(([ownedApp]) => ownedApp.id === app.id) ?? false;
 
 					return (
 						<AppCard
@@ -280,7 +293,9 @@ function LatestUserAppsSection({
 							variant="extended"
 							className="w-full h-full"
 							onClick={() =>
-								router.push(isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`)
+								router.push(
+									isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`,
+								)
 							}
 							href={isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`}
 						/>

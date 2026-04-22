@@ -1,5 +1,9 @@
 export { OverlayWizard, type OverlayWizardProps } from "./overlay-wizard";
-export { StepTables, type StepTablesProps, type TableInfo } from "./step-tables";
+export {
+	StepTables,
+	type StepTablesProps,
+	type TableInfo,
+} from "./step-tables";
 export { StepNodes, type StepNodesProps } from "./step-nodes";
 export { StepEdges, type StepEdgesProps } from "./step-edges";
 export { StepStyle, type StepStyleProps } from "./step-style";

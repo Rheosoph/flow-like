@@ -8,7 +8,11 @@
  */
 
 import { getRegisteredTypes } from "../a2ui/ComponentRegistry";
-import type { BoundValue, CanvasSettings, SurfaceComponent } from "../a2ui/types";
+import type {
+	BoundValue,
+	CanvasSettings,
+	SurfaceComponent,
+} from "../a2ui/types";
 
 // ---------------------------------------------------------------------------
 // Known props per component type
@@ -32,10 +36,39 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 	widgetInstance: new Set(["widgetId", "widgetInputs", "bindOutputs"]),
 
 	// Display
-	text: new Set(["content", "variant", "size", "weight", "color", "align", "truncate", "maxLines"]),
-	image: new Set(["src", "alt", "fit", "fallback", "fallbackSrc", "loading", "aspectRatio", "width", "height"]),
+	text: new Set([
+		"content",
+		"variant",
+		"size",
+		"weight",
+		"color",
+		"align",
+		"truncate",
+		"maxLines",
+	]),
+	image: new Set([
+		"src",
+		"alt",
+		"fit",
+		"fallback",
+		"fallbackSrc",
+		"loading",
+		"aspectRatio",
+		"width",
+		"height",
+	]),
 	icon: new Set(["name", "size", "color", "strokeWidth"]),
-	video: new Set(["src", "poster", "autoplay", "autoPlay", "loop", "muted", "controls", "width", "height"]),
+	video: new Set([
+		"src",
+		"poster",
+		"autoplay",
+		"autoPlay",
+		"loop",
+		"muted",
+		"controls",
+		"width",
+		"height",
+	]),
 	lottie: new Set(["src", "autoplay", "loop", "speed", "width", "height"]),
 	markdown: new Set(["content", "allowHtml"]),
 	divider: new Set(["orientation", "thickness", "color"]),
@@ -44,75 +77,356 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 	progress: new Set(["value", "max", "showLabel", "variant", "color"]),
 	spinner: new Set(["size", "color"]),
 	skeleton: new Set(["width", "height", "rounded", "variant"]),
-	iframe: new Set(["src", "srcdoc", "width", "height", "sandbox", "allow", "title", "referrerPolicy", "border", "loading"]),
+	iframe: new Set([
+		"src",
+		"srcdoc",
+		"width",
+		"height",
+		"sandbox",
+		"allow",
+		"title",
+		"referrerPolicy",
+		"border",
+		"loading",
+	]),
 	table: new Set([
-		"columns", "data", "caption", "striped", "bordered", "hoverable",
-		"compact", "stickyHeader", "sortable", "searchable", "paginated",
-		"pageSize", "selectable", "onRowClick", "showPagination",
+		"columns",
+		"data",
+		"caption",
+		"striped",
+		"bordered",
+		"hoverable",
+		"compact",
+		"stickyHeader",
+		"sortable",
+		"searchable",
+		"paginated",
+		"pageSize",
+		"selectable",
+		"onRowClick",
+		"showPagination",
 	]),
 	tableRow: new Set(["cells", "selected", "disabled"]),
 	tableCell: new Set(["content", "isHeader", "colSpan", "rowSpan", "align"]),
-	plotlyChart: new Set(["chartType", "data", "title", "layout", "config", "height", "width"]),
+	plotlyChart: new Set([
+		"chartType",
+		"data",
+		"title",
+		"layout",
+		"config",
+		"height",
+		"width",
+	]),
 	nivoChart: new Set([
-		"chartType", "data", "height", "width", "colors", "colorScheme",
-		"showLegend", "legendPosition", "margin", "axisBottom", "axisLeft",
-		"animate", "motionConfig", "style",
+		"chartType",
+		"data",
+		"height",
+		"width",
+		"colors",
+		"colorScheme",
+		"showLegend",
+		"legendPosition",
+		"margin",
+		"axisBottom",
+		"axisLeft",
+		"animate",
+		"motionConfig",
+		"style",
 	]),
 	filePreview: new Set(["url", "mimeType", "width", "height"]),
-	boundingBoxOverlay: new Set(["src", "boxes", "showLabels", "showConfidence", "normalized", "width", "height"]),
-	geoMap: new Set(["center", "zoom", "markers", "style", "width", "height", "mapStyle", "interactive"]),
+	boundingBoxOverlay: new Set([
+		"src",
+		"boxes",
+		"showLabels",
+		"showConfidence",
+		"normalized",
+		"width",
+		"height",
+	]),
+	geoMap: new Set([
+		"center",
+		"zoom",
+		"markers",
+		"style",
+		"width",
+		"height",
+		"mapStyle",
+		"interactive",
+	]),
 
 	// Interactive
-	button: new Set(["label", "variant", "size", "disabled", "loading", "icon", "iconPosition", "tooltip"]),
-	textField: new Set(["value", "placeholder", "label", "helperText", "error", "disabled", "inputType", "type", "multiline", "rows", "maxLength", "required"]),
-	select: new Set(["value", "options", "placeholder", "label", "disabled", "multiple", "searchable"]),
-	slider: new Set(["value", "min", "max", "step", "disabled", "showValue", "label"]),
+	button: new Set([
+		"label",
+		"variant",
+		"size",
+		"disabled",
+		"loading",
+		"icon",
+		"iconPosition",
+		"tooltip",
+	]),
+	textField: new Set([
+		"value",
+		"placeholder",
+		"label",
+		"helperText",
+		"error",
+		"disabled",
+		"inputType",
+		"type",
+		"multiline",
+		"rows",
+		"maxLength",
+		"required",
+	]),
+	select: new Set([
+		"value",
+		"options",
+		"placeholder",
+		"label",
+		"disabled",
+		"multiple",
+		"searchable",
+	]),
+	slider: new Set([
+		"value",
+		"min",
+		"max",
+		"step",
+		"disabled",
+		"showValue",
+		"label",
+	]),
 	checkbox: new Set(["checked", "label", "disabled", "indeterminate"]),
 	switch: new Set(["checked", "label", "disabled"]),
 	radioGroup: new Set(["value", "options", "disabled", "orientation", "label"]),
 	dateTimeInput: new Set(["value", "mode", "min", "max", "disabled", "label"]),
-	fileInput: new Set(["value", "label", "helperText", "accept", "multiple", "maxSize", "maxFiles", "disabled", "error"]),
-	imageInput: new Set(["value", "label", "helperText", "accept", "multiple", "maxSize", "maxFiles", "disabled", "error", "aspectRatio", "showPreview"]),
-	imageLabeler: new Set(["src", "labels", "boxes", "disabled", "width", "height"]),
+	fileInput: new Set([
+		"value",
+		"label",
+		"helperText",
+		"accept",
+		"multiple",
+		"maxSize",
+		"maxFiles",
+		"disabled",
+		"error",
+	]),
+	imageInput: new Set([
+		"value",
+		"label",
+		"helperText",
+		"accept",
+		"multiple",
+		"maxSize",
+		"maxFiles",
+		"disabled",
+		"error",
+		"aspectRatio",
+		"showPreview",
+	]),
+	imageLabeler: new Set([
+		"src",
+		"labels",
+		"boxes",
+		"disabled",
+		"width",
+		"height",
+	]),
 	imageHotspot: new Set(["src", "hotspots", "markerStyle", "width", "height"]),
-	link: new Set(["href", "label", "text", "route", "queryParams", "external", "target", "variant", "underline", "disabled", "openInNewTab"]),
+	link: new Set([
+		"href",
+		"label",
+		"text",
+		"route",
+		"queryParams",
+		"external",
+		"target",
+		"variant",
+		"underline",
+		"disabled",
+		"openInNewTab",
+	]),
 
 	// Container
-	card: new Set(["title", "description", "footer", "hoverable", "clickable", "variant", "padding", "headerImage", "headerIcon"]),
-	modal: new Set(["open", "title", "description", "closeOnOverlay", "closeOnEscape", "showCloseButton", "size", "centered"]),
+	card: new Set([
+		"title",
+		"description",
+		"footer",
+		"hoverable",
+		"clickable",
+		"variant",
+		"padding",
+		"headerImage",
+		"headerIcon",
+	]),
+	modal: new Set([
+		"open",
+		"title",
+		"description",
+		"closeOnOverlay",
+		"closeOnEscape",
+		"showCloseButton",
+		"size",
+		"centered",
+	]),
 	tabs: new Set(["value", "tabs", "orientation", "variant", "defaultValue"]),
-	accordion: new Set(["items", "multiple", "defaultExpanded", "collapsible", "type"]),
-	drawer: new Set(["open", "side", "title", "size", "overlay", "closable", "description"]),
+	accordion: new Set([
+		"items",
+		"multiple",
+		"defaultExpanded",
+		"collapsible",
+		"type",
+	]),
+	drawer: new Set([
+		"open",
+		"side",
+		"title",
+		"size",
+		"overlay",
+		"closable",
+		"description",
+	]),
 	tooltip: new Set(["content", "side", "delayMs", "maxWidth"]),
-	popover: new Set(["open", "contentComponentId", "side", "trigger", "closeOnClickOutside", "content"]),
+	popover: new Set([
+		"open",
+		"contentComponentId",
+		"side",
+		"trigger",
+		"closeOnClickOutside",
+		"content",
+	]),
 
 	// Game
 	canvas2d: new Set(["width", "height", "backgroundColor", "pixelPerfect"]),
-	sprite: new Set(["src", "x", "y", "width", "height", "rotation", "scale", "opacity", "flipX", "flipY", "zIndex"]),
-	shape: new Set(["shapeType", "x", "y", "width", "height", "radius", "points", "fill", "stroke", "strokeWidth"]),
+	sprite: new Set([
+		"src",
+		"x",
+		"y",
+		"width",
+		"height",
+		"rotation",
+		"scale",
+		"opacity",
+		"flipX",
+		"flipY",
+		"zIndex",
+	]),
+	shape: new Set([
+		"shapeType",
+		"x",
+		"y",
+		"width",
+		"height",
+		"radius",
+		"points",
+		"fill",
+		"stroke",
+		"strokeWidth",
+	]),
 	scene3d: new Set([
-		"width", "height", "cameraType", "cameraPosition", "backgroundColor",
-		"controlMode", "fixedView", "autoRotateSpeed", "enableControls",
-		"enableZoom", "enablePan", "fov", "near", "far", "target",
-		"ambientLight", "directionalLight", "showGrid", "showAxes",
+		"width",
+		"height",
+		"cameraType",
+		"cameraPosition",
+		"backgroundColor",
+		"controlMode",
+		"fixedView",
+		"autoRotateSpeed",
+		"enableControls",
+		"enableZoom",
+		"enablePan",
+		"fov",
+		"near",
+		"far",
+		"target",
+		"ambientLight",
+		"directionalLight",
+		"showGrid",
+		"showAxes",
 	]),
 	model3d: new Set([
-		"src", "position", "rotation", "scale", "castShadow", "receiveShadow",
-		"animation", "autoRotate", "rotateSpeed", "viewerHeight",
-		"backgroundColor", "cameraDistance", "fov", "cameraAngle",
-		"cameraPosition", "cameraTarget", "enableControls", "enableZoom",
-		"enablePan", "autoRotateCamera", "cameraRotateSpeed",
-		"ambientLight", "directionalLight", "fillLight", "rimLight",
-		"lightColor", "lightingPreset", "showGround", "groundColor",
-		"enableReflections", "environment", "environmentSource",
-		"useHdrBackground", "polyhavenHdri", "polyhavenResolution",
+		"src",
+		"position",
+		"rotation",
+		"scale",
+		"castShadow",
+		"receiveShadow",
+		"animation",
+		"autoRotate",
+		"rotateSpeed",
+		"viewerHeight",
+		"backgroundColor",
+		"cameraDistance",
+		"fov",
+		"cameraAngle",
+		"cameraPosition",
+		"cameraTarget",
+		"enableControls",
+		"enableZoom",
+		"enablePan",
+		"autoRotateCamera",
+		"cameraRotateSpeed",
+		"ambientLight",
+		"directionalLight",
+		"fillLight",
+		"rimLight",
+		"lightColor",
+		"lightingPreset",
+		"showGround",
+		"groundColor",
+		"enableReflections",
+		"environment",
+		"environmentSource",
+		"useHdrBackground",
+		"polyhavenHdri",
+		"polyhavenResolution",
 	]),
-	dialogue: new Set(["text", "speakerName", "typewriter", "speed", "portrait", "children"]),
-	characterPortrait: new Set(["image", "expression", "position", "width", "height", "flip"]),
+	dialogue: new Set([
+		"text",
+		"speakerName",
+		"typewriter",
+		"speed",
+		"portrait",
+		"children",
+	]),
+	characterPortrait: new Set([
+		"image",
+		"expression",
+		"position",
+		"width",
+		"height",
+		"flip",
+	]),
 	choiceMenu: new Set(["choices", "title", "layout", "columns"]),
-	inventoryGrid: new Set(["items", "columns", "rows", "cellSize", "showTooltips"]),
-	healthBar: new Set(["value", "maxValue", "label", "fillColor", "variant", "showLabel", "size", "animated"]),
-	miniMap: new Set(["mapImage", "width", "height", "markers", "playerX", "playerY", "viewportWidth", "viewportHeight", "zoom"]),
+	inventoryGrid: new Set([
+		"items",
+		"columns",
+		"rows",
+		"cellSize",
+		"showTooltips",
+	]),
+	healthBar: new Set([
+		"value",
+		"maxValue",
+		"label",
+		"fillColor",
+		"variant",
+		"showLabel",
+		"size",
+		"animated",
+	]),
+	miniMap: new Set([
+		"mapImage",
+		"width",
+		"height",
+		"markers",
+		"playerX",
+		"playerY",
+		"viewportWidth",
+		"viewportHeight",
+		"zoom",
+	]),
 };
 
 /** Shared base props all component types have. */
@@ -195,7 +509,12 @@ function coerceToBoundValue(v: unknown): BoundValue | undefined {
 	if (typeof v === "boolean") return { literalBool: v };
 	if (Array.isArray(v)) {
 		// Could be options array [{value, label}]
-		if (v.length > 0 && typeof v[0] === "object" && v[0] !== null && "value" in v[0]) {
+		if (
+			v.length > 0 &&
+			typeof v[0] === "object" &&
+			v[0] !== null &&
+			"value" in v[0]
+		) {
 			return { literalOptions: v as { value: string; label: string }[] };
 		}
 		return { literalJson: JSON.stringify(v) };
@@ -217,8 +536,9 @@ function validateChildren(
 	const c = children as Record<string, unknown>;
 
 	if ("explicitList" in c && Array.isArray(c.explicitList)) {
-		const filtered = (c.explicitList as unknown[])
-			.filter((id): id is string => typeof id === "string" && validIds.has(id));
+		const filtered = (c.explicitList as unknown[]).filter(
+			(id): id is string => typeof id === "string" && validIds.has(id),
+		);
 		return filtered.length > 0 ? { explicitList: filtered } : undefined;
 	}
 
@@ -291,9 +611,15 @@ export function validateComponents(
 			if (knownForType.has(key)) {
 				// Props that hold structured data (arrays/objects) should not be blindly coerced
 				if (
-					key === "tabs" || key === "items" || key === "overlays" ||
-					key === "columns" || key === "data" || key === "boxes" ||
-					key === "hotspots" || key === "markers" || key === "choices" ||
+					key === "tabs" ||
+					key === "items" ||
+					key === "overlays" ||
+					key === "columns" ||
+					key === "data" ||
+					key === "boxes" ||
+					key === "hotspots" ||
+					key === "markers" ||
+					key === "choices" ||
 					key === "options"
 				) {
 					// Options specifically expects BoundValue
@@ -318,7 +644,9 @@ export function validateComponents(
 					const defaultVal = DEFAULT_BOUND_VALUES[prop];
 					if (defaultVal) {
 						cleaned[prop] = defaultVal;
-						warnings.push(`${comp.id}: injected default for required prop "${prop}" on ${type}`);
+						warnings.push(
+							`${comp.id}: injected default for required prop "${prop}" on ${type}`,
+						);
 					}
 				}
 			}
