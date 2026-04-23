@@ -96,6 +96,40 @@ fn parse_message(msg: &Value) -> Option<OutlookMessage> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OutlookAttachment {
+    pub id: String,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub size: i64,
+    pub is_inline: bool,
+    pub content_id: Option<String>,
+    pub content_location: Option<String>,
+    pub attachment_type: Option<String>,
+    pub data: Vec<u8>,
+}
+
+fn parse_attachment(attachment: &Value) -> Option<OutlookAttachment> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    Some(OutlookAttachment {
+        id: attachment["id"].as_str()?.to_string(),
+        filename: attachment["name"].as_str().map(String::from),
+        content_type: attachment["contentType"].as_str().map(String::from),
+        size: attachment["size"].as_i64().unwrap_or(0),
+        is_inline: attachment["isInline"].as_bool().unwrap_or(false),
+        content_id: attachment["contentId"].as_str().map(String::from),
+        content_location: attachment["contentLocation"].as_str().map(String::from),
+        attachment_type: attachment["@odata.type"]
+            .as_str()
+            .map(|value| value.trim_start_matches("#microsoft.graph.").to_string()),
+        data: attachment["contentBytes"]
+            .as_str()
+            .and_then(|value| STANDARD.decode(value).ok())
+            .unwrap_or_default(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutlookCalendarEvent {
     pub id: String,
     pub subject: Option<String>,
@@ -550,6 +584,238 @@ impl NodeLogic for GetOutlookMessageNode {
 }
 
 // =============================================================================
+// Get Message Attachments Node
+// =============================================================================
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct GetOutlookMessageAttachmentsNode {}
+
+impl GetOutlookMessageAttachmentsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for GetOutlookMessageAttachmentsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "data_microsoft_outlook_get_message_attachments",
+            "Get Message Attachments",
+            "Fetch attachments for an Outlook message",
+            "Data/Microsoft/Outlook",
+        );
+        node.add_icon("/flow/icons/outlook.svg");
+
+        node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "Microsoft Graph provider",
+            VariableType::Struct,
+        )
+        .set_schema::<MicrosoftGraphProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "message",
+            "Message",
+            "Outlook message from List Messages or Get Message",
+            VariableType::Struct,
+        )
+        .set_schema::<OutlookMessage>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
+        node.add_output_pin("error", "Error", "", VariableType::Execution);
+        node.add_output_pin(
+            "attachments",
+            "Attachments",
+            "List of message attachments",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array)
+        .set_schema::<OutlookAttachment>();
+        node.add_output_pin(
+            "count",
+            "Count",
+            "Number of attachments",
+            VariableType::Integer,
+        );
+        node.add_output_pin("error_message", "Error Message", "", VariableType::String);
+
+        node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["Mail.Read"]);
+        node.set_long_running(true);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
+
+        let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
+        let message: OutlookMessage = context.evaluate_pin("message").await?;
+
+        let url = format!(
+            "{}/me/messages/{}/attachments",
+            provider.base_url,
+            urlencoding::encode(&message.id)
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Content-Type", "application/json")
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                let body: Value = resp.json().await?;
+                let attachments = body["value"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(parse_attachment)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                let count = attachments.len() as i64;
+                context
+                    .set_pin_value("attachments", json!(attachments))
+                    .await?;
+                context.set_pin_value("count", json!(count)).await?;
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let error_text = resp.text().await.unwrap_or_default();
+                context
+                    .set_pin_value(
+                        "error_message",
+                        json!(format!("API error {}: {}", status, error_text)),
+                    )
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+            Err(e) => {
+                context
+                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct OutlookAttachmentFieldsNode {}
+
+impl OutlookAttachmentFieldsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for OutlookAttachmentFieldsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "data_microsoft_outlook_attachment_fields",
+            "Attachment → Fields",
+            "Access Outlook attachment fields and bytes",
+            "Data/Microsoft/Outlook",
+        );
+        node.add_icon("/flow/icons/outlook.svg");
+
+        node.add_input_pin(
+            "attachment",
+            "Attachment",
+            "Outlook attachment struct",
+            VariableType::Struct,
+        )
+        .set_schema::<OutlookAttachment>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin("id", "ID", "Attachment ID", VariableType::String);
+        node.add_output_pin(
+            "filename",
+            "Filename",
+            "Attachment filename",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "content_type",
+            "Content Type",
+            "Attachment MIME type",
+            VariableType::String,
+        );
+        node.add_output_pin("size", "Size", "Attachment size in bytes", VariableType::Integer);
+        node.add_output_pin(
+            "is_inline",
+            "Is Inline",
+            "Whether the attachment is inline",
+            VariableType::Boolean,
+        );
+        node.add_output_pin(
+            "content_id",
+            "Content ID",
+            "Inline content ID",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "content_location",
+            "Content Location",
+            "Inline content location",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "attachment_type",
+            "Attachment Type",
+            "Graph attachment type",
+            VariableType::String,
+        );
+        node.add_output_pin("data", "Data", "Raw attachment bytes", VariableType::Byte)
+            .set_value_type(ValueType::Array);
+
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let attachment: OutlookAttachment = context.evaluate_pin("attachment").await?;
+
+        context.set_pin_value("id", json!(attachment.id)).await?;
+        context
+            .set_pin_value("filename", json!(attachment.filename))
+            .await?;
+        context
+            .set_pin_value("content_type", json!(attachment.content_type))
+            .await?;
+        context.set_pin_value("size", json!(attachment.size)).await?;
+        context
+            .set_pin_value("is_inline", json!(attachment.is_inline))
+            .await?;
+        context
+            .set_pin_value("content_id", json!(attachment.content_id))
+            .await?;
+        context
+            .set_pin_value("content_location", json!(attachment.content_location))
+            .await?;
+        context
+            .set_pin_value("attachment_type", json!(attachment.attachment_type))
+            .await?;
+        context.set_pin_value("data", json!(attachment.data)).await?;
+
+        Ok(())
+    }
+}
+
+// =============================================================================
 // Send Message Node
 // =============================================================================
 
@@ -573,6 +839,7 @@ impl NodeLogic for SendOutlookMessageNode {
             "Data/Microsoft/Outlook",
         );
         node.add_icon("/flow/icons/outlook.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
         node.add_input_pin(
@@ -607,6 +874,15 @@ impl NodeLogic for SendOutlookMessageNode {
         )
         .set_default_value(Some(json!(false)));
         node.add_input_pin(
+            "attachments",
+            "Attachments",
+            "Optional file attachments to include in the message",
+            VariableType::Struct,
+        )
+        .set_schema::<OutlookAttachment>()
+        .set_value_type(ValueType::Array)
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
             "save_to_sent_items",
             "Save to Sent Items",
             "Save the message to Sent Items folder",
@@ -627,12 +903,16 @@ impl NodeLogic for SendOutlookMessageNode {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
 
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let to: String = context.evaluate_pin("to").await?;
         let cc: String = context.evaluate_pin("cc").await.unwrap_or_default();
         let subject: String = context.evaluate_pin("subject").await?;
         let body: String = context.evaluate_pin("body").await?;
         let is_html: bool = context.evaluate_pin("is_html").await.unwrap_or(false);
+        let attachments: Vec<OutlookAttachment> =
+            context.evaluate_pin("attachments").await.unwrap_or_default();
         let save_to_sent: bool = context
             .evaluate_pin("save_to_sent_items")
             .await
@@ -663,6 +943,45 @@ impl NodeLogic for SendOutlookMessageNode {
                 .collect()
         };
 
+        let unsupported_attachments: Vec<String> = attachments
+            .iter()
+            .filter(|attachment| attachment.data.is_empty())
+            .map(|attachment| {
+                attachment
+                    .filename
+                    .clone()
+                    .unwrap_or_else(|| attachment.id.clone())
+            })
+            .collect();
+
+        if !unsupported_attachments.is_empty() {
+            context
+                .set_pin_value(
+                    "error_message",
+                    json!(format!(
+                        "Outlook sendMail JSON only supports file attachments with bytes. These attachments do not include file data: {}",
+                        unsupported_attachments.join(", ")
+                    )),
+                )
+                .await?;
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
+
+        let attachment_payloads: Vec<Value> = attachments
+            .into_iter()
+            .map(|attachment| {
+                json!({
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": attachment.filename.unwrap_or_else(|| "attachment.bin".to_string()),
+                    "contentType": attachment.content_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                    "contentBytes": STANDARD.encode(&attachment.data),
+                    "isInline": attachment.is_inline,
+                    "contentId": attachment.content_id,
+                })
+            })
+            .collect();
+
         let content_type = if is_html { "HTML" } else { "Text" };
 
         let message_payload = json!({
@@ -673,7 +992,8 @@ impl NodeLogic for SendOutlookMessageNode {
                     "content": body
                 },
                 "toRecipients": to_recipients,
-                "ccRecipients": cc_recipients
+                "ccRecipients": cc_recipients,
+                "attachments": attachment_payloads
             },
             "saveToSentItems": save_to_sent
         });

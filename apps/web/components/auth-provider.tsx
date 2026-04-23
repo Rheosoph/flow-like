@@ -20,7 +20,12 @@ import { get } from "../lib/api";
 import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
-const PUBLIC_PATHS = ["/thirdparty/callback", "/store", "/store/explore"];
+const PUBLIC_PATHS = [
+	"/callback",
+	"/thirdparty/callback",
+	"/store",
+	"/store/explore",
+];
 
 const DEFAULT_PROFILE: IProfile = {
 	name: "default",

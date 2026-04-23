@@ -13,8 +13,8 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        collect_generic_result, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
+        collect_generic_result_bytes, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -660,9 +660,6 @@ pub async fn trigger_http(
 
     match backend {
         ExecutionBackend::LambdaStream => {
-            // Lambda's ByteStream still flows through proxy_lambda_sse_response
-            // for now — aligning that path needs a bytestream-based collector
-            // we haven't added yet. Track separately.
             let dispatch_result = state.dispatcher.dispatch_streaming(request).await;
 
             if let Err(e) = db_insert_handle.await {
@@ -671,13 +668,29 @@ pub async fn trigger_http(
 
             match dispatch_result {
                 Ok((_dispatch_response, byte_stream)) => {
-                    tracing::info!(run_id = %run_id, "Got Lambda response, starting stream");
-                    Ok(proxy_lambda_sse_response(
+                    tracing::info!(run_id = %run_id, "Got Lambda response, collecting result");
+                    let db_arc = Arc::new(state.db.clone());
+                    let run_id_owned = run_id.clone();
+                    let generic_result = collect_generic_result_bytes(
                         byte_stream,
-                        run_id,
-                        Some(Arc::new(state.db.clone())),
+                        run_id_owned,
+                        Some(db_arc),
+                        HTTP_SINK_RESULT_TIMEOUT,
                     )
-                    .into_response())
+                    .await;
+
+                    match generic_result {
+                        Some(payload) => Ok((StatusCode::OK, Json(payload)).into_response()),
+                        None => Ok((
+                            StatusCode::OK,
+                            Json(TriggerResponse {
+                                triggered: true,
+                                run_id: Some(run_id),
+                                message: "Event triggered".to_string(),
+                            }),
+                        )
+                            .into_response()),
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming");
@@ -1818,131 +1831,4 @@ pub async fn get_sink_configs(
         .collect();
 
     Ok(Json(configs))
-}
-
-/// Create an SSE stream from a Lambda ByteStream response
-fn proxy_lambda_sse_response(
-    stream: ByteStream,
-    run_id: String,
-    db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
-) -> axum::response::sse::Sse<
-    impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
-> {
-    use axum::response::sse::{Event, KeepAlive, Sse};
-    use futures::StreamExt;
-    use std::time::Duration;
-
-    let stream = async_stream::stream! {
-        let mut byte_stream = stream;
-        let mut buffer = Vec::new();
-
-        while let Some(result) = byte_stream.next().await {
-            match result {
-                Ok(bytes) => {
-                    // Append bytes to buffer
-                    buffer.extend_from_slice(&bytes);
-
-                    // Try to parse complete SSE events from buffer
-                    while let Some(event) = extract_sse_event(&mut buffer) {
-                        // Check if this is a completed event and update the database
-                        if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
-                                && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
-                                    && event_type == "completed" {
-                                        let log_level = parsed.get("payload")
-                                            .and_then(|p| p.get("log_level"))
-                                            .and_then(|l| l.as_i64())
-                                            .unwrap_or(0) as i32;
-                                        let status = parsed.get("payload")
-                                            .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or("Completed");
-
-                                        let run_status = match status {
-                                            "Failed" => RunStatus::Failed,
-                                            "Cancelled" => RunStatus::Cancelled,
-                                            "Timeout" => RunStatus::Timeout,
-                                            _ => RunStatus::Completed,
-                                        };
-
-                                        let db = db.clone();
-                                        let run_id_clone = run_id.clone();
-                                        tokio::spawn(async move {
-                                            use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
-                                            use crate::entity::prelude::*;
-                                            if let Ok(Some(run)) = ExecutionRun::find_by_id(&run_id_clone).one(db.as_ref()).await {
-                                                let mut run: execution_run::ActiveModel = run.into();
-                                                run.status = Set(run_status);
-                                                run.log_level = Set(log_level);
-                                                run.updated_at = Set(chrono::Utc::now().naive_utc());
-                                                if let Err(e) = run.update(db.as_ref()).await {
-                                                    tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                                }
-                                            }
-                                        });
-                                    }
-
-                        let sse_event = Event::default()
-                            .event(&event.event_type)
-                            .data(event.data);
-                        yield Ok(sse_event);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
-                    let error_event = Event::default()
-                        .event("error")
-                        .data(format!(r#"{{"error":"{}"}}"#, e));
-                    yield Ok(error_event);
-                    break;
-                }
-            }
-        }
-
-        tracing::debug!(run_id = %run_id, "Lambda SSE stream ended");
-    };
-
-    Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .text("keep-alive")
-            .interval(Duration::from_secs(1)),
-    )
-}
-
-/// Parsed SSE event
-struct ParsedSseEvent {
-    event_type: String,
-    data: String,
-}
-
-/// Extract a complete SSE event from the buffer, if available
-fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
-    // Look for double newline which marks end of SSE event
-    let s = String::from_utf8_lossy(buffer);
-    if let Some(end_pos) = s.find("\n\n") {
-        let event_str = &s[..end_pos];
-        let remainder = &s[end_pos + 2..];
-
-        let mut event_type = "message".to_string();
-        let mut data_parts = Vec::new();
-
-        for line in event_str.lines() {
-            if let Some(value) = line.strip_prefix("event:") {
-                event_type = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("data:") {
-                data_parts.push(value.trim_start().to_string());
-            }
-        }
-
-        // Update buffer with remainder
-        *buffer = remainder.as_bytes().to_vec();
-
-        if !data_parts.is_empty() {
-            return Some(ParsedSseEvent {
-                event_type,
-                data: data_parts.join("\n"),
-            });
-        }
-    }
-    None
 }

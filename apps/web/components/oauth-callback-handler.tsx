@@ -4,11 +4,20 @@ import type {
 	IOAuthCallbackData,
 	IOAuthPendingAuth,
 	IOAuthProvider,
+	IStoredOAuthToken,
 	OAuthService,
 } from "@tm9657/flow-like-ui";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { oauthTokenStore } from "../lib/oauth-db";
+import {
+	broadcastOAuthCallbackCompletion,
+	clearPendingOAuthCallback,
+	OAUTH_CALLBACK_CHANNEL,
+	OAUTH_CALLBACK_COMPLETE_KEY,
+	parseOAuthCallbackCompletion,
+	readPendingOAuthCallback,
+} from "../lib/oauth-callback-storage";
 import { getOAuthService } from "../lib/oauth-service";
 
 type OAuthCallbackListener = (
@@ -48,7 +57,20 @@ export function clearProviderCache() {
 	providerCache = null;
 }
 
-async function processCallback(payload: IOAuthCallbackData) {
+function notifyListeners(
+	pending: IOAuthPendingAuth,
+	token: IStoredOAuthToken,
+) {
+	for (const listener of listeners) {
+		try {
+			listener(pending, token);
+		} catch (e) {
+			console.error("[Web OAuth] Callback listener error:", e);
+		}
+	}
+}
+
+async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 	const {
 		url,
 		code,
@@ -75,7 +97,7 @@ async function processCallback(payload: IOAuthCallbackData) {
 		const errorMsg = error_description || error;
 		console.error("[Web OAuth] Error:", errorMsg);
 		toast.error(`Authorization failed: ${errorMsg}`);
-		return;
+		return false;
 	}
 
 	const isImplicitFlow = !!(access_token || id_token);
@@ -84,13 +106,13 @@ async function processCallback(payload: IOAuthCallbackData) {
 	if (!isImplicitFlow && !isCodeFlow) {
 		console.error("[Web OAuth] Invalid callback: no code or tokens received");
 		toast.error("Invalid callback: no authorization data received");
-		return;
+		return false;
 	}
 
 	if (!state) {
 		console.error("[Web OAuth] Missing state in callback");
 		toast.error("Invalid callback: missing state parameter");
-		return;
+		return false;
 	}
 
 	try {
@@ -99,7 +121,7 @@ async function processCallback(payload: IOAuthCallbackData) {
 		if (!pending) {
 			console.error("[Web OAuth] No pending auth found for state:", state);
 			toast.error("Authorization session expired or invalid");
-			return;
+			return false;
 		}
 
 		const provider = pending.provider ?? providerCache?.get(pending.providerId);
@@ -110,7 +132,7 @@ async function processCallback(payload: IOAuthCallbackData) {
 				pending.providerId,
 			);
 			toast.error(`Provider not found: ${pending.providerId}. Please retry.`);
-			return;
+			return false;
 		}
 
 		const oauthService = getOAuthService(pending.apiBaseUrl);
@@ -131,18 +153,19 @@ async function processCallback(payload: IOAuthCallbackData) {
 		console.log("[Web OAuth] Token obtained for provider:", provider.name);
 		toast.success(`Connected to ${provider.name}`);
 
-		for (const listener of listeners) {
-			try {
-				listener(pending, token);
-			} catch (e) {
-				console.error("[Web OAuth] Callback listener error:", e);
-			}
-		}
+		notifyListeners(pending, token as IStoredOAuthToken);
+		broadcastOAuthCallbackCompletion(
+			pending,
+			token as IStoredOAuthToken,
+		);
+
+		return true;
 	} catch (e) {
 		console.error("[Web OAuth] Failed to handle callback:", e);
 		toast.error(
 			`Authorization failed: ${e instanceof Error ? e.message : "Unknown error"}`,
 		);
+		return false;
 	}
 }
 
@@ -152,55 +175,104 @@ export function OAuthCallbackHandler({
 	children: React.ReactNode;
 }) {
 	useEffect(() => {
+		const seenCompletionTimestamps = new Set<number>();
+		let channel: BroadcastChannel | null = null;
+
+		const handleCompletion = (rawValue: string | null) => {
+			if (!rawValue) {
+				return;
+			}
+
+			const completion = parseOAuthCallbackCompletion(rawValue);
+			if (!completion) {
+				return;
+			}
+
+			if (seenCompletionTimestamps.has(completion.timestamp)) {
+				return;
+			}
+			seenCompletionTimestamps.add(completion.timestamp);
+
+			console.log(
+				"[Web OAuth] Received cross-tab OAuth completion for provider:",
+				completion.pending.providerId,
+			);
+			notifyListeners(completion.pending, completion.token);
+		};
+
 		const handleOAuthEvent = (event: Event) => {
 			const customEvent = event as CustomEvent<IOAuthCallbackData>;
 			const payload = customEvent.detail;
 			if (!payload) return;
 
 			console.log("[Web OAuth] Event received:", payload);
-			processCallback(payload);
+			void processCallback(payload).then((processed) => {
+				if (processed) {
+					clearPendingOAuthCallback();
+				}
+			});
 		};
 
 		const checkPendingCallback = () => {
-			try {
-				const pendingData = sessionStorage.getItem("oauth-callback-pending");
-				if (!pendingData) return;
-
-				const data = JSON.parse(pendingData);
-				if (Date.now() - data.timestamp > 60000) {
-					sessionStorage.removeItem("oauth-callback-pending");
-					return;
-				}
-
-				sessionStorage.removeItem("oauth-callback-pending");
-
-				console.log(
-					"[Web OAuth] Processing pending callback from sessionStorage",
-				);
-				processCallback({
-					url: data.url,
-					code: data.code,
-					state: data.state,
-					id_token: data.id_token,
-					access_token: data.access_token,
-					token_type: data.token_type,
-					expires_in: data.expires_in,
-					scope: data.scope,
-					error: null,
-					error_description: null,
-				});
-			} catch (e) {
-				console.error("[Web OAuth] Failed to process pending callback:", e);
-				sessionStorage.removeItem("oauth-callback-pending");
+			const data = readPendingOAuthCallback();
+			if (!data) {
+				return;
 			}
+
+			console.log("[Web OAuth] Processing pending callback from storage");
+			void processCallback({
+				url: data.url,
+				code: data.code,
+				state: data.state,
+				id_token: data.id_token,
+				access_token: data.access_token,
+				token_type: data.token_type,
+				expires_in: data.expires_in,
+				scope: data.scope,
+				error: null,
+				error_description: null,
+			}).then((processed) => {
+				if (processed) {
+					clearPendingOAuthCallback();
+				}
+			});
+		};
+
+		const handleStorageChange = (event: StorageEvent) => {
+			if (event.key !== OAUTH_CALLBACK_COMPLETE_KEY) {
+				return;
+			}
+
+			handleCompletion(event.newValue);
+		};
+
+		const handleChannelMessage = (event: MessageEvent) => {
+			if (event.data?.type !== "oauth-complete") {
+				return;
+			}
+
+			handleCompletion(JSON.stringify(event.data.payload));
 		};
 
 		window.addEventListener("thirdparty-oauth-callback", handleOAuthEvent);
+		window.addEventListener("storage", handleStorageChange);
+
+		try {
+			channel = new BroadcastChannel(OAUTH_CALLBACK_CHANNEL);
+			channel.addEventListener("message", handleChannelMessage);
+		} catch {
+			channel = null;
+		}
 
 		const timer = setTimeout(checkPendingCallback, 100);
 
 		return () => {
 			window.removeEventListener("thirdparty-oauth-callback", handleOAuthEvent);
+			window.removeEventListener("storage", handleStorageChange);
+			if (channel) {
+				channel.removeEventListener("message", handleChannelMessage);
+				channel.close();
+			}
 			clearTimeout(timer);
 		};
 	}, []);
