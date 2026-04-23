@@ -63,10 +63,21 @@ pub struct CronSinkConfig {
     /// One-time scheduled execution (local date+time, resolved with timezone)
     #[serde(default)]
     pub scheduled_for: Option<ScheduledLocal>,
+
+    /// Whether the schedule should be active. Backends must honor this so that
+    /// creates/updates are atomic with respect to the enabled state (avoids a
+    /// race where a freshly-created schedule fires before a follow-up disable
+    /// call lands).
+    #[serde(default = "default_active")]
+    pub active: bool,
 }
 
 fn default_timezone() -> String {
     "UTC".to_string()
+}
+
+fn default_active() -> bool {
+    true
 }
 
 impl Default for CronSinkConfig {
@@ -75,6 +86,7 @@ impl Default for CronSinkConfig {
             expression: "0 * * * *".to_string(), // Every hour
             timezone: default_timezone(),
             scheduled_for: None,
+            active: true,
         }
     }
 }
@@ -95,6 +107,31 @@ impl CronSinkConfig {
         } else {
             None
         }
+    }
+
+    /// Resolve the one-time `scheduled_for` to a concrete UTC instant using the
+    /// configured IANA timezone. Returns `None` when not a one-time schedule,
+    /// the date/time can't be parsed, or the timezone is unknown.
+    pub fn scheduled_instant_utc(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        use chrono::{NaiveDate, NaiveTime, TimeZone};
+        use chrono_tz::Tz;
+
+        let scheduled = self.scheduled_for.as_ref()?;
+        let tz: Tz = self.timezone.parse().ok()?;
+
+        let date = NaiveDate::parse_from_str(&scheduled.date, "%Y-%m-%d").ok()?;
+        // Accept "HH:MM" or "HH:MM:SS".
+        let time = NaiveTime::parse_from_str(&scheduled.time, "%H:%M")
+            .or_else(|_| NaiveTime::parse_from_str(&scheduled.time, "%H:%M:%S"))
+            .ok()?;
+        let naive = date.and_time(time);
+
+        // `from_local_datetime` returns a MappedLocalTime; for DST gaps/ambiguity
+        // pick the earliest valid instant (matches AWS's own timezone handling
+        // conservatively).
+        tz.from_local_datetime(&naive)
+            .earliest()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
     }
 }
 

@@ -32,7 +32,11 @@ pub struct Model {
     pub is_default: bool,
     #[sea_orm(column_name = "eventVersion", column_type = "Text")]
     pub event_version: String,
-    #[sea_orm(column_name = "executionMode", column_type = "Text", default_value = "Local")]
+    #[sea_orm(
+        column_name = "executionMode",
+        column_type = "Text",
+        default_value = "Local"
+    )]
     pub execution_mode: String,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub variables: Option<Json>,

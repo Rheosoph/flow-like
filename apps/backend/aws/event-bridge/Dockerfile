@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.91-slim AS builder
+FROM rust:1.92-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -20,6 +20,8 @@ RUN cargo build --release --package aws-event-bridge
 # Runtime stage
 FROM public.ecr.aws/lambda/provided:al2023
 
-COPY --from=builder /usr/src/app/target/release/aws-event-bridge ${LAMBDA_RUNTIME_DIR}/bootstrap
+# AWS convention for custom-runtime user code is ${LAMBDA_TASK_ROOT} (/var/task).
+# See https://docs.aws.amazon.com/lambda/latest/dg/images-create.html#images-create-from-base
+COPY --from=builder /usr/src/app/target/release/aws-event-bridge ${LAMBDA_TASK_ROOT}/bootstrap
 
 CMD ["bootstrap"]

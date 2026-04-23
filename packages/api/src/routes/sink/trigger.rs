@@ -1389,7 +1389,7 @@ pub struct ServiceTriggerRequest {
 }
 
 /// Response from service trigger
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ServiceTriggerResponse {
     pub success: bool,
     pub run_id: Option<String>,
@@ -1458,13 +1458,15 @@ async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result
 ///
 /// If a service is compromised, it can only trigger events of its own type.
 /// Tokens can be individually revoked via /admin/sinks/{jti}.
+///
+/// Idempotency: callers may include an `Idempotency-Key` header. If the same
+/// key is seen within a short TTL (~15 minutes) the cached response is
+/// returned instead of re-dispatching. This shields downstream flows from
+/// EventBridge Scheduler's and Lambda's automatic retries on transient errors.
 #[utoipa::path(
     post,
-    path = "/sink/trigger/service/{event_id}",
+    path = "/sink/trigger/async",
     tag = "sink",
-    params(
-        ("event_id" = String, Path, description = "Event ID")
-    ),
     request_body = ServiceTriggerRequest,
     responses(
         (status = 200, description = "Service trigger response", body = ServiceTriggerResponse),
@@ -1504,6 +1506,25 @@ pub async fn trigger_service(
     {
         tracing::warn!(jti = %jti, "Attempted use of revoked sink token");
         return Err(ApiError::unauthorized("Token has been revoked"));
+    }
+
+    // Look up (or reserve) an idempotency key if provided. The cache stores
+    // the previously-produced ServiceTriggerResponse and short-circuits repeats.
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref key) = idempotency_key
+        && let Some(cached) = state.trigger_idempotency.get(key)
+    {
+        tracing::info!(
+            idempotency_key = %key,
+            event_id = %request.event_id,
+            "Returning cached idempotent trigger response"
+        );
+        return Ok(Json(cached));
     }
 
     // Check if this JWT is allowed to trigger this sink type
@@ -1581,7 +1602,7 @@ pub async fn trigger_service(
     );
 
     // Use the existing trigger_event utility
-    match trigger_event(
+    let response = match trigger_event(
         &state,
         TriggerEventInput {
             event_id: request.event_id.clone(),
@@ -1591,7 +1612,7 @@ pub async fn trigger_service(
     )
     .await
     {
-        Ok(result) => Ok(Json(ServiceTriggerResponse {
+        Ok(result) => ServiceTriggerResponse {
             success: result.triggered,
             run_id: result.run_id,
             error: if result.triggered {
@@ -1599,16 +1620,22 @@ pub async fn trigger_service(
             } else {
                 Some(result.message)
             },
-        })),
+        },
         Err(e) => {
             tracing::error!(error = %e, "Service trigger failed");
-            Ok(Json(ServiceTriggerResponse {
+            ServiceTriggerResponse {
                 success: false,
                 run_id: None,
                 error: Some(e.to_string()),
-            }))
+            }
         }
+    };
+
+    if let Some(key) = idempotency_key {
+        state.trigger_idempotency.insert(key, response.clone());
     }
+
+    Ok(Json(response))
 }
 
 /// GET /sink/schedules
@@ -1617,7 +1644,7 @@ pub async fn trigger_service(
 /// to sync its in-memory scheduler with the database.
 #[utoipa::path(
     get,
-    path = "/sink/cron",
+    path = "/sink/schedules",
     tag = "sink",
     responses(
         (status = 200, description = "List of cron schedules", body = Vec<CronScheduleInfo>),

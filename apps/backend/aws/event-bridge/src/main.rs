@@ -6,13 +6,25 @@ use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+// Defaults chosen so a slow API doesn't blow past the Lambda timeout and cause
+// EventBridge Scheduler to retry, producing duplicate executions.
+const HTTP_CONNECT_TIMEOUT_SECS: u64 = 5;
+const HTTP_TIMEOUT_SECS: u64 = 120;
 
 static SINK_JWT: OnceLock<String> = OnceLock::new();
 static API_BASE_URL: OnceLock<String> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build reqwest client")
+    })
 }
 
 fn get_sink_jwt() -> Result<&'static str, Error> {
@@ -41,8 +53,11 @@ fn get_api_base_url() -> Result<&'static str, Error> {
         .as_str())
 }
 
+/// Payload delivered by EventBridge Scheduler. Scheduler passes the `Input`
+/// string verbatim as the Lambda event body (unlike EventBridge *Bus* rules,
+/// which wrap the payload in a `detail` field).
 #[derive(Debug, Deserialize, Serialize)]
-struct EventDetail {
+struct ScheduledEventPayload {
     event_id: String,
 }
 
@@ -58,25 +73,35 @@ async fn main() -> Result<(), Error> {
     run(service_fn(event_bridge_handler)).await
 }
 
-async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Error> {
+async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Result<(), Error> {
     let api_base_url = get_api_base_url()?;
     let sink_jwt = get_sink_jwt()?;
 
-    let detail = event.payload;
+    let payload = event.payload;
+    // Lambda's per-invocation request id is the natural idempotency key:
+    // retries of the same logical invocation share it, retries originating
+    // from EventBridge Scheduler get a fresh one (which is what we want — the
+    // API should run once per scheduled firing).
+    let idempotency_key = event.context.request_id.clone();
 
-    tracing::info!(event_id = %detail.event_id, "Processing scheduled event");
+    tracing::info!(
+        event_id = %payload.event_id,
+        idempotency_key = %idempotency_key,
+        "Processing scheduled event"
+    );
 
     let client = get_http_client();
     let trigger_url = format!("{}/api/v1/sink/trigger/async", api_base_url);
 
     let request_body = TriggerRequest {
-        event_id: detail.event_id.clone(),
+        event_id: payload.event_id.clone(),
         sink_type: "cron".to_string(),
     };
 
     let response = client
         .post(&trigger_url)
         .header("Authorization", format!("Bearer {}", sink_jwt))
+        .header("Idempotency-Key", &idempotency_key)
         .json(&request_body)
         .send()
         .await
@@ -91,10 +116,25 @@ async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Err
             .text()
             .await
             .unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
+
+        // 4xx responses are not retryable — returning Ok prevents EventBridge
+        // Scheduler from burning its retry budget on a request that will
+        // always fail (e.g. revoked token, missing sink). 5xx and network
+        // errors bubble up so the scheduler's RetryPolicy can kick in.
+        if status.is_client_error() {
+            tracing::error!(
+                status = %status,
+                body = %body,
+                event_id = %payload.event_id,
+                "API returned client error — not retrying"
+            );
+            return Ok(());
+        }
+
         tracing::error!(status = %status, body = %body, "API returned error");
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }
 
-    tracing::info!(event_id = %detail.event_id, "Successfully triggered event");
+    tracing::info!(event_id = %payload.event_id, "Successfully triggered event");
     Ok(())
 }

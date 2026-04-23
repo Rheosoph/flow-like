@@ -110,10 +110,15 @@ pub async fn sync_sink(
         if config.sink_type == sink_types::CRON {
             let cron_changed = old_cron != config.cron_expression;
             let type_changed = old_sink_type != config.sink_type;
+            let active_changed = new_active != old_active;
             let has_schedule =
                 config.cron_expression.is_some() || config.cron_scheduled_for.is_some();
 
-            if (cron_changed || type_changed) && has_schedule {
+            // Collapse "change expression + toggle active" into a single atomic
+            // update. The previous two-step dance (update → disable) left a
+            // race window where a freshly-enabled schedule could fire before
+            // the follow-up disable landed.
+            if (cron_changed || type_changed || active_changed) && has_schedule {
                 let cron_expr = config.cron_expression.as_deref().unwrap_or("");
                 update_external_scheduler(
                     state,
@@ -121,13 +126,11 @@ pub async fn sync_sink(
                     cron_expr,
                     config.cron_timezone.as_deref(),
                     config.cron_scheduled_for.as_ref(),
-                    old_active,
+                    new_active,
                 )
                 .await?;
-            }
-
-            // Sync active state with external scheduler
-            if new_active != old_active {
+            } else if active_changed {
+                // No schedule to (re)build — just toggle state.
                 if new_active {
                     enable_external_schedule(state, &config.event_id).await?;
                 } else {
@@ -177,11 +180,9 @@ pub async fn sync_sink(
                 cron_expr,
                 config.cron_timezone.as_deref(),
                 config.cron_scheduled_for.as_ref(),
+                initial_active,
             )
             .await?;
-            if !initial_active {
-                disable_external_schedule(state, &config.event_id).await?;
-            }
         }
 
         created
@@ -260,12 +261,14 @@ async fn create_external_schedule(
     cron_expression: &str,
     timezone: Option<&str>,
     scheduled_for: Option<&flow_like_sinks::ScheduledLocal>,
+    active: bool,
 ) -> flow_like_types::Result<()> {
     if let Some(ref scheduler) = state.sink_scheduler {
         let config = flow_like_sinks::CronSinkConfig {
             expression: cron_expression.to_string(),
             timezone: timezone.unwrap_or("UTC").to_string(),
             scheduled_for: scheduled_for.cloned(),
+            active,
         };
 
         scheduler.create_schedule(event_id, cron_expression, &config).await.map_err(|e| {
@@ -273,7 +276,7 @@ async fn create_external_schedule(
             anyhow!("Failed to create schedule: {}", e)
         })?;
 
-        tracing::info!(event_id = %event_id, cron = %cron_expression, tz = %config.timezone, one_time = config.is_one_time(), "Created external schedule");
+        tracing::info!(event_id = %event_id, cron = %cron_expression, tz = %config.timezone, one_time = config.is_one_time(), active, "Created external schedule");
     }
 
     Ok(())
@@ -286,41 +289,56 @@ async fn update_external_scheduler(
     cron_expression: &str,
     timezone: Option<&str>,
     scheduled_for: Option<&flow_like_sinks::ScheduledLocal>,
-    was_active: bool,
+    active: bool,
 ) -> flow_like_types::Result<()> {
     if let Some(ref scheduler) = state.sink_scheduler {
         let config = flow_like_sinks::CronSinkConfig {
             expression: cron_expression.to_string(),
             timezone: timezone.unwrap_or("UTC").to_string(),
             scheduled_for: scheduled_for.cloned(),
+            active,
         };
 
-        // If the schedule exists, update it; otherwise create it
-        let exists = scheduler.schedule_exists(event_id).await.unwrap_or(false);
-
-        if exists {
-            scheduler.update_schedule(event_id, cron_expression, &config).await.map_err(|e| {
-                tracing::error!(event_id = %event_id, error = %e, "Failed to update external schedule");
-                anyhow!("Failed to update schedule: {}", e)
-            })?;
-
-            // Restore active state
-            if !was_active {
-                let _ = scheduler.disable_schedule(event_id).await;
+        // Try an update first; on NotFound fall through to create. This
+        // removes the check-then-act race between concurrent syncs where two
+        // writers both see `exists=false` and the second `create` hits
+        // ConflictException.
+        match scheduler
+            .update_schedule(event_id, cron_expression, &config)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    event_id = %event_id,
+                    cron = %cron_expression,
+                    active,
+                    "Updated external schedule"
+                );
             }
-        } else {
-            scheduler.create_schedule(event_id, cron_expression, &config).await.map_err(|e| {
-                tracing::error!(event_id = %event_id, error = %e, "Failed to create external schedule");
-                anyhow!("Failed to create schedule: {}", e)
-            })?;
-
-            // Set initial active state
-            if !was_active {
-                let _ = scheduler.disable_schedule(event_id).await;
+            Err(flow_like_sinks::SchedulerError::NotFound(_)) => {
+                scheduler
+                    .create_schedule(event_id, cron_expression, &config)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            event_id = %event_id,
+                            error = %e,
+                            "Failed to create external schedule after missing update"
+                        );
+                        anyhow!("Failed to create schedule: {}", e)
+                    })?;
+                tracing::info!(
+                    event_id = %event_id,
+                    cron = %cron_expression,
+                    active,
+                    "Re-created missing external schedule"
+                );
+            }
+            Err(e) => {
+                tracing::error!(event_id = %event_id, error = %e, "Failed to update external schedule");
+                return Err(anyhow!("Failed to update schedule: {}", e));
             }
         }
-
-        tracing::info!(event_id = %event_id, cron = %cron_expression, "Updated external schedule");
     }
 
     Ok(())

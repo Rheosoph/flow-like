@@ -93,6 +93,11 @@ pub struct State {
     pub encryption_key: [u8; 32],
     /// HMAC secret for signing/verifying sink trigger JWTs
     pub sink_secret: Option<String>,
+    /// Idempotency cache for sink trigger requests. Keyed by the
+    /// `Idempotency-Key` header; callers (Lambda, cron worker) use the
+    /// invocation-unique key to collapse automatic retries into a single run.
+    pub trigger_idempotency:
+        moka::sync::Cache<String, crate::routes::sink::trigger::ServiceTriggerResponse>,
 }
 
 impl State {
@@ -396,6 +401,10 @@ impl State {
             secrets,
             encryption_key,
             sink_secret,
+            trigger_idempotency: moka::sync::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(Duration::from_secs(15 * 60))
+                .build(),
         }
     }
 
