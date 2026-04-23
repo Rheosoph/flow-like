@@ -1,21 +1,9 @@
+import { getApiOrigin } from "../../../lib/api-url";
 import type { IProfile } from "../../../types";
 import type { IApiState } from "../api-state";
 
 function constructUrl(profile: IProfile, path: string): string {
-	let baseUrl = profile.hub ?? "api.flow-like.com";
-	if (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_API_URL) {
-		baseUrl = process.env.NEXT_PUBLIC_API_URL;
-	}
-	if (!baseUrl.endsWith("/")) {
-		baseUrl += "/";
-	}
-
-	if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-		return `${baseUrl}api/v1/${path}`;
-	}
-
-	const protocol = profile.secure === false ? "http" : "https";
-	return `${protocol}://${baseUrl}api/v1/${path}`;
+	return `${getApiOrigin(profile)}/api/v1/${path}`;
 }
 
 /**

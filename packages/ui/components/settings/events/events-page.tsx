@@ -20,6 +20,7 @@ import {
 	EventTranslation,
 	EventTypeConfiguration,
 	type IEvent,
+	IEventExecutionMode,
 	type IEventInput,
 	type IEventMapping,
 	type IOAuthProvider,
@@ -283,6 +284,8 @@ export default function EventsPage({
 				priority: events.data?.length ?? 0,
 				canary: null,
 				notes: null,
+				execution_mode:
+					(newEvent as any)?.execution_mode ?? IEventExecutionMode.Local,
 			};
 
 			let savedEvent: IEvent | null = null;
@@ -630,6 +633,7 @@ function EventConfiguration({
 	const [formData, setFormData] = useState<IEvent>(event);
 	const [showPatDialog, setShowPatDialog] = useState(false);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
+	const canExecuteLocally = backend.capabilities().canExecuteLocally;
 	const [isRefreshingInputs, setIsRefreshingInputs] = useState(false);
 	const uiEventTypeSet = useMemo(
 		() => new Set(uiEventTypes ?? []),
@@ -1132,21 +1136,57 @@ function EventConfiguration({
 							{formData.active ? "Active" : "Inactive"}
 						</span>
 					</div>
-					{isOffline !== null && (
-						<span
-							className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
-						>
-							{isOffline ? (
-								<>
-									<Monitor className="h-3 w-3" /> Local
-								</>
-							) : (
-								<>
-									<Cloud className="h-3 w-3" /> Online
-								</>
-							)}
-						</span>
-					)}
+					{(() => {
+						const boardMode = board.data?.execution_mode;
+						const locked =
+							boardMode === "Local" || boardMode === "Remote";
+						const currentMode =
+							formData.execution_mode ?? IEventExecutionMode.Local;
+						// Only gate Local on platform capability — Remote is always a
+						// valid choice (the backend rejects configurations the hub
+						// can't host at save time).
+						const localDisabled =
+							!canExecuteLocally &&
+							currentMode !== IEventExecutionMode.Local &&
+							!locked;
+						return (
+							<div className="flex items-center gap-2">
+								<Label className="text-xs text-muted-foreground">
+									Execution
+								</Label>
+								<Select
+									value={currentMode}
+									onValueChange={(value) => {
+										if (!isEditing) enterEdit();
+										handleInputChange(
+											"execution_mode",
+											value as IEventExecutionMode,
+										);
+									}}
+									disabled={!isEditing || locked}
+								>
+									<SelectTrigger className="h-7 w-32 text-xs">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem
+											value={IEventExecutionMode.Local}
+											disabled={localDisabled}
+										>
+											<span className="inline-flex items-center gap-1.5">
+												<Monitor className="h-3 w-3" /> Local
+											</span>
+										</SelectItem>
+										<SelectItem value={IEventExecutionMode.Remote}>
+											<span className="inline-flex items-center gap-1.5">
+												<Cloud className="h-3 w-3" /> Remote
+											</span>
+										</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+						);
+					})()}
 					<div className="flex-1" />
 					{board.data?.nodes?.[formData.node_id] && formData.node_id && (
 						<EventTypeConfiguration
@@ -1159,7 +1199,8 @@ function EventConfiguration({
 								handleInputChange("event_type", type);
 							}}
 							hub={hub}
-							canExecuteLocally={!isOffline}
+							canExecuteLocally={canExecuteLocally}
+							eventExecutionMode={formData.execution_mode ?? IEventExecutionMode.Local}
 						/>
 					)}
 					<Button
@@ -1800,7 +1841,8 @@ function EventConfiguration({
 									nodeId={formData.node_id}
 									hub={hub}
 									eventId={event.id}
-									canExecuteLocally={!isOffline}
+									canExecuteLocally={canExecuteLocally}
+									eventExecutionMode={formData.execution_mode ?? IEventExecutionMode.Local}
 									onUpdate={(config) => {
 										console.dir(config);
 										if (!isEditing) setIsEditing(true);

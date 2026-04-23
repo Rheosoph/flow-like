@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use crate::entity::event;
 use flow_like::app::App;
-use flow_like::flow::event::{CanaryEvent, Event as CoreEvent, EventInput, ReleaseNotes};
+use flow_like::flow::event::{
+    CanaryEvent, Event as CoreEvent, EventExecutionMode, EventInput, ReleaseNotes,
+};
 use flow_like_types::anyhow;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -115,6 +117,7 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         route: Set(event.route.clone()),
         is_default: Set(event.is_default),
         event_version: Set(event_version),
+        execution_mode: Set(event.execution_mode.as_str().to_string()),
         variables: Set(variables),
         config: Set(config),
         inputs: Set(inputs),
@@ -213,6 +216,7 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
         inputs,
         route: model.route,
         is_default: model.is_default,
+        execution_mode: EventExecutionMode::parse(&model.execution_mode),
     })
 }
 
@@ -313,6 +317,14 @@ pub async fn sync_event_with_sink_tokens(
         None
     };
 
+    // Extract HTTP method from event config (default to POST — the most
+    // common trigger method — if the event config doesn't specify one).
+    let sink_method = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        Some(extract_http_method(&event.config).unwrap_or_else(|| "POST".to_string()))
+    } else {
+        None
+    };
+
     // Encrypt PAT if provided
     let pat_encrypted = pat.map(|p| encrypt_token(p, &state.encryption_key));
 
@@ -332,6 +344,7 @@ pub async fn sync_event_with_sink_tokens(
             app_id: app_id.to_string(),
             sink_type: sink_type.to_string(),
             path: sink_path,
+            method: sink_method,
             auth_token: config_auth_token,
             webhook_secret: None, // Webhook secret is set separately
             cron_expression,
@@ -458,6 +471,21 @@ fn extract_http_path(config: &[u8]) -> Option<String> {
         .or_else(|| value.get("path_suffix"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Extract HTTP method from event config bytes (for api/http/webhook events)
+fn extract_http_method(config: &[u8]) -> Option<String> {
+    if config.is_empty() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+
+    value
+        .get("method")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty())
 }
 
 /// Extract HTTP auth token from event config bytes (for api/http/webhook events)

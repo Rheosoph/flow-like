@@ -1,7 +1,12 @@
 "use client";
 
+import { ExternalLink } from "lucide-react";
 import type React from "react";
 import { useMemo, useState } from "react";
+import { useInvoke } from "../../../hooks";
+import { getApiOrigin } from "../../../lib/api-url";
+import { IEventExecutionMode } from "../../../lib/schema/flow/event";
+import { useBackend } from "../../../state/backend-state";
 import {
 	Alert,
 	AlertDescription,
@@ -32,6 +37,40 @@ export type HttpSink = {
 	sink_execution?: SinkExecutionTarget;
 };
 
+function getPlatform(): "mac" | "windows" | "linux" {
+	if (typeof window === "undefined") return "mac";
+	const ua = window.navigator.userAgent.toLowerCase();
+	if (ua.includes("win")) return "windows";
+	if (ua.includes("linux")) return "linux";
+	return "mac";
+}
+
+function getCloudflareInstallCommand(
+	platform: ReturnType<typeof getPlatform>,
+): string {
+	switch (platform) {
+		case "windows":
+			return "winget install --id Cloudflare.cloudflared";
+		case "linux":
+			return "curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\nsudo dpkg -i cloudflared.deb";
+		default:
+			return "brew install cloudflare/cloudflare/cloudflared";
+	}
+}
+
+function getNgrokInstallCommand(
+	platform: ReturnType<typeof getPlatform>,
+): string {
+	switch (platform) {
+		case "windows":
+			return "choco install ngrok";
+		case "linux":
+			return 'curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null\necho "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list\nsudo apt update && sudo apt install ngrok';
+		default:
+			return "brew install ngrok";
+	}
+}
+
 const HTTP_METHODS = [
 	{ value: "GET", label: "GET", description: "Retrieve data" },
 	{ value: "POST", label: "POST", description: "Create or submit data" },
@@ -48,15 +87,20 @@ export function HttpConfig({
 	config,
 	onConfigUpdate,
 	hub,
-	canExecuteLocally,
+	eventExecutionMode,
 }: IConfigInterfaceProps) {
+	const backend = useBackend();
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+	);
 	const [showToken, setShowToken] = useState(false);
+	const platform = getPlatform();
 
 	const path = (config?.path as string) || "/webhook";
 	const method = (config?.method as string) || "POST";
 	const authToken = (config?.auth_token as string | null) || null;
-	const sinkExecution =
-		(config?.sink_execution as SinkExecutionTarget) || undefined;
 
 	const setValue = (key: string, value: any) => {
 		onConfigUpdate?.({
@@ -65,31 +109,28 @@ export function HttpConfig({
 		});
 	};
 
-	// Compute URLs
+	const isRemote = eventExecutionMode === IEventExecutionMode.Remote;
+
 	const localUrl = `http://localhost:9657/${appId}${path}`;
 
 	const remoteUrl = useMemo(() => {
-		if (!hub?.domain) return null;
-		const protocol = hub.environment === "Development" ? "http" : "https";
-		return `${protocol}://${hub.domain}/sink/trigger/http/${appId}${path}`;
-	}, [hub?.domain, hub?.environment, appId, path]);
-
-	const supportsRemote = hub?.domain != null;
-	const supportsLocal = canExecuteLocally ?? false;
-	const supportsBoth = supportsRemote && supportsLocal;
-
-	// Determine effective execution target
-	const effectiveExecution: SinkExecutionTarget = useMemo(() => {
-		if (sinkExecution) return sinkExecution;
-		if (supportsBoth) return "HYBRID";
-		if (supportsRemote) return "REMOTE";
-		return "LOCAL";
-	}, [sinkExecution, supportsBoth, supportsRemote]);
-
-	const showRemoteUrl =
-		effectiveExecution === "REMOTE" || effectiveExecution === "HYBRID";
-	const showLocalUrl =
-		effectiveExecution === "LOCAL" || effectiveExecution === "HYBRID";
+		// Prefer the hub's declared domain (authoritative), then the same API
+		// origin the rest of the app uses for API calls (profile.hub /
+		// NEXT_PUBLIC_API_URL). Never fall back to `window.location.origin`:
+		// in dev the web app is served from a different host than the API.
+		// The sink trigger lives under /api/v1/ just like every other route
+		// the backend exposes — easy to miss because it's a "public" webhook
+		// endpoint, but it's still nested under /api/v1.
+		if (hub?.domain) {
+			const protocol = hub.environment === "Development" ? "http" : "https";
+			return `${protocol}://${hub.domain}/api/v1/sink/trigger/http/${appId}${path}`;
+		}
+		const origin = getApiOrigin(profile.data);
+		if (origin) {
+			return `${origin}/api/v1/sink/trigger/http/${appId}${path}`;
+		}
+		return null;
+	}, [hub?.domain, hub?.environment, profile.data, appId, path]);
 
 	const pathError =
 		path && !path.startsWith("/") ? "Path must start with '/'" : null;
@@ -149,9 +190,7 @@ export function HttpConfig({
 			<div className="space-y-2">
 				<Label htmlFor="http_path">Path</Label>
 				<div className="flex items-center gap-2">
-					<div className="flex-shrink-0 text-sm text-muted-foreground">
-						/{appId}
-					</div>
+					<div className="shrink-0 text-sm text-muted-foreground">/{appId}</div>
 					<Input
 						id="http_path"
 						value={path}
@@ -167,61 +206,14 @@ export function HttpConfig({
 				</p>
 			</div>
 
-			{/* Execution Target */}
-			{supportsBoth && (
-				<div className="space-y-2">
-					<Label htmlFor="sink_execution">Execution Target</Label>
-					<Select
-						value={effectiveExecution}
-						onValueChange={(value) => setValue("sink_execution", value)}
-						disabled={!isEditing}
-					>
-						<SelectTrigger id="sink_execution" className="w-full">
-							<SelectValue placeholder="Select execution target" />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="REMOTE">
-								<div className="flex items-center gap-2">
-									<Badge variant="default">Remote</Badge>
-									<span className="text-muted-foreground text-xs">
-										Server only — available 24/7
-									</span>
-								</div>
-							</SelectItem>
-							<SelectItem value="LOCAL">
-								<div className="flex items-center gap-2">
-									<Badge variant="secondary">Local</Badge>
-									<span className="text-muted-foreground text-xs">
-										Desktop app only
-									</span>
-								</div>
-							</SelectItem>
-							<SelectItem value="HYBRID">
-								<div className="flex items-center gap-2">
-									<Badge variant="outline">Both</Badge>
-									<span className="text-muted-foreground text-xs">
-										Server + desktop app
-									</span>
-								</div>
-							</SelectItem>
-						</SelectContent>
-					</Select>
-					<p className="text-sm text-muted-foreground">
-						Where this HTTP endpoint should be registered and executed.
-					</p>
-				</div>
-			)}
-
-			{/* URL Preview */}
+			{/* URL Preview — tied to the event's execution mode, not to platform
+			    capabilities. Remote events show the server endpoint; Local events
+			    show the desktop localhost URL plus tunnel instructions. */}
 			<div className="space-y-2">
-				<Label>Endpoint URLs</Label>
-				{showRemoteUrl && showLocalUrl && remoteUrl ? (
-					<Tabs defaultValue="remote" className="w-full">
-						<TabsList className="grid w-full grid-cols-2">
-							<TabsTrigger value="remote">Remote (Server)</TabsTrigger>
-							<TabsTrigger value="local">Local (Desktop)</TabsTrigger>
-						</TabsList>
-						<TabsContent value="remote" className="space-y-3">
+				<Label>Endpoint URL</Label>
+				{isRemote ? (
+					remoteUrl ? (
+						<div className="space-y-3">
 							<UrlPreview
 								url={remoteUrl}
 								method={method}
@@ -230,38 +222,23 @@ export function HttpConfig({
 								CurlExample={CurlExample}
 							/>
 							<p className="text-xs text-muted-foreground">
-								Public endpoint for remote/cloud execution. Available 24/7.
+								This is a public, server-hosted endpoint. It's always available
+								— no tunneling required. Point external services at this URL to
+								trigger the event.
 							</p>
-						</TabsContent>
-						<TabsContent value="local" className="space-y-3">
-							<UrlPreview
-								url={localUrl}
-								method={method}
-								variant="secondary"
-								authToken={authToken}
-								CurlExample={CurlExample}
-							/>
-							<p className="text-xs text-muted-foreground">
-								Local endpoint for desktop app execution. Only available when
-								the app is running.
-							</p>
-						</TabsContent>
-					</Tabs>
-				) : showRemoteUrl && remoteUrl ? (
-					<div className="space-y-3">
-						<UrlPreview
-							url={remoteUrl}
-							method={method}
-							variant="default"
-							authToken={authToken}
-							CurlExample={CurlExample}
-						/>
-						<p className="text-xs text-muted-foreground">
-							Public endpoint for remote/cloud execution. Available 24/7.
-						</p>
-					</div>
+						</div>
+					) : (
+						<Alert variant="destructive">
+							<AlertTitle>Server endpoint unavailable</AlertTitle>
+							<AlertDescription>
+								This event is configured to run remotely, but no hub domain is
+								available. Sign in to a hub that supports HTTP sinks, or switch
+								the event to run locally.
+							</AlertDescription>
+						</Alert>
+					)
 				) : (
-					<div className="space-y-3">
+					<div className="space-y-4">
 						<UrlPreview
 							url={localUrl}
 							method={method}
@@ -269,10 +246,15 @@ export function HttpConfig({
 							authToken={authToken}
 							CurlExample={CurlExample}
 						/>
-						<p className="text-xs text-muted-foreground">
-							Local endpoint for desktop app execution. Only available when the
-							app is running.
-						</p>
+						<Alert>
+							<AlertTitle>Local endpoint</AlertTitle>
+							<AlertDescription>
+								This URL is only reachable while the desktop app is running on
+								this machine. To expose it to the public internet, use a tunnel
+								(instructions below).
+							</AlertDescription>
+						</Alert>
+						<LocalTunnelGuide path={path} platform={platform} />
 					</div>
 				)}
 			</div>
@@ -401,5 +383,99 @@ function generateToken(): string {
 	crypto.getRandomValues(array);
 	return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
 		"",
+	);
+}
+
+function LocalTunnelGuide({
+	path,
+	platform,
+}: {
+	path: string;
+	platform: ReturnType<typeof getPlatform>;
+}) {
+	const platformLabel =
+		platform === "windows"
+			? "Windows"
+			: platform === "linux"
+				? "Linux"
+				: "macOS";
+	return (
+		<div className="space-y-3">
+			<Label className="text-base">Expose this endpoint publicly</Label>
+			<p className="text-sm text-muted-foreground">
+				Local events are only reachable on this machine. If you need an external
+				service (webhook provider, partner system, etc.) to call this endpoint,
+				run a tunnel in front of port <code>9657</code>.
+			</p>
+			<Tabs defaultValue="cloudflare" className="w-full">
+				<TabsList className="grid w-full grid-cols-2">
+					<TabsTrigger value="cloudflare" className="gap-2">
+						Cloudflare Tunnel
+						<Badge className="px-2 py-0.5 text-xs">Recommended</Badge>
+					</TabsTrigger>
+					<TabsTrigger value="ngrok">ngrok</TabsTrigger>
+				</TabsList>
+				<TabsContent value="cloudflare" className="space-y-4 mt-4">
+					<ol className="space-y-3 text-sm list-decimal list-inside">
+						<li>
+							Install <code>cloudflared</code> on{" "}
+							<strong>{platformLabel}</strong>:
+							<pre className="mt-2 p-3 bg-muted rounded-md text-xs whitespace-pre-wrap overflow-x-auto">
+								{getCloudflareInstallCommand(platform)}
+							</pre>
+						</li>
+						<li>
+							Start a free Quick Tunnel:
+							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
+								cloudflared tunnel --url http://localhost:9657
+							</pre>
+						</li>
+						<li>
+							Use the generated{" "}
+							<code>https://*****.trycloudflare.com{path}</code> URL in your
+							external system.
+						</li>
+					</ol>
+					<a
+						href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+					>
+						Installation docs <ExternalLink className="h-3 w-3" />
+					</a>
+				</TabsContent>
+				<TabsContent value="ngrok" className="space-y-4 mt-4">
+					<ol className="space-y-3 text-sm list-decimal list-inside">
+						<li>
+							Install ngrok on <strong>{platformLabel}</strong>:
+							<pre className="mt-2 p-3 bg-muted rounded-md text-xs whitespace-pre-wrap overflow-x-auto">
+								{getNgrokInstallCommand(platform)}
+							</pre>
+						</li>
+						<li>
+							Authenticate (requires a free ngrok account):
+							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
+								ngrok config add-authtoken YOUR_TOKEN_HERE
+							</pre>
+						</li>
+						<li>
+							Start the tunnel:
+							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
+								ngrok http 9657
+							</pre>
+						</li>
+					</ol>
+					<a
+						href="https://dashboard.ngrok.com/get-started/setup"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+					>
+						ngrok docs <ExternalLink className="h-3 w-3" />
+					</a>
+				</TabsContent>
+			</Tabs>
+		</div>
 	);
 }

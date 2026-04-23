@@ -1,4 +1,4 @@
-import type { IExecutionMode } from "../../lib/schema";
+import type { IEventExecutionMode, IExecutionMode } from "../../lib/schema";
 
 export interface IStorageItemActionResult {
 	prefix: string;
@@ -148,6 +148,8 @@ export interface IPrerunEventResponse {
 	oauth_requirements: IOAuthRequirement[];
 	requires_local_execution: boolean;
 	execution_mode: IExecutionMode;
+	/** Event's own execution mode — where this specific event runs. */
+	event_execution_mode?: IEventExecutionMode;
 	/** Whether user can execute locally (has ReadBoards permission). If false, must execute on server */
 	can_execute_locally: boolean;
 	/** Whether the board contains any WASM (external) nodes */

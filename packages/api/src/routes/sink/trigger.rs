@@ -14,7 +14,7 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        is_jwt_configured, proxy_sse_response, resolve_wasm_packages, sign_execution_jwt,
+        collect_generic_result, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -413,10 +413,19 @@ pub async fn trigger_http(
         app_id
     );
 
-    // Look up sink by app_id and path
-    let sink = event_sink::Entity::find()
+    // Look up the sink using the unique (appId, path, method) index.
+    // Two targeted queries — exact method match first, then a fallback for
+    // legacy rows whose method column is still NULL from before this
+    // migration landed. Postgres's unique constraint treats NULLs as
+    // distinct, so pre-migration rows can coexist with new ones during
+    // rollout; once they are re-saved through `sync_event_with_sink_tokens`
+    // they'll pick up the explicit method and the fallback becomes a noop.
+    let method_str = method.as_str().to_ascii_uppercase();
+
+    let exact_match = event_sink::Entity::find()
         .filter(event_sink::Column::AppId.eq(&app_id))
         .filter(event_sink::Column::Path.eq(&normalized_path))
+        .filter(event_sink::Column::Method.eq(&method_str))
         .filter(event_sink::Column::Active.eq(true))
         .one(&state.db)
         .await
@@ -425,23 +434,41 @@ pub async fn trigger_http(
             ApiError::internal_error(anyhow!("Database error"))
         })?;
 
-    let sink = match sink {
+    let sink = match exact_match {
         Some(s) => s,
         None => {
-            tracing::warn!(
-                "No active HTTP sink found for {} in app {}",
-                normalized_path,
-                app_id
-            );
-            return Ok((
-                StatusCode::NOT_FOUND,
-                Json(TriggerResponse {
-                    triggered: false,
-                    run_id: None,
-                    message: "Route not found".to_string(),
-                }),
-            )
-                .into_response());
+            let legacy = event_sink::Entity::find()
+                .filter(event_sink::Column::AppId.eq(&app_id))
+                .filter(event_sink::Column::Path.eq(&normalized_path))
+                .filter(event_sink::Column::Method.is_null())
+                .filter(event_sink::Column::Active.eq(true))
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Database error: {}", e);
+                    ApiError::internal_error(anyhow!("Database error"))
+                })?;
+
+            match legacy {
+                Some(s) => s,
+                None => {
+                    tracing::warn!(
+                        "No active HTTP sink found for {} {} in app {}",
+                        method_str,
+                        normalized_path,
+                        app_id
+                    );
+                    return Ok((
+                        StatusCode::NOT_FOUND,
+                        Json(TriggerResponse {
+                            triggered: false,
+                            run_id: None,
+                            message: "Route not found".to_string(),
+                        }),
+                    )
+                        .into_response());
+                }
+            }
         }
     };
 
@@ -621,12 +648,21 @@ pub async fn trigger_http(
         })
     });
 
-    // Determine the streaming dispatch method based on backend configuration
+    // Match the desktop HTTP sink: wait for the first `generic_result`
+    // event and return it as a single JSON response. External callers of
+    // this webhook want a synchronous request/response, not SSE —
+    // invoke_event is the streaming entry point for clients that want
+    // live updates. 120s covers typical LLM-bound flows; longer-running
+    // workloads should invoke via SSE or async.
+    const HTTP_SINK_RESULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
     let backend = state.dispatcher.backend();
 
     match backend {
         ExecutionBackend::LambdaStream => {
-            // Use Lambda SDK streaming
+            // Lambda's ByteStream still flows through proxy_lambda_sse_response
+            // for now — aligning that path needs a bytestream-based collector
+            // we haven't added yet. Track separately.
             let dispatch_result = state.dispatcher.dispatch_streaming(request).await;
 
             if let Err(e) = db_insert_handle.await {
@@ -658,7 +694,6 @@ pub async fn trigger_http(
             }
         }
         _ => {
-            // Use HTTP SSE for all other backends
             let dispatch_result = state.dispatcher.dispatch_http_sse(request).await;
 
             if let Err(e) = db_insert_handle.await {
@@ -667,13 +702,29 @@ pub async fn trigger_http(
 
             match dispatch_result {
                 Ok((_dispatch_response, executor_response)) => {
-                    tracing::info!(run_id = %run_id, "Got executor response, starting stream");
-                    Ok(proxy_sse_response(
+                    tracing::info!(run_id = %run_id, "Got executor response, collecting result");
+                    let db_arc = Arc::new(state.db.clone());
+                    let run_id_owned = run_id.clone();
+                    let generic_result = collect_generic_result(
                         executor_response,
-                        run_id,
-                        Some(Arc::new(state.db.clone())),
+                        run_id_owned,
+                        Some(db_arc),
+                        HTTP_SINK_RESULT_TIMEOUT,
                     )
-                    .into_response())
+                    .await;
+
+                    match generic_result {
+                        Some(payload) => Ok((StatusCode::OK, Json(payload)).into_response()),
+                        None => Ok((
+                            StatusCode::OK,
+                            Json(TriggerResponse {
+                                triggered: true,
+                                run_id: Some(run_id),
+                                message: "Event triggered".to_string(),
+                            }),
+                        )
+                            .into_response()),
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch");

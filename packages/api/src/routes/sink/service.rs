@@ -27,6 +27,10 @@ pub struct SinkConfig {
     pub app_id: String,
     pub sink_type: String,
     pub path: Option<String>,
+    /// HTTP method for HTTP sinks (GET/POST/...). Only meaningful when
+    /// `sink_type` is "http"; stored so different methods on the same path
+    /// route to different events.
+    pub method: Option<String>,
     pub auth_token: Option<String>,
     pub webhook_secret: Option<String>,
     pub cron_expression: Option<String>,
@@ -79,6 +83,9 @@ pub async fn sync_sink(
         // Only update optional fields if provided
         if config.path.is_some() {
             active_model.path = Set(config.path.clone());
+        }
+        if config.method.is_some() {
+            active_model.method = Set(config.method.clone());
         }
         if config.cron_expression.is_some() {
             active_model.cron_expression = Set(config.cron_expression.clone());
@@ -145,6 +152,7 @@ pub async fn sync_sink(
             sink_type: Set(config.sink_type.clone()),
             active: Set(initial_active),
             path: Set(config.path.clone()),
+            method: Set(config.method.clone()),
             auth_token: Set(config.auth_token),
             webhook_secret: Set(config.webhook_secret),
             cron_expression: Set(config.cron_expression.clone()),

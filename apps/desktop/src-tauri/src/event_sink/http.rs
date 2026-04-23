@@ -337,9 +337,11 @@ impl HttpSink {
             tracing::error!("EventSinkManager state not available for {}", event_id);
         }
 
-        // Wait for the callback to receive the response (with timeout)
+        // Wait for the callback to receive the response (with timeout).
+        // Kept aligned with the server's HTTP sink timeout so a caller sees
+        // the same window regardless of which transport served the request.
         let timeout_result =
-            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(30), rx).await;
+            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(120), rx).await;
 
         match timeout_result {
             Ok(Ok(())) => {

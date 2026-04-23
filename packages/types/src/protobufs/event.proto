@@ -49,6 +49,9 @@ message Event {
   optional string route = 20;
   // Whether this is the default event/route for the app (shown at "/")
   bool is_default = 21;
+  // Where this event runs: "Local" (offline/desktop) or "Remote" (server).
+  // Defaults to Local when unset for backward compatibility.
+  optional string execution_mode = 22;
 }
 
 // Simplified input pin metadata for events

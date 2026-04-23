@@ -1,6 +1,5 @@
 "use client";
 import {
-	Badge,
 	type IBoard,
 	type IEvent,
 	type IEventMapping,
@@ -12,16 +11,12 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
 } from "@tm9657/flow-like-ui";
+import { IEventExecutionMode } from "@tm9657/flow-like-ui/lib/schema/flow/event";
 import type {
 	IHub,
 	ISupportedSinks,
 } from "@tm9657/flow-like-ui/lib/schema/hub/hub";
-import { Cloud, Laptop, MonitorSmartphone } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */
@@ -96,56 +91,6 @@ function computeSinkAvailability(
 	return null;
 }
 
-function SinkAvailabilityBadge({
-	availability,
-	description,
-}: Readonly<{
-	availability: "local" | "remote" | "both";
-	description?: string;
-}>) {
-	const config = {
-		local: {
-			icon: Laptop,
-			label: "Local",
-			variant: "secondary" as const,
-		},
-		remote: {
-			icon: Cloud,
-			label: "Remote",
-			variant: "default" as const,
-		},
-		both: {
-			icon: MonitorSmartphone,
-			label: "Both",
-			variant: "outline" as const,
-		},
-	}[availability];
-
-	const Icon = config.icon;
-
-	const badge = (
-		<Badge variant={config.variant} className="text-xs gap-1 ml-2">
-			<Icon className="h-3 w-3" />
-			{config.label}
-		</Badge>
-	);
-
-	if (description) {
-		return (
-			<TooltipProvider>
-				<Tooltip>
-					<TooltipTrigger asChild>{badge}</TooltipTrigger>
-					<TooltipContent>
-						<p>{description}</p>
-					</TooltipContent>
-				</Tooltip>
-			</TooltipProvider>
-		);
-	}
-
-	return badge;
-}
-
 export function EventTypeConfiguration({
 	eventConfig,
 	node,
@@ -154,6 +99,7 @@ export function EventTypeConfiguration({
 	onUpdate,
 	hub,
 	canExecuteLocally,
+	eventExecutionMode,
 }: Readonly<{
 	eventConfig: IEventMapping;
 	node: INode;
@@ -164,6 +110,8 @@ export function EventTypeConfiguration({
 	hub?: IHub | null;
 	/** Whether local execution is available (desktop app) */
 	canExecuteLocally?: boolean;
+	/** Event's own execution mode; filters event types to matching availability. */
+	eventExecutionMode?: IEventExecutionMode;
 }>) {
 	const foundConfig = eventConfig[node?.name];
 
@@ -184,9 +132,21 @@ export function EventTypeConfiguration({
 
 	if (foundConfig?.eventTypes.length <= 1) return null;
 
+	const matchesExecutionMode = (
+		availability: "local" | "remote" | "both",
+	): boolean => {
+		if (!eventExecutionMode) return true;
+		if (availability === "both") return true;
+		if (eventExecutionMode === IEventExecutionMode.Local) {
+			return availability === "local";
+		}
+		return availability === "remote";
+	};
+
 	// Filter event types to only those that have at least one available sink
+	// AND match the event's execution mode (a Remote event must not offer
+	// local-only types like IMAP/Discord).
 	const availableEventTypes = foundConfig?.eventTypes.filter((type) => {
-		// If this event type has a sink requirement, check availability
 		if (foundConfig?.withSink?.includes(type)) {
 			const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
 			const sinkConfig = computeSinkAvailability(
@@ -195,17 +155,11 @@ export function EventTypeConfiguration({
 				canExecuteLocally,
 				staticCfg,
 			);
-			return sinkConfig !== null;
+			if (sinkConfig === null) return false;
+			return matchesExecutionMode(sinkConfig.availability);
 		}
-		// Event types without sinks are always available
 		return true;
 	});
-
-	const getSinkAvailability = (type: string) => {
-		if (!foundConfig?.withSink?.includes(type)) return null;
-		const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
-		return computeSinkAvailability(type, hub, canExecuteLocally, staticCfg);
-	};
 
 	return (
 		<div className="space-y-3">
@@ -221,24 +175,13 @@ export function EventTypeConfiguration({
 					<SelectValue placeholder="Select event type" />
 				</SelectTrigger>
 				<SelectContent>
-					{availableEventTypes?.map((type) => {
-						const sinkConfig = getSinkAvailability(type);
-						return (
-							<SelectItem key={type} value={type}>
-								<span className="flex items-center">
-									{type
-										.replace(/_/g, " ")
-										.replace(/\b\w/g, (c) => c.toUpperCase())}
-									{sinkConfig && (
-										<SinkAvailabilityBadge
-											availability={sinkConfig.availability}
-											description={sinkConfig.description}
-										/>
-									)}
-								</span>
-							</SelectItem>
-						);
-					})}
+					{availableEventTypes?.map((type) => (
+						<SelectItem key={type} value={type}>
+							{type
+								.replace(/_/g, " ")
+								.replace(/\b\w/g, (c) => c.toUpperCase())}
+						</SelectItem>
+					))}
 				</SelectContent>
 			</Select>
 		</div>
@@ -257,6 +200,7 @@ export function EventTranslation({
 	hub,
 	eventId,
 	canExecuteLocally,
+	eventExecutionMode,
 }: Readonly<{
 	appId: string;
 	eventConfig: IEventMapping;
@@ -269,6 +213,7 @@ export function EventTranslation({
 	hub?: IHub | null;
 	eventId?: string;
 	canExecuteLocally?: boolean;
+	eventExecutionMode?: IEventExecutionMode;
 }>) {
 	const [intermediateConfig, setIntermediateConfig] =
 		useState<Partial<IEventPayload>>(config);
@@ -294,6 +239,7 @@ export function EventTranslation({
 			hub,
 			eventId,
 			canExecuteLocally,
+			eventExecutionMode,
 			onConfigUpdate: (payload: Partial<IEventPayload>) => {
 				setIntermediateConfig(payload);
 				if (onUpdate) {
@@ -312,6 +258,7 @@ export function EventTranslation({
 			hub,
 			eventId,
 			canExecuteLocally,
+			eventExecutionMode,
 		],
 	);
 

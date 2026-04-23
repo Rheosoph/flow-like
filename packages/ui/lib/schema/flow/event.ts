@@ -10,6 +10,11 @@ export interface IEvent {
 	default_page_id?: string | null;
 	event_type: string;
 	event_version: number[];
+	/**
+	 * Where this event runs. Events are always exactly one of Local or Remote
+	 * (never Hybrid). Defaults to "Local" when unset for backward compatibility.
+	 */
+	execution_mode?: IEventExecutionMode;
 	id: string;
 	/** Input pins copied from the node */
 	inputs?: IEventInput[];
@@ -20,6 +25,11 @@ export interface IEvent {
 	updated_at: ISystemTime;
 	variables: { [key: string]: IVariable };
 	[property: string]: any;
+}
+
+export enum IEventExecutionMode {
+	Local = "Local",
+	Remote = "Remote",
 }
 
 /** Simplified input pin metadata for events */
