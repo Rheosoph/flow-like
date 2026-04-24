@@ -2,16 +2,25 @@
 
 import { useCallback, useId, useMemo } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import { cn } from "../../lib/utils";
 import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
-import { DataProvider } from "./DataContext";
+import { DataProvider, DataScopeProvider } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
+	DataEntry,
+	DataScope,
 	Surface,
 	SurfaceComponent,
 } from "./types";
+
+const EMPTY_DATA_MODEL: DataEntry[] = [];
+
+function isBackgroundClass(value: string | undefined): value is string {
+	return value?.startsWith("bg-") ?? false;
+}
 
 export interface A2UIRendererProps {
 	surface: Surface;
@@ -49,9 +58,15 @@ export function A2UIRenderer({
 		[surface.components],
 	);
 	const canvasSettings = surface.canvasSettings;
+	const dataModel = surface.dataModel ?? EMPTY_DATA_MODEL;
+	const backgroundClass = isBackgroundClass(canvasSettings?.backgroundColor)
+		? canvasSettings?.backgroundColor
+		: undefined;
 	const canvasStyle = useMemo(
 		() => ({
-			backgroundColor: canvasSettings?.backgroundColor,
+			backgroundColor: backgroundClass
+				? undefined
+				: canvasSettings?.backgroundColor,
 			backgroundImage: canvasSettings?.backgroundImage
 				? `url(${canvasSettings.backgroundImage})`
 				: undefined,
@@ -61,7 +76,7 @@ export function A2UIRenderer({
 				: undefined,
 			padding: canvasSettings?.padding,
 		}),
-		[canvasSettings],
+		[canvasSettings, backgroundClass],
 	);
 	const customCss = canvasSettings?.customCss;
 
@@ -72,8 +87,8 @@ export function A2UIRenderer({
 		[onMessage],
 	);
 
-	const renderComponent = useCallback(
-		(componentId: string): React.ReactNode => {
+	const renderScopedComponent = useCallback(
+		(componentId: string, dataScope?: DataScope): React.ReactNode => {
 			const surfaceComponent = components[componentId];
 			if (!surfaceComponent?.component) return null;
 
@@ -90,10 +105,16 @@ export function A2UIRenderer({
 				surfaceId: surface.id,
 				style: style ?? component.style,
 				onAction: handleAction,
-				renderChild: renderComponent,
+				renderChild: (childId, childScope) =>
+					renderScopedComponent(childId, childScope ?? dataScope),
 			};
 
-			return <Renderer key={componentId} {...props} />;
+			const node = <Renderer key={componentId} {...props} />;
+			return dataScope ? (
+				<DataScopeProvider scope={dataScope}>{node}</DataScopeProvider>
+			) : (
+				node
+			);
 		},
 		[components, surface.id, handleAction],
 	);
@@ -113,7 +134,7 @@ export function A2UIRenderer({
 	}
 
 	return (
-		<DataProvider initialData={[]}>
+		<DataProvider initialData={dataModel}>
 			<WidgetRefsProvider widgetRefs={widgetRefs}>
 				<ActionProvider
 					onAction={handleAction}
@@ -137,11 +158,11 @@ export function A2UIRenderer({
 						/>
 					)}
 					<div
-						className={className}
+						className={cn(backgroundClass, className)}
 						data-surface-canvas-id={canvasId}
 						style={canvasStyle}
 					>
-						{renderComponent(surface.rootComponentId)}
+						{renderScopedComponent(surface.rootComponentId)}
 					</div>
 				</ActionProvider>
 			</WidgetRefsProvider>
@@ -174,6 +195,7 @@ export function useA2UIState() {
 					id: message.surfaceId,
 					rootComponentId: message.rootComponentId,
 					components: componentsMap,
+					dataModel: message.dataModel,
 					catalogId: message.catalogId,
 				});
 			}
@@ -201,6 +223,22 @@ export function useA2UIState() {
 							...existing.canvasSettings,
 							...message.canvasSettings,
 						},
+					});
+				}
+			}
+
+			if (message.type === "dataModelUpdate") {
+				const existing = newSurfaces.get(message.surfaceId);
+				if (existing) {
+					const entries = new Map(
+						(existing.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+					newSurfaces.set(message.surfaceId, {
+						...existing,
+						dataModel: Array.from(entries.values()),
 					});
 				}
 			}

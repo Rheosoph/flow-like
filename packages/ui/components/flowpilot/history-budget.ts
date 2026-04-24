@@ -149,10 +149,6 @@ function sanitizeRecentMessage(message: CopilotMessage): UnifiedChatMessage {
 	return {
 		role: message.role === "user" ? "User" : "Assistant",
 		content: clipText(message.content, MAX_MESSAGE_CHARS),
-		images: message.images?.map((image) => ({
-			data: image.data,
-			media_type: image.mediaType,
-		})),
 	};
 }
 

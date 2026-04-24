@@ -407,23 +407,20 @@ async fn copilot_sdk_chat_internal(
     // Do NOT set available_tools — it can conflict with custom tool visibility in the CLI.
     // Custom tools (emit_ui, get_component_schema, emit_commands, etc.) are always available
     // via the `tools` array in the session config.
-    let excluded_tools = match scope {
-        CopilotScope::Frontend => Some(vec![
-            "Read".to_string(),
-            "Edit".to_string(),
-            "Write".to_string(),
-            "shell".to_string(),
-            "powershell".to_string(),
-            "bash".to_string(),
-            "Grep".to_string(),
-            "listDir".to_string(),
-            "Search".to_string(),
-            "Insert".to_string(),
-            "Replace".to_string(),
-            "CreateFile".to_string(),
-        ]),
-        _ => None,
-    };
+    let excluded_tools = Some(vec![
+        "Read".to_string(),
+        "Edit".to_string(),
+        "Write".to_string(),
+        "shell".to_string(),
+        "powershell".to_string(),
+        "bash".to_string(),
+        "Grep".to_string(),
+        "listDir".to_string(),
+        "Search".to_string(),
+        "Insert".to_string(),
+        "Replace".to_string(),
+        "CreateFile".to_string(),
+    ]);
 
     let config = copilot_sdk::SessionConfig {
         model: Some(model_id.to_string()),
@@ -451,9 +448,10 @@ async fn copilot_sdk_chat_internal(
             .await;
     }
 
-    // Approve all permission requests so the CLI never blocks tool execution
+    // FlowPilot only exposes reviewed custom tools. Deny any unexpected
+    // permission request so built-in file/shell tools cannot run if surfaced.
     session
-        .register_permission_handler(|_req| copilot_sdk::PermissionRequestResult::approved())
+        .register_permission_handler(|_req| copilot_sdk::PermissionRequestResult::denied())
         .await;
 
     let mut events = session.subscribe();
@@ -477,6 +475,12 @@ async fn copilot_sdk_chat_internal(
     let mut extracted_components: Vec<SurfaceComponent> = Vec::new();
     let mut extracted_canvas_settings: Option<serde_json::Value> = None;
     let mut extracted_root_component_id: Option<String> = None;
+    let mut last_validated_commands: Option<Vec<BoardCommand>> = None;
+    let mut last_validated_components: Option<(
+        Vec<SurfaceComponent>,
+        Option<serde_json::Value>,
+        Option<String>,
+    )> = None;
 
     loop {
         match events.recv().await {
@@ -504,8 +508,41 @@ async fn copilot_sdk_chat_internal(
                         && let Ok(parsed) =
                             serde_json::from_str::<serde_json::Value>(&result.content)
                     {
+                        let status = parsed.get("status").and_then(|s| s.as_str());
+
+                        // Some models, especially Claude/Sonnet variants, stop after a
+                        // successful validate_* call. Remember valid payloads so idle
+                        // handling can still surface the reviewable action to the board.
+                        if status == Some("valid") {
+                            if let Some(cmds) = parsed.get("commands")
+                                && let Ok(commands) =
+                                    serde_json::from_value::<Vec<BoardCommand>>(cmds.clone())
+                            {
+                                last_validated_commands = Some(commands);
+                            }
+
+                            if let Some(comps) = parsed.get("components")
+                                && let Ok(components) =
+                                    serde_json::from_value::<Vec<SurfaceComponent>>(comps.clone())
+                            {
+                                let canvas = parsed.get("canvasSettings").cloned();
+                                let root_id = parsed
+                                    .get("rootComponentId")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string);
+                                last_validated_components = Some((components, canvas, root_id));
+                            }
+                        } else if status == Some("validation_errors") {
+                            if parsed.get("commands").is_some() {
+                                last_validated_commands = None;
+                            }
+                            if parsed.get("components").is_some() {
+                                last_validated_components = None;
+                            }
+                        }
+
                         // Extract commands from emit_commands tool (status: "queued")
-                        if parsed.get("status").and_then(|s| s.as_str()) == Some("queued")
+                        if status == Some("queued")
                             && let Some(cmds) = parsed.get("commands")
                             && let Ok(commands) =
                                 serde_json::from_value::<Vec<BoardCommand>>(cmds.clone())
@@ -516,9 +553,10 @@ async fn copilot_sdk_chat_internal(
                             );
                             let _ = channel.send(cmd_event);
                             extracted_commands.extend(commands);
+                            last_validated_commands = None;
                         }
                         // Extract components from emit_ui tool (status: "rendered")
-                        if parsed.get("status").and_then(|s| s.as_str()) == Some("rendered") {
+                        if status == Some("rendered") {
                             // Extract canvasSettings
                             if let Some(canvas) = parsed.get("canvasSettings") {
                                 extracted_canvas_settings = Some(canvas.clone());
@@ -549,6 +587,7 @@ async fn copilot_sdk_chat_internal(
                                     let _ = channel.send(canvas_event);
                                 }
                                 extracted_components.extend(components);
+                                last_validated_components = None;
                             }
                         }
                     }
@@ -566,6 +605,40 @@ async fn copilot_sdk_chat_internal(
                     let _ = channel.send(tool_msg);
                 }
                 SessionEventData::SessionIdle(_) => {
+                    if extracted_commands.is_empty()
+                        && let Some(commands) = last_validated_commands.take()
+                    {
+                        let cmd_event = format!(
+                            "<commands>{}</commands>",
+                            serde_json::to_string(&commands).unwrap_or_default()
+                        );
+                        let _ = channel.send(cmd_event);
+                        extracted_commands.extend(commands);
+                    }
+
+                    if extracted_components.is_empty()
+                        && let Some((components, canvas_settings, root_component_id)) =
+                            last_validated_components.take()
+                    {
+                        let comp_event = format!(
+                            "<components>{}</components>",
+                            serde_json::to_string(&components).unwrap_or_default()
+                        );
+                        let _ = channel.send(comp_event);
+
+                        if let Some(canvas) = canvas_settings {
+                            let canvas_event = format!(
+                                "<canvas_settings>{}</canvas_settings>",
+                                serde_json::to_string(&canvas).unwrap_or_default()
+                            );
+                            let _ = channel.send(canvas_event);
+                            extracted_canvas_settings = Some(canvas);
+                        }
+
+                        extracted_root_component_id = root_component_id;
+                        extracted_components = components;
+                    }
+
                     break;
                 }
                 SessionEventData::SessionError(err) => {

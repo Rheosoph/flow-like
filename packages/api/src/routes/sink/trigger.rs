@@ -22,11 +22,13 @@ use crate::{
 use axum::{
     Json,
     body::Body,
-    extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    extract::{ConnectInfo, FromRequest, Multipart, Path, Query, State},
+    http::{HeaderMap, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use flow_like_types::{Result as FlResult, anyhow, create_id, tokio};
+use flow_like_storage::{Path as StorePath, files::store::FlowLikeStore, object_store::PutPayload};
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
+use flow_like_types::{Bytes, Result as FlResult, anyhow, create_id, tokio};
 use ipnetwork::IpNetwork;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,312 @@ fn merge_payloads(
         // If either is not an object, override wins entirely
         (_, Some(over)) => Some(over),
     }
+}
+
+const HTTP_SINK_BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Default)]
+struct ParsedHttpRequestPayload {
+    payload: Option<serde_json::Value>,
+}
+
+fn authorization_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(normalize_authorization_token)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_authorization_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
+fn is_multipart_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/form-data"))
+        })
+        .unwrap_or(false)
+}
+
+fn is_urlencoded_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value.split(';').next().is_some_and(|mime| {
+                mime.trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn decode_form_component(value: &str) -> String {
+    let value = value.replace('+', " ");
+    urlencoding::decode(&value)
+        .unwrap_or(std::borrow::Cow::Borrowed(value.as_str()))
+        .into_owned()
+}
+
+fn normalize_form_key(raw_key: &str, fallback: &str) -> (String, bool) {
+    let decoded = decode_form_component(raw_key);
+    let trimmed = decoded.trim();
+    let key = if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Some(stripped) = key.strip_suffix("[]") {
+        let stripped = stripped.trim();
+        return (
+            if stripped.is_empty() {
+                fallback.to_string()
+            } else {
+                stripped.to_string()
+            },
+            true,
+        );
+    }
+
+    (key, false)
+}
+
+fn insert_payload_value(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    key: String,
+    value: serde_json::Value,
+    force_array: bool,
+) {
+    match map.get_mut(&key) {
+        Some(serde_json::Value::Array(values)) => values.push(value),
+        Some(existing) => {
+            let previous = std::mem::replace(existing, serde_json::Value::Null);
+            *existing = serde_json::Value::Array(vec![previous, value]);
+        }
+        None if force_array => {
+            map.insert(key, serde_json::Value::Array(vec![value]));
+        }
+        None => {
+            map.insert(key, value);
+        }
+    }
+}
+
+fn parse_form_encoded_payload(input: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    for pair in input.split('&').filter(|pair| !pair.is_empty()) {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, force_array) = normalize_form_key(raw_key, "value");
+        let value = serde_json::Value::String(decode_form_component(raw_value));
+        insert_payload_value(&mut map, key, value, force_array);
+    }
+
+    map
+}
+
+fn merge_query_and_body(
+    query: serde_json::Map<String, serde_json::Value>,
+    body: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (query.is_empty(), body) {
+        (true, None) => None,
+        (false, None) => Some(serde_json::Value::Object(query)),
+        (true, Some(body)) => Some(body),
+        (false, Some(serde_json::Value::Object(mut body_map))) => {
+            let mut merged = query;
+            merged.append(&mut body_map);
+            Some(serde_json::Value::Object(merged))
+        }
+        (false, Some(body)) => {
+            let mut merged = query;
+            merged.insert("_body".to_string(), body);
+            Some(serde_json::Value::Object(merged))
+        }
+    }
+}
+
+fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> String {
+    let raw = filename
+        .and_then(|name| name.rsplit(['/', '\\']).next())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("file");
+
+    let mut sanitized = String::with_capacity(raw.len().min(120));
+    for ch in raw.chars().take(120) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        format!("file-{fallback_index}")
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len().min(80));
+    for ch in value.chars().take(80) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn flow_path_value(path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "path": path,
+        "store_ref": REQUEST_FILES_STORE_REF,
+        "cache_store_ref": null
+    })
+}
+
+async fn parse_multipart_payload(
+    request: Request<Body>,
+    query: serde_json::Map<String, serde_json::Value>,
+    body_limit: usize,
+    file_store: FlowLikeStore,
+    file_path_prefix: String,
+) -> Result<ParsedHttpRequestPayload, ApiError> {
+    let mut multipart = Multipart::from_request(request, &()).await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to parse multipart HTTP sink payload");
+        ApiError::bad_request("Invalid multipart/form-data request")
+    })?;
+
+    let mut body_map = serde_json::Map::new();
+    let mut total_bytes = 0usize;
+    let mut file_count = 0usize;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to read multipart field");
+        ApiError::bad_request("Invalid multipart/form-data field")
+    })? {
+        let raw_name = field.name().unwrap_or("file").to_string();
+        let file_name = field.file_name().map(ToOwned::to_owned);
+        let (key, force_array) = normalize_form_key(&raw_name, "file");
+        let bytes = field.bytes().await.map_err(|e| {
+            tracing::warn!(error = %e, "Failed to read multipart field bytes");
+            ApiError::bad_request("Invalid multipart/form-data field")
+        })?;
+
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        if total_bytes > body_limit {
+            return Err(ApiError::bad_request("Request body exceeds size limit"));
+        }
+
+        if file_name.is_some() {
+            file_count += 1;
+            let file_index = file_count;
+            let sanitized_name = sanitize_request_file_name(file_name.as_deref(), file_index);
+            let path = format!("{file_path_prefix}/{file_index:04}-{sanitized_name}");
+            file_store
+                .as_generic()
+                .put(
+                    &StorePath::from(path.clone()),
+                    PutPayload::from_bytes(Bytes::copy_from_slice(&bytes)),
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, path = %path, "Failed to stage multipart file");
+                    ApiError::internal_error(anyhow!("Failed to stage multipart file"))
+                })?;
+            insert_payload_value(&mut body_map, key, flow_path_value(&path), force_array);
+        } else {
+            let value = serde_json::Value::String(String::from_utf8_lossy(&bytes).to_string());
+            insert_payload_value(&mut body_map, key, value, force_array);
+        }
+    }
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, Some(serde_json::Value::Object(body_map))),
+    })
+}
+
+async fn parse_http_request_payload(
+    request: Request<Body>,
+    body_limit: usize,
+    file_store: Option<FlowLikeStore>,
+    file_path_prefix: Option<String>,
+) -> Result<ParsedHttpRequestPayload, ApiError> {
+    let (parts, body) = request.into_parts();
+    let query = parts
+        .uri
+        .query()
+        .map(parse_form_encoded_payload)
+        .unwrap_or_default();
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+
+    if is_multipart_content_type(content_type.as_deref()) {
+        let file_store = file_store.ok_or_else(|| {
+            ApiError::internal_error(anyhow!("Temporary file store is not configured"))
+        })?;
+        let file_path_prefix = file_path_prefix.ok_or_else(|| {
+            ApiError::internal_error(anyhow!("Temporary file path is not configured"))
+        })?;
+        return parse_multipart_payload(
+            Request::from_parts(parts, body),
+            query,
+            body_limit,
+            file_store,
+            file_path_prefix,
+        )
+        .await;
+    }
+
+    let body_bytes = axum::body::to_bytes(body, body_limit).await.map_err(|e| {
+        tracing::error!("Failed to read body: {}", e);
+        ApiError::bad_request("Failed to read request body")
+    })?;
+
+    let body_payload = if body_bytes.is_empty() {
+        None
+    } else if is_urlencoded_content_type(content_type.as_deref()) {
+        let body_str = std::str::from_utf8(&body_bytes)
+            .map_err(|_| ApiError::bad_request("Invalid form body"))?;
+        Some(serde_json::Value::Object(parse_form_encoded_payload(
+            body_str,
+        )))
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(value) => Some(value),
+            Err(_) => Some(serde_json::Value::String(
+                String::from_utf8_lossy(&body_bytes).to_string(),
+            )),
+        }
+    };
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, body_payload),
+    })
 }
 
 /// Refresh any expired OAuth tokens in the provided map.
@@ -388,16 +696,16 @@ pub async fn trigger_event(
         (status = 500, description = "Internal server error")
     )
 )]
-#[tracing::instrument(name = "ANY /sink/trigger/{app_id}/{path}", skip(state, headers, body))]
+#[tracing::instrument(name = "ANY /sink/trigger/{app_id}/{path}", skip(state, request))]
 pub async fn trigger_http(
     State(state): State<AppState>,
     Path((app_id, path)): Path<(String, String)>,
-    method: Method,
-    headers: HeaderMap,
-    body: Body,
+    request: Request<Body>,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
     let encryption_key = &state.encryption_key;
+    let method = request.method().clone();
+    let headers = request.headers().clone();
 
     // Normalize path
     let normalized_path = if path.starts_with('/') {
@@ -474,13 +782,11 @@ pub async fn trigger_http(
 
     // Check auth token if set
     if let Some(expected_token) = &sink.auth_token {
-        let provided_token = headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim_start_matches("Bearer ").to_string());
+        let expected_token = normalize_authorization_token(expected_token);
+        let provided_token = authorization_token_from_headers(&headers);
 
         match provided_token {
-            Some(token) if &token == expected_token => {}
+            Some(token) if token == expected_token => {}
             _ => {
                 return Ok((
                     StatusCode::UNAUTHORIZED,
@@ -495,24 +801,35 @@ pub async fn trigger_http(
         }
     }
 
-    // Parse body
-    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024) // 10MB limit
+    // Create the run id before parsing so multipart files can be staged under
+    // a stable, per-run temporary object prefix.
+    let run_id = create_id();
+    let credentials = state
+        .scoped_credentials(
+            "http_sink",
+            &app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to read body: {}", e);
-            ApiError::bad_request("Failed to read request body")
-        })?;
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
+    let request_file_store = credentials
+        .to_store(false)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to create file store: {}", e)))?;
+    let request_file_prefix = format!(
+        "tmp/global/apps/{}/runs/{}/request",
+        sanitize_store_path_segment(&app_id, "app"),
+        sanitize_store_path_segment(&run_id, "run")
+    );
 
-    let payload: Option<serde_json::Value> = if !body_bytes.is_empty() {
-        match serde_json::from_slice(&body_bytes) {
-            Ok(v) => Some(v),
-            Err(_) => Some(serde_json::Value::String(
-                String::from_utf8_lossy(&body_bytes).to_string(),
-            )),
-        }
-    } else {
-        None
-    };
+    let parsed_payload = parse_http_request_payload(
+        request,
+        HTTP_SINK_BODY_LIMIT_BYTES,
+        Some(request_file_store),
+        Some(request_file_prefix),
+    )
+    .await?;
+    let payload = parsed_payload.payload;
 
     // Get the event from database (config lives in Event)
     let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
@@ -526,8 +843,6 @@ pub async fn trigger_http(
         )));
     }
 
-    // Create run
-    let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = payload
@@ -541,12 +856,6 @@ pub async fn trigger_http(
 
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
-
-    // Get credentials
-    let credentials = state
-        .master_credentials()
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
 
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials)

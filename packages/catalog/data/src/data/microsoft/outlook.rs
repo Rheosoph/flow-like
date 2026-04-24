@@ -675,11 +675,7 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
                 let body: Value = resp.json().await?;
                 let attachments = body["value"]
                     .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(parse_attachment)
-                            .collect::<Vec<_>>()
-                    })
+                    .map(|arr| arr.iter().filter_map(parse_attachment).collect::<Vec<_>>())
                     .unwrap_or_default();
 
                 let count = attachments.len() as i64;
@@ -755,7 +751,12 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
             "Attachment MIME type",
             VariableType::String,
         );
-        node.add_output_pin("size", "Size", "Attachment size in bytes", VariableType::Integer);
+        node.add_output_pin(
+            "size",
+            "Size",
+            "Attachment size in bytes",
+            VariableType::Integer,
+        );
         node.add_output_pin(
             "is_inline",
             "Is Inline",
@@ -796,7 +797,9 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
         context
             .set_pin_value("content_type", json!(attachment.content_type))
             .await?;
-        context.set_pin_value("size", json!(attachment.size)).await?;
+        context
+            .set_pin_value("size", json!(attachment.size))
+            .await?;
         context
             .set_pin_value("is_inline", json!(attachment.is_inline))
             .await?;
@@ -809,7 +812,9 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
         context
             .set_pin_value("attachment_type", json!(attachment.attachment_type))
             .await?;
-        context.set_pin_value("data", json!(attachment.data)).await?;
+        context
+            .set_pin_value("data", json!(attachment.data))
+            .await?;
 
         Ok(())
     }
@@ -911,8 +916,10 @@ impl NodeLogic for SendOutlookMessageNode {
         let subject: String = context.evaluate_pin("subject").await?;
         let body: String = context.evaluate_pin("body").await?;
         let is_html: bool = context.evaluate_pin("is_html").await.unwrap_or(false);
-        let attachments: Vec<OutlookAttachment> =
-            context.evaluate_pin("attachments").await.unwrap_or_default();
+        let attachments: Vec<OutlookAttachment> = context
+            .evaluate_pin("attachments")
+            .await
+            .unwrap_or_default();
         let save_to_sent: bool = context
             .evaluate_pin("save_to_sent_items")
             .await

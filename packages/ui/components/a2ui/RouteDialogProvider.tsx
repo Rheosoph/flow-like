@@ -289,6 +289,27 @@ function RouteDialogRenderer({
 			return;
 		}
 
+		if (message.type === "dataModelUpdate") {
+			setSurface((prevSurface) => {
+				if (!prevSurface || message.surfaceId !== prevSurface.id) {
+					return prevSurface;
+				}
+
+				const entries = new Map(
+					(prevSurface.dataModel ?? []).map((entry) => [entry.path, entry]),
+				);
+				for (const entry of message.contents) {
+					entries.set(entry.path, entry);
+				}
+
+				return {
+					...prevSurface,
+					dataModel: Array.from(entries.values()),
+				};
+			});
+			return;
+		}
+
 		if (message.type !== "upsertElement") return;
 
 		setSurface((prevSurface) => {
@@ -561,5 +582,6 @@ function buildSurfaceFromPage(page: IPage, surfaceId: string): Surface | null {
 		id: surfaceId,
 		rootComponentId,
 		components: componentsRecord,
+		canvasSettings: page.canvasSettings,
 	};
 }

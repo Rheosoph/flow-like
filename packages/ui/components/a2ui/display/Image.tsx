@@ -30,6 +30,7 @@ export function A2UIImage({
 		fill: "object-fill",
 		none: "object-none",
 		scaleDown: "object-scale-down",
+		"scale-down": "object-scale-down",
 	};
 
 	if (error && fallback) {

@@ -483,6 +483,11 @@ const DEFAULT_BOUND_VALUES: Record<string, BoundValue> = {
 	ratio: { literalNumber: 1 },
 };
 
+const MAX_COMPONENTS = 120;
+const MAX_COMPONENT_ID_CHARS = 120;
+const MAX_BOUND_STRING_CHARS = 8_000;
+const MAX_CUSTOM_CSS_CHARS = 12_000;
+
 // ---------------------------------------------------------------------------
 // BoundValue coercion
 // ---------------------------------------------------------------------------
@@ -500,11 +505,48 @@ function isBoundValue(v: unknown): v is BoundValue {
 	);
 }
 
+function clipString(value: string, maxChars: number): string {
+	return value.length > maxChars ? value.slice(0, maxChars) : value;
+}
+
+function sanitizeBoundValue(value: BoundValue): BoundValue {
+	if ("literalString" in value) {
+		return {
+			literalString: clipString(value.literalString, MAX_BOUND_STRING_CHARS),
+		};
+	}
+	if ("literalJson" in value) {
+		return {
+			literalJson: clipString(value.literalJson, MAX_BOUND_STRING_CHARS),
+		};
+	}
+	if ("path" in value) {
+		return {
+			...value,
+			path: clipString(value.path, 512),
+			defaultValue:
+				typeof value.defaultValue === "string"
+					? clipString(value.defaultValue, MAX_BOUND_STRING_CHARS)
+					: value.defaultValue,
+		};
+	}
+	if ("literalOptions" in value) {
+		return {
+			literalOptions: value.literalOptions.slice(0, 100).map((option) => ({
+				value: clipString(String(option.value), 256),
+				label: clipString(String(option.label), 512),
+			})),
+		};
+	}
+	return value;
+}
+
 /** Wrap a bare primitive as a BoundValue. */
 function coerceToBoundValue(v: unknown): BoundValue | undefined {
 	if (v == null) return undefined;
-	if (isBoundValue(v)) return v as BoundValue;
-	if (typeof v === "string") return { literalString: v };
+	if (isBoundValue(v)) return sanitizeBoundValue(v as BoundValue);
+	if (typeof v === "string")
+		return { literalString: clipString(v, MAX_BOUND_STRING_CHARS) };
 	if (typeof v === "number") return { literalNumber: v };
 	if (typeof v === "boolean") return { literalBool: v };
 	if (Array.isArray(v)) {
@@ -515,12 +557,39 @@ function coerceToBoundValue(v: unknown): BoundValue | undefined {
 			v[0] !== null &&
 			"value" in v[0]
 		) {
-			return { literalOptions: v as { value: string; label: string }[] };
+			return sanitizeBoundValue({
+				literalOptions: v as { value: string; label: string }[],
+			});
 		}
-		return { literalJson: JSON.stringify(v) };
+		return {
+			literalJson: clipString(JSON.stringify(v), MAX_BOUND_STRING_CHARS),
+		};
 	}
-	if (typeof v === "object") return { literalJson: JSON.stringify(v) };
+	if (typeof v === "object") {
+		return {
+			literalJson: clipString(JSON.stringify(v), MAX_BOUND_STRING_CHARS),
+		};
+	}
 	return undefined;
+}
+
+function sanitizeIframeSandbox(value: unknown): BoundValue | undefined {
+	const boundValue = coerceToBoundValue(value);
+	if (!boundValue || !("literalString" in boundValue)) return undefined;
+
+	const allowedTokens = new Set([
+		"allow-downloads",
+		"allow-forms",
+		"allow-modals",
+		"allow-popups",
+		"allow-presentation",
+		"allow-scripts",
+	]);
+	const tokens = boundValue.literalString
+		.split(/\s+/)
+		.filter((token) => allowedTokens.has(token));
+
+	return { literalString: tokens.join(" ") };
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +599,7 @@ function coerceToBoundValue(v: unknown): BoundValue | undefined {
 function validateChildren(
 	children: unknown,
 	validIds: Set<string>,
-): { explicitList: string[] } | undefined {
+): { explicitList: string[] } | { template: unknown } | undefined {
 	if (children == null || typeof children !== "object") return undefined;
 
 	const c = children as Record<string, unknown>;
@@ -542,8 +611,23 @@ function validateChildren(
 		return filtered.length > 0 ? { explicitList: filtered } : undefined;
 	}
 
-	if ("template" in c) {
-		return children as { explicitList: string[] };
+	if ("template" in c && c.template && typeof c.template === "object") {
+		const template = c.template as Record<string, unknown>;
+		if (
+			typeof template.templateComponentId === "string" &&
+			validIds.has(template.templateComponentId) &&
+			typeof template.dataPath === "string"
+		) {
+			return {
+				template: {
+					templateComponentId: template.templateComponentId,
+					dataPath: clipString(template.dataPath, 512),
+					...(typeof template.itemIdPath === "string"
+						? { itemIdPath: clipString(template.itemIdPath, 512) }
+						: {}),
+				},
+			};
+		}
 	}
 
 	return undefined;
@@ -574,28 +658,47 @@ export function validateComponents(
 ): ValidationResult {
 	const warnings: string[] = [];
 	const registeredTypes = new Set(getRegisteredTypes());
+	const input = raw.slice(0, MAX_COMPONENTS);
+	if (raw.length > MAX_COMPONENTS) {
+		warnings.push(`Only the first ${MAX_COMPONENTS} components were kept`);
+	}
 
 	// Build a set of all IDs for children validation
-	const allIds = new Set(raw.map((c) => c.id));
+	const allIds = new Set(
+		input
+			.map((c) => c.id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0),
+	);
+	const seenIds = new Set<string>();
 
 	const validated: SurfaceComponent[] = [];
 
-	for (const comp of raw) {
+	for (const comp of input) {
 		// Must have an id
-		if (!comp.id) {
+		if (!comp.id || typeof comp.id !== "string") {
 			warnings.push("Skipped component with missing id");
 			continue;
 		}
+		const componentId = comp.id.trim();
+		if (componentId.length > MAX_COMPONENT_ID_CHARS) {
+			warnings.push(`${componentId.slice(0, 32)}: component id is too long`);
+			continue;
+		}
+		if (seenIds.has(componentId)) {
+			warnings.push(`${componentId}: skipped duplicate component id`);
+			continue;
+		}
+		seenIds.add(componentId);
 
 		const rawComponent = comp.component as unknown as Record<string, unknown>;
 		if (!rawComponent || typeof rawComponent !== "object") {
-			warnings.push(`${comp.id}: missing component data`);
+			warnings.push(`${componentId}: missing component data`);
 			continue;
 		}
 
 		const type = rawComponent.type as string | undefined;
 		if (!type || !registeredTypes.has(type)) {
-			warnings.push(`${comp.id}: unknown component type "${type}"`);
+			warnings.push(`${componentId}: unknown component type "${type}"`);
 			continue;
 		}
 
@@ -609,6 +712,16 @@ export function validateComponents(
 			if (BASE_PROPS.has(key)) continue; // handled separately
 
 			if (knownForType.has(key)) {
+				if (type === "markdown" && key === "allowHtml") {
+					cleaned[key] = { literalBool: false };
+					warnings.push(`${componentId}: disabled HTML rendering for markdown`);
+					continue;
+				}
+				if (type === "iframe" && key === "sandbox") {
+					const sandbox = sanitizeIframeSandbox(value);
+					if (sandbox) cleaned[key] = sandbox;
+					continue;
+				}
 				// Props that hold structured data (arrays/objects) should not be blindly coerced
 				if (
 					key === "tabs" ||
@@ -632,7 +745,9 @@ export function validateComponents(
 					cleaned[key] = coerceToBoundValue(value) ?? value;
 				}
 			} else {
-				warnings.push(`${comp.id}: stripped unknown prop "${key}" on ${type}`);
+				warnings.push(
+					`${componentId}: stripped unknown prop "${key}" on ${type}`,
+				);
 			}
 		}
 
@@ -645,7 +760,7 @@ export function validateComponents(
 					if (defaultVal) {
 						cleaned[prop] = defaultVal;
 						warnings.push(
-							`${comp.id}: injected default for required prop "${prop}" on ${type}`,
+							`${componentId}: injected default for required prop "${prop}" on ${type}`,
 						);
 					}
 				}
@@ -658,14 +773,28 @@ export function validateComponents(
 		if (validatedChildren) {
 			(cleaned as Record<string, unknown>).children = validatedChildren;
 		} else if (rawChildren != null) {
-			warnings.push(`${comp.id}: removed invalid children reference`);
+			warnings.push(`${componentId}: removed invalid children reference`);
 		}
 
 		validated.push({
-			id: comp.id,
+			id: componentId,
 			style: comp.style,
 			component: cleaned as unknown as SurfaceComponent["component"],
 		});
+	}
+
+	const validIds = new Set(validated.map((component) => component.id));
+	for (const comp of validated) {
+		const component = comp.component as unknown as Record<string, unknown>;
+		const validatedChildren = validateChildren(component.children, validIds);
+		if (validatedChildren) {
+			component.children = validatedChildren;
+		} else if (component.children != null) {
+			delete component.children;
+			warnings.push(
+				`${comp.id}: removed child references to skipped components`,
+			);
+		}
 	}
 
 	return { components: validated, warnings };
@@ -690,10 +819,15 @@ export function validateCanvasSettings(
 		result.padding = obj.padding;
 	}
 	if (typeof obj.customCss === "string") {
-		result.customCss = obj.customCss;
+		result.customCss = obj.customCss.slice(0, MAX_CUSTOM_CSS_CHARS);
 	}
 	if (typeof obj.backgroundImage === "string") {
-		result.backgroundImage = obj.backgroundImage;
+		const image = obj.backgroundImage.trim();
+		if (
+			/^(https?:\/\/|data:image\/(?:png|jpeg|webp|gif);base64,)/i.test(image)
+		) {
+			result.backgroundImage = image;
+		}
 	}
 
 	return Object.keys(result).length > 0 ? result : undefined;

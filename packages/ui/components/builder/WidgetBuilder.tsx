@@ -100,6 +100,10 @@ export const CONTAINER_TYPES = new Set([
 // Root component ID constant
 export const ROOT_ID = "root";
 
+function isBackgroundClass(value: string | undefined): value is string {
+	return value?.startsWith("bg-") ?? false;
+}
+
 // Create the default root component
 function createRootComponent(): SurfaceComponent {
 	return {
@@ -621,6 +625,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 	> | null>(null);
 	const [presignedCanvasSettings, setPresignedCanvasSettings] =
 		useState(canvasSettings);
+	const backgroundClass = isBackgroundClass(
+		presignedCanvasSettings.backgroundColor,
+	)
+		? presignedCanvasSettings.backgroundColor
+		: undefined;
 
 	// Presign assets in components for preview rendering
 	useEffect(() => {
@@ -896,9 +905,14 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			>
 				<div
 					data-canvas-id={canvasId}
-					className="min-h-full rounded-lg border shadow-sm relative"
+					className={cn(
+						"min-h-full rounded-lg border shadow-sm relative",
+						backgroundClass,
+					)}
 					style={{
-						backgroundColor: presignedCanvasSettings.backgroundColor,
+						backgroundColor: backgroundClass
+							? undefined
+							: presignedCanvasSettings.backgroundColor,
 						backgroundImage: presignedCanvasSettings.backgroundImage
 							? `url(${presignedCanvasSettings.backgroundImage})`
 							: undefined,
@@ -954,6 +968,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	> | null>(null);
 	const [presignedCanvasSettings, setPresignedCanvasSettings] =
 		useState(canvasSettings);
+	const backgroundClass = isBackgroundClass(
+		presignedCanvasSettings.backgroundColor,
+	)
+		? presignedCanvasSettings.backgroundColor
+		: undefined;
 	const loadEventExecutedRef = useRef<string | null>(null);
 	// Keep a ref to components to avoid stale closure in handleA2UIMessage
 	const componentsRef = useRef(components);
@@ -1471,9 +1490,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	return (
 		<div
 			data-canvas-id={previewCanvasId}
-			className="h-full w-full overflow-auto"
+			className={cn("h-full w-full overflow-auto", backgroundClass)}
 			style={{
-				backgroundColor: presignedCanvasSettings.backgroundColor,
+				backgroundColor: backgroundClass
+					? undefined
+					: presignedCanvasSettings.backgroundColor,
 				backgroundImage: presignedCanvasSettings.backgroundImage
 					? `url(${presignedCanvasSettings.backgroundImage})`
 					: undefined,

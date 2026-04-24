@@ -61,7 +61,8 @@ impl AzureProvider {
     pub fn apply_to_azure_builder(
         &self,
         builder: flow_like_storage::object_store::azure::MicrosoftAzureBuilder,
-    ) -> flow_like_types::Result<flow_like_storage::object_store::azure::MicrosoftAzureBuilder> {
+    ) -> flow_like_types::Result<flow_like_storage::object_store::azure::MicrosoftAzureBuilder>
+    {
         use flow_like_storage::object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 
         let mut b: MicrosoftAzureBuilder = builder;

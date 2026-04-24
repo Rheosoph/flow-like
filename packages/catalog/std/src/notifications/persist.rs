@@ -48,6 +48,25 @@ pub struct PersistNotificationParams {
     pub target_user_sub: Option<String>,
 }
 
+fn notification_api_origin(hub: &str, secure: bool) -> Option<String> {
+    let trimmed = hub.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+
+    if trimmed.starts_with("//") {
+        let protocol = if secure { "https:" } else { "http:" };
+        return Some(format!("{protocol}{trimmed}"));
+    }
+
+    let protocol = if secure { "https" } else { "http" };
+    Some(format!("{protocol}://{trimmed}"))
+}
+
 /// Build a notification link from an app_id and a user-provided path.
 ///
 /// If `user_link` is already a non-empty relative path (e.g. `/dashboard`
@@ -98,17 +117,14 @@ pub async fn persist_notification(
     context: &ExecutionContext,
     params: PersistNotificationParams,
 ) -> flow_like_types::Result<bool> {
-    let hub_url = context.profile.hub.trim_end_matches('/');
+    let hub_url = match notification_api_origin(&context.profile.hub, context.profile.secure) {
+        Some(url) => url,
+        None => return Ok(false),
+    };
     let token = match &context.token {
         Some(t) if !t.is_empty() => t,
         _ => return Ok(false),
     };
-    if hub_url.is_empty() {
-        return Ok(false);
-    }
-    if !hub_url.starts_with("http://") && !hub_url.starts_with("https://") {
-        return Ok(false);
-    }
 
     let app_id = context
         .execution_cache
@@ -216,4 +232,33 @@ pub async fn persist_notification(
     }
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::notification_api_origin;
+
+    #[test]
+    fn normalizes_bare_hub_domains() {
+        assert_eq!(
+            notification_api_origin("api.flow-like.com", true).as_deref(),
+            Some("https://api.flow-like.com")
+        );
+        assert_eq!(
+            notification_api_origin("localhost:8080/", false).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn preserves_absolute_hub_urls() {
+        assert_eq!(
+            notification_api_origin("https://api.flow-like.com/", false).as_deref(),
+            Some("https://api.flow-like.com")
+        );
+        assert_eq!(
+            notification_api_origin("http://localhost:8080", true).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
 }

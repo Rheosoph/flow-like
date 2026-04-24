@@ -418,17 +418,9 @@ mod tests {
         sync_auth_mode_pins(&mut node, CF_R2);
         assert!(node.get_pin_by_name("api_token").is_none());
         assert!(node.get_pin_by_name("r2_access_key_id").is_some());
-        let id_before = node
-            .get_pin_by_name("r2_access_key_id")
-            .unwrap()
-            .id
-            .clone();
+        let id_before = node.get_pin_by_name("r2_access_key_id").unwrap().id.clone();
         sync_auth_mode_pins(&mut node, CF_R2);
-        let id_after = node
-            .get_pin_by_name("r2_access_key_id")
-            .unwrap()
-            .id
-            .clone();
+        let id_after = node.get_pin_by_name("r2_access_key_id").unwrap().id.clone();
         assert_eq!(id_before, id_after);
     }
 

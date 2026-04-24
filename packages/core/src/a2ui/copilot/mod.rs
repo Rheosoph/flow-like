@@ -374,6 +374,8 @@ impl A2UICopilot {
         // Parse the components from the response JSON block
         let surface = extract_surface_from_response(&full_response);
         let generated_components = surface.components;
+        let canvas_settings = surface.canvas_settings;
+        let root_component_id = surface.root_component_id;
 
         let component_count = generated_components.len();
 
@@ -398,6 +400,8 @@ impl A2UICopilot {
         Ok(A2UICopilotResponse {
             message: full_response,
             components: generated_components,
+            canvas_settings,
+            root_component_id,
             suggestions: vec![],
         })
     }

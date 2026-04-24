@@ -41,6 +41,58 @@ import {
 
 type NotificationsTab = "all" | "invitations" | "notifications";
 
+const FLOWLIKE_NOTIFICATION_ICON = "/app-logo.webp";
+
+function isImageIcon(icon: string): boolean {
+	const value = icon.trim();
+	return (
+		value.startsWith("http://") ||
+		value.startsWith("https://") ||
+		value.startsWith("data:image/") ||
+		value.startsWith("asset://") ||
+		value.startsWith("/") ||
+		/\.(avif|gif|jpe?g|png|svg|webp)([?#].*)?$/i.test(value)
+	);
+}
+
+function NotificationIcon({
+	icon,
+	read,
+}: Readonly<{ icon?: string; read: boolean }>) {
+	const value = icon?.trim();
+
+	if (value && isImageIcon(value)) {
+		return (
+			<img
+				src={value}
+				alt=""
+				className="size-4 rounded-sm object-contain"
+				onError={(event) => {
+					const image = event.currentTarget;
+					if (image.dataset.fallbackIcon === "true") return;
+					image.dataset.fallbackIcon = "true";
+					image.src = FLOWLIKE_NOTIFICATION_ICON;
+				}}
+			/>
+		);
+	}
+
+	if (value) {
+		return <span className="text-sm leading-none">{value}</span>;
+	}
+
+	return (
+		<img
+			src={FLOWLIKE_NOTIFICATION_ICON}
+			alt=""
+			className={cn(
+				"size-4 rounded-sm object-contain",
+				read && "opacity-70 grayscale",
+			)}
+		/>
+	);
+}
+
 export function NotificationsPageScreen() {
 	const backend = useBackend();
 	const auth = useAuth();
@@ -728,16 +780,10 @@ function NotificationCard({
 								: "border-primary/20 bg-primary/8",
 						)}
 					>
-						{notification.icon ? (
-							<span className="text-sm leading-none">{notification.icon}</span>
-						) : (
-							<Workflow
-								className={cn(
-									"size-4",
-									notification.read ? "text-muted-foreground" : "text-primary",
-								)}
-							/>
-						)}
+						<NotificationIcon
+							icon={notification.icon}
+							read={notification.read}
+						/>
 					</div>
 
 					<div className="min-w-0 flex-1">

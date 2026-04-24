@@ -2,6 +2,7 @@
 
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
+import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, StackComponent } from "../types";
@@ -30,7 +31,7 @@ export function A2UIStack({
 	const width = useResolved<string>(component.width);
 	const height = useResolved<string>(component.height);
 
-	const children = resolveChildren(component, resolve);
+	const children = resolveChildSpecs(component.children, resolve);
 
 	// Build inline styles from component props
 	const inlineStyles = {
@@ -50,35 +51,15 @@ export function A2UIStack({
 			)}
 			style={inlineStyles}
 		>
-			{children.map((childId, index) => (
+			{children.map((child, index) => (
 				<div
-					key={childId}
+					key={child.key}
 					className="absolute inset-0"
 					style={{ zIndex: index }}
 				>
-					{renderChild(childId)}
+					{renderChild(child.id, child.scope)}
 				</div>
 			))}
 		</div>
 	);
-}
-
-function resolveChildren(
-	component: StackComponent,
-	resolve: (boundValue: BoundValue) => unknown,
-): string[] {
-	if (!component.children) return [];
-
-	if ("explicitList" in component.children) {
-		return component.children.explicitList;
-	}
-
-	if ("template" in component.children) {
-		const { template } = component.children;
-		const items = resolve({ path: template.dataPath }) as unknown[];
-		if (!Array.isArray(items)) return [];
-		return items.map((_, i) => `${template.templateComponentId}[${i}]`);
-	}
-
-	return [];
 }

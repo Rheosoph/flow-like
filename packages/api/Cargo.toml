@@ -65,7 +65,7 @@ aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 # ----- Azure dependencies ----
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
-urlencoding = { workspace = true, optional = true }
+urlencoding = { workspace = true }
 # -----
 
 # ----- GCP dependencies ----
@@ -135,7 +135,7 @@ full=[
     "s3",
     "sentry",
 ]
-urlencoding = ["dep:urlencoding"]
+urlencoding = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

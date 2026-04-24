@@ -68,6 +68,7 @@ export interface UnifiedSuggestion {
 /** Canvas settings for UI components */
 export interface CanvasSettings {
 	backgroundColor?: string;
+	backgroundImage?: string;
 	padding?: string;
 	customCss?: string;
 }

@@ -20,6 +20,30 @@ pub mod sink_types {
     pub const CHAT: &str = "chat";
 }
 
+fn normalize_http_auth_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
+fn normalized_http_auth_token(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_http_auth_token)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalized_http_method(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|method| !method.is_empty())
+        .map(str::to_ascii_uppercase)
+}
+
 /// Configuration for creating/updating a sink
 #[derive(Debug, Clone, Default)]
 pub struct SinkConfig {
@@ -56,6 +80,9 @@ pub async fn sync_sink(
     config: SinkConfig,
 ) -> flow_like_types::Result<event_sink::Model> {
     let now = chrono::Utc::now().naive_utc();
+    let is_http_sink = config.sink_type == sink_types::HTTP;
+    let auth_token = normalized_http_auth_token(config.auth_token.as_deref());
+    let method = normalized_http_method(config.method.as_deref());
 
     // Check if sink already exists
     let existing = event_sink::Entity::find()
@@ -85,8 +112,13 @@ pub async fn sync_sink(
         if config.path.is_some() {
             active_model.path = Set(config.path.clone());
         }
+        if is_http_sink {
+            active_model.auth_token = Set(auth_token.clone());
+        } else if config.auth_token.is_some() {
+            active_model.auth_token = Set(auth_token.clone());
+        }
         if config.method.is_some() {
-            active_model.method = Set(config.method.clone());
+            active_model.method = Set(method.clone());
         }
         if config.cron_expression.is_some() {
             active_model.cron_expression = Set(config.cron_expression.clone());
@@ -163,8 +195,8 @@ pub async fn sync_sink(
             sink_type: Set(config.sink_type.clone()),
             active: Set(initial_active),
             path: Set(config.path.clone()),
-            method: Set(config.method.clone()),
-            auth_token: Set(config.auth_token),
+            method: Set(method),
+            auth_token: Set(auth_token),
             webhook_secret: Set(config.webhook_secret),
             cron_expression: Set(config.cron_expression.clone()),
             cron_timezone: Set(config.cron_timezone.clone()),

@@ -1,3 +1,5 @@
+#[cfg(feature = "execute")]
+use chrono::{DateTime, Utc};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -5,8 +7,6 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
-use chrono::{DateTime, Utc};
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 use flow_like_types::{
@@ -263,8 +263,7 @@ impl NodeLogic for ListMailsNode {
             }
             "BEFORE" => {
                 let before_date: DateTime<Utc> = context.evaluate_pin("before_date").await?;
-                search_criteria =
-                    format!("BEFORE {}", format_imap_search_date(before_date));
+                search_criteria = format!("BEFORE {}", format_imap_search_date(before_date));
             }
             "FROM" => {
                 let from_addr: String = context.evaluate_pin("from").await?;

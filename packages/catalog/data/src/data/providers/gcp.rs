@@ -88,9 +88,12 @@ impl GcpProvider {
                         e
                     )
                 })?;
-                let key: ServiceAccountKey = flow_like_types::json::from_slice(&bytes)
-                    .map_err(|e| {
-                        flow_like_types::anyhow!("Service account key file is not valid JSON: {}", e)
+                let key: ServiceAccountKey =
+                    flow_like_types::json::from_slice(&bytes).map_err(|e| {
+                        flow_like_types::anyhow!(
+                            "Service account key file is not valid JSON: {}",
+                            e
+                        )
                     })?;
                 Client::from_service_account_key(key, self.readonly)
                     .await
@@ -119,7 +122,8 @@ impl GcpProvider {
         &self,
         context: &mut ExecutionContext,
         builder: flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder,
-    ) -> flow_like_types::Result<flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder> {
+    ) -> flow_like_types::Result<flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder>
+    {
         use flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder;
 
         match self.auth_mode.as_str() {

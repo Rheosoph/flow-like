@@ -74,12 +74,7 @@ impl NodeLogic for S3StoreNode {
         )
         .set_default_value(Some(json!(false)));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -122,7 +117,15 @@ impl NodeLogic for S3StoreNode {
             .map_err(|e| flow_like_types::anyhow!("Failed to build S3 store: {}", e))?;
         let store = FlowLikeStore::AWS(Arc::new(store));
 
-        let path = cache_and_wrap(context, "s3_store", &bucket, &prefix, &provider.auth_mode, store).await;
+        let path = cache_and_wrap(
+            context,
+            "s3_store",
+            &bucket,
+            &prefix,
+            &provider.auth_mode,
+            store,
+        )
+        .await;
         context.set_pin_value("path", json!(path)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -183,12 +186,7 @@ impl NodeLogic for S3ExpressStoreNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -298,12 +296,7 @@ impl NodeLogic for AzureBlobStoreNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -406,12 +399,7 @@ impl NodeLogic for GcpStorageStoreNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -515,12 +503,7 @@ impl NodeLogic for CloudflareR2StoreNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -587,10 +570,7 @@ async fn cache_and_wrap(
         "{}_{}_{}",
         kind,
         bucket_or_container,
-        flow_like::utils::hash::hash_string_non_cryptographic(&format!(
-            "{}_{}",
-            auth_key, prefix
-        ))
+        flow_like::utils::hash::hash_string_non_cryptographic(&format!("{}_{}", auth_key, prefix))
     );
     let cacheable: Arc<dyn Cacheable> = Arc::new(store);
     context
@@ -606,7 +586,11 @@ mod tests {
     use super::*;
     use flow_like::flow::pin::PinType;
 
-    fn find_pin<'a>(node: &'a Node, name: &str, pin_type: PinType) -> Option<&'a flow_like::flow::pin::Pin> {
+    fn find_pin<'a>(
+        node: &'a Node,
+        name: &str,
+        pin_type: PinType,
+    ) -> Option<&'a flow_like::flow::pin::Pin> {
         node.pins
             .values()
             .find(|p| p.name == name && p.pin_type == pin_type)
@@ -685,7 +669,11 @@ mod tests {
         ] {
             let path = find_pin(&node, "path", PinType::Output).expect("path output");
             assert_eq!(path.data_type, VariableType::Struct);
-            assert!(path.schema.is_some(), "{} path output must be schema-typed FlowPath", node.name);
+            assert!(
+                path.schema.is_some(),
+                "{} path output must be schema-typed FlowPath",
+                node.name
+            );
         }
     }
 }

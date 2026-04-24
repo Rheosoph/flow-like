@@ -5,6 +5,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     routing::post,
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
     ChatImage, CopilotScope, RunContext, UIActionContext, UnifiedChatMessage,
@@ -70,6 +71,117 @@ pub struct CopilotChatRequest {
     /// Whether to stream the response
     #[serde(default)]
     pub stream: bool,
+}
+
+const MAX_PROMPT_CHARS: usize = 20_000;
+const MAX_HISTORY_MESSAGES: usize = 32;
+const MAX_HISTORY_MESSAGE_CHARS: usize = 4_000;
+const MAX_REQUEST_IMAGES: usize = 4;
+const MAX_TOTAL_IMAGES: usize = 8;
+const MAX_IMAGE_BASE64_CHARS: usize = 7_000_000;
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_SELECTED_IDS: usize = 200;
+const MAX_SELECTED_ID_CHARS: usize = 256;
+const ALLOWED_IMAGE_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError> {
+    if payload.user_prompt.chars().count() > MAX_PROMPT_CHARS {
+        return Err(ApiError::bad_request(format!(
+            "Prompt is too large. Maximum is {MAX_PROMPT_CHARS} characters."
+        )));
+    }
+
+    if payload.history.len() > MAX_HISTORY_MESSAGES {
+        return Err(ApiError::bad_request(format!(
+            "Chat history is too large. Maximum is {MAX_HISTORY_MESSAGES} messages."
+        )));
+    }
+
+    let mut total_images = payload.request_images.as_ref().map_or(0, Vec::len);
+
+    for (index, message) in payload.history.iter().enumerate() {
+        if message.content.chars().count() > MAX_HISTORY_MESSAGE_CHARS {
+            return Err(ApiError::bad_request(format!(
+                "History message {index} is too large. Maximum is {MAX_HISTORY_MESSAGE_CHARS} characters."
+            )));
+        }
+
+        if let Some(images) = &message.images {
+            total_images += images.len();
+            validate_images(images, &format!("history message {index}"))?;
+        }
+    }
+
+    if total_images > MAX_TOTAL_IMAGES {
+        return Err(ApiError::bad_request(format!(
+            "Too many images in request. Maximum is {MAX_TOTAL_IMAGES} total images."
+        )));
+    }
+
+    if payload.selected_node_ids.len() > MAX_SELECTED_IDS
+        || payload.selected_component_ids.len() > MAX_SELECTED_IDS
+    {
+        return Err(ApiError::bad_request(format!(
+            "Too many selected IDs. Maximum is {MAX_SELECTED_IDS}."
+        )));
+    }
+
+    for selected_id in payload
+        .selected_node_ids
+        .iter()
+        .chain(payload.selected_component_ids.iter())
+    {
+        if selected_id.chars().count() > MAX_SELECTED_ID_CHARS {
+            return Err(ApiError::bad_request(format!(
+                "Selected IDs are limited to {MAX_SELECTED_ID_CHARS} characters."
+            )));
+        }
+    }
+
+    if let Some(images) = &payload.request_images {
+        validate_images(images, "request")?;
+    }
+
+    Ok(())
+}
+
+fn validate_images(images: &[ChatImage], context: &str) -> Result<(), ApiError> {
+    if images.len() > MAX_REQUEST_IMAGES {
+        return Err(ApiError::bad_request(format!(
+            "Too many images in {context}. Maximum is {MAX_REQUEST_IMAGES}."
+        )));
+    }
+
+    for (index, image) in images.iter().enumerate() {
+        if !ALLOWED_IMAGE_MEDIA_TYPES.contains(&image.media_type.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "Unsupported image type '{}' in {context} image {index}.",
+                image.media_type
+            )));
+        }
+
+        if image.data.len() > MAX_IMAGE_BASE64_CHARS {
+            return Err(ApiError::bad_request(format!(
+                "Image {index} in {context} is too large."
+            )));
+        }
+
+        match STANDARD.decode(&image.data) {
+            Ok(decoded) if decoded.len() <= MAX_IMAGE_BYTES => {}
+            Ok(_) => {
+                return Err(ApiError::bad_request(format!(
+                    "Image {index} in {context} is too large."
+                )));
+            }
+            Err(_) => {
+                return Err(ApiError::bad_request(format!(
+                    "Image {index} in {context} is not valid base64 data."
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 struct ServerCatalogProvider {
@@ -274,6 +386,7 @@ pub async fn copilot_chat(
     Json(payload): Json<CopilotChatRequest>,
 ) -> Result<axum::response::Response, ApiError> {
     let sub = user.sub()?;
+    validate_copilot_payload(&payload)?;
 
     tracing::info!(
         "[copilot_chat] User {} requested scope {:?}",
@@ -354,15 +467,16 @@ pub async fn copilot_chat(
     });
 
     let stream = async_stream::stream! {
+        let mut token_stream_open = true;
         loop {
             flow_like_types::tokio::select! {
-                token = rx.recv() => {
+                token = rx.recv(), if token_stream_open => {
                     match token {
                         Some(token) => {
                             yield Ok::<Event, Infallible>(Event::default().event("token").data(token));
                         }
                         None => {
-                            // Sender dropped; wait for final result.
+                            token_stream_open = false;
                         }
                     }
                 }

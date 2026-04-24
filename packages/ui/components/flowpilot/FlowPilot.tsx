@@ -71,6 +71,32 @@ import type {
 import type { BoardCommand, Suggestion } from "../../lib/schema/flow/copilot";
 import type { SurfaceComponent } from "../a2ui/types";
 
+const MAX_ATTACHED_IMAGES = 4;
+const MAX_ATTACHED_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_ATTACHED_IMAGE_TYPES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/webp",
+	"image/gif",
+]);
+
+function canAttachImage(file: File): boolean {
+	return (
+		ALLOWED_ATTACHED_IMAGE_TYPES.has(file.type) &&
+		file.size <= MAX_ATTACHED_IMAGE_BYTES
+	);
+}
+
+function normalizedDataUrlImageType(mediaType: string): string | null {
+	if (mediaType === "image/jpg") return "image/jpeg";
+	return ALLOWED_ATTACHED_IMAGE_TYPES.has(mediaType) ? mediaType : null;
+}
+
+function base64ByteLength(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
+}
+
 export function FlowPilot({
 	agentMode,
 	title = "FlowPilot",
@@ -290,6 +316,7 @@ export function FlowPilot({
 		setValidationWarnings([]);
 		setSuggestions([]);
 		setCurrentConversationId(undefined);
+		currentMessageIdRef.current = undefined;
 		setShowHistory(false);
 	}, []);
 
@@ -316,6 +343,7 @@ export function FlowPilot({
 				setPendingCommands([]);
 				setPendingComponents([]);
 				setValidationWarnings([]);
+				currentMessageIdRef.current = undefined;
 				setShowHistory(false);
 			} catch (err) {
 				console.error("Failed to load conversation:", err);
@@ -331,7 +359,12 @@ export function FlowPilot({
 			if (!files) return;
 
 			Array.from(files).forEach((file) => {
-				if (!file.type.startsWith("image/")) return;
+				if (!canAttachImage(file)) {
+					console.warn(
+						`Skipped unsupported or oversized FlowPilot image: ${file.name}`,
+					);
+					return;
+				}
 
 				const reader = new FileReader();
 				reader.onload = (event) => {
@@ -339,14 +372,23 @@ export function FlowPilot({
 					if (!dataUrl) return;
 
 					const base64Data = dataUrl.split(",")[1];
-					setAttachedImages((prev) => [
-						...prev,
-						{
-							data: base64Data,
-							mediaType: file.type,
-							preview: dataUrl,
-						},
-					]);
+					if (
+						!base64Data ||
+						base64ByteLength(base64Data) > MAX_ATTACHED_IMAGE_BYTES
+					) {
+						return;
+					}
+					setAttachedImages((prev) => {
+						if (prev.length >= MAX_ATTACHED_IMAGES) return prev;
+						return [
+							...prev,
+							{
+								data: base64Data,
+								mediaType: file.type,
+								preview: dataUrl,
+							},
+						];
+					});
 				};
 				reader.readAsDataURL(file);
 			});
@@ -371,6 +413,12 @@ export function FlowPilot({
 				e.preventDefault();
 				const file = item.getAsFile();
 				if (!file) continue;
+				if (!canAttachImage(file)) {
+					console.warn(
+						"Skipped unsupported or oversized pasted FlowPilot image",
+					);
+					continue;
+				}
 
 				const reader = new FileReader();
 				reader.onload = (event) => {
@@ -378,14 +426,23 @@ export function FlowPilot({
 					if (!dataUrl) return;
 
 					const base64Data = dataUrl.split(",")[1];
-					setAttachedImages((prev) => [
-						...prev,
-						{
-							data: base64Data,
-							mediaType: file.type,
-							preview: dataUrl,
-						},
-					]);
+					if (
+						!base64Data ||
+						base64ByteLength(base64Data) > MAX_ATTACHED_IMAGE_BYTES
+					) {
+						return;
+					}
+					setAttachedImages((prev) => {
+						if (prev.length >= MAX_ATTACHED_IMAGES) return prev;
+						return [
+							...prev,
+							{
+								data: base64Data,
+								mediaType: file.type,
+								preview: dataUrl,
+							},
+						];
+					});
 				};
 				reader.readAsDataURL(file);
 			}
@@ -505,11 +562,43 @@ export function FlowPilot({
 	// Main submit handler
 	const handleSubmit = useCallback(
 		async (withScreenshot?: boolean) => {
-			if (!input.trim() && attachedImages.length === 0) return;
+			if (loading || (!input.trim() && attachedImages.length === 0)) return;
 
 			let currentImages = [...attachedImages];
 			const currentInput = input;
 			const currentContextNodes = [...selectedNodeIds];
+			const scope: CopilotScope =
+				agentMode === "board"
+					? "Board"
+					: agentMode === "ui"
+						? "Frontend"
+						: "Both";
+
+			if (scope === "Board" && !board) {
+				setMessages((prev) => [
+					...prev,
+					{
+						role: "assistant",
+						content: "No board is currently loaded. Please load a board first.",
+					},
+				]);
+				return;
+			}
+
+			if (
+				provider === "copilot" &&
+				(!copilotSDK.isRunning || !selectedModelId)
+			) {
+				setMessages((prev) => [
+					...prev,
+					{
+						role: "assistant",
+						content:
+							"GitHub Copilot is not ready yet. Connect Copilot and select a model before sending.",
+					},
+				]);
+				return;
+			}
 
 			// Capture screenshot if requested and captureScreenshot is provided
 			if (withScreenshot && captureScreenshot) {
@@ -518,13 +607,21 @@ export function FlowPilot({
 					if (screenshotDataUrl) {
 						// Parse the data URL
 						const match = screenshotDataUrl.match(
-							/^data:(image\/\w+);base64,(.+)$/,
+							/^data:(image\/(?:png|jpe?g|webp|gif));base64,(.+)$/,
 						);
-						if (match) {
+						const mediaType = match
+							? normalizedDataUrlImageType(match[1])
+							: null;
+						if (
+							match &&
+							mediaType &&
+							base64ByteLength(match[2]) <= MAX_ATTACHED_IMAGE_BYTES &&
+							currentImages.length < MAX_ATTACHED_IMAGES
+						) {
 							currentImages = [
 								{
 									data: match[2],
-									mediaType: match[1],
+									mediaType,
 									preview: screenshotDataUrl,
 								},
 								...currentImages,
@@ -629,13 +726,15 @@ export function FlowPilot({
 				}
 			}
 
+			let phaseTimer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				let currentMessageContent = "";
 				let lastUpdateTime = 0;
 				const UPDATE_INTERVAL = 100;
 				let tagBuffer = ""; // Buffer for partial XML tags that might be split across tokens
+				let currentPlanSteps: UnifiedPlanStep[] = [];
 
-				setTimeout(() => setLoadingPhase("analyzing"), 300);
+				phaseTimer = setTimeout(() => setLoadingPhase("analyzing"), 300);
 
 				const flushMessageContent = () => {
 					setMessages((prev) => {
@@ -749,15 +848,16 @@ export function FlowPilot({
 									setLoadingPhase("generating");
 								}
 
-								setPlanSteps((prev) => {
-									const existingIndex = prev.findIndex((s) => s.id === step.id);
-									if (existingIndex >= 0) {
-										const updated = [...prev];
-										updated[existingIndex] = step;
-										return updated;
-									}
-									return [...prev, step];
-								});
+								const existingIndex = currentPlanSteps.findIndex(
+									(s) => s.id === step.id,
+								);
+								currentPlanSteps =
+									existingIndex >= 0
+										? currentPlanSteps.map((existing, index) =>
+												index === existingIndex ? step : existing,
+											)
+										: [...currentPlanSteps, step];
+								setPlanSteps(currentPlanSteps);
 							}
 						} catch {
 							// Invalid JSON
@@ -888,29 +988,6 @@ export function FlowPilot({
 					}
 				};
 
-				// Determine the scope for the unified copilot
-				const scope: CopilotScope =
-					agentMode === "board"
-						? "Board"
-						: agentMode === "ui"
-							? "Frontend"
-							: "Both";
-
-				// Check if we have the required context
-				if (scope === "Board" && !board) {
-					setMessages((prev) => [
-						...prev,
-						{
-							role: "assistant",
-							content:
-								"No board is currently loaded. Please load a board first.",
-						},
-					]);
-					setLoading(false);
-					setLoadingPhase("idle");
-					return;
-				}
-
 				// Build the prompt with context
 				let userMsg = currentInput;
 				if (runContext) {
@@ -963,7 +1040,7 @@ ${userMsg}`;
 				const effectiveModelId =
 					provider === "copilot" && selectedModelId
 						? `copilot:${selectedModelId}`
-						: selectedModelId;
+						: selectedModelId || undefined;
 
 				const response = await backendContext.boardState.copilot_chat(
 					scope,
@@ -983,11 +1060,14 @@ ${userMsg}`;
 
 				flushMessageContent();
 
+				const finalAssistantContent =
+					currentMessageContent || response.message || "";
+
 				// Save final assistant message to DB
-				if (assistantMessageId && currentMessageContent) {
+				if (assistantMessageId && finalAssistantContent) {
 					try {
 						await updateMessage(assistantMessageId, {
-							content: currentMessageContent || response.message,
+							content: finalAssistantContent,
 						});
 					} catch (err) {
 						console.error("Failed to update assistant message:", err);
@@ -998,11 +1078,11 @@ ${userMsg}`;
 					const newMessages = [...prev];
 					const lastMessage = newMessages[newMessages.length - 1];
 					if (lastMessage && lastMessage.role === "assistant") {
-						lastMessage.planSteps = planSteps.filter(
+						lastMessage.planSteps = currentPlanSteps.filter(
 							(s) => s.status === "Completed",
 						);
 						if (!lastMessage.content.trim()) {
-							lastMessage.content = response.message;
+							lastMessage.content = finalAssistantContent;
 						}
 					}
 					return newMessages;
@@ -1023,6 +1103,13 @@ ${userMsg}`;
 							connections: [],
 						})),
 					);
+				}
+
+				const validatedCanvasSettings = validateCanvasSettings(
+					response.canvas_settings,
+				);
+				if (validatedCanvasSettings) {
+					setPendingCanvasSettings(validatedCanvasSettings);
 				}
 
 				// Handle generated components — validate before showing
@@ -1057,10 +1144,16 @@ ${userMsg}`;
 						}
 
 						lastMessage.content = `Error: ${errorMessage}`;
+						if (assistantMessageId) {
+							void updateMessage(assistantMessageId, {
+								content: lastMessage.content,
+							});
+						}
 					}
 					return newMessages;
 				});
 			} finally {
+				if (phaseTimer) clearTimeout(phaseTimer);
 				setLoading(false);
 				setLoadingPhase("idle");
 				setLoadingStartTime(null);
@@ -1080,10 +1173,11 @@ ${userMsg}`;
 			selectedComponentIds,
 			onComponentsGenerated,
 			backendContext.boardState,
-			planSteps,
 			captureScreenshot,
 			provider,
+			copilotSDK.isRunning,
 			currentConversationId,
+			loading,
 		],
 	);
 
@@ -1368,7 +1462,7 @@ ${userMsg}`;
 					<input
 						type="file"
 						ref={imageInputRef}
-						accept="image/*"
+						accept="image/png,image/jpeg,image/webp,image/gif"
 						multiple
 						onChange={handleImageSelect}
 						className="hidden"
@@ -1381,7 +1475,9 @@ ${userMsg}`;
 								size="icon"
 								className="h-10 w-10 shrink-0 rounded-lg hover:bg-accent/50"
 								onClick={() => imageInputRef.current?.click()}
-								disabled={loading}
+								disabled={
+									loading || attachedImages.length >= MAX_ATTACHED_IMAGES
+								}
 							>
 								<ImageIcon className="w-4 h-4" />
 							</Button>
@@ -1902,7 +1998,9 @@ const MessageBubble = memo(function MessageBubble({
 					<MessageContent
 						content={message.content}
 						onFocusNode={onFocusNode}
-						board={agentMode === "board" ? board : undefined}
+						board={
+							agentMode === "board" || agentMode === "both" ? board : undefined
+						}
 						enableMarkdown={true}
 					/>
 				) : isLoading ? null : (

@@ -1,12 +1,18 @@
 use anyhow::Result;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{FromRequest, Multipart};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::{
     Json, Router,
     body::Body,
     extract::{Path as AxumPath, State},
     response::IntoResponse,
 };
+use flow_like::flow_like_storage::{
+    Path as StorePath, files::store::FlowLikeStore, object_store::PutPayload,
+};
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::BufferedInterComHandler;
+use flow_like_types::{Bytes, create_id};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -24,6 +30,336 @@ pub struct HttpSink {
     /// Where this sink should execute: "LOCAL", "REMOTE", or "HYBRID"
     #[serde(default)]
     pub sink_execution: Option<String>,
+}
+
+const HTTP_SINK_BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Default)]
+struct ParsedHttpRequestPayload {
+    payload: Option<flow_like_types::Value>,
+}
+
+fn authorization_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(normalize_authorization_token)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_authorization_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
+fn is_multipart_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/form-data"))
+        })
+        .unwrap_or(false)
+}
+
+fn is_urlencoded_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value.split(';').next().is_some_and(|mime| {
+                mime.trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn decode_form_component(value: &str) -> String {
+    let value = value.replace('+', " ");
+    urlencoding::decode(&value)
+        .unwrap_or(std::borrow::Cow::Borrowed(value.as_str()))
+        .into_owned()
+}
+
+fn normalize_form_key(raw_key: &str, fallback: &str) -> (String, bool) {
+    let decoded = decode_form_component(raw_key);
+    let trimmed = decoded.trim();
+    let key = if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Some(stripped) = key.strip_suffix("[]") {
+        let stripped = stripped.trim();
+        return (
+            if stripped.is_empty() {
+                fallback.to_string()
+            } else {
+                stripped.to_string()
+            },
+            true,
+        );
+    }
+
+    (key, false)
+}
+
+fn insert_payload_value(
+    map: &mut serde_json::Map<String, flow_like_types::Value>,
+    key: String,
+    value: flow_like_types::Value,
+    force_array: bool,
+) {
+    match map.get_mut(&key) {
+        Some(flow_like_types::Value::Array(values)) => values.push(value),
+        Some(existing) => {
+            let previous = std::mem::replace(existing, flow_like_types::Value::Null);
+            *existing = flow_like_types::Value::Array(vec![previous, value]);
+        }
+        None if force_array => {
+            map.insert(key, flow_like_types::Value::Array(vec![value]));
+        }
+        None => {
+            map.insert(key, value);
+        }
+    }
+}
+
+fn parse_form_encoded_payload(input: &str) -> serde_json::Map<String, flow_like_types::Value> {
+    let mut map = serde_json::Map::new();
+
+    for pair in input.split('&').filter(|pair| !pair.is_empty()) {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, force_array) = normalize_form_key(raw_key, "value");
+        let value = flow_like_types::Value::String(decode_form_component(raw_value));
+        insert_payload_value(&mut map, key, value, force_array);
+    }
+
+    map
+}
+
+fn merge_query_and_body(
+    query: serde_json::Map<String, flow_like_types::Value>,
+    body: Option<flow_like_types::Value>,
+) -> Option<flow_like_types::Value> {
+    match (query.is_empty(), body) {
+        (true, None) => None,
+        (false, None) => Some(flow_like_types::Value::Object(query)),
+        (true, Some(body)) => Some(body),
+        (false, Some(flow_like_types::Value::Object(mut body_map))) => {
+            let mut merged = query;
+            merged.append(&mut body_map);
+            Some(flow_like_types::Value::Object(merged))
+        }
+        (false, Some(body)) => {
+            let mut merged = query;
+            merged.insert("_body".to_string(), body);
+            Some(flow_like_types::Value::Object(merged))
+        }
+    }
+}
+
+fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> String {
+    let raw = filename
+        .and_then(|name| name.rsplit(['/', '\\']).next())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("file");
+
+    let mut sanitized = String::with_capacity(raw.len().min(120));
+    for ch in raw.chars().take(120) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        format!("file-{fallback_index}")
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len().min(80));
+    for ch in value.chars().take(80) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn flow_path_value(path: &str) -> flow_like_types::Value {
+    serde_json::json!({
+        "path": path,
+        "store_ref": REQUEST_FILES_STORE_REF,
+        "cache_store_ref": null
+    })
+}
+
+async fn parse_multipart_payload(
+    request: Request<Body>,
+    query: serde_json::Map<String, flow_like_types::Value>,
+    body_limit: usize,
+    file_store: FlowLikeStore,
+    file_path_prefix: String,
+) -> std::result::Result<ParsedHttpRequestPayload, (StatusCode, String)> {
+    let mut multipart = Multipart::from_request(request, &()).await.map_err(|e| {
+        eprintln!("[HTTP] Failed to parse multipart body: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid multipart/form-data request".to_string(),
+        )
+    })?;
+
+    let mut body_map = serde_json::Map::new();
+    let mut total_bytes = 0usize;
+    let mut file_count = 0usize;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        eprintln!("[HTTP] Failed to read multipart field: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid multipart/form-data field".to_string(),
+        )
+    })? {
+        let raw_name = field.name().unwrap_or("file").to_string();
+        let file_name = field.file_name().map(ToOwned::to_owned);
+        let (key, force_array) = normalize_form_key(&raw_name, "file");
+        let bytes = field.bytes().await.map_err(|e| {
+            eprintln!("[HTTP] Failed to read multipart field bytes: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                "Invalid multipart/form-data field".to_string(),
+            )
+        })?;
+
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        if total_bytes > body_limit {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Request body exceeds size limit".to_string(),
+            ));
+        }
+
+        if file_name.is_some() {
+            file_count += 1;
+            let file_index = file_count;
+            let sanitized_name = sanitize_request_file_name(file_name.as_deref(), file_index);
+            let path = format!("{file_path_prefix}/{file_index:04}-{sanitized_name}");
+            file_store
+                .as_generic()
+                .put(
+                    &StorePath::from(path.clone()),
+                    PutPayload::from_bytes(Bytes::copy_from_slice(&bytes)),
+                )
+                .await
+                .map_err(|e| {
+                    eprintln!("[HTTP] Failed to stage multipart file: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to stage multipart file".to_string(),
+                    )
+                })?;
+            insert_payload_value(&mut body_map, key, flow_path_value(&path), force_array);
+        } else {
+            let value = flow_like_types::Value::String(String::from_utf8_lossy(&bytes).to_string());
+            insert_payload_value(&mut body_map, key, value, force_array);
+        }
+    }
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, Some(flow_like_types::Value::Object(body_map))),
+    })
+}
+
+async fn parse_http_request_payload(
+    request: Request<Body>,
+    body_limit: usize,
+    file_store: Option<FlowLikeStore>,
+    file_path_prefix: Option<String>,
+) -> std::result::Result<ParsedHttpRequestPayload, (StatusCode, String)> {
+    let (parts, body) = request.into_parts();
+    let query = parts
+        .uri
+        .query()
+        .map(parse_form_encoded_payload)
+        .unwrap_or_default();
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+
+    if is_multipart_content_type(content_type.as_deref()) {
+        let file_store = file_store.ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Temporary file store is not configured".to_string(),
+            )
+        })?;
+        let file_path_prefix = file_path_prefix.ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Temporary file path is not configured".to_string(),
+            )
+        })?;
+        return parse_multipart_payload(
+            Request::from_parts(parts, body),
+            query,
+            body_limit,
+            file_store,
+            file_path_prefix,
+        )
+        .await;
+    }
+
+    let body_bytes = axum::body::to_bytes(body, body_limit).await.map_err(|e| {
+        eprintln!("[HTTP] Failed to read request body: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            "Failed to read request body".to_string(),
+        )
+    })?;
+
+    let body_payload = if body_bytes.is_empty() {
+        None
+    } else if is_urlencoded_content_type(content_type.as_deref()) {
+        let body_str = std::str::from_utf8(&body_bytes)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid form body".to_string()))?;
+        Some(flow_like_types::Value::Object(parse_form_encoded_payload(
+            body_str,
+        )))
+    } else {
+        match serde_json::from_slice::<flow_like_types::Value>(&body_bytes) {
+            Ok(value) => Some(value),
+            Err(_) => Some(flow_like_types::Value::String(
+                String::from_utf8_lossy(&body_bytes).to_string(),
+            )),
+        }
+    };
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, body_payload),
+    })
 }
 
 impl HttpSink {
@@ -56,6 +392,14 @@ impl HttpSink {
         registration: &EventRegistration,
         config: &HttpSink,
     ) -> Result<()> {
+        let method = config.method.trim().to_ascii_uppercase();
+        let auth_token = config
+            .auth_token
+            .as_deref()
+            .map(normalize_authorization_token)
+            .filter(|token| !token.is_empty())
+            .map(ToOwned::to_owned);
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
@@ -66,7 +410,7 @@ impl HttpSink {
             .query_row(
                 "SELECT event_id FROM http_routes
                  WHERE app_id = ?1 AND path = ?2 AND method = ?3",
-                params![registration.app_id, config.path, config.method],
+                params![registration.app_id, config.path, method],
                 |row| row.get::<_, String>(0),
             )
             .ok();
@@ -77,7 +421,7 @@ impl HttpSink {
             tracing::warn!(
                 "Route conflict: {} {} {} already registered to event {}. Overwriting with event {}",
                 registration.app_id,
-                config.method,
+                method,
                 config.path,
                 existing_event_id,
                 registration.event_id
@@ -102,8 +446,8 @@ impl HttpSink {
                 registration.event_id,
                 registration.app_id,
                 config.path,
-                config.method,
-                config.auth_token,
+                method,
+                auth_token,
                 now,
             ],
         )?;
@@ -148,34 +492,12 @@ impl HttpSink {
     async fn handle_request(
         State(state): State<Arc<HttpServerState>>,
         AxumPath((app_id, path)): AxumPath<(String, String)>,
-        method: axum::http::Method,
-        headers: HeaderMap,
-        body: Body,
+        request: Request<Body>,
     ) -> impl IntoResponse {
         use crate::state::TauriEventSinkManagerState;
 
-        // Extract body as string
-        let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("[HTTP] Failed to read request body: {}", e);
-                return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response();
-            }
-        };
-
-        let body_str = if !body_bytes.is_empty() {
-            match String::from_utf8(body_bytes.to_vec()) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    eprintln!("[HTTP] Invalid UTF-8 in request body: {}", e);
-                    return (StatusCode::BAD_REQUEST, "Invalid UTF-8 in request body")
-                        .into_response();
-                }
-            }
-        } else {
-            None
-        };
-
+        let method = request.method().clone();
+        let headers = request.headers().clone();
         let method_str = method.as_str();
         let full_path = format!("/{}", path);
         let path_without_app_id = full_path
@@ -230,38 +552,45 @@ impl HttpSink {
         );
 
         if let Some(auth_token) = auth_token {
-            let header_token = headers
-                .get("Authorization")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
+            let expected_token = normalize_authorization_token(&auth_token);
+            let header_token = authorization_token_from_headers(&headers);
 
-            if header_token != auth_token {
+            if header_token.as_deref() != Some(expected_token) {
                 return (StatusCode::UNAUTHORIZED, "Invalid auth token").into_response();
             }
         }
 
         println!("[HTTP] Authentication passed");
 
-        // Extract body from request
-        let body = if let Some(body_str) = body_str {
-            if !body_str.is_empty() {
-                match serde_json::from_str::<flow_like_types::Value>(&body_str) {
-                    Ok(value) => Some(value),
-                    Err(e) => {
-                        eprintln!("[HTTP] Failed to parse JSON body: {}", e);
-                        return (StatusCode::BAD_REQUEST, "Invalid JSON body").into_response();
-                    }
-                }
-            } else {
-                None
+        let temporary_store = match app_handle.try_state::<crate::state::TauriFlowLikeState>() {
+            Some(state) => {
+                let config = state.0.config.read().await;
+                config.stores.temporary_store.clone()
             }
-        } else {
-            None
+            None => None,
+        };
+        let file_path_prefix = format!(
+            "tmp/global/apps/{}/events/{}/requests/{}",
+            sanitize_store_path_segment(&app_id, "app"),
+            sanitize_store_path_segment(&event_id, "event"),
+            create_id()
+        );
+
+        let parsed_payload = match parse_http_request_payload(
+            request,
+            HTTP_SINK_BODY_LIMIT_BYTES,
+            temporary_store,
+            Some(file_path_prefix),
+        )
+        .await
+        {
+            Ok(payload) => payload,
+            Err((status, message)) => return (status, message).into_response(),
         };
 
         println!(
             "[HTTP] Triggering event: {}, with body {:?}",
-            event_id, body
+            event_id, parsed_payload.payload
         );
 
         let response = Arc::new(Mutex::new(None));
@@ -312,7 +641,12 @@ impl HttpSink {
 
         if let Some(manager_state) = app_handle.try_state::<TauriEventSinkManagerState>() {
             let result = match manager_state.0.try_lock() {
-                Ok(manager) => manager.fire_event(&app_handle, &event_id, body, Some(callback)),
+                Ok(manager) => manager.fire_event(
+                    &app_handle,
+                    &event_id,
+                    parsed_payload.payload,
+                    Some(callback),
+                ),
                 Err(_) => {
                     tracing::warn!(
                         "EventSinkManager busy while handling HTTP event {}",

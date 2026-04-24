@@ -532,9 +532,14 @@ async fn run_bigquery_registration(
 
     let batch: RecordBatch = rows_to_record_batch(&arrow_schema, &schema_fields, &all_rows)?;
 
-    let mem_table = Arc::new(MemTable::try_new(arrow_schema, vec![vec![batch]]).map_err(|e| {
-        flow_like_types::anyhow!("Failed to build DataFusion MemTable for BigQuery result: {}", e)
-    })?);
+    let mem_table = Arc::new(
+        MemTable::try_new(arrow_schema, vec![vec![batch]]).map_err(|e| {
+            flow_like_types::anyhow!(
+                "Failed to build DataFusion MemTable for BigQuery result: {}",
+                e
+            )
+        })?,
+    );
 
     cached_session
         .ctx
@@ -783,7 +788,10 @@ mod tests {
             .find(|p| p.name == "provider" && p.pin_type == PinType::Input)
             .expect("provider input pin");
         assert_eq!(provider.data_type, VariableType::Struct);
-        assert!(provider.schema.is_some(), "provider pin must be schema-typed GcpProvider");
+        assert!(
+            provider.schema.is_some(),
+            "provider pin must be schema-typed GcpProvider"
+        );
     }
 
     #[test]

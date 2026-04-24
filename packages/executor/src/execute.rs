@@ -259,6 +259,11 @@ pub async fn execute(
         "Creating InternalRun with predetermined run_id"
     );
 
+    let context_token = request
+        .token
+        .clone()
+        .or_else(|| Some(request.executor_jwt.clone()));
+
     let mut run = InternalRun::new_with_run_id(
         &request.app_id,
         board.clone(),
@@ -269,7 +274,7 @@ pub async fn execute(
         request.stream_state,
         callback,
         Some(request.credentials.clone()),
-        Some(request.executor_jwt.clone()),
+        context_token,
         oauth_tokens,
         Some(claims.run_id.clone()),
     )

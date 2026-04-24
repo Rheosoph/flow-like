@@ -17,6 +17,7 @@ use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
 use flow_like_storage::{Path, serde_arrow};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
 use flow_like_types::json::to_vec;
 use flow_like_types::sync::{Mutex, RwLock};
@@ -1049,12 +1050,25 @@ impl InternalRun {
             );
         }
 
+        let cache = Arc::new(RwLock::new(AHashMap::new()));
+        let temporary_store = {
+            let config = handler.config.read().await;
+            config.stores.temporary_store.clone()
+        };
+        if let Some(temporary_store) = temporary_store {
+            let cacheable_store: Arc<dyn Cacheable> = Arc::new(temporary_store);
+            cache
+                .write()
+                .await
+                .insert(REQUEST_FILES_STORE_REF.to_string(), cacheable_store);
+        }
+
         Ok(InternalRun {
             run,
             nodes: Arc::new(nodes),
             pins,
             variables,
-            cache: Arc::new(RwLock::new(AHashMap::new())),
+            cache,
             stack: Arc::new(stack),
             concurrency_limit: 128_000,
             cpus: num_cpus::get().max(4) * 4,

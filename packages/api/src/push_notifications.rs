@@ -344,6 +344,23 @@ fn is_target_allowed(
     }
 }
 
+fn is_absolute_http_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn notification_image_url(input: &DispatchNotificationInput) -> Option<&str> {
+    input
+        .image
+        .as_deref()
+        .filter(|url| is_absolute_http_url(url))
+        .or_else(|| {
+            input
+                .icon
+                .as_deref()
+                .filter(|url| is_absolute_http_url(url))
+        })
+}
+
 fn should_invalidate_target(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("unregistered")
@@ -432,8 +449,8 @@ async fn send_via_fcm(
         "title": input.title,
         "body": input.description.clone().unwrap_or_default(),
     });
-    if let Some(image_url) = &input.image {
-        notification_obj["image"] = serde_json::Value::String(image_url.clone());
+    if let Some(image_url) = notification_image_url(input) {
+        notification_obj["image"] = serde_json::Value::String(image_url.to_string());
     }
 
     let mut body = serde_json::json!({
@@ -445,17 +462,28 @@ async fn send_via_fcm(
     });
 
     // Android-specific: notification channel
+    let mut android_notification = serde_json::Map::new();
     if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
+        android_notification.insert(
+            "channel_id".to_string(),
+            serde_json::Value::String(channel_id),
+        );
+    }
+    if let Some(image_url) = notification_image_url(input) {
+        android_notification.insert(
+            "image".to_string(),
+            serde_json::Value::String(image_url.to_string()),
+        );
+    }
+    if !android_notification.is_empty() {
         body["message"]["android"] = serde_json::json!({
-            "notification": {
-                "channel_id": channel_id,
-            }
+            "notification": android_notification,
         });
     }
 
     // iOS-specific: sound + badge via APNS payload
     if target.platform == PushNotificationTargetPlatform::Ios {
-        body["message"]["apns"] = serde_json::json!({
+        let mut apns = serde_json::json!({
             "payload": {
                 "aps": {
                     "sound": "default",
@@ -463,6 +491,15 @@ async fn send_via_fcm(
                 }
             }
         });
+
+        if let Some(image_url) = notification_image_url(input) {
+            apns["payload"]["aps"]["mutable-content"] = serde_json::json!(1);
+            apns["fcm_options"] = serde_json::json!({
+                "image": image_url,
+            });
+        }
+
+        body["message"]["apns"] = apns;
     }
 
     const MAX_RETRIES: u32 = 2;
@@ -697,6 +734,9 @@ fn aws_sns_payload(
             if let Some(channel_id) = &target.channel_id {
                 notification["channel_id"] = serde_json::Value::String(channel_id.clone());
             }
+            if let Some(image_url) = notification_image_url(input) {
+                notification["image"] = serde_json::Value::String(image_url.to_string());
+            }
 
             serde_json::json!({
                 "default": default_body,
@@ -867,15 +907,22 @@ fn azure_message_payload(
     let data = notification_data(notification_id, target, input);
 
     match target.platform {
-        PushNotificationTargetPlatform::Android => Ok(serde_json::to_string(&serde_json::json!({
-            "message": {
-                "notification": {
-                    "title": input.title,
-                    "body": input.description.clone().unwrap_or_default(),
-                },
-                "data": data,
+        PushNotificationTargetPlatform::Android => {
+            let mut notification = serde_json::json!({
+                "title": input.title,
+                "body": input.description.clone().unwrap_or_default(),
+            });
+            if let Some(image_url) = notification_image_url(input) {
+                notification["image"] = serde_json::Value::String(image_url.to_string());
             }
-        }))?),
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "message": {
+                    "notification": notification,
+                    "data": data,
+                }
+            }))?)
+        }
         PushNotificationTargetPlatform::Ios => {
             let mut apns = serde_json::json!({
                 "aps": {

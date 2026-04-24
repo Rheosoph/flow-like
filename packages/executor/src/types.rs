@@ -33,6 +33,9 @@ pub struct ExecutionRequest {
     pub payload: Option<serde_json::Value>,
     /// JWT containing callback_url and run metadata
     pub executor_jwt: String,
+    /// User/PAT/API token injected by the API for workflow nodes to call back into the hub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     /// OAuth tokens keyed by provider name
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_tokens: Option<HashMap<String, OAuthTokenInput>>,
@@ -130,6 +133,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             event_json: p.event_json,
             payload: p.payload,
             executor_jwt: p.executor_jwt,
+            token: p.token,
             oauth_tokens: p.oauth_tokens,
             stream_state: p.stream_state,
             runtime_variables,

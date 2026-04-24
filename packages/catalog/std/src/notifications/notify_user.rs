@@ -1,4 +1,7 @@
-use super::persist::{PersistNotificationParams, build_notification_link, persist_notification};
+use super::{
+    icon::{add_notification_icon_pin, migrate_notification_icon_pin, resolve_notification_icon},
+    persist::{PersistNotificationParams, build_notification_link, persist_notification},
+};
 use flow_like::{
     flow::{
         board::Board,
@@ -47,13 +50,7 @@ impl NodeLogic for NotifyUserNode {
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
 
-        node.add_input_pin(
-            "icon",
-            "Icon",
-            "Icon URL or path (optional)",
-            VariableType::String,
-        )
-        .set_default_value(Some(flow_like_types::json::json!("")));
+        add_notification_icon_pin(&mut node);
 
         node.add_input_pin(
             "link",
@@ -93,7 +90,7 @@ impl NodeLogic for NotifyUserNode {
 
         let title = context.evaluate_pin::<String>("title").await?;
         let description = context.evaluate_pin::<String>("description").await?;
-        let icon = context.evaluate_pin::<String>("icon").await?;
+        let icon = resolve_notification_icon(context).await;
         let link = context.evaluate_pin::<String>("link").await?;
         let show_desktop = context.evaluate_pin::<bool>("show_desktop").await?;
 
@@ -118,9 +115,7 @@ impl NodeLogic for NotifyUserNode {
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
-        if !icon.is_empty() {
-            notification = notification.with_icon(&icon);
-        }
+        notification = notification.with_icon(&icon);
 
         // Send notification via InterCom stream (local display / SSE forwarding)
         context
@@ -133,7 +128,7 @@ impl NodeLogic for NotifyUserNode {
             PersistNotificationParams {
                 title,
                 description: (!description.is_empty()).then_some(description),
-                icon: (!icon.is_empty()).then_some(icon),
+                icon: Some(icon),
                 link: Some(resolved_link),
                 target_user_sub: None,
             },
@@ -158,7 +153,7 @@ impl NodeLogic for NotifyUserNode {
         Ok(())
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: &Board) {
-        // No type matching needed
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        migrate_notification_icon_pin(node);
     }
 }

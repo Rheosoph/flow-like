@@ -134,18 +134,10 @@ impl NodeLogic for EmailHeadersNode {
         let email: Email = context.evaluate_pin("email").await?;
 
         context.set_pin_value("from", json!(email.from)).await?;
-        context
-            .set_pin_value("sender", json!(email.sender))
-            .await?;
-        context
-            .set_pin_value("to", json!(email.to))
-            .await?;
-        context
-            .set_pin_value("cc", json!(email.cc))
-            .await?;
-        context
-            .set_pin_value("bcc", json!(email.bcc))
-            .await?;
+        context.set_pin_value("sender", json!(email.sender)).await?;
+        context.set_pin_value("to", json!(email.to)).await?;
+        context.set_pin_value("cc", json!(email.cc)).await?;
+        context.set_pin_value("bcc", json!(email.bcc)).await?;
 
         Ok(())
     }

@@ -387,7 +387,7 @@ export class WebBoardState implements IBoardState {
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/apps/${appId}/board/${boardId}/invoke`;
 
-		const headers: HeadersInit = {
+		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
 		};
 		if (this.backend.auth?.user?.access_token) {
@@ -697,11 +697,15 @@ export class WebBoardState implements IBoardState {
 		const headers: HeadersInit = {
 			"Content-Type": "application/json",
 		};
+		if (onToken) {
+			headers.Accept = "text/event-stream";
+		}
 		if (this.backend.auth?.user?.access_token) {
 			headers["Authorization"] =
 				`Bearer ${this.backend.auth.user.access_token}`;
 		}
 
+		const wantsStream = Boolean(onToken);
 		const response = await fetch(url, {
 			method: "POST",
 			headers,
@@ -718,6 +722,7 @@ export class WebBoardState implements IBoardState {
 				token,
 				run_context: runContext,
 				action_context: actionContext,
+				stream: wantsStream,
 			}),
 		});
 
@@ -725,46 +730,87 @@ export class WebBoardState implements IBoardState {
 			throw new Error(`Copilot chat failed: ${response.status}`);
 		}
 
-		if (onToken && response.body) {
+		if (
+			onToken &&
+			response.body &&
+			response.headers.get("content-type")?.includes("text/event-stream")
+		) {
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = "";
 			let result: UnifiedCopilotResponse | undefined;
+			let streamError: Error | undefined;
+
+			const handleEvent = (rawEvent: string) => {
+				if (!rawEvent.trim()) return;
+
+				let eventName = "message";
+				const dataLines: string[] = [];
+
+				for (const line of rawEvent.split(/\r?\n/)) {
+					if (line.startsWith(":")) continue;
+					if (line.startsWith("event:")) {
+						eventName = line.slice("event:".length).trim();
+					} else if (line.startsWith("data:")) {
+						dataLines.push(line.slice("data:".length).replace(/^\s/, ""));
+					}
+				}
+
+				const data = dataLines.join("\n");
+				if (!data) return;
+
+				if (eventName === "token" || eventName === "message") {
+					onToken(data);
+					return;
+				}
+
+				if (eventName === "final") {
+					result = JSON.parse(data) as UnifiedCopilotResponse;
+					return;
+				}
+
+				if (eventName === "error") {
+					let message = "Copilot chat failed";
+					try {
+						const parsed = JSON.parse(data) as { error?: string };
+						message = parsed.error ?? message;
+					} catch {
+						message = data;
+					}
+					streamError = new Error(message);
+				}
+			};
+
+			const consumeBufferedEvents = () => {
+				let separatorIndex = buffer.search(/\r?\n\r?\n/);
+				while (separatorIndex !== -1) {
+					const rawEvent = buffer.slice(0, separatorIndex);
+					const separatorLength =
+						buffer.slice(separatorIndex, separatorIndex + 4) === "\r\n\r\n"
+							? 4
+							: 2;
+					buffer = buffer.slice(separatorIndex + separatorLength);
+					handleEvent(rawEvent);
+					if (streamError) throw streamError;
+					separatorIndex = buffer.search(/\r?\n\r?\n/);
+				}
+			};
 
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 
 				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-
-				for (const line of lines) {
-					if (line.startsWith("data: ")) {
-						try {
-							const data = JSON.parse(line.slice(6));
-							if (data.token) {
-								onToken(data.token);
-							}
-							if (data.result) {
-								result = data.result;
-							}
-						} catch {
-							// Ignore parse errors
-						}
-					}
-				}
+				consumeBufferedEvents();
 			}
 
-			return (
-				result ?? {
-					message: "",
-					commands: [],
-					components: [],
-					suggestions: [],
-					active_scope: "Board" as const,
-				}
-			);
+			buffer += decoder.decode();
+			if (buffer.trim()) handleEvent(buffer);
+			if (streamError) throw streamError;
+			if (!result)
+				throw new Error("Copilot stream ended without a final event");
+
+			return result;
 		}
 
 		return response.json();

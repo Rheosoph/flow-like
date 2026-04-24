@@ -3023,8 +3023,14 @@ function BoundValueEditor({
 		if ("literalNumber" in value) return value.literalNumber;
 		if ("literalBool" in value) return value.literalBool;
 		if ("literalJson" in value) return value.literalJson as string;
-		if ("path" in value && value.defaultValue !== undefined)
+		if (
+			"path" in value &&
+			(typeof value.defaultValue === "string" ||
+				typeof value.defaultValue === "number" ||
+				typeof value.defaultValue === "boolean")
+		) {
 			return value.defaultValue;
+		}
 		return undefined;
 	});
 

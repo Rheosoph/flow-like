@@ -51,6 +51,7 @@ export function useSurfaceManager() {
 						id: message.surfaceId,
 						rootComponentId: message.rootComponentId,
 						components: componentsMap,
+						dataModel: message.dataModel,
 						catalogId: message.catalogId,
 					});
 					break;
@@ -99,7 +100,18 @@ export function useSurfaceManager() {
 				}
 
 				case "dataModelUpdate": {
-					// Handle data model updates if needed
+					const existing = next.get(message.surfaceId);
+					if (!existing) break;
+					const entries = new Map(
+						(existing.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+					next.set(message.surfaceId, {
+						...existing,
+						dataModel: Array.from(entries.values()),
+					});
 					break;
 				}
 

@@ -515,6 +515,16 @@ fn extract_http_method(config: &[u8]) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn normalize_http_auth_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
 /// Extract HTTP auth token from event config bytes (for api/http/webhook events)
 fn extract_http_auth_token(config: &[u8]) -> Option<String> {
     if config.is_empty() {
@@ -526,8 +536,9 @@ fn extract_http_auth_token(config: &[u8]) -> Option<String> {
     value
         .get("auth_token")
         .and_then(|v| v.as_str())
+        .map(normalize_http_auth_token)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(ToOwned::to_owned)
 }
 
 /// Delete an event from the database

@@ -16,6 +16,7 @@ import { VariableDescription } from "./variable-types/default-text";
 import { ElementSelect } from "./variable-types/element-select";
 import { EnumVariable } from "./variable-types/enum-variable";
 import { FnVariable } from "./variable-types/fn-select";
+import { ProjectUserSelect } from "./variable-types/project-user-select";
 import { VarVariable } from "./variable-types/var-select";
 
 interface PinEditProps {
@@ -58,6 +59,21 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	if (pin.pin_type === IPinType.Output)
 		return <VariableDescription pin={pin} />;
 	if (pin.depends_on.length > 0) return <VariableDescription pin={pin} />;
+	if (
+		pin.name === "_flow_user_sub" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		return (
+			<ProjectUserSelect
+				pin={pin}
+				value={cachedDefaultValue}
+				appId={appId}
+				setValue={updateDefaultValue}
+			/>
+		);
+	}
+
 	if (pin.data_type === IVariableType.Boolean)
 		return (
 			<BooleanVariable
