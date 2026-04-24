@@ -10,6 +10,8 @@ use flow_like_types::anyhow;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
+use super::db::validate_event_schedule;
+
 #[derive(Deserialize, Debug, ToSchema)]
 pub struct VersionQuery {
     /// expected format: "MAJOR_MINOR_PATCH", e.g. "1_0_3"
@@ -76,7 +78,21 @@ pub async fn validate_event(
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
-    app.validate_event(&event_id, version_opt).await?;
+
+    let event = app.get_event(&event_id, version_opt).await?;
+    event.validate_event_references(&app).await?;
+
+    validate_event_schedule(&state, &event)
+        .await
+        .map_err(|error| match error {
+            flow_like_sinks::SchedulerError::InvalidCronExpression(message) => {
+                ApiError::bad_request(message)
+            }
+            other => ApiError::service_unavailable(format!(
+                "Failed to validate cron schedule: {}",
+                other
+            )),
+        })?;
 
     Ok(Json(()))
 }

@@ -20,8 +20,7 @@ RUN cargo build --release --package aws-event-bridge
 # Runtime stage
 FROM public.ecr.aws/lambda/provided:al2023
 
-# AWS convention for custom-runtime user code is ${LAMBDA_TASK_ROOT} (/var/task).
-# See https://docs.aws.amazon.com/lambda/latest/dg/images-create.html#images-create-from-base
-COPY --from=builder /usr/src/app/target/release/aws-event-bridge ${LAMBDA_TASK_ROOT}/bootstrap
+# The AL2023 custom-runtime entrypoint executes /var/runtime/bootstrap.
+COPY --from=builder /usr/src/app/target/release/aws-event-bridge /var/runtime/bootstrap
 
 CMD ["bootstrap"]

@@ -53,6 +53,16 @@ pub struct ScheduleInfo {
 /// call the central API's `/api/v1/sink/trigger` endpoint.
 #[async_trait::async_trait]
 pub trait SchedulerBackend: Send + Sync {
+    /// Validate a schedule configuration without mutating provider state.
+    async fn validate_schedule(
+        &self,
+        cron_expr: &str,
+        config: &CronSinkConfig,
+    ) -> SchedulerResult<()> {
+        let _ = (cron_expr, config);
+        Ok(())
+    }
+
     /// Create a new schedule for an event
     ///
     /// # Arguments

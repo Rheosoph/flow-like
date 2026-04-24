@@ -225,6 +225,14 @@ impl AwsEventBridgeScheduler {
 #[cfg(feature = "aws")]
 #[async_trait::async_trait]
 impl SchedulerBackend for AwsEventBridgeScheduler {
+    async fn validate_schedule(
+        &self,
+        cron_expr: &str,
+        config: &CronSinkConfig,
+    ) -> SchedulerResult<()> {
+        Self::build_schedule_expression(config, cron_expr).map(|_| ())
+    }
+
     async fn create_schedule(
         &self,
         event_id: &str,

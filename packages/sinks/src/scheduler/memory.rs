@@ -193,6 +193,19 @@ fn next_trigger_for(s: &ScheduleState) -> Option<chrono::DateTime<chrono::Utc>> 
 
 #[async_trait::async_trait]
 impl SchedulerBackend for InMemoryScheduler {
+    async fn validate_schedule(
+        &self,
+        cron_expr: &str,
+        config: &CronSinkConfig,
+    ) -> SchedulerResult<()> {
+        if !config.is_one_time() {
+            cron::Schedule::from_str(&normalize_cron_for_crate(cron_expr))
+                .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
     async fn create_schedule(
         &self,
         event_id: &str,

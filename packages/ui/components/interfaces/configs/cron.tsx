@@ -287,6 +287,7 @@ export type CronSink = {
 	scheduled_for?: ScheduledLocal | null; // local date+time, runtime uses timezone to compute UTC
 	last_fired?: string | null; // RFC3339 (from runtime)
 	timezone?: string | null; // IANA e.g. "Europe/Berlin"
+	sink_execution?: SinkExecutionTarget;
 };
 
 type Mode = "one_time" | "recurring";
@@ -397,6 +398,13 @@ function isValidTimezone(tz: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function getUnsupportedRemoteCronSeconds(expr: string): string | null {
+	const parts = expr.trim().split(/\s+/);
+	if (parts.length !== 6) return null;
+	const seconds = parts[0];
+	return seconds === "0" || seconds === "*" ? null : seconds;
 }
 
 function formatRelativeTime(iso: string): string {
@@ -549,6 +557,12 @@ export function CronJobConfig({
 		if (supportsRemote) return "REMOTE";
 		return "LOCAL";
 	}, [sinkExecution, supportsBoth, supportsRemote]);
+	const includesRemoteExecution = effectiveExecution !== "LOCAL";
+	const remoteCronUnsupportedSeconds = useMemo(() => {
+		if (!includesRemoteExecution || mode !== "recurring") return null;
+		if (!expression.trim()) return null;
+		return getUnsupportedRemoteCronSeconds(expression);
+	}, [includesRemoteExecution, mode, expression]);
 
 	const setValue = (k: keyof CronSink | string, v: any) =>
 		onConfigUpdate?.({ ...(config as any), [k]: v });
@@ -827,13 +841,31 @@ export function CronJobConfig({
 							onChange={(e) => setValue("expression", e.target.value)}
 							placeholder="0 */5 * * * *"
 							disabled={!isEditing}
-							aria-invalid={!isCronValid}
+							aria-invalid={!isCronValid || remoteCronUnsupportedSeconds != null}
+							className={cn(
+								(!isCronValid || remoteCronUnsupportedSeconds != null) &&
+									"border-destructive",
+							)}
 						/>
 						<p className="text-sm text-muted-foreground">
 							6-field cron (<code>sec min hour dom mon dow</code>) or 5-field (
 							<code>min hour dom mon dow</code>). Timezone applied:{" "}
 							<strong>{timezone}</strong>.
 						</p>
+						{remoteCronUnsupportedSeconds && (
+							<Alert variant="destructive">
+								<AlertTitle>Remote cron is minute-precision only</AlertTitle>
+								<AlertDescription>
+									{effectiveExecution === "HYBRID"
+										? "Hybrid execution still registers this schedule remotely. "
+										: "Remote execution uses EventBridge Scheduler. "}
+									Use 5-field cron, or keep the seconds field at <strong>0</strong>{" "}
+									or <strong>*</strong>. Current seconds field:{" "}
+									<strong>{remoteCronUnsupportedSeconds}</strong>. Switch to local
+									execution if you need sub-minute schedules.
+								</AlertDescription>
+							</Alert>
+						)}
 					</div>
 
 					<div className="space-y-2">

@@ -66,6 +66,7 @@ pub async fn sync_sink(
     let sink = if let Some(existing) = existing {
         // Update existing sink
         let old_cron = existing.cron_expression.clone();
+        let old_cron_timezone = existing.cron_timezone.clone();
         let old_active = existing.active;
         let old_sink_type = existing.sink_type.clone();
 
@@ -108,17 +109,24 @@ pub async fn sync_sink(
 
         // Handle scheduler updates for cron sinks
         if config.sink_type == sink_types::CRON {
-            let cron_changed = old_cron != config.cron_expression;
-            let type_changed = old_sink_type != config.sink_type;
             let active_changed = new_active != old_active;
             let has_schedule =
                 config.cron_expression.is_some() || config.cron_scheduled_for.is_some();
+            let schedule_rebuild_needed = cron_schedule_needs_rebuild(
+                &old_cron,
+                &config.cron_expression,
+                &old_cron_timezone,
+                &config.cron_timezone,
+                &old_sink_type,
+                &config.sink_type,
+                config.cron_scheduled_for.as_ref(),
+            );
 
             // Collapse "change expression + toggle active" into a single atomic
             // update. The previous two-step dance (update → disable) left a
             // race window where a freshly-enabled schedule could fire before
             // the follow-up disable landed.
-            if (cron_changed || type_changed || active_changed) && has_schedule {
+            if (schedule_rebuild_needed || active_changed) && has_schedule {
                 let cron_expr = config.cron_expression.as_deref().unwrap_or("");
                 update_external_scheduler(
                     state,
@@ -189,6 +197,80 @@ pub async fn sync_sink(
     };
 
     Ok(sink)
+}
+
+fn cron_schedule_needs_rebuild(
+    old_cron_expression: &Option<String>,
+    new_cron_expression: &Option<String>,
+    old_timezone: &Option<String>,
+    new_timezone: &Option<String>,
+    old_sink_type: &str,
+    new_sink_type: &str,
+    new_scheduled_for: Option<&flow_like_sinks::ScheduledLocal>,
+) -> bool {
+    if old_sink_type != new_sink_type {
+        return true;
+    }
+
+    if old_cron_expression != new_cron_expression {
+        return true;
+    }
+
+    if old_timezone != new_timezone {
+        return true;
+    }
+
+    // `scheduled_for` is not mirrored into the EventSink table, so treat any
+    // one-time sync as a rebuild to propagate date/time edits to the external
+    // scheduler.
+    new_scheduled_for.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cron_schedule_needs_rebuild;
+
+    #[test]
+    fn rebuilds_on_timezone_change() {
+        assert!(cron_schedule_needs_rebuild(
+            &Some("0 9 * * *".to_string()),
+            &Some("0 9 * * *".to_string()),
+            &Some("UTC".to_string()),
+            &Some("Europe/Berlin".to_string()),
+            "cron",
+            "cron",
+            None,
+        ));
+    }
+
+    #[test]
+    fn rebuilds_for_one_time_schedules() {
+        assert!(cron_schedule_needs_rebuild(
+            &None,
+            &None,
+            &Some("UTC".to_string()),
+            &Some("UTC".to_string()),
+            "cron",
+            "cron",
+            Some(&flow_like_sinks::ScheduledLocal {
+                date: "2026-04-25".to_string(),
+                time: "09:00".to_string(),
+            }),
+        ));
+    }
+
+    #[test]
+    fn skips_rebuild_when_schedule_is_unchanged() {
+        assert!(!cron_schedule_needs_rebuild(
+            &Some("0 9 * * *".to_string()),
+            &Some("0 9 * * *".to_string()),
+            &Some("UTC".to_string()),
+            &Some("UTC".to_string()),
+            "cron",
+            "cron",
+            None,
+        ));
+    }
 }
 
 /// Delete a sink and its external scheduler

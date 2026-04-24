@@ -254,6 +254,29 @@ pub async fn sync_event_with_sink(
     sync_event_with_sink_tokens(db, state, app_id, event, None, None, None).await
 }
 
+pub async fn validate_event_schedule(
+    state: &crate::state::AppState,
+    event: &CoreEvent,
+) -> flow_like_sinks::SchedulerResult<()> {
+    if event.event_type != "cron" {
+        return Ok(());
+    }
+
+    let Some(scheduler) = state.sink_scheduler.as_ref() else {
+        return Ok(());
+    };
+
+    let cron_expression = extract_cron_expression(&event.config).unwrap_or_default();
+    let config = flow_like_sinks::CronSinkConfig {
+        expression: cron_expression.clone(),
+        timezone: extract_cron_timezone(&event.config).unwrap_or_else(|| "UTC".to_string()),
+        scheduled_for: extract_scheduled_for(&event.config),
+        active: event.active,
+    };
+
+    scheduler.validate_schedule(&cron_expression, &config).await
+}
+
 /// Sync an event and its sink to the database, with optional PAT and OAuth tokens
 ///
 /// This is the main entry point for event creation/updates when tokens are provided.
@@ -275,6 +298,10 @@ pub async fn sync_event_with_sink_tokens(
     profile_json: Option<serde_json::Value>,
 ) -> flow_like_types::Result<()> {
     use crate::routes::sink::service::{SinkConfig, sink_type_from_event_type, sync_sink};
+
+    validate_event_schedule(state, event)
+        .await
+        .map_err(|error| anyhow!("Invalid cron schedule for event {}: {}", event.id, error))?;
 
     // First sync the event
     sync_event_to_db(db, app_id, event).await?;
