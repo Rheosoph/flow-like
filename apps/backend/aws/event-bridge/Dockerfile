@@ -2,17 +2,30 @@
 # ============================================================
 # Stage 1: Builder
 # ============================================================
-FROM rust:1.87-bookworm AS builder
-
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/* \
-    && rustup toolchain install nightly-2025-12-15 \
-    && rustup default nightly-2025-12-15
+FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
 
 WORKDIR /app
+
+RUN yum update -y && \
+    yum install -y \
+        clang \
+        gcc \
+        gcc-c++ \
+        make \
+        openssl-devel \
+        pkgconf-pkg-config \
+        unzip \
+        xz && \
+    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
+    unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
+    rm protoc-25.3-linux-aarch_64.zip && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 && \
+    yum remove -y xz && \
+    yum clean all
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTFLAGS="--cfg tokio_unstable"
+ENV CARGO_BUILD_JOBS=2
 
 COPY . .
 
@@ -25,26 +38,22 @@ RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
     sed -i '/apps\/backend\/kubernetes\/executor/d' Cargo.toml && \
     sed -i '/dexie-tauri-adapter/d' Cargo.toml
 
-# Limit build parallelism to reduce memory pressure during heavy workspace builds.
-ENV CARGO_BUILD_JOBS=2
-ENV RUSTFLAGS="--cfg tokio_unstable"
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/root/.cargo/git,id=cargo-git \
     --mount=type=cache,target=/app/target,id=cargo-target-aws-event-bridge \
     cargo build --release --package aws-event-bridge && \
-    cp /app/target/release/aws-event-bridge /tmp/bootstrap
+    cp /app/target/release/aws-event-bridge /tmp/bootstrap && \
+    strip --strip-all /tmp/bootstrap
 
 # ============================================================
 # Stage 2: Runtime
 # ============================================================
-FROM public.ecr.aws/lambda/provided:al2023
+FROM --platform=linux/arm64 public.ecr.aws/lambda/provided:al2023-arm64
 
-# The AL2023 custom-runtime entrypoint executes /var/runtime/bootstrap.
-COPY --from=builder /tmp/bootstrap /var/runtime/bootstrap
+COPY --from=builder /tmp/bootstrap ${LAMBDA_RUNTIME_DIR}/bootstrap
 
-RUN chmod 755 /var/runtime/bootstrap && \
-    test -x /var/runtime/bootstrap
+RUN chmod 755 ${LAMBDA_RUNTIME_DIR}/bootstrap && \
+    test -x ${LAMBDA_RUNTIME_DIR}/bootstrap
 
 ENV RUST_LOG=info
 

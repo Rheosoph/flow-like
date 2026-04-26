@@ -370,6 +370,9 @@ fn should_invalidate_target(message: &str) -> bool {
         || lower.contains("endpointdisabled")
         || lower.contains("endpoint is disabled")
         || lower.contains("invalid token")
+        // FCM payload shape errors use a different message prefix; only disable
+        // targets when the structured FCM error classifier marked the token bad.
+        || lower.contains("fcm error invalid_argument")
         || lower.contains("sender_id_mismatch")
 }
 
@@ -439,68 +442,12 @@ async fn send_via_fcm(
     let service_account_json =
         resolve_service_account_json(state, &fcm.service_account_json_env).await?;
 
-    let data = notification_data(notification_id, target, input);
     let url = format!(
         "https://fcm.googleapis.com/v1/projects/{}/messages:send",
         fcm.project_id
     );
 
-    let mut notification_obj = serde_json::json!({
-        "title": input.title,
-        "body": input.description.clone().unwrap_or_default(),
-    });
-    if let Some(image_url) = notification_image_url(input) {
-        notification_obj["image"] = serde_json::Value::String(image_url.to_string());
-    }
-
-    let mut body = serde_json::json!({
-        "message": {
-            "token": token,
-            "notification": notification_obj,
-            "data": data,
-        }
-    });
-
-    // Android-specific: notification channel
-    let mut android_notification = serde_json::Map::new();
-    if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
-        android_notification.insert(
-            "channel_id".to_string(),
-            serde_json::Value::String(channel_id),
-        );
-    }
-    if let Some(image_url) = notification_image_url(input) {
-        android_notification.insert(
-            "image".to_string(),
-            serde_json::Value::String(image_url.to_string()),
-        );
-    }
-    if !android_notification.is_empty() {
-        body["message"]["android"] = serde_json::json!({
-            "notification": android_notification,
-        });
-    }
-
-    // iOS-specific: sound + badge via APNS payload
-    if target.platform == PushNotificationTargetPlatform::Ios {
-        let mut apns = serde_json::json!({
-            "payload": {
-                "aps": {
-                    "sound": "default",
-                    "badge": 1,
-                }
-            }
-        });
-
-        if let Some(image_url) = notification_image_url(input) {
-            apns["payload"]["aps"]["mutable-content"] = serde_json::json!(1);
-            apns["fcm_options"] = serde_json::json!({
-                "image": image_url,
-            });
-        }
-
-        body["message"]["apns"] = apns;
-    }
+    let body = fcm_message_body(config, target, token, notification_id, input);
 
     const MAX_RETRIES: u32 = 2;
     let mut attempt = 0;
@@ -539,6 +486,76 @@ async fn send_via_fcm(
             }
         }
     }
+}
+
+fn fcm_message_body(
+    config: &PushNotificationsConfig,
+    target: &push_notification_target::Model,
+    token: &str,
+    notification_id: &str,
+    input: &DispatchNotificationInput,
+) -> serde_json::Value {
+    let data = notification_data(notification_id, target, input);
+
+    let mut notification_obj = serde_json::json!({
+        "title": input.title,
+        "body": input.description.clone().unwrap_or_default(),
+    });
+    if let Some(image_url) = notification_image_url(input) {
+        notification_obj["image"] = serde_json::Value::String(image_url.to_string());
+    }
+
+    let mut body = serde_json::json!({
+        "message": {
+            "token": token,
+            "notification": notification_obj,
+            "data": data,
+        }
+    });
+
+    if target.platform == PushNotificationTargetPlatform::Android {
+        let mut android_notification = serde_json::Map::new();
+        if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
+            android_notification.insert(
+                "channel_id".to_string(),
+                serde_json::Value::String(channel_id),
+            );
+        }
+        if let Some(image_url) = notification_image_url(input) {
+            android_notification.insert(
+                "image".to_string(),
+                serde_json::Value::String(image_url.to_string()),
+            );
+        }
+        if !android_notification.is_empty() {
+            body["message"]["android"] = serde_json::json!({
+                "notification": android_notification,
+            });
+        }
+    }
+
+    // iOS-specific: sound + badge via APNS payload
+    if target.platform == PushNotificationTargetPlatform::Ios {
+        let mut apns = serde_json::json!({
+            "payload": {
+                "aps": {
+                    "sound": "default",
+                    "badge": 1,
+                }
+            }
+        });
+
+        if let Some(image_url) = notification_image_url(input) {
+            apns["payload"]["aps"]["mutable-content"] = serde_json::json!(1);
+            apns["fcm_options"] = serde_json::json!({
+                "image": image_url,
+            });
+        }
+
+        body["message"]["apns"] = apns;
+    }
+
+    body
 }
 
 async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
@@ -1086,4 +1103,122 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
     }
 
     Ok(token.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_config() -> PushNotificationsConfig {
+        PushNotificationsConfig {
+            channel_id: Some("default-channel".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn target(platform: PushNotificationTargetPlatform) -> push_notification_target::Model {
+        let now = chrono::Utc::now().naive_utc();
+
+        push_notification_target::Model {
+            id: "target-id".to_string(),
+            user_id: "user-id".to_string(),
+            device_id: "device-id".to_string(),
+            platform,
+            provider: PushNotificationTargetProvider::Fcm,
+            token_encrypted: "encrypted-token".to_string(),
+            endpoint_arn: None,
+            installation_id: None,
+            channel_id: Some("target-channel".to_string()),
+            device_name: None,
+            metadata: None,
+            push_enabled: true,
+            last_registered_at: now,
+            last_seen_at: now,
+            invalidated_at: None,
+            invalidation_reason: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn notification_input() -> DispatchNotificationInput {
+        DispatchNotificationInput {
+            user_id: "user-id".to_string(),
+            app_id: Some("app-id".to_string()),
+            title: "Build finished".to_string(),
+            description: Some("The workflow completed.".to_string()),
+            icon: None,
+            image: Some("https://cdn.example.com/image.png".to_string()),
+            link: Some("flow-like://notification/target-id".to_string()),
+            notification_type: NotificationType::Workflow,
+            source_run_id: Some("run-id".to_string()),
+            source_node_id: None,
+        }
+    }
+
+    fn message_object(body: &serde_json::Value) -> &serde_json::Map<String, serde_json::Value> {
+        body.get("message")
+            .and_then(serde_json::Value::as_object)
+            .expect("FCM body contains a message object")
+    }
+
+    #[test]
+    fn fcm_android_body_includes_android_notification_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Android),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        let android = message.get("android").expect("android options are present");
+        assert_eq!(message.get("token"), Some(&serde_json::json!("fcm-token")));
+        assert_eq!(android["notification"]["channel_id"], "target-channel");
+        assert_eq!(
+            android["notification"]["image"],
+            "https://cdn.example.com/image.png"
+        );
+    }
+
+    #[test]
+    fn fcm_ios_body_omits_android_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        assert!(!message.contains_key("android"));
+        assert!(message.contains_key("apns"));
+    }
+
+    #[test]
+    fn fcm_desktop_body_omits_mobile_platform_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Desktop),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        assert!(!message.contains_key("android"));
+        assert!(!message.contains_key("apns"));
+    }
+
+    #[test]
+    fn fcm_invalid_argument_error_marks_target_invalid() {
+        assert!(should_invalidate_target(
+            "FCM error INVALID_ARGUMENT: token is invalid (HTTP 400)"
+        ));
+        assert!(!should_invalidate_target(
+            "FCM request failed with status 400: {\"status\":\"INVALID_ARGUMENT\"}"
+        ));
+    }
 }

@@ -202,7 +202,7 @@ pub async fn report_progress(
         let board_id = claims.board_id.clone();
         let event_id = claims.event_id.clone().unwrap_or_default();
         let app_id = claims.app_id.clone();
-        let user_id = claims.sub.clone();
+        let user_id = execution_claim_user_id(&claims.sub).map(ToOwned::to_owned);
         let run_id = claims.run_id.clone();
         tokio::spawn(async move {
             if let Err(e) = track_execution_usage(
@@ -212,7 +212,7 @@ pub async fn report_progress(
                 &run_id,
                 duration_us,
                 exec_status,
-                &user_id,
+                user_id.as_deref(),
                 &app_id,
             )
             .await
@@ -299,10 +299,18 @@ pub async fn push_events(
             continue;
         };
 
-        let target_user_id = notification
+        let Some(target_user_id) = notification
             .target_user_sub
             .clone()
-            .unwrap_or_else(|| claims.sub.clone());
+            .or_else(|| execution_claim_user_id(&claims.sub).map(ToOwned::to_owned))
+        else {
+            tracing::warn!(
+                run_id = %claims.run_id,
+                executor_subject = %claims.sub,
+                "Skipping flow_notification without a user target for non-user execution actor"
+            );
+            continue;
+        };
 
         if target_user_id != claims.sub {
             let membership = membership::Entity::find()
@@ -573,7 +581,7 @@ async fn track_execution_usage(
     version: &str,
     microseconds: i64,
     status: ExecutionStatus,
-    user_id: &str,
+    user_id: Option<&str>,
     app_id: &str,
 ) -> Result<(), flow_like_types::Error> {
     let now = chrono::Utc::now().naive_utc();
@@ -586,13 +594,21 @@ async fn track_execution_usage(
         version: Set(version.to_string()),
         microseconds: Set(microseconds),
         status: Set(status),
-        user_id: Set(Some(user_id.to_string())),
+        user_id: Set(user_id.map(ToOwned::to_owned)),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(now),
         updated_at: Set(now),
     };
     record.insert(db).await?;
     Ok(())
+}
+
+fn execution_claim_user_id(subject: &str) -> Option<&str> {
+    if subject.starts_with("sink:") {
+        None
+    } else {
+        Some(subject)
+    }
 }
 
 // ============================================================================

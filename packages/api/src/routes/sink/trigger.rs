@@ -503,7 +503,7 @@ pub struct TriggerEventInput {
     pub event_id: String,
     /// Optional payload to pass to the event
     pub payload: Option<serde_json::Value>,
-    /// User ID for attribution (optional)
+    /// User ID for human-triggered attribution. Leave empty for sink/event-triggered runs.
     pub user_id: Option<String>,
 }
 
@@ -528,7 +528,7 @@ pub struct TriggerResponse {
 /// let result = trigger_event(&state, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
-///     user_id: Some("cron_worker".to_string()),
+///     user_id: None,
 /// }).await?;
 /// ```
 pub async fn trigger_event(
@@ -556,7 +556,12 @@ pub async fn trigger_event(
     // Create run
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
-    let user_id = input.user_id.unwrap_or_else(|| "system".to_string());
+    let actor_user_id = input.user_id;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+    let actor_event_id = Some(sink.event_id.clone());
+    debug_assert!(actor_user_id.is_some() || actor_event_id.is_some());
 
     let input_payload_len = input
         .payload
@@ -580,7 +585,7 @@ pub async fn trigger_event(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: user_id.clone(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -620,7 +625,7 @@ pub async fn trigger_event(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload: input.payload,
-        user_id: user_id.clone(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -638,7 +643,7 @@ pub async fn trigger_event(
         id: Set(run_id.clone()),
         board_id: Set(event.board_id.clone()),
         version: Set(None),
-        event_id: Set(Some(sink.event_id.clone())),
+        event_id: Set(actor_event_id),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
@@ -652,7 +657,7 @@ pub async fn trigger_event(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(Some(user_id)),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -804,9 +809,10 @@ pub async fn trigger_http(
     // Create the run id before parsing so multipart files can be staged under
     // a stable, per-run temporary object prefix.
     let run_id = create_id();
+    let executor_subject = format!("sink:{}", sink.id);
     let credentials = state
         .scoped_credentials(
-            "http_sink",
+            &executor_subject,
             &app_id,
             crate::credentials::CredentialsAccess::InvokeWrite,
         )
@@ -866,7 +872,7 @@ pub async fn trigger_http(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "http_sink".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: event.board_id.clone(),
@@ -907,7 +913,7 @@ pub async fn trigger_http(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload,
-        user_id: "http_sink".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -1248,10 +1254,11 @@ pub async fn trigger_telegram(
 
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let executor_subject = format!("sink:{}", sink.id);
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "telegram_webhook".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1292,7 +1299,7 @@ pub async fn trigger_telegram(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload,
-        user_id: "telegram_webhook".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -1566,10 +1573,11 @@ pub async fn trigger_discord(
 
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let executor_subject = format!("sink:{}", sink.id);
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "discord_webhook".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1610,7 +1618,7 @@ pub async fn trigger_discord(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload: Some(interaction.clone()),
-        user_id: "discord_webhook".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -1684,17 +1692,17 @@ pub struct SinkTriggerClaims {
     /// Issuer - always "flow-like"
     pub iss: String,
     /// JWT ID - unique identifier for revocation checking
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
     /// Which sink types this token can trigger
     pub sink_types: Vec<String>,
     /// Optional: restrict to specific app IDs
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_ids: Option<Vec<String>>,
     /// Issued at timestamp
     pub iat: usize,
     /// Expiration timestamp (optional - can be very long-lived)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exp: Option<usize>,
 }
 
@@ -1721,7 +1729,9 @@ pub struct ServiceTriggerResponse {
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
 fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerClaims, ApiError> {
-    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.required_spec_claims.remove("exp");
+    validation.validate_exp = false;
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
 
     let token_data = jsonwebtoken::decode::<SinkTriggerClaims>(token, &key, &validation)
@@ -1735,6 +1745,13 @@ fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerCla
     // Verify issuer
     if token_data.claims.iss != "flow-like" {
         return Err(ApiError::unauthorized("Invalid token issuer"));
+    }
+
+    if let Some(exp) = token_data.claims.exp {
+        let now = chrono::Utc::now().timestamp() as usize;
+        if exp <= now {
+            return Err(ApiError::unauthorized("Sink trigger token has expired"));
+        }
     }
 
     Ok(token_data.claims)
@@ -1929,7 +1946,7 @@ pub async fn trigger_service(
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload,
-            user_id: Some(format!("service:{}", request.sink_type)),
+            user_id: None,
         },
     )
     .await
@@ -2140,4 +2157,52 @@ pub async fn get_sink_configs(
         .collect();
 
     Ok(Json(configs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
+
+    const TEST_SECRET: &str = "test-sink-secret";
+
+    fn sign_test_sink_claims(exp: Option<usize>) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = SinkTriggerClaims {
+            sub: "sink-trigger".to_string(),
+            iss: "flow-like".to_string(),
+            jti: None,
+            sink_types: vec!["cron".to_string()],
+            app_ids: None,
+            iat: now,
+            exp,
+        };
+
+        jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+        )
+        .expect("test sink token should encode")
+    }
+
+    #[test]
+    fn accepts_long_lived_sink_token_without_exp() {
+        let token = sign_test_sink_claims(None);
+        let claims = validate_sink_trigger_jwt(&token, TEST_SECRET)
+            .expect("sink token without exp should validate");
+
+        assert_eq!(claims.sub, "sink-trigger");
+        assert_eq!(claims.iss, "flow-like");
+        assert_eq!(claims.sink_types, vec!["cron".to_string()]);
+        assert_eq!(claims.exp, None);
+    }
+
+    #[test]
+    fn rejects_expired_sink_token_when_exp_is_present() {
+        let expired_at = (chrono::Utc::now() - chrono::Duration::minutes(1)).timestamp() as usize;
+        let token = sign_test_sink_claims(Some(expired_at));
+
+        assert!(validate_sink_trigger_jwt(&token, TEST_SECRET).is_err());
+    }
 }

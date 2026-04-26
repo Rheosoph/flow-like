@@ -67,6 +67,13 @@ struct TriggerRequest {
     sink_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct TriggerResponse {
+    success: bool,
+    run_id: Option<String>,
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
@@ -135,6 +142,28 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }
 
-    tracing::info!(event_id = %payload.event_id, "Successfully triggered event");
+    let trigger_response = response.json::<TriggerResponse>().await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to parse trigger response");
+        Error::from(format!("Failed to parse trigger response: {}", e))
+    })?;
+
+    if !trigger_response.success {
+        let error = trigger_response
+            .error
+            .unwrap_or_else(|| "unknown trigger error".to_string());
+        tracing::error!(
+            event_id = %payload.event_id,
+            run_id = ?trigger_response.run_id,
+            error = %error,
+            "API accepted request but did not trigger event"
+        );
+        return Err(Error::from(format!("Trigger failed: {}", error)));
+    }
+
+    tracing::info!(
+        event_id = %payload.event_id,
+        run_id = ?trigger_response.run_id,
+        "Successfully triggered event"
+    );
     Ok(())
 }
