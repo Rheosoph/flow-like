@@ -2,8 +2,8 @@
 
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
+import { useEffect, useRef } from "react";
 
 interface MapMarker {
 	lat: number;

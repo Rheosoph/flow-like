@@ -358,10 +358,25 @@ function PermissionsSection({
 	onChange: (d: ManifestData) => void;
 }) {
 	const p = data.permissions ?? {};
-	const net = p.network ?? { http_enabled: false, allowed_hosts: [], websocket_enabled: false, tcp_enabled: false, udp_enabled: false, dns_enabled: false };
-	const fs = p.filesystem ?? { node_storage: false, user_storage: false, upload_dir: false, cache_dir: false };
+	const net = p.network ?? {
+		http_enabled: false,
+		allowed_hosts: [],
+		websocket_enabled: false,
+		tcp_enabled: false,
+		udp_enabled: false,
+		dns_enabled: false,
+	};
+	const fs = p.filesystem ?? {
+		node_storage: false,
+		user_storage: false,
+		upload_dir: false,
+		cache_dir: false,
+	};
 	const updatePerm = (patch: Partial<ManifestData["permissions"]>) =>
-		onChange({ ...data, permissions: { ...p, network: net, filesystem: fs, ...patch } });
+		onChange({
+			...data,
+			permissions: { ...p, network: net, filesystem: fs, ...patch },
+		});
 
 	return (
 		<Card>

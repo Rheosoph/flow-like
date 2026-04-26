@@ -5,7 +5,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::sync::Arc;
 
 use super::element_utils::extract_element_id;
 

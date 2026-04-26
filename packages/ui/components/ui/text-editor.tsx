@@ -111,7 +111,9 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
 			typeof node.url === "string" &&
 			node.url.startsWith("spoiler://")
 		) {
-			const spoilerText = decodeURIComponent(node.url.replace("spoiler://", ""));
+			const spoilerText = decodeURIComponent(
+				node.url.replace("spoiler://", ""),
+			);
 			return {
 				type: "inline_spoiler",
 				spoilerText,
@@ -172,7 +174,9 @@ export const safeDeserialize = (
 	// Pre-process directive blocks (:::type ... :::) at text level before parsing.
 	const preprocessed = preprocessDirectiveBlocks(data);
 	try {
-		const nodes = editor.api.markdown.deserialize(preprocessed, { remarkPlugins });
+		const nodes = editor.api.markdown.deserialize(preprocessed, {
+			remarkPlugins,
+		});
 		if (nodes.length > 0) return transformSpecialLinks(nodes);
 		return [{ type: "p", children: [{ text: "" }] }];
 	} catch (error) {
@@ -275,7 +279,13 @@ function TextEditorStatic({
 	const remarkPlugins = useMemo(
 		() =>
 			minimal
-				? [remarkGfm, remarkBreaks, remarkFocusNodes, remarkUserMention, remarkInlineSpoiler]
+				? [
+						remarkGfm,
+						remarkBreaks,
+						remarkFocusNodes,
+						remarkUserMention,
+						remarkInlineSpoiler,
+					]
 				: [
 						remarkMath,
 						remarkGfm,
@@ -374,7 +384,10 @@ function TextEditorStatic({
 			}}
 			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word"
 		>
-			<PlateStatic editor={editor} className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0" />
+			<PlateStatic
+				editor={editor}
+				className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0"
+			/>
 		</div>
 	);
 }

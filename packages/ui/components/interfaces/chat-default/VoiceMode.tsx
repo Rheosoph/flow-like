@@ -60,9 +60,21 @@ function VoiceOrb({
 
 			// Multiple layered rings
 			const layers = [
-				{ radius: baseRadius + maxBulge * scaledAmplitude, alpha: 0.08, blur: 40 },
-				{ radius: baseRadius + maxBulge * scaledAmplitude * 0.7, alpha: 0.12, blur: 25 },
-				{ radius: baseRadius + maxBulge * scaledAmplitude * 0.4, alpha: 0.2, blur: 12 },
+				{
+					radius: baseRadius + maxBulge * scaledAmplitude,
+					alpha: 0.08,
+					blur: 40,
+				},
+				{
+					radius: baseRadius + maxBulge * scaledAmplitude * 0.7,
+					alpha: 0.12,
+					blur: 25,
+				},
+				{
+					radius: baseRadius + maxBulge * scaledAmplitude * 0.4,
+					alpha: 0.2,
+					blur: 12,
+				},
 			];
 
 			for (const layer of layers) {
@@ -88,10 +100,23 @@ function VoiceOrb({
 			ctx.beginPath();
 			for (let i = 0; i <= points; i++) {
 				const angle = (i / points) * Math.PI * 2;
-				const wave1 = Math.sin(angle * 3 + phaseRef.current * 2) * maxBulge * scaledAmplitude * 0.3;
-				const wave2 = Math.sin(angle * 5 - phaseRef.current * 1.5) * maxBulge * scaledAmplitude * 0.2;
-				const wave3 = Math.sin(angle * 7 + phaseRef.current * 3) * maxBulge * scaledAmplitude * 0.1;
-				const r = baseRadius + maxBulge * scaledAmplitude * 0.5 + wave1 + wave2 + wave3;
+				const wave1 =
+					Math.sin(angle * 3 + phaseRef.current * 2) *
+					maxBulge *
+					scaledAmplitude *
+					0.3;
+				const wave2 =
+					Math.sin(angle * 5 - phaseRef.current * 1.5) *
+					maxBulge *
+					scaledAmplitude *
+					0.2;
+				const wave3 =
+					Math.sin(angle * 7 + phaseRef.current * 3) *
+					maxBulge *
+					scaledAmplitude *
+					0.1;
+				const r =
+					baseRadius + maxBulge * scaledAmplitude * 0.5 + wave1 + wave2 + wave3;
 
 				const x = cx + Math.cos(angle) * r;
 				const y = cy + Math.sin(angle) * r;
@@ -100,7 +125,14 @@ function VoiceOrb({
 			}
 			ctx.closePath();
 
-			const orbGradient = ctx.createRadialGradient(cx - 20, cy - 20, 0, cx, cy, baseRadius + maxBulge);
+			const orbGradient = ctx.createRadialGradient(
+				cx - 20,
+				cy - 20,
+				0,
+				cx,
+				cy,
+				baseRadius + maxBulge,
+			);
 			orbGradient.addColorStop(0, "rgba(167, 139, 250, 0.95)");
 			orbGradient.addColorStop(0.4, "rgba(99, 102, 241, 0.85)");
 			orbGradient.addColorStop(0.7, "rgba(59, 130, 246, 0.8)");
@@ -109,7 +141,14 @@ function VoiceOrb({
 			ctx.fill();
 
 			// Inner highlight
-			const innerGlow = ctx.createRadialGradient(cx - 15, cy - 15, 0, cx, cy, baseRadius * 0.6);
+			const innerGlow = ctx.createRadialGradient(
+				cx - 15,
+				cy - 15,
+				0,
+				cx,
+				cy,
+				baseRadius * 0.6,
+			);
 			innerGlow.addColorStop(0, "rgba(255, 255, 255, 0.25)");
 			innerGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
 			ctx.fillStyle = innerGlow;
@@ -145,7 +184,9 @@ function VoiceOrb({
 }
 
 export function VoiceMode({ open, onClose, onSend }: VoiceModeProps) {
-	const [state, setState] = useState<"idle" | "listening" | "processing">("idle");
+	const [state, setState] = useState<"idle" | "listening" | "processing">(
+		"idle",
+	);
 	const [duration, setDuration] = useState(0);
 	const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
@@ -268,9 +309,7 @@ export function VoiceMode({ open, onClose, onSend }: VoiceModeProps) {
 					if (!silentSince) silentSince = Date.now();
 					if (Date.now() - silentSince > SILENCE_MS) {
 						// Auto-stop on silence
-						if (
-							mediaRecorderRef.current?.state === "recording"
-						) {
+						if (mediaRecorderRef.current?.state === "recording") {
 							mediaRecorderRef.current.stop();
 						}
 						return;

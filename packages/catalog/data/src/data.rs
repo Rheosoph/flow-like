@@ -9,4 +9,5 @@ pub mod linkedin;
 pub mod microsoft;
 pub mod notion;
 pub mod path;
+pub mod providers;
 pub mod tdms;

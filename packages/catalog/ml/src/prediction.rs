@@ -30,7 +30,6 @@ use flow_like_types::anyhow;
 use flow_like_types::{Result, Value, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

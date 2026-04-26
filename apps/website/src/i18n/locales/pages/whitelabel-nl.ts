@@ -1,54 +1,71 @@
 export const nlWhitelabel = {
 	"whitelabel.meta.title": "White-Label & OEM | Flow-Like",
-	"whitelabel.meta.description": "Lever Flow-Like onder jouw merk. Volledige theming, embed/headless/hybride deploymentmodi, SSO, gebruiksmeting en SDK-toegang voor OEM-partners.",
+	"whitelabel.meta.description":
+		"Lever Flow-Like onder jouw merk. Volledige theming, embed/headless/hybride deploymentmodi, SSO, gebruiksmeting en SDK-toegang voor OEM-partners.",
 	"whitelabel.hero.tagline": "White-Label & OEM",
 	"whitelabel.hero.headline": "Jouw Merk.",
 	"whitelabel.hero.headline.highlight": "Onze Engine.",
-	"whitelabel.hero.description": "Integreer workflowautomatisering, AI-agents en dashboards in jouw product — volledig in jouw huisstijl. Van design tokens tot deploymentmodus, elk oppervlak is van jou om te bepalen.",
+	"whitelabel.hero.description":
+		"Integreer workflowautomatisering, AI-agents en dashboards in jouw product — volledig in jouw huisstijl. Van design tokens tot deploymentmodus, elk oppervlak is van jou om te bepalen.",
 	"whitelabel.hero.cta": "Neem Contact op met Sales",
 	"whitelabel.hero.cta.docs": "Lees de Documentatie",
 	"whitelabel.modes.tagline": "Deploymentmodi",
 	"whitelabel.modes.headline": "Kies Hoe Je Levert",
-	"whitelabel.modes.description": "Drie deploymentarchitecturen die passen bij jouw productstrategie. Mix en match per klant.",
+	"whitelabel.modes.description":
+		"Drie deploymentarchitecturen die passen bij jouw productstrategie. Mix en match per klant.",
 	"whitelabel.modes.embed.title": "Ingebed",
-	"whitelabel.modes.embed.desc": "Integreer Flow-Like in je bestaande app als iframe of web component. Je gebruikers verlaten nooit jouw interface.",
+	"whitelabel.modes.embed.desc":
+		"Integreer Flow-Like in je bestaande app als iframe of web component. Je gebruikers verlaten nooit jouw interface.",
 	"whitelabel.modes.embed.feat1": "iframe & Web Component SDKs",
 	"whitelabel.modes.embed.feat2": "Sessie-passthrough-authenticatie",
 	"whitelabel.modes.embed.feat3": "Event bus voor ouder ↔ kind communicatie",
 	"whitelabel.modes.headless.title": "Headless",
-	"whitelabel.modes.headless.desc": "Gebruik de engine API rechtstreeks. Bouw je eigen UI of voer automatiseringen uit zonder zichtbare frontend.",
+	"whitelabel.modes.headless.desc":
+		"Gebruik de engine API rechtstreeks. Bouw je eigen UI of voer automatiseringen uit zonder zichtbare frontend.",
 	"whitelabel.modes.headless.feat1": "Volledige REST + WebSocket API",
 	"whitelabel.modes.headless.feat2": "SDKs voor TypeScript, Python, Rust",
 	"whitelabel.modes.headless.feat3": "Trigger workflows vanuit elk systeem",
 	"whitelabel.modes.hybrid.title": "Hybride",
-	"whitelabel.modes.hybrid.desc": "Gebruik onze gepolijste UI voor workflowontwerp. Headless API voor uitvoering en aangepaste dashboards.",
+	"whitelabel.modes.hybrid.desc":
+		"Gebruik onze gepolijste UI voor workflowontwerp. Headless API voor uitvoering en aangepaste dashboards.",
 	"whitelabel.modes.hybrid.feat1": "Visuele editor met jouw branding",
 	"whitelabel.modes.hybrid.feat2": "API-gestuurde uitvoeringspipeline",
 	"whitelabel.modes.hybrid.feat3": "Het beste van beide werelden",
 	"whitelabel.theming.tagline": "Volledige Themacontrole",
 	"whitelabel.theming.headline": "Elke Pixel, Jouw Merk",
-	"whitelabel.theming.description": "Design tokens propageren door elk component. Wissel kleuren, typografie, randradii en spatiëring met één configuratiebestand — of gebruik de visuele thema-editor.",
+	"whitelabel.theming.description":
+		"Design tokens propageren door elk component. Wissel kleuren, typografie, randradii en spatiëring met één configuratiebestand — of gebruik de visuele thema-editor.",
 	"whitelabel.theming.tokens.title": "Design Tokens",
-	"whitelabel.theming.tokens.desc": "Kleuren, spatiëring, typografie, radii — allemaal configureerbaar via CSS custom properties of de thema-API.",
+	"whitelabel.theming.tokens.desc":
+		"Kleuren, spatiëring, typografie, radii — allemaal configureerbaar via CSS custom properties of de thema-API.",
 	"whitelabel.theming.logo.title": "Logo & Assets",
-	"whitelabel.theming.logo.desc": "Vervang logo's, favicons en splashscreens in desktop-, web- en ingebedde deployments.",
+	"whitelabel.theming.logo.desc":
+		"Vervang logo's, favicons en splashscreens in desktop-, web- en ingebedde deployments.",
 	"whitelabel.theming.domains.title": "Aangepaste Domeinen",
-	"whitelabel.theming.domains.desc": "Serveer het platform vanaf je eigen domein met automatische TLS-provisioning en DNS-verificatie.",
+	"whitelabel.theming.domains.desc":
+		"Serveer het platform vanaf je eigen domein met automatische TLS-provisioning en DNS-verificatie.",
 	"whitelabel.theming.email.title": "E-mail & Notificaties",
-	"whitelabel.theming.email.desc": "Transactionele e-mails met jouw merk, in-app-notificaties en webhook-payloads met jouw identiteit.",
+	"whitelabel.theming.email.desc":
+		"Transactionele e-mails met jouw merk, in-app-notificaties en webhook-payloads met jouw identiteit.",
 	"whitelabel.oem.tagline": "Gebouwd voor OEM-Partners",
 	"whitelabel.oem.headline": "Enterprise-Grade OEM-Tooling",
-	"whitelabel.oem.description": "Alles wat je nodig hebt om automatisering als functie in je eigen product te leveren.",
+	"whitelabel.oem.description":
+		"Alles wat je nodig hebt om automatisering als functie in je eigen product te leveren.",
 	"whitelabel.oem.sso.title": "SSO & Auth-Passthrough",
-	"whitelabel.oem.sso.desc": "SAML-, OIDC- en JWT-gebaseerde authenticatiedelegatie. Je gebruikers authenticeren via jouw identity provider — Flow-Like vertrouwt het token.",
+	"whitelabel.oem.sso.desc":
+		"SAML-, OIDC- en JWT-gebaseerde authenticatiedelegatie. Je gebruikers authenticeren via jouw identity provider — Flow-Like vertrouwt het token.",
 	"whitelabel.oem.metering.title": "Gebruiksmeting",
-	"whitelabel.oem.metering.desc": "Uitvoeringsaantallen per tenant, API-aanroepen en opslaggebruik — beschikbaar via API voor jouw factureringssysteem.",
+	"whitelabel.oem.metering.desc":
+		"Uitvoeringsaantallen per tenant, API-aanroepen en opslaggebruik — beschikbaar via API voor jouw factureringssysteem.",
 	"whitelabel.oem.isolation.title": "Tenantisolatie",
-	"whitelabel.oem.isolation.desc": "Strikte namespacegrenzen tussen tenants. Gescheiden opslag, uitvoeringsqueues en toegangsbeleid.",
+	"whitelabel.oem.isolation.desc":
+		"Strikte namespacegrenzen tussen tenants. Gescheiden opslag, uitvoeringsqueues en toegangsbeleid.",
 	"whitelabel.oem.sdk.title": "SDK & API-Toegang",
-	"whitelabel.oem.sdk.desc": "TypeScript-, Python- en Rust-SDKs met getypeerde interfaces. OpenAPI-specificatie beschikbaar voor codegeneratie.",
+	"whitelabel.oem.sdk.desc":
+		"TypeScript-, Python- en Rust-SDKs met getypeerde interfaces. OpenAPI-specificatie beschikbaar voor codegeneratie.",
 	"whitelabel.cta.headline": "Klaar om te Leveren onder Jouw Merk?",
-	"whitelabel.cta.description": "Neem contact op met ons partnershipsteam om OEM-licenties, volumeprijzen en white-glove onboarding te bespreken.",
+	"whitelabel.cta.description":
+		"Neem contact op met ons partnershipsteam om OEM-licenties, volumeprijzen en white-glove onboarding te bespreken.",
 	"whitelabel.cta.button": "Neem Contact op met Partnerships",
 	"whitelabel.cta.docs": "Bekijk de SDK-Documentatie",
 } as const;

@@ -8,7 +8,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
-use std::sync::Arc;
 
 /// Widget Action Event - Entry point for widget action triggers.
 ///

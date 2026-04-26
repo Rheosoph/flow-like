@@ -1,25 +1,52 @@
-# Build stage
-FROM rust:1.91-slim AS builder
+# syntax=docker/dockerfile:1.4
+# ============================================================
+# Stage 1: Builder
+# ============================================================
+FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
 
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
-WORKDIR /usr/src/app
+RUN yum update -y && \
+    yum install -y \
+        binutils \
+        clang \
+        gcc \
+        gcc-c++ \
+        make \
+        openssl-devel \
+        pkgconf-pkg-config \
+        unzip \
+        xz && \
+    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
+    unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
+    rm protoc-25.3-linux-aarch_64.zip && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 && \
+    yum remove -y xz && \
+    yum clean all
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTFLAGS="--cfg tokio_unstable"
+ENV CARGO_BUILD_JOBS=2
 
 COPY . .
-RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
-    sed -i '/apps\/backend\/local\/api/d' Cargo.toml && \
-    sed -i '/apps\/backend\/local\/runtime/d' Cargo.toml && \
-    sed -i '/dexie-tauri-adapter/d' Cargo.toml
 
-RUN cargo build --release --package aws-event-bridge
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/root/.cargo/git,id=cargo-git \
+    --mount=type=cache,target=/app/target,id=cargo-target-aws-event-bridge \
+    cargo build --release --manifest-path apps/backend/aws/event-bridge/Cargo.toml && \
+    cp /app/target/release/aws-event-bridge /tmp/bootstrap && \
+    strip --strip-all /tmp/bootstrap
 
-# Runtime stage
-FROM public.ecr.aws/lambda/provided:al2023
+# ============================================================
+# Stage 2: Runtime
+# ============================================================
+FROM --platform=linux/arm64 public.ecr.aws/lambda/provided:al2023-arm64
 
-COPY --from=builder /usr/src/app/target/release/aws-event-bridge ${LAMBDA_RUNTIME_DIR}/bootstrap
+COPY --from=builder /tmp/bootstrap ${LAMBDA_RUNTIME_DIR}/bootstrap
+
+RUN chmod 755 ${LAMBDA_RUNTIME_DIR}/bootstrap && \
+    test -x ${LAMBDA_RUNTIME_DIR}/bootstrap
+
+ENV RUST_LOG=info
 
 CMD ["bootstrap"]

@@ -380,7 +380,9 @@ export function FavoritesSection({
 									key={item.id}
 									item={item}
 									onAppClick={onAppClick}
-									onSettingsClick={onSettingsClick}								appHref={appHref}								/>
+									onSettingsClick={onSettingsClick}
+									appHref={appHref}
+								/>
 							))}
 						</div>
 					</SortableContext>
@@ -528,7 +530,9 @@ export function SearchResults({
 								}`}
 							>
 								<AppCard
-									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
+									isOwned
+									href={!visibilityMode ? appHref?.(meta.id) : undefined}
+									app={meta.app}
 									metadata={meta}
 									variant="small"
 									onClick={() => handleClick(meta.id)}
@@ -560,7 +564,9 @@ export function SearchResults({
 								}`}
 							>
 								<AppCard
-									isOwned								href={!visibilityMode ? appHref?.(meta.id) : undefined}									app={meta.app}
+									isOwned
+									href={!visibilityMode ? appHref?.(meta.id) : undefined}
+									app={meta.app}
 									metadata={meta}
 									variant="extended"
 									onClick={() => handleClick(meta.id)}

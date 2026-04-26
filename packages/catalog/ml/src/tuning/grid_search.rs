@@ -33,7 +33,6 @@ use linfa_bayes::GaussianNb;
 use linfa_trees::DecisionTree as LinfaDecisionTree;
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

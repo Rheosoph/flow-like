@@ -12,6 +12,7 @@ import {
 	useState,
 } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import { cn } from "../../lib/utils";
 import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -38,6 +39,10 @@ import type {
 } from "../a2ui/types";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
+
+function isBackgroundClass(value: string | undefined): value is string {
+	return value?.startsWith("bg-") ?? false;
+}
 
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
@@ -91,9 +96,7 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					return {
@@ -116,6 +119,26 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						updatedComponents[comp.id] = comp;
 					}
 					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "dataModelUpdate") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+
+					const entries = new Map(
+						(prevSurface.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+
+					return {
+						...prevSurface,
+						dataModel: Array.from(entries.values()),
+					};
 				});
 				return;
 			}
@@ -166,6 +189,30 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 					if (!prevSurface || message.surfaceId !== prevSurface.id)
 						return prevSurface;
 					const updatedComponents = { ...prevSurface.components };
+					for (const [componentId, component] of Object.entries(
+						updatedComponents,
+					)) {
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const children = componentData.children as
+							| { explicitList?: string[] }
+							| undefined;
+						if (!children?.explicitList?.includes(message.elementId)) continue;
+						updatedComponents[componentId] = {
+							...component,
+							component: {
+								...component.component,
+								children: {
+									...children,
+									explicitList: children.explicitList.filter(
+										(id) => id !== message.elementId,
+									),
+								},
+							} as SurfaceComponent["component"],
+						};
+					}
 					delete updatedComponents[message.elementId];
 					return { ...prevSurface, components: updatedComponents };
 				});
@@ -411,8 +458,12 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.layout !== undefined && {
+									layout: { literalJson: JSON.stringify(configOrLayout) },
+								}),
+								...(updateValue.config !== undefined && {
+									config: { literalJson: JSON.stringify(configOrLayout) },
+								}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -824,7 +875,8 @@ function PageInterfaceInner({
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
-		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
+		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning)
+			return;
 		void writePageSurfaceCache(appId, page, surface);
 	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
@@ -1042,11 +1094,8 @@ function PageInterfaceInner({
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
-				await executePageEvent(
-					page.onLoadEventId,
-					"onLoad",
-					undefined,
-					() => setLoadEventPhase("running"),
+				await executePageEvent(page.onLoadEventId, "onLoad", undefined, () =>
+					setLoadEventPhase("running"),
 				);
 			} finally {
 				setLoadEventPhase("idle");
@@ -1107,7 +1156,8 @@ function PageInterfaceInner({
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
-	const shouldHoldForCachedState = Boolean(cacheSource?.cache) && isCacheLoading;
+	const shouldHoldForCachedState =
+		Boolean(cacheSource?.cache) && isCacheLoading;
 	const canRenderFromCache = Boolean(cacheSource?.cache && cachedSurface);
 	const shouldShowLoading =
 		(isLoading && !canRenderFromCache) ||
@@ -1161,10 +1211,18 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings = activeSurface?.canvasSettings ?? page?.canvasSettings;
+	const runtimeCanvasSettings =
+		activeSurface?.canvasSettings ?? page?.canvasSettings;
+	const backgroundClass = isBackgroundClass(
+		runtimeCanvasSettings?.backgroundColor,
+	)
+		? runtimeCanvasSettings?.backgroundColor
+		: undefined;
 
 	const canvasStyle: React.CSSProperties = {
-		backgroundColor: runtimeCanvasSettings?.backgroundColor,
+		backgroundColor: backgroundClass
+			? undefined
+			: runtimeCanvasSettings?.backgroundColor,
 		padding: runtimeCanvasSettings?.padding,
 		backgroundImage: runtimeCanvasSettings?.backgroundImage
 			? `url(${runtimeCanvasSettings.backgroundImage})`
@@ -1190,7 +1248,7 @@ function PageInterfaceInner({
 			)}
 			<div
 				data-page-id={pageContainerId}
-				className="min-h-full flex flex-col"
+				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
 			>
 				<DataProvider initialData={[]}>

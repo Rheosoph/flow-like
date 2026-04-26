@@ -10,7 +10,10 @@ import { ptProcessAutomation } from "./usecase-process-automation-pt";
 import { svProcessAutomation } from "./usecase-process-automation-sv";
 import { zhProcessAutomation } from "./usecase-process-automation-zh";
 
-export const translationsProcessAutomation: Record<string, Record<string, string>> = {
+export const translationsProcessAutomation: Record<
+	string,
+	Record<string, string>
+> = {
 	en: enProcessAutomation,
 	de: deProcessAutomation,
 	fr: frProcessAutomation,
@@ -25,5 +28,9 @@ export const translationsProcessAutomation: Record<string, Record<string, string
 };
 
 export function tProcessAutomation(lang: string, key: string): string {
-	return translationsProcessAutomation[lang]?.[key] ?? translationsProcessAutomation.en[key] ?? key;
+	return (
+		translationsProcessAutomation[lang]?.[key] ??
+		translationsProcessAutomation.en[key] ??
+		key
+	);
 }

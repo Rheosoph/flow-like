@@ -414,7 +414,10 @@ export default function TemplatesPage() {
 							: "Templates let you snapshot a flow at a specific version so you can share, reuse, or roll back to it later."}
 					</p>
 					{!searchTerm && (
-						<Button onClick={() => setIsCreateDialogOpen(true)} className="mt-2">
+						<Button
+							onClick={() => setIsCreateDialogOpen(true)}
+							className="mt-2"
+						>
 							<Plus className="w-4 h-4 mr-2" />
 							Create Your First Template
 						</Button>

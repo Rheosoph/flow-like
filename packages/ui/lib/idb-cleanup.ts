@@ -1,7 +1,7 @@
-import { flowpilotDB } from "./flowpilot-db";
 import { chatDb } from "../components/interfaces/chat-default/chat-db";
 import { temporaryFilesDb } from "../db/temporary-files-db";
 import { viewportDb } from "../db/viewport-db";
+import { flowpilotDB } from "./flowpilot-db";
 import { offlineSyncDB } from "./sync-db";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,14 +24,19 @@ const DEFAULTS: Required<CleanupOptions> = {
 
 async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	const cutoff = Date.now() - maxAgeDays * DAY_MS;
-	const old = await chatDb.messages.filter((m) => m.timestamp < cutoff).primaryKeys();
+	const old = await chatDb.messages
+		.filter((m) => m.timestamp < cutoff)
+		.primaryKeys();
 	if (old.length > 0) await chatDb.messages.bulkDelete(old);
 
 	// Clean up sessions that have no remaining messages
 	const allSessions = await chatDb.sessions.toArray();
 	const orphanIds: string[] = [];
 	for (const session of allSessions) {
-		const count = await chatDb.messages.where("sessionId").equals(session.id).count();
+		const count = await chatDb.messages
+			.where("sessionId")
+			.equals(session.id)
+			.count();
 		if (count === 0) orphanIds.push(session.id);
 	}
 	if (orphanIds.length > 0) await chatDb.sessions.bulkDelete(orphanIds);

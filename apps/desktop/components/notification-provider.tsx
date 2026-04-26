@@ -80,7 +80,7 @@ async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 			onNotificationReceived: mod.onNotificationReceived,
 			onNotificationTapped: mod.onNotificationTapped,
 			onTokenRefresh: mod.onTokenRefresh,
-		} ;
+		};
 	} catch {
 		return null;
 	}
@@ -511,9 +511,7 @@ export default function NotificationProvider({
 
 		const handleNotificationBatch = async (
 			events: IIntercomEvent[],
-			persistViaApi: boolean,
 			notificationAppId?: string,
-			boardId?: string,
 		) => {
 			for (const event of events) {
 				const notification = event.payload as INotificationEvent;
@@ -524,56 +522,13 @@ export default function NotificationProvider({
 						: undefined;
 				const isCurrentUserTarget =
 					!normalizedTargetUserSub || normalizedTargetUserSub === userId;
-				const canPersistNotification =
-					Boolean(notification.event_id?.trim()) || Boolean(boardId?.trim());
-
-				if (
-					persistViaApi &&
-					notificationAppId &&
-					backend?.profile &&
-					currentUser &&
-					canPersistNotification
-				) {
-					try {
-						await fetcher<{ id: string; success: boolean }>(
-							backend.profile,
-							`apps/${notificationAppId}/notifications/create`,
-							{
-								method: "POST",
-								body: JSON.stringify({
-									event_id: notification.event_id,
-									board_id:
-										notification.event_id &&
-										notification.event_id.trim().length > 0
-											? undefined
-											: boardId,
-										target_user_sub: normalizedTargetUserSub,
-									title: notification.title,
-									description: notification.description,
-									icon: notification.icon,
-									link: notification.link,
-									run_id: notification.source_run_id,
-									node_id: notification.source_node_id,
-								}),
-							},
-							authContext,
-						);
-					} catch (e) {
-						console.warn(
-							"[NotificationProvider] Failed to persist remote notification:",
-							e,
-						);
-					}
-				} else if (persistViaApi && !canPersistNotification) {
-					console.warn(
-						"[NotificationProvider] Skipping workflow notification persistence because neither event_id nor board_id is available.",
-					);
-				}
 
 				if (!isCurrentUserTarget) {
 					continue;
 				}
 
+				// Store locally for immediate/offline desktop history. Remote
+				// persistence is handled by notification nodes and backend routes.
 				await storeNotification({
 					title: notification.title,
 					description: notification.description,
@@ -607,18 +562,13 @@ export default function NotificationProvider({
 				return;
 			}
 
-			void handleNotificationBatch(
-				detail.events,
-				detail.persistViaApi,
-				detail.appId ?? appId,
-				detail.boardId,
-			);
+			void handleNotificationBatch(detail.events, detail.appId ?? appId);
 		};
 
 		const unlistenFn = listen(
 			"flow_notification",
 			async (events: Event<IIntercomEvent[]>) => {
-				await handleNotificationBatch(events.payload, true, appId);
+				await handleNotificationBatch(events.payload, appId);
 			},
 		);
 
@@ -639,7 +589,7 @@ export default function NotificationProvider({
 				}
 			})();
 		};
-	}, [userId, appId, queryClient, backend?.profile, currentUser, authContext]);
+	}, [userId, appId, queryClient]);
 
 	return null;
 }

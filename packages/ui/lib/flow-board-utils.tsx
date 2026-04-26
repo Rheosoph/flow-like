@@ -25,7 +25,7 @@ import {
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
 import type { IFnRefs, INode } from "./schema/flow/node";
-import { type IPinOptions, type IPin, IPinType } from "./schema/flow/pin";
+import { type IPin, type IPinOptions, IPinType } from "./schema/flow/pin";
 import { parseUint8ArrayToJson } from "./uint8";
 
 export function hexToRgba(hex: string, alpha = 0.3): string {
@@ -192,7 +192,10 @@ function invertPinType(type: IPinType): IPinType {
 	return type === IPinType.Input ? IPinType.Output : IPinType.Input;
 }
 
-function stripCallFunctionRef(node: INode): { node: INode; functionLayerId: string | undefined } {
+function stripCallFunctionRef(node: INode): {
+	node: INode;
+	functionLayerId: string | undefined;
+} {
 	const layerPin = Object.values(node.pins).find(
 		(p) => p.name === "function_layer_id",
 	);
@@ -405,7 +408,9 @@ export function parseBoard(
 		const hash = node.hash ?? -1;
 		const isUnavailable = catalogLookup
 			? node.wasm?.package_id
-				? !catalogLookup.wasmNodeKeys.has(`${node.wasm.package_id}:${node.name}`)
+				? !catalogLookup.wasmNodeKeys.has(
+						`${node.wasm.package_id}:${node.name}`,
+					)
 				: !catalogLookup.nodeNames.has(node.name)
 			: false;
 		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
@@ -420,12 +425,19 @@ export function parseBoard(
 			nodes.push(oldNode);
 		} else if (oldNode) {
 			// Hash matches but some derived state changed — shallow update
-			const nodeForData = node.name === "control_call_function"
-				? stripCallFunctionRef(node).node
-				: node;
+			const nodeForData =
+				node.name === "control_call_function"
+					? stripCallFunctionRef(node).node
+					: node;
 			nodes.push({
 				...oldNode,
-				data: { ...oldNode.data, isUnavailable, fnRefsHash, node: nodeForData, boardRef },
+				data: {
+					...oldNode.data,
+					isUnavailable,
+					fnRefsHash,
+					node: nodeForData,
+					boardRef,
+				},
 				selected: sel,
 			});
 		} else {
@@ -479,7 +491,8 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
-			if (layer.type === ILayerType.Function && layer.id !== currentLayer) continue;
+			if (layer.type === ILayerType.Function && layer.id !== currentLayer)
+				continue;
 			const parentLayer =
 				(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
 			if (parentLayer !== currentLayer) {
@@ -1042,9 +1055,10 @@ export async function handlePaste(
 		const clipboard = await navigator.clipboard.readText();
 		const detection = detectFormat(clipboard);
 		if (detection.format !== "unknown" && detection.parsed) {
-			const result = detection.format === "n8n"
-				? translateN8n(detection.parsed as N8nWorkflow, catalog)
-				: translateDify(detection.parsed as DifyWorkflow);
+			const result =
+				detection.format === "n8n"
+					? translateN8n(detection.parsed as N8nWorkflow, catalog)
+					: translateDify(detection.parsed as DifyWorkflow);
 
 			const boardNodes = Object.values(result.board.nodes);
 			const boardComments = Object.values(result.board.comments);

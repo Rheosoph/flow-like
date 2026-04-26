@@ -160,10 +160,7 @@ export function PublishDialog({
 					>
 						Cancel
 					</Button>
-					<Button
-						onClick={handlePublish}
-						disabled={!isValid || isPublishing}
-					>
+					<Button onClick={handlePublish} disabled={!isValid || isPublishing}>
 						{isPublishing ? (
 							<>
 								<Loader2 className="h-4 w-4 mr-2 animate-spin" />

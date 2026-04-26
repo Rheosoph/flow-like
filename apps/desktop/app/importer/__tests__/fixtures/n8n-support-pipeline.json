@@ -24,7 +24,11 @@
 				"assignments": {
 					"assignments": [
 						{ "name": "ticket_id", "value": "={{$json.id}}", "type": "string" },
-						{ "name": "priority", "value": "={{$json.priority}}", "type": "number" },
+						{
+							"name": "priority",
+							"value": "={{$json.priority}}",
+							"type": "number"
+						},
 						{ "name": "resolved", "value": false, "type": "boolean" }
 					]
 				}

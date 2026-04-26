@@ -1,5 +1,5 @@
-import { PrismaClient, Prisma } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { type Prisma, PrismaClient } from "@prisma/client";
 import pg from "pg";
 import type { AAModel, ModelClassification } from "./types";
 
@@ -55,7 +55,9 @@ export function computeTier(
 	existingParams: Record<string, unknown> | null,
 	costScore: number,
 ): { newTier: string; oldTier: string } | null {
-	const provider = existingParams?.provider as Record<string, unknown> | undefined;
+	const provider = existingParams?.provider as
+		| Record<string, unknown>
+		| undefined;
 	const params = provider?.params as Record<string, unknown> | undefined;
 	const currentTier = params?.tier;
 	if (typeof currentTier !== "string") return null;

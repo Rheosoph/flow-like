@@ -104,6 +104,7 @@ impl Modify for SecurityAddon {
         (name = "sink", description = "Event sink management"),
         (name = "chat", description = "LLM chat completions"),
         (name = "database", description = "Database operations"),
+        (name = "graph", description = "Graph overlay and visualization operations"),
         (name = "data", description = "Data file access"),
         (name = "store", description = "Data store"),
         (name = "solution", description = "Solution requests"),
@@ -294,6 +295,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_index::drop_index,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
+        crate::routes::app::graph::search::search_nodes,
         // App package routes
         crate::routes::app::packages::list_packages,
         crate::routes::app::packages::add_package,

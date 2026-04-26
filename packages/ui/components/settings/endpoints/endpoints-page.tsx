@@ -170,10 +170,7 @@ function EndpointRow({
 	const fullUrl = `${baseUrl}${filledPath}`;
 
 	const nonAppParams = useMemo(
-		() =>
-			(endpoint.parameters ?? []).filter(
-				(p) => p.name !== "app_id",
-			),
+		() => (endpoint.parameters ?? []).filter((p) => p.name !== "app_id"),
 		[endpoint.parameters],
 	);
 
@@ -317,9 +314,7 @@ function extractAppEndpoints(spec: OpenApiSpec): OpenApiPath[] {
 
 		for (const [method, details] of Object.entries(methods)) {
 			if (
-				["get", "post", "put", "patch", "delete"].includes(
-					method.toLowerCase(),
-				)
+				["get", "post", "put", "patch", "delete"].includes(method.toLowerCase())
 			) {
 				const d = details as Record<string, unknown>;
 				endpoints.push({
@@ -348,9 +343,7 @@ function extractGlobalEndpoints(spec: OpenApiSpec): OpenApiPath[] {
 		if (path.includes("{app_id}")) continue;
 		for (const [method, details] of Object.entries(methods)) {
 			if (
-				["get", "post", "put", "patch", "delete"].includes(
-					method.toLowerCase(),
-				)
+				["get", "post", "put", "patch", "delete"].includes(method.toLowerCase())
 			) {
 				const d = details as Record<string, unknown>;
 				const tags = Array.isArray(d.tags) ? (d.tags as string[]) : [];
@@ -374,9 +367,7 @@ function extractGlobalEndpoints(spec: OpenApiSpec): OpenApiPath[] {
 	return endpoints;
 }
 
-function groupByTag(
-	endpoints: OpenApiPath[],
-): Record<string, OpenApiPath[]> {
+function groupByTag(endpoints: OpenApiPath[]): Record<string, OpenApiPath[]> {
 	const groups: Record<string, OpenApiPath[]> = {};
 	for (const ep of endpoints) {
 		const tag = ep.tag ?? "other";
@@ -423,9 +414,7 @@ export function EndpointsPage() {
 			setError(null);
 			let res: Response;
 			try {
-				const { fetch: tauriFetch } = await import(
-					"@tauri-apps/plugin-http"
-				);
+				const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
 				res = await tauriFetch(openApiUrl);
 			} catch {
 				res = await fetch(openApiUrl);
@@ -479,32 +468,29 @@ export function EndpointsPage() {
 
 	return (
 		<div className="space-y-6">
-				{/* SDK Installation */}
-				<Card>
-					<CardHeader>
-						<div className="flex items-center gap-2">
-							<PackageIcon className="h-5 w-5" />
-							<CardTitle>SDK Installation</CardTitle>
-						</div>
-						<CardDescription>
-							Use the official Flow-Like SDK to interact with your app
-							programmatically.
-						</CardDescription>
-					</CardHeader>
-					<CardContent>
-						<Tabs defaultValue="npm">
-							<TabsList>
-								<TabsTrigger value="npm">npm / TypeScript</TabsTrigger>
-								<TabsTrigger value="python">Python</TabsTrigger>
-							</TabsList>
-							<TabsContent value="npm" className="space-y-3 mt-3">
-								<CodeBlock
-									language="bash"
-									code="npm install @flow-like/sdk"
-								/>
-								<CodeBlock
-									language="typescript"
-									code={`import { FlowLikeClient } from "@flow-like/sdk";
+			{/* SDK Installation */}
+			<Card>
+				<CardHeader>
+					<div className="flex items-center gap-2">
+						<PackageIcon className="h-5 w-5" />
+						<CardTitle>SDK Installation</CardTitle>
+					</div>
+					<CardDescription>
+						Use the official Flow-Like SDK to interact with your app
+						programmatically.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<Tabs defaultValue="npm">
+						<TabsList>
+							<TabsTrigger value="npm">npm / TypeScript</TabsTrigger>
+							<TabsTrigger value="python">Python</TabsTrigger>
+						</TabsList>
+						<TabsContent value="npm" className="space-y-3 mt-3">
+							<CodeBlock language="bash" code="npm install @flow-like/sdk" />
+							<CodeBlock
+								language="typescript"
+								code={`import { FlowLikeClient } from "@flow-like/sdk";
 
 const client = new FlowLikeClient({
   baseUrl: "${baseUrl}",
@@ -528,13 +514,13 @@ const uploaded = await client.uploadFile(appId, file);
 const rows = await client.queryTable(appId, "table-name", {
   filter: "column = 'value'",
 });`}
-								/>
-							</TabsContent>
-							<TabsContent value="python" className="space-y-3 mt-3">
-								<CodeBlock language="bash" code="pip install flow-like" />
-								<CodeBlock
-									language="python"
-									code={`from flow_like import FlowLikeClient
+							/>
+						</TabsContent>
+						<TabsContent value="python" className="space-y-3 mt-3">
+							<CodeBlock language="bash" code="pip install flow-like" />
+							<CodeBlock
+								language="python"
+								code={`from flow_like import FlowLikeClient
 
 client = FlowLikeClient(
     base_url="${baseUrl}",
@@ -555,107 +541,152 @@ uploaded = client.upload_file(app_id, file)
 
 # Query a database table
 rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`}
+							/>
+						</TabsContent>
+					</Tabs>
+				</CardContent>
+			</Card>
+
+			{/* Authentication */}
+			<Card>
+				<CardHeader>
+					<div className="flex items-center gap-2">
+						<ShieldIcon className="h-5 w-5" />
+						<CardTitle>Authentication</CardTitle>
+					</div>
+					<CardDescription>
+						Choose one of the supported authentication methods for API access.
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					<div className="grid gap-4 md:grid-cols-2">
+						<Card>
+							<CardHeader className="pb-2">
+								<div className="flex items-center gap-2">
+									<KeyIcon className="h-4 w-4" />
+									<CardTitle className="text-sm">
+										Personal Access Token (PAT)
+									</CardTitle>
+								</div>
+							</CardHeader>
+							<CardContent className="space-y-2">
+								<p className="text-xs text-muted-foreground">
+									Create PATs in your user settings. Best for personal scripts
+									and development. Token format:{" "}
+									<code className="text-xs font-mono">
+										pat_&#123;id&#125;.&#123;secret&#125;
+									</code>
+								</p>
+								<CodeBlock
+									language="http"
+									code={"Authorization: pat_{id}.{secret}"}
 								/>
-							</TabsContent>
-						</Tabs>
-					</CardContent>
-				</Card>
+							</CardContent>
+						</Card>
+						<Card>
+							<CardHeader className="pb-2">
+								<div className="flex items-center gap-2">
+									<ServerIcon className="h-4 w-4" />
+									<CardTitle className="text-sm">
+										Technical User API Key
+									</CardTitle>
+								</div>
+							</CardHeader>
+							<CardContent className="space-y-2">
+								<p className="text-xs text-muted-foreground">
+									Create API keys in the Team settings of this app. Best for
+									server-to-server integrations. Key format:{" "}
+									<code className="text-xs font-mono">
+										flk_&#123;app_id&#125;.&#123;key_id&#125;.&#123;secret&#125;
+									</code>
+								</p>
+								<CodeBlock
+									language="http"
+									code={"X-API-Key: flk_{app_id}.{key_id}.{secret}"}
+								/>
+							</CardContent>
+						</Card>
+					</div>
+				</CardContent>
+			</Card>
 
-				{/* Authentication */}
-				<Card>
-					<CardHeader>
-						<div className="flex items-center gap-2">
-							<ShieldIcon className="h-5 w-5" />
-							<CardTitle>Authentication</CardTitle>
+			{/* App-scoped Endpoints */}
+			<Card>
+				<CardHeader>
+					<div className="flex items-center gap-2">
+						<BookOpenIcon className="h-5 w-5" />
+						<CardTitle>App Endpoints</CardTitle>
+					</div>
+					<CardDescription>
+						These endpoints are scoped to your app. The app ID{" "}
+						<code className="text-xs rounded bg-muted px-1.5 py-0.5 font-mono">
+							{appId}
+						</code>{" "}
+						is pre-filled in all paths.
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-4">
+					{error && (
+						<div className="text-sm text-destructive rounded-md border border-destructive/20 bg-destructive/5 p-3">
+							{error}
+							<Button
+								variant="link"
+								size="sm"
+								className="ml-2 h-auto p-0"
+								onClick={loadSpec}
+							>
+								Retry
+							</Button>
 						</div>
-						<CardDescription>
-							Choose one of the supported authentication methods for API
-							access.
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="space-y-4">
-						<div className="grid gap-4 md:grid-cols-2">
-							<Card>
-								<CardHeader className="pb-2">
-									<div className="flex items-center gap-2">
-										<KeyIcon className="h-4 w-4" />
-										<CardTitle className="text-sm">
-											Personal Access Token (PAT)
-										</CardTitle>
-									</div>
-								</CardHeader>
-								<CardContent className="space-y-2">
-									<p className="text-xs text-muted-foreground">
-										Create PATs in your user settings. Best for personal
-										scripts and development. Token format:{" "}
-										<code className="text-xs font-mono">pat_&#123;id&#125;.&#123;secret&#125;</code>
-									</p>
-									<CodeBlock
-										language="http"
-										code={"Authorization: pat_{id}.{secret}"}
-									/>
-								</CardContent>
-							</Card>
-							<Card>
-								<CardHeader className="pb-2">
-									<div className="flex items-center gap-2">
-										<ServerIcon className="h-4 w-4" />
-										<CardTitle className="text-sm">
-											Technical User API Key
-										</CardTitle>
-									</div>
-								</CardHeader>
-								<CardContent className="space-y-2">
-									<p className="text-xs text-muted-foreground">
-										Create API keys in the Team settings of this app. Best for
-										server-to-server integrations. Key format:{" "}
-										<code className="text-xs font-mono">flk_&#123;app_id&#125;.&#123;key_id&#125;.&#123;secret&#125;</code>
-									</p>
-									<CodeBlock
-										language="http"
-										code={"X-API-Key: flk_{app_id}.{key_id}.{secret}"}
-									/>
-								</CardContent>
-							</Card>
-						</div>
-					</CardContent>
-				</Card>
-
-				{/* App-scoped Endpoints */}
-				<Card>
-					<CardHeader>
-						<div className="flex items-center gap-2">
-							<BookOpenIcon className="h-5 w-5" />
-							<CardTitle>App Endpoints</CardTitle>
-						</div>
-						<CardDescription>
-							These endpoints are scoped to your app. The app ID{" "}
-							<code className="text-xs rounded bg-muted px-1.5 py-0.5 font-mono">
-								{appId}
-							</code>{" "}
-							is pre-filled in all paths.
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="space-y-4">
-						{error && (
-							<div className="text-sm text-destructive rounded-md border border-destructive/20 bg-destructive/5 p-3">
-								{error}
-								<Button
-									variant="link"
-									size="sm"
-									className="ml-2 h-auto p-0"
-									onClick={loadSpec}
-								>
-									Retry
-								</Button>
+					)}
+					{!error && appEndpoints.length === 0 && (
+						<p className="text-sm text-muted-foreground">
+							No app-scoped endpoints found.
+						</p>
+					)}
+					{Object.entries(groupedApp).map(([tag, endpoints]) => (
+						<div key={tag} className="space-y-1">
+							<div className="flex items-center gap-2 mb-2">
+								<h3 className="text-sm font-semibold capitalize">{tag}</h3>
+								{tagDescriptions[tag] && (
+									<span className="text-xs text-muted-foreground">
+										— {tagDescriptions[tag]}
+									</span>
+								)}
+								<Badge variant="secondary" className="text-[10px] ml-auto">
+									{endpoints.length}
+								</Badge>
 							</div>
-						)}
-						{!error && appEndpoints.length === 0 && (
-							<p className="text-sm text-muted-foreground">
-								No app-scoped endpoints found.
-							</p>
-						)}
-						{Object.entries(groupedApp).map(([tag, endpoints]) => (
+							<div className="border rounded-lg divide-y">
+								{endpoints.map((ep) => (
+									<EndpointRow
+										key={`${ep.method}-${ep.path}`}
+										endpoint={ep}
+										appId={appId}
+										baseUrl={baseUrl}
+									/>
+								))}
+							</div>
+						</div>
+					))}
+				</CardContent>
+			</Card>
+
+			{/* Utility Endpoints (tmp, chat) */}
+			{Object.keys(groupedGlobal).length > 0 && (
+				<Card>
+					<CardHeader>
+						<div className="flex items-center gap-2">
+							<ServerIcon className="h-5 w-5" />
+							<CardTitle>Utility Endpoints</CardTitle>
+						</div>
+						<CardDescription>
+							Global endpoints for temporary file uploads, chat completions, and
+							other utilities.
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						{Object.entries(groupedGlobal).map(([tag, endpoints]) => (
 							<div key={tag} className="space-y-1">
 								<div className="flex items-center gap-2 mb-2">
 									<h3 className="text-sm font-semibold capitalize">{tag}</h3>
@@ -682,80 +713,34 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 						))}
 					</CardContent>
 				</Card>
+			)}
 
-				{/* Utility Endpoints (tmp, chat) */}
-				{Object.keys(groupedGlobal).length > 0 && (
-					<Card>
-						<CardHeader>
-							<div className="flex items-center gap-2">
-								<ServerIcon className="h-5 w-5" />
-								<CardTitle>Utility Endpoints</CardTitle>
-							</div>
-							<CardDescription>
-								Global endpoints for temporary file uploads, chat completions,
-								and other utilities.
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="space-y-4">
-							{Object.entries(groupedGlobal).map(([tag, endpoints]) => (
-								<div key={tag} className="space-y-1">
-									<div className="flex items-center gap-2 mb-2">
-										<h3 className="text-sm font-semibold capitalize">{tag}</h3>
-										{tagDescriptions[tag] && (
-											<span className="text-xs text-muted-foreground">
-												— {tagDescriptions[tag]}
-											</span>
-										)}
-										<Badge
-											variant="secondary"
-											className="text-[10px] ml-auto"
-										>
-											{endpoints.length}
-										</Badge>
-									</div>
-									<div className="border rounded-lg divide-y">
-										{endpoints.map((ep) => (
-											<EndpointRow
-												key={`${ep.method}-${ep.path}`}
-												endpoint={ep}
-												appId={appId}
-												baseUrl={baseUrl}
-											/>
-										))}
-									</div>
-								</div>
-							))}
-						</CardContent>
-					</Card>
-				)}
-
-				{/* Swagger UI Link */}
-				<Card>
-					<CardHeader>
-						<div className="flex items-center gap-2">
-							<ExternalLinkIcon className="h-5 w-5" />
-							<CardTitle>Full API Documentation</CardTitle>
-						</div>
-						<CardDescription>
-							View the complete interactive API documentation in Swagger UI,
-							including request/response schemas and the ability to try
-							endpoints.
-						</CardDescription>
-					</CardHeader>
-					<CardContent>
-						<Button variant="outline" asChild>
-							<a
-								href={swaggerUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="gap-2"
-							>
-								<ExternalLinkIcon className="h-4 w-4" />
-								Open Swagger UI
-							</a>
-						</Button>
-					</CardContent>
-				</Card>
+			{/* Swagger UI Link */}
+			<Card>
+				<CardHeader>
+					<div className="flex items-center gap-2">
+						<ExternalLinkIcon className="h-5 w-5" />
+						<CardTitle>Full API Documentation</CardTitle>
+					</div>
+					<CardDescription>
+						View the complete interactive API documentation in Swagger UI,
+						including request/response schemas and the ability to try endpoints.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<Button variant="outline" asChild>
+						<a
+							href={swaggerUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="gap-2"
+						>
+							<ExternalLinkIcon className="h-4 w-4" />
+							Open Swagger UI
+						</a>
+					</Button>
+				</CardContent>
+			</Card>
 		</div>
 	);
 }

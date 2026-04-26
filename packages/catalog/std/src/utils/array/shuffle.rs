@@ -12,7 +12,6 @@ use flow_like_types::{
     json::json,
     rand::{self, SeedableRng, rngs::SmallRng, seq::SliceRandom},
 };
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

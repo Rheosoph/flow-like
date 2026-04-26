@@ -12,7 +12,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::{board::ExecutionMode, node::NodePermission};
+use flow_like::flow::{board::ExecutionMode, event::EventExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -59,6 +59,11 @@ pub struct PrerunEventResponse {
     /// Board's execution mode setting (Hybrid, Remote, Local)
     #[schema(value_type = String)]
     pub execution_mode: ExecutionMode,
+    /// Event's execution mode — where this specific event runs.
+    /// An event is always either Local or Remote (never Hybrid), and must
+    /// match the board when the board is not Hybrid.
+    #[schema(value_type = String)]
+    pub event_execution_mode: EventExecutionMode,
     /// Whether the user can execute locally (has ReadBoards permission)
     /// If false, execution must happen on server
     pub can_execute_locally: bool,
@@ -128,6 +133,7 @@ pub async fn prerun_event(
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     let board_id = event.board_id.clone();
+    let event_execution_mode = event.execution_mode;
 
     // Get the board from the event
     let board = state
@@ -243,6 +249,7 @@ pub async fn prerun_event(
         oauth_requirements,
         requires_local_execution,
         execution_mode: board.execution_mode.clone(),
+        event_execution_mode,
         can_execute_locally,
         has_wasm_nodes: !wasm_package_ids.is_empty(),
         wasm_package_ids,

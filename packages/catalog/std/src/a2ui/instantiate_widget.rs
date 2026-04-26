@@ -9,7 +9,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait, json::json};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -305,7 +304,7 @@ impl NodeLogic for InstantiateWidget {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        let widgets = load_app_widgets(&board).await;
+        let widgets = load_app_widgets(board).await;
 
         let widget_names: Vec<String> = widgets.iter().map(|w| w.name.clone()).collect();
 

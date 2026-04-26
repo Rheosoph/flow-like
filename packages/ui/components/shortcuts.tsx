@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { createId } from "@paralleldrive/cuid2";
 import type Dexie from "dexie";
 import type { EntityTable } from "dexie";
+import { motion } from "framer-motion";
 import {
 	Bookmark,
 	Cable,
@@ -31,9 +32,11 @@ import {
 	WifiOff,
 	Workflow,
 } from "lucide-react";
-import { useCallback, useState, type ComponentType } from "react";
-import { motion } from "framer-motion";
+import { type ComponentType, useCallback, useState } from "react";
 import { isTauri } from "../lib/platform";
+import { AnimatedPinIcon } from "./animated-icons";
+import { AnimatedNewProjectIcon } from "./animated-icons/animated-plus";
+import { AutoPlayNewProjectIcon } from "./animated-icons/animated-plus-autoplay";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import {
@@ -56,9 +59,6 @@ import {
 	SidebarMenuItem,
 	useSidebar,
 } from "./ui/sidebar";
-import { AnimatedNewProjectIcon } from "./animated-icons/animated-plus";
-import { AutoPlayNewProjectIcon } from "./animated-icons/animated-plus-autoplay";
-import { AnimatedPinIcon } from "./animated-icons";
 
 const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
 
@@ -357,7 +357,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 			<SidebarGroup>
 				<SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
 				<SidebarMenu>
-						{predefinedShortcuts.map((shortcut) => (
+					{predefinedShortcuts.map((shortcut) => (
 						<SidebarMenuItem key={shortcut.id}>
 							<MotionSidebarMenuButton
 								onClick={shortcut.action}
@@ -418,7 +418,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 					<DialogContent>
 						<DialogHeader>
 							<DialogTitle className="flex items-center gap-2">
-								<AutoPlayNewProjectIcon className="h-5 w-5"/>
+								<AutoPlayNewProjectIcon className="h-5 w-5" />
 								Create Flow
 							</DialogTitle>
 							<DialogDescription>
@@ -601,7 +601,12 @@ function SortableShortcutItem({
 					tooltip={shortcut.label}
 					variant={pathname === shortcut.path ? "outline" : "default"}
 				>
-					<motion.a href={shortcut.path} className="flex items-center gap-2" initial="initial" whileHover="hover">
+					<motion.a
+						href={shortcut.path}
+						className="flex items-center gap-2"
+						initial="initial"
+						whileHover="hover"
+					>
 						{metadata ? (
 							<motion.div variants={iconVariants} className="relative shrink-0">
 								<Avatar className="h-6 w-6 -left-1">

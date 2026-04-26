@@ -22,8 +22,21 @@ export function useDataBinding(bound: BoundValue | undefined): unknown {
 			return bound.literalBool;
 		}
 
+		if ("literalOptions" in bound) {
+			return bound.literalOptions;
+		}
+
+		if ("literalJson" in bound) {
+			try {
+				return JSON.parse(bound.literalJson);
+			} catch {
+				return undefined;
+			}
+		}
+
 		if ("path" in bound && dataContext) {
-			return dataContext.get(bound.path);
+			const value = dataContext.get(bound.path);
+			return value !== undefined ? value : bound.defaultValue;
 		}
 
 		return undefined;

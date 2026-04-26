@@ -35,11 +35,7 @@ struct ReportRunRequest {
     error_message: Option<String>,
 }
 
-async fn report_run_to_backend(
-    app_handle: &AppHandle,
-    token: &str,
-    meta: &LogMeta,
-) {
+async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
     let hub_url = match TauriSettingsState::current_profile(app_handle).await {
         Ok(profile) => profile.hub_profile.hub.clone(),
         Err(_) => return,
@@ -57,7 +53,10 @@ async fn report_run_to_backend(
     );
 
     let error_message = if meta.log_level >= 3 {
-        Some(format!("Local run failed with log_level {}", meta.log_level))
+        Some(format!(
+            "Local run failed with log_level {}",
+            meta.log_level
+        ))
     } else {
         None
     };
@@ -326,15 +325,15 @@ async fn execute_internal(
     }
 
     // Report to backend for online apps when warnings or errors occurred
-    if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
-        if meta.log_level >= 2 {
-            let app_handle = app_handle_for_report.clone();
-            let token = token.clone();
-            let meta = meta.clone();
-            tokio::spawn(async move {
-                report_run_to_backend(&app_handle, &token, &meta).await;
-            });
-        }
+    if let (Some(meta), Some(token)) = (&meta, &token_for_report)
+        && meta.log_level >= 2
+    {
+        let app_handle = app_handle_for_report.clone();
+        let token = token.clone();
+        let meta = meta.clone();
+        tokio::spawn(async move {
+            report_run_to_backend(&app_handle, &token, &meta).await;
+        });
     }
 
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);

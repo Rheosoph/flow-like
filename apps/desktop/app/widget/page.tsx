@@ -692,10 +692,7 @@ function WidgetEventsEditor({
 }>) {
 	const addAction = () => {
 		const id = `action_${Date.now()}`;
-		onChange([
-			...actions,
-			{ id, label: "New Event", contextSchema: [] },
-		]);
+		onChange([...actions, { id, label: "New Event", contextSchema: [] }]);
 	};
 
 	const updateAction = (index: number, updates: Partial<WidgetAction>) => {
@@ -728,18 +725,13 @@ function WidgetEventsEditor({
 				</p>
 			)}
 			{actions.map((action, index) => (
-				<div
-					key={action.id}
-					className="border rounded-md p-3 space-y-2"
-				>
+				<div key={action.id} className="border rounded-md p-3 space-y-2">
 					<div className="flex items-start justify-between gap-2">
 						<div className="flex-1 space-y-2">
 							<Input
 								placeholder="Event label (e.g. On Button Press)"
 								value={action.label}
-								onChange={(e) =>
-									updateAction(index, { label: e.target.value })
-								}
+								onChange={(e) => updateAction(index, { label: e.target.value })}
 								className="h-8 text-sm"
 							/>
 							<Input

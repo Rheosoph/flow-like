@@ -926,8 +926,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
         .func_wrap_async(
             "flowlike_storage",
             "write_start_request",
-            |caller: Caller<'_, StoreData>,
-             (path_ptr, path_len, total_size): (u32, u32, u64)| {
+            |caller: Caller<'_, StoreData>, (path_ptr, path_len, total_size): (u32, u32, u64)| {
                 Box::new(async move {
                     if !caller
                         .data()
@@ -995,7 +994,11 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         &write_id,
                         &data,
                     );
-                    if ok { 0 } else { -1 }
+                    if ok {
+                        0
+                    } else {
+                        -1
+                    }
                 })
             },
         )

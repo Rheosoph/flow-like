@@ -101,7 +101,11 @@ export default function Page() {
 					setBoardCreation={setBoardCreation}
 					onOpenBoard={handleOpenBoard}
 					onDeleteBoard={handleDeleteBoard}
-					boardHref={app.data ? (boardId) => `/flow?id=${boardId}&app=${app.data.id}` : undefined}
+					boardHref={
+						app.data
+							? (boardId) => `/flow?id=${boardId}&app=${app.data.id}`
+							: undefined
+					}
 				/>
 			</div>
 		</main>

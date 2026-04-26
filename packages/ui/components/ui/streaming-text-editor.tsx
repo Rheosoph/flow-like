@@ -1,7 +1,7 @@
 "use client";
 
 import { MarkdownPlugin, remarkMdx, remarkMention } from "@platejs/markdown";
-import { type Value, KEYS, createSlateEditor } from "platejs";
+import { KEYS, type Value } from "platejs";
 import { Plate, PlateContent, usePlateEditor } from "platejs/react";
 import { memo, useEffect, useRef } from "react";
 import remarkBreaks from "remark-breaks";
@@ -30,9 +30,7 @@ const EMPTY_VALUE: Value = [{ type: "p", children: [{ text: "" }] }];
 
 function buildPlugins() {
 	return [
-		...BaseEditorKit.filter(
-			(p) => (p as any).key !== MarkdownPlugin.key,
-		),
+		...BaseEditorKit.filter((p) => (p as any).key !== MarkdownPlugin.key),
 		MarkdownPlugin.configure({
 			options: {
 				disallowedNodes: [KEYS.suggestion],

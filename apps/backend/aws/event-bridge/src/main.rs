@@ -3,16 +3,48 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_types::tokio;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
+use reqwest::StatusCode;
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+// Defaults chosen so a slow API doesn't blow past the Lambda timeout and cause
+// EventBridge Scheduler to retry, producing duplicate executions.
+const HTTP_CONNECT_TIMEOUT_SECS: u64 = 5;
+const HTTP_TIMEOUT_SECS: u64 = 120;
 
 static SINK_JWT: OnceLock<String> = OnceLock::new();
 static API_BASE_URL: OnceLock<String> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+fn is_retryable_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+        )
+}
+
+fn get_http_client() -> Result<&'static reqwest::Client, Error> {
+    if let Some(client) = HTTP_CLIENT.get() {
+        return Ok(client);
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to build HTTP client");
+            Error::from(format!("Failed to build HTTP client: {}", e))
+        })?;
+
+    let _ = HTTP_CLIENT.set(client);
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| Error::from("HTTP client failed to initialize"))
 }
 
 fn get_sink_jwt() -> Result<&'static str, Error> {
@@ -41,8 +73,11 @@ fn get_api_base_url() -> Result<&'static str, Error> {
         .as_str())
 }
 
+/// Payload delivered by EventBridge Scheduler. Scheduler passes the `Input`
+/// string verbatim as the Lambda event body (unlike EventBridge *Bus* rules,
+/// which wrap the payload in a `detail` field).
 #[derive(Debug, Deserialize, Serialize)]
-struct EventDetail {
+struct ScheduledEventPayload {
     event_id: String,
 }
 
@@ -52,31 +87,48 @@ struct TriggerRequest {
     sink_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct TriggerResponse {
+    success: bool,
+    run_id: Option<String>,
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
     run(service_fn(event_bridge_handler)).await
 }
 
-async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Error> {
+async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Result<(), Error> {
     let api_base_url = get_api_base_url()?;
     let sink_jwt = get_sink_jwt()?;
 
-    let detail = event.payload;
+    let payload = event.payload;
+    // Lambda's per-invocation request id is the natural idempotency key:
+    // retries of the same logical invocation share it, retries originating
+    // from EventBridge Scheduler get a fresh one (which is what we want — the
+    // API should run once per scheduled firing).
+    let idempotency_key = event.context.request_id.clone();
 
-    tracing::info!(event_id = %detail.event_id, "Processing scheduled event");
+    tracing::info!(
+        event_id = %payload.event_id,
+        idempotency_key = %idempotency_key,
+        "Processing scheduled event"
+    );
 
-    let client = get_http_client();
+    let client = get_http_client()?;
     let trigger_url = format!("{}/api/v1/sink/trigger/async", api_base_url);
 
     let request_body = TriggerRequest {
-        event_id: detail.event_id.clone(),
+        event_id: payload.event_id.clone(),
         sink_type: "cron".to_string(),
     };
 
     let response = client
         .post(&trigger_url)
         .header("Authorization", format!("Bearer {}", sink_jwt))
+        .header("Idempotency-Key", &idempotency_key)
         .json(&request_body)
         .send()
         .await
@@ -91,10 +143,80 @@ async fn event_bridge_handler(event: LambdaEvent<EventDetail>) -> Result<(), Err
             .text()
             .await
             .unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
-        tracing::error!(status = %status, body = %body, "API returned error");
+
+        // Most 4xx responses are hard failures. Retry only transient client
+        // failures where the same scheduled firing can plausibly succeed later.
+        if status.is_client_error() && !is_retryable_status(status) {
+            tracing::error!(
+                status = %status,
+                body = %body,
+                event_id = %payload.event_id,
+                "API returned client error — not retrying"
+            );
+            return Ok(());
+        }
+
+        tracing::error!(status = %status, body = %body, "API returned retryable error");
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }
 
-    tracing::info!(event_id = %detail.event_id, "Successfully triggered event");
+    if response.status() == StatusCode::NO_CONTENT {
+        tracing::info!(event_id = %payload.event_id, "API returned 204; treating trigger as successful");
+        return Ok(());
+    }
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let response_body = response.text().await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to read trigger response");
+        Error::from(format!("Failed to read trigger response: {}", e))
+    })?;
+    let trimmed_body = response_body.trim();
+
+    if trimmed_body.is_empty() {
+        tracing::info!(event_id = %payload.event_id, "API returned empty success body; treating trigger as successful");
+        return Ok(());
+    }
+
+    let looks_like_json = content_type
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
+        || trimmed_body.starts_with('{');
+    if !looks_like_json {
+        tracing::warn!(
+            event_id = %payload.event_id,
+            content_type = ?content_type,
+            body = %trimmed_body,
+            "API returned non-JSON success body; treating trigger as successful"
+        );
+        return Ok(());
+    }
+
+    let trigger_response = serde_json::from_str::<TriggerResponse>(trimmed_body).map_err(|e| {
+        tracing::error!(error = %e, body = %trimmed_body, "Failed to parse trigger response");
+        Error::from(format!("Failed to parse trigger response: {}", e))
+    })?;
+
+    if !trigger_response.success {
+        let error = trigger_response
+            .error
+            .unwrap_or_else(|| "unknown trigger error".to_string());
+        tracing::error!(
+            event_id = %payload.event_id,
+            run_id = ?trigger_response.run_id,
+            error = %error,
+            "API accepted request but did not trigger event"
+        );
+        return Err(Error::from(format!("Trigger failed: {}", error)));
+    }
+
+    tracing::info!(
+        event_id = %payload.event_id,
+        run_id = ?trigger_response.run_id,
+        "Successfully triggered event"
+    );
     Ok(())
 }

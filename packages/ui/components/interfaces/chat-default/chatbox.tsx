@@ -161,10 +161,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			}
 
 			await onSendMessage(
-					input.trim(),
-					attachedFiles,
-					activeTools,
-					recordedAudio || undefined,
+				input.trim(),
+				attachedFiles,
+				activeTools,
+				recordedAudio || undefined,
 			);
 			setInput("");
 			setAttachedFiles([]);
@@ -263,7 +263,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			if (!audioInput) return;
 			const SpeechRecognitionApi =
 				typeof window !== "undefined"
-					? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+					? (window as any).SpeechRecognition ||
+						(window as any).webkitSpeechRecognition
 					: null;
 			if (!SpeechRecognitionApi) return;
 
@@ -760,9 +761,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 												isTranscribing && "animate-pulse",
 											)}
 											onClick={
-												isTranscribing
-													? stopTranscription
-													: startTranscription
+												isTranscribing ? stopTranscription : startTranscription
 											}
 											disabled={isRecording || sendDisabled}
 										>
@@ -825,7 +824,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										variant="ghost"
 										className="h-8 w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
 										onClick={onVoiceModeToggle}
-											disabled={isRecording || isTranscribing || sendDisabled}
+										disabled={isRecording || isTranscribing || sendDisabled}
 										title="Voice mode"
 									>
 										<AudioWaveform className="w-4 h-4" />

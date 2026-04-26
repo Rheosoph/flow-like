@@ -3,8 +3,8 @@
 import { useTheme } from "next-themes";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
-import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { VoiceMode } from "./VoiceMode";
+import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 
 interface ChatWelcomeProps {
 	onSendMessage: ISendMessageFunction;

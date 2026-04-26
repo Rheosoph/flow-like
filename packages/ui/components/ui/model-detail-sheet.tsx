@@ -26,6 +26,8 @@ import type { ISettingsProfile } from "../../types";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Badge } from "./badge";
 import { Button } from "./button";
+import type { IModelEvaluation } from "./model-benchmarks";
+import { ModelBenchmarks } from "./model-benchmarks";
 import {
 	ModalityIcons,
 	ModelTypeIcon,
@@ -34,8 +36,6 @@ import {
 	isEmbeddingBit,
 	supportsRemoteEmbeddingExecution,
 } from "./model-card";
-import type { IModelEvaluation } from "./model-benchmarks";
-import { ModelBenchmarks } from "./model-benchmarks";
 import { Progress } from "./progress";
 import {
 	Sheet,
@@ -152,7 +152,8 @@ export function ModelDetailSheet({
 	const displayBit = detailedBit.data ?? bit;
 
 	const isVirtualBit = useMemo(
-		() => !displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess),
+		() =>
+			!displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess),
 		[displayBit?.download_link, bitSize.data, bitSize.isSuccess],
 	);
 

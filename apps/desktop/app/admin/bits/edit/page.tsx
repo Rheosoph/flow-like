@@ -10,12 +10,12 @@ import {
 	CardTitle,
 	type IBit,
 	type IBitModelClassification,
-	type IMetadata,
 	IBitTypes,
 	type ILlmParameters,
-	Input,
+	type IMetadata,
 	type IModelProvider,
 	type IVlmParameters,
+	Input,
 	Label,
 	Select,
 	SelectContent,
@@ -95,17 +95,23 @@ function isHostedProviderName(providerName?: null | string) {
 	return normalized === "hosted" || normalized.startsWith("hosted:");
 }
 
-function getProviderParams(provider: IModelProvider | Record<string, unknown> | undefined) {
+function getProviderParams(
+	provider: IModelProvider | Record<string, unknown> | undefined,
+) {
 	return asRecord(provider?.params);
 }
 
-function normalizeModelParameters(parameters: unknown): ILlmParameters | IVlmParameters {
+function normalizeModelParameters(
+	parameters: unknown,
+): ILlmParameters | IVlmParameters {
 	const current = asRecord(parameters);
 	const provider = asRecord(current.provider);
 	return {
 		...current,
 		context_length:
-			typeof current.context_length === "number" ? current.context_length : 2048,
+			typeof current.context_length === "number"
+				? current.context_length
+				: 2048,
 		model_classification: {
 			...DEFAULT_MODEL_CLASSIFICATION,
 			...asRecord(current.model_classification),
@@ -116,7 +122,8 @@ function normalizeModelParameters(parameters: unknown): ILlmParameters | IVlmPar
 				typeof provider.provider_name === "string" && provider.provider_name
 					? provider.provider_name
 					: "Local",
-			model_id: typeof provider.model_id === "string" ? provider.model_id : null,
+			model_id:
+				typeof provider.model_id === "string" ? provider.model_id : null,
 			version: typeof provider.version === "string" ? provider.version : null,
 			params: getProviderParams(provider),
 		},
@@ -124,7 +131,10 @@ function normalizeModelParameters(parameters: unknown): ILlmParameters | IVlmPar
 }
 
 function isHostedBit(bit: IBit | null | undefined) {
-	if (!bit || !MODEL_BIT_TYPES.includes(bit.type as (typeof MODEL_BIT_TYPES)[number])) {
+	if (
+		!bit ||
+		!MODEL_BIT_TYPES.includes(bit.type as (typeof MODEL_BIT_TYPES)[number])
+	) {
 		return false;
 	}
 	const parameters = normalizeModelParameters(bit.parameters);
@@ -190,7 +200,9 @@ export default function EditBitsPage() {
 	const [parametersText, setParametersText] = useState("{}");
 	const [parametersError, setParametersError] = useState<string | null>(null);
 	const [providerParamsText, setProviderParamsText] = useState("{}");
-	const [providerParamsError, setProviderParamsError] = useState<string | null>(null);
+	const [providerParamsError, setProviderParamsError] = useState<string | null>(
+		null,
+	);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const debouncedSearch = useDebounce(searchTerm, 250);
@@ -254,7 +266,11 @@ export default function EditBitsPage() {
 		setDependenciesText((nextDraft.dependencies ?? []).join("\n"));
 		setTagsText((nextDraft.meta.en?.tags ?? []).join(", "));
 		setParametersText(JSON.stringify(nextDraft.parameters ?? {}, null, 2));
-		if (MODEL_BIT_TYPES.includes(nextDraft.type as (typeof MODEL_BIT_TYPES)[number])) {
+		if (
+			MODEL_BIT_TYPES.includes(
+				nextDraft.type as (typeof MODEL_BIT_TYPES)[number],
+			)
+		) {
 			const modelParameters = normalizeModelParameters(nextDraft.parameters);
 			setProviderParamsText(
 				JSON.stringify(getProviderParams(modelParameters.provider), null, 2),
@@ -272,16 +288,15 @@ export default function EditBitsPage() {
 
 	const visibleBits = useMemo(
 		() =>
-			(bits.data ?? []).filter(
-				(bit) => {
-					const hasMeta = bit.meta?.en ?? Object.values(bit.meta ?? {}).length > 0;
-					if (!hasMeta) return false;
-					if (selectedType === HOSTED_FILTER) {
-						return isHostedBit(bit);
-					}
-					return true;
-				},
-			),
+			(bits.data ?? []).filter((bit) => {
+				const hasMeta =
+					bit.meta?.en ?? Object.values(bit.meta ?? {}).length > 0;
+				if (!hasMeta) return false;
+				if (selectedType === HOSTED_FILTER) {
+					return isHostedBit(bit);
+				}
+				return true;
+			}),
 		[bits.data, selectedType],
 	);
 
@@ -313,30 +328,42 @@ export default function EditBitsPage() {
 		[],
 	);
 
-	const applyParsedParameters = useCallback((parsed: unknown) => {
-		setDraft((current) => {
-			if (!current) return current;
-			return {
-				...current,
-				parameters: parsed,
-			};
-		});
-		setParametersText(JSON.stringify(parsed ?? {}, null, 2));
-		if (draft && MODEL_BIT_TYPES.includes(draft.type as (typeof MODEL_BIT_TYPES)[number])) {
-			const modelParameters = normalizeModelParameters(parsed);
-			setProviderParamsText(
-				JSON.stringify(getProviderParams(modelParameters.provider), null, 2),
-			);
-		}
-		setParametersError(null);
-		setProviderParamsError(null);
-	}, [draft]);
-
-	const updateStructuredParameters = useCallback(
-		(updater: (current: ILlmParameters | IVlmParameters) => ILlmParameters | IVlmParameters) => {
+	const applyParsedParameters = useCallback(
+		(parsed: unknown) => {
 			setDraft((current) => {
 				if (!current) return current;
-				const nextParameters = updater(normalizeModelParameters(current.parameters));
+				return {
+					...current,
+					parameters: parsed,
+				};
+			});
+			setParametersText(JSON.stringify(parsed ?? {}, null, 2));
+			if (
+				draft &&
+				MODEL_BIT_TYPES.includes(draft.type as (typeof MODEL_BIT_TYPES)[number])
+			) {
+				const modelParameters = normalizeModelParameters(parsed);
+				setProviderParamsText(
+					JSON.stringify(getProviderParams(modelParameters.provider), null, 2),
+				);
+			}
+			setParametersError(null);
+			setProviderParamsError(null);
+		},
+		[draft],
+	);
+
+	const updateStructuredParameters = useCallback(
+		(
+			updater: (
+				current: ILlmParameters | IVlmParameters,
+			) => ILlmParameters | IVlmParameters,
+		) => {
+			setDraft((current) => {
+				if (!current) return current;
+				const nextParameters = updater(
+					normalizeModelParameters(current.parameters),
+				);
 				setParametersText(JSON.stringify(nextParameters, null, 2));
 				setProviderParamsText(
 					JSON.stringify(getProviderParams(nextParameters.provider), null, 2),
@@ -360,7 +387,9 @@ export default function EditBitsPage() {
 			applyParsedParameters(parsed);
 		} catch (error) {
 			setParametersError(
-				error instanceof Error ? error.message : "Parameters must be valid JSON",
+				error instanceof Error
+					? error.message
+					: "Parameters must be valid JSON",
 			);
 		}
 	}, [applyParsedParameters, parametersText]);
@@ -382,41 +411,40 @@ export default function EditBitsPage() {
 			}));
 		} catch (error) {
 			setProviderParamsError(
-				error instanceof Error ? error.message : "Provider params must be valid JSON",
+				error instanceof Error
+					? error.message
+					: "Provider params must be valid JSON",
 			);
 		}
 	}, [providerParamsText, updateStructuredParameters]);
 
-	const setModelHostingMode = useCallback(
-		(nextMode: "local" | "hosted") => {
-			setDraft((current) => {
-				if (!current) return current;
-				const nextParameters = normalizeModelParameters(current.parameters);
-				nextParameters.provider = {
-					...nextParameters.provider,
-					provider_name: nextMode === "hosted" ? "Hosted" : "Local",
-					params:
-						nextMode === "hosted"
-							? getProviderParams(nextParameters.provider)
-							: getProviderParams(nextParameters.provider),
-				};
-				setParametersText(JSON.stringify(nextParameters, null, 2));
-				setProviderParamsText(
-					JSON.stringify(getProviderParams(nextParameters.provider), null, 2),
-				);
-				return {
-					...current,
-					parameters: nextParameters,
-					download_link: nextMode === "hosted" ? "" : current.download_link,
-					file_name: nextMode === "hosted" ? "" : current.file_name,
-					size: nextMode === "hosted" ? 0 : current.size,
-				};
-			});
-			setParametersError(null);
-			setProviderParamsError(null);
-		},
-		[],
-	);
+	const setModelHostingMode = useCallback((nextMode: "local" | "hosted") => {
+		setDraft((current) => {
+			if (!current) return current;
+			const nextParameters = normalizeModelParameters(current.parameters);
+			nextParameters.provider = {
+				...nextParameters.provider,
+				provider_name: nextMode === "hosted" ? "Hosted" : "Local",
+				params:
+					nextMode === "hosted"
+						? getProviderParams(nextParameters.provider)
+						: getProviderParams(nextParameters.provider),
+			};
+			setParametersText(JSON.stringify(nextParameters, null, 2));
+			setProviderParamsText(
+				JSON.stringify(getProviderParams(nextParameters.provider), null, 2),
+			);
+			return {
+				...current,
+				parameters: nextParameters,
+				download_link: nextMode === "hosted" ? "" : current.download_link,
+				file_name: nextMode === "hosted" ? "" : current.file_name,
+				size: nextMode === "hosted" ? 0 : current.size,
+			};
+		});
+		setParametersError(null);
+		setProviderParamsError(null);
+	}, []);
 
 	const handleRefresh = useCallback(() => {
 		queryClient.invalidateQueries({ queryKey: ["bit-search"] });
@@ -474,7 +502,11 @@ export default function EditBitsPage() {
 			if (!receivedSavedBit) {
 				throw new Error("Bit update did not complete");
 			}
-			await backend.apiState.put(profile.data, `admin/bit/${savedBit.id}/en`, nextDraft.meta.en);
+			await backend.apiState.put(
+				profile.data,
+				`admin/bit/${savedBit.id}/en`,
+				nextDraft.meta.en,
+			);
 			toast.success("Bit updated");
 			queryClient.invalidateQueries({ queryKey: ["bit-search"] });
 			queryClient.invalidateQueries({ queryKey: ["bit", savedBit.id] });
@@ -484,7 +516,16 @@ export default function EditBitsPage() {
 		} finally {
 			setIsSaving(false);
 		}
-	}, [authorsText, backend.apiState, dependenciesText, draft, parametersText, profile.data, queryClient, tagsText]);
+	}, [
+		authorsText,
+		backend.apiState,
+		dependenciesText,
+		draft,
+		parametersText,
+		profile.data,
+		queryClient,
+		tagsText,
+	]);
 
 	const handleDelete = useCallback(async () => {
 		if (!profile.data || !draft) {
@@ -511,7 +552,10 @@ export default function EditBitsPage() {
 	}, [backend.apiState, draft, profile.data, queryClient]);
 
 	const modelParameters = useMemo(() => {
-		if (!draft || !MODEL_BIT_TYPES.includes(draft.type as (typeof MODEL_BIT_TYPES)[number])) {
+		if (
+			!draft ||
+			!MODEL_BIT_TYPES.includes(draft.type as (typeof MODEL_BIT_TYPES)[number])
+		) {
 			return null;
 		}
 		return normalizeModelParameters(draft.parameters);
@@ -527,7 +571,8 @@ export default function EditBitsPage() {
 						<div>
 							<h1 className="text-3xl font-bold">Bit Management</h1>
 							<p className="text-muted-foreground">
-								Search, inspect, edit, and remove published bits from one screen.
+								Search, inspect, edit, and remove published bits from one
+								screen.
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
@@ -545,7 +590,9 @@ export default function EditBitsPage() {
 					<Card>
 						<CardHeader>
 							<CardTitle>Search</CardTitle>
-							<CardDescription>Filter by name, description, type, or hosted-model category.</CardDescription>
+							<CardDescription>
+								Filter by name, description, type, or hosted-model category.
+							</CardDescription>
 						</CardHeader>
 						<CardContent className="grid gap-4 md:grid-cols-[1fr,240px,160px]">
 							<div className="relative">
@@ -557,7 +604,10 @@ export default function EditBitsPage() {
 									onChange={(event) => setSearchTerm(event.target.value)}
 								/>
 							</div>
-							<Select value={selectedType} onValueChange={(v) => setSelectedType(v as BitFilterValue)}>
+							<Select
+								value={selectedType}
+								onValueChange={(v) => setSelectedType(v as BitFilterValue)}
+							>
 								<SelectTrigger>
 									<SelectValue placeholder="All categories" />
 								</SelectTrigger>
@@ -594,14 +644,19 @@ export default function EditBitsPage() {
 							<CardHeader>
 								<CardTitle>Matching Bits</CardTitle>
 								<CardDescription>
-									{bits.isLoading ? "Loading bits..." : `${visibleBits.length} visible on this page`}
+									{bits.isLoading
+										? "Loading bits..."
+										: `${visibleBits.length} visible on this page`}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-3">
 								{bits.isLoading ? (
 									<div className="space-y-2">
 										{Array.from({ length: 8 }).map((_, index) => (
-											<Skeleton key={`bit-skeleton-${index}`} className="h-20 w-full" />
+											<Skeleton
+												key={`bit-skeleton-${index}`}
+												className="h-20 w-full"
+											/>
 										))}
 									</div>
 								) : visibleBits.length === 0 ? (
@@ -610,7 +665,8 @@ export default function EditBitsPage() {
 									</div>
 								) : (
 									visibleBits.map((bit) => {
-										const meta = bit.meta?.en ?? Object.values(bit.meta ?? {})[0];
+										const meta =
+											bit.meta?.en ?? Object.values(bit.meta ?? {})[0];
 										const isSelected = bit.id === selectedId;
 										return (
 											<button
@@ -618,16 +674,24 @@ export default function EditBitsPage() {
 												type="button"
 												onClick={() => setSelectedId(bit.id)}
 												className={`w-full rounded-lg border p-4 text-left transition-colors ${
-													isSelected ? "border-primary bg-primary/5" : "hover:border-primary/40"
+													isSelected
+														? "border-primary bg-primary/5"
+														: "hover:border-primary/40"
 												}`}
 											>
 												<div className="flex items-center justify-between gap-3">
 													<div>
-														<p className="font-medium">{meta?.name || bit.id}</p>
-														<p className="text-xs text-muted-foreground">{bit.id}</p>
+														<p className="font-medium">
+															{meta?.name || bit.id}
+														</p>
+														<p className="text-xs text-muted-foreground">
+															{bit.id}
+														</p>
 													</div>
 													<div className="flex items-center gap-2">
-														{isHostedBit(bit) ? <Badge variant="outline">Hosted</Badge> : null}
+														{isHostedBit(bit) ? (
+															<Badge variant="outline">Hosted</Badge>
+														) : null}
 														<Badge variant="secondary">{bit.type}</Badge>
 													</div>
 												</div>
@@ -650,11 +714,15 @@ export default function EditBitsPage() {
 										variant="outline"
 										size="sm"
 										disabled={currentPage === 1}
-										onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+										onClick={() =>
+											setCurrentPage((page) => Math.max(1, page - 1))
+										}
 									>
 										Previous
 									</Button>
-									<span className="text-xs text-muted-foreground">Page {currentPage}</span>
+									<span className="text-xs text-muted-foreground">
+										Page {currentPage}
+									</span>
 									<Button
 										variant="outline"
 										size="sm"
@@ -671,14 +739,18 @@ export default function EditBitsPage() {
 							<CardHeader>
 								<CardTitle>Editor</CardTitle>
 								<CardDescription>
-									Update core fields, metadata, and model runtime settings from one screen.
+									Update core fields, metadata, and model runtime settings from
+									one screen.
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
 								{selectedBit.isLoading || (selectedId && !draft) ? (
 									<div className="space-y-3">
 										{Array.from({ length: 10 }).map((_, index) => (
-											<Skeleton key={`editor-skeleton-${index}`} className="h-12 w-full" />
+											<Skeleton
+												key={`editor-skeleton-${index}`}
+												className="h-12 w-full"
+											/>
 										))}
 									</div>
 								) : !draft ? (
@@ -697,18 +769,23 @@ export default function EditBitsPage() {
 												<Input
 													id="bit-slug"
 													value={draft.name ?? ""}
-													onChange={(event) => updateDraft("name", event.target.value)}
+													onChange={(event) =>
+														updateDraft("name", event.target.value)
+													}
 													placeholder="e.g. step-3-5-flash"
 												/>
 												<p className="text-xs text-muted-foreground">
-													Used to auto-compute capability scores for hosted models.
+													Used to auto-compute capability scores for hosted
+													models.
 												</p>
 											</div>
 											<div className="space-y-2">
 												<Label htmlFor="bit-type">Type</Label>
 												<Select
 													value={draft.type}
-													onValueChange={(value) => updateDraft("type", value as IBitTypes)}
+													onValueChange={(value) =>
+														updateDraft("type", value as IBitTypes)
+													}
 												>
 													<SelectTrigger id="bit-type">
 														<SelectValue />
@@ -724,19 +801,27 @@ export default function EditBitsPage() {
 											</div>
 											{modelParameters ? (
 												<div className="space-y-2">
-													<Label htmlFor="bit-model-category">Model Category</Label>
+													<Label htmlFor="bit-model-category">
+														Model Category
+													</Label>
 													<Select
 														value={draftIsHosted ? HOSTED_FILTER : "local"}
 														onValueChange={(value) =>
-															setModelHostingMode(value === HOSTED_FILTER ? "hosted" : "local")
+															setModelHostingMode(
+																value === HOSTED_FILTER ? "hosted" : "local",
+															)
 														}
 													>
 														<SelectTrigger id="bit-model-category">
 															<SelectValue />
 														</SelectTrigger>
 														<SelectContent>
-															<SelectItem value="local">Local weights</SelectItem>
-															<SelectItem value={HOSTED_FILTER}>Hosted model</SelectItem>
+															<SelectItem value="local">
+																Local weights
+															</SelectItem>
+															<SelectItem value={HOSTED_FILTER}>
+																Hosted model
+															</SelectItem>
 														</SelectContent>
 													</Select>
 												</div>
@@ -746,7 +831,9 @@ export default function EditBitsPage() {
 												<Input
 													id="bit-name"
 													value={draft.meta.en?.name ?? ""}
-													onChange={(event) => updateMeta("name", event.target.value)}
+													onChange={(event) =>
+														updateMeta("name", event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
@@ -755,16 +842,22 @@ export default function EditBitsPage() {
 													id="bit-description"
 													rows={3}
 													value={draft.meta.en?.description ?? ""}
-													onChange={(event) => updateMeta("description", event.target.value)}
+													onChange={(event) =>
+														updateMeta("description", event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-long-description">Long Description</Label>
+												<Label htmlFor="bit-long-description">
+													Long Description
+												</Label>
 												<Textarea
 													id="bit-long-description"
 													rows={6}
 													value={draft.meta.en?.long_description ?? ""}
-													onChange={(event) => updateMeta("long_description", event.target.value)}
+													onChange={(event) =>
+														updateMeta("long_description", event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2">
@@ -772,7 +865,9 @@ export default function EditBitsPage() {
 												<Input
 													id="bit-version"
 													value={draft.version ?? ""}
-													onChange={(event) => updateDraft("version", event.target.value)}
+													onChange={(event) =>
+														updateDraft("version", event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2">
@@ -780,7 +875,9 @@ export default function EditBitsPage() {
 												<Input
 													id="bit-license"
 													value={draft.license ?? ""}
-													onChange={(event) => updateDraft("license", event.target.value)}
+													onChange={(event) =>
+														updateDraft("license", event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
@@ -788,13 +885,17 @@ export default function EditBitsPage() {
 												<Input
 													id="bit-repository"
 													value={draft.repository ?? ""}
-													onChange={(event) => updateDraft("repository", event.target.value)}
+													onChange={(event) =>
+														updateDraft("repository", event.target.value)
+													}
 												/>
 											</div>
 											{modelParameters ? (
 												<>
 													<div className="space-y-2">
-														<Label htmlFor="bit-context-length">Context Length</Label>
+														<Label htmlFor="bit-context-length">
+															Context Length
+														</Label>
 														<Input
 															id="bit-context-length"
 															type="number"
@@ -802,7 +903,8 @@ export default function EditBitsPage() {
 															onChange={(event) =>
 																updateStructuredParameters((current) => ({
 																	...current,
-																	context_length: Number(event.target.value) || 2048,
+																	context_length:
+																		Number(event.target.value) || 2048,
 																}))
 															}
 														/>
@@ -828,7 +930,10 @@ export default function EditBitsPage() {
 																<SelectItem value="Local">Local</SelectItem>
 																<SelectItem value="Premium">Premium</SelectItem>
 																{HOSTED_PROVIDER_OPTIONS.map((providerName) => (
-																	<SelectItem key={providerName} value={providerName}>
+																	<SelectItem
+																		key={providerName}
+																		value={providerName}
+																	>
 																		{providerName}
 																	</SelectItem>
 																))}
@@ -852,7 +957,9 @@ export default function EditBitsPage() {
 														/>
 													</div>
 													<div className="space-y-2">
-														<Label htmlFor="bit-provider-version">Provider Version</Label>
+														<Label htmlFor="bit-provider-version">
+															Provider Version
+														</Label>
 														<Input
 															id="bit-provider-version"
 															value={modelParameters.provider.version ?? ""}
@@ -870,17 +977,29 @@ export default function EditBitsPage() {
 													{draftIsHosted ? (
 														<>
 															<div className="space-y-2 md:col-span-2">
-																<Label htmlFor="bit-provider-endpoint">Endpoint</Label>
+																<Label htmlFor="bit-provider-endpoint">
+																	Endpoint
+																</Label>
 																<Input
 																	id="bit-provider-endpoint"
-																	value={typeof getProviderParams(modelParameters.provider).endpoint === "string" ? (getProviderParams(modelParameters.provider).endpoint as string) : ""}
+																	value={
+																		typeof getProviderParams(
+																			modelParameters.provider,
+																		).endpoint === "string"
+																			? (getProviderParams(
+																					modelParameters.provider,
+																				).endpoint as string)
+																			: ""
+																	}
 																	onChange={(event) =>
 																		updateStructuredParameters((current) => ({
 																			...current,
 																			provider: {
 																				...current.provider,
 																				params: {
-																					...getProviderParams(current.provider),
+																					...getProviderParams(
+																						current.provider,
+																					),
 																					endpoint: event.target.value,
 																				},
 																			},
@@ -889,7 +1008,9 @@ export default function EditBitsPage() {
 																/>
 															</div>
 															<div className="space-y-2 md:col-span-2">
-																<Label htmlFor="bit-provider-params">Provider Params JSON</Label>
+																<Label htmlFor="bit-provider-params">
+																	Provider Params JSON
+																</Label>
 																<Textarea
 																	id="bit-provider-params"
 																	rows={8}
@@ -901,10 +1022,14 @@ export default function EditBitsPage() {
 																	onBlur={handleProviderParamsBlur}
 																/>
 																{providerParamsError ? (
-																	<p className="text-xs text-destructive">{providerParamsError}</p>
+																	<p className="text-xs text-destructive">
+																		{providerParamsError}
+																	</p>
 																) : (
 																	<p className="text-xs text-muted-foreground">
-																		Hosted models use provider params for endpoint overrides and provider-specific metadata.
+																		Hosted models use provider params for
+																		endpoint overrides and provider-specific
+																		metadata.
 																	</p>
 																)}
 															</div>
@@ -915,11 +1040,15 @@ export default function EditBitsPage() {
 											{!draftIsHosted ? (
 												<>
 													<div className="space-y-2 md:col-span-2">
-														<Label htmlFor="bit-download-link">Download Link</Label>
+														<Label htmlFor="bit-download-link">
+															Download Link
+														</Label>
 														<Input
 															id="bit-download-link"
 															value={draft.download_link ?? ""}
-															onChange={(event) => updateDraft("download_link", event.target.value)}
+															onChange={(event) =>
+																updateDraft("download_link", event.target.value)
+															}
 														/>
 													</div>
 													<div className="space-y-2">
@@ -927,7 +1056,9 @@ export default function EditBitsPage() {
 														<Input
 															id="bit-file-name"
 															value={draft.file_name ?? ""}
-															onChange={(event) => updateDraft("file_name", event.target.value)}
+															onChange={(event) =>
+																updateDraft("file_name", event.target.value)
+															}
 														/>
 													</div>
 													<div className="space-y-2">
@@ -936,14 +1067,17 @@ export default function EditBitsPage() {
 															id="bit-size"
 															type="number"
 															value={draft.size ?? 0}
-															onChange={(event) => updateDraft("size", Number(event.target.value))}
+															onChange={(event) =>
+																updateDraft("size", Number(event.target.value))
+															}
 														/>
 													</div>
 												</>
 											) : (
 												<div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground md:col-span-2">
-													Hosted models are routed through provider metadata and do not need a downloadable artifact,
-													stored file name, or local size.
+													Hosted models are routed through provider metadata and
+													do not need a downloadable artifact, stored file name,
+													or local size.
 												</div>
 											)}
 											<div className="space-y-2 md:col-span-2">
@@ -952,7 +1086,9 @@ export default function EditBitsPage() {
 													id="bit-authors"
 													placeholder="Comma or newline separated"
 													value={authorsText}
-													onChange={(event) => setAuthorsText(event.target.value)}
+													onChange={(event) =>
+														setAuthorsText(event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
@@ -962,7 +1098,9 @@ export default function EditBitsPage() {
 													rows={4}
 													placeholder="One dependency per line or comma separated"
 													value={dependenciesText}
-													onChange={(event) => setDependenciesText(event.target.value)}
+													onChange={(event) =>
+														setDependenciesText(event.target.value)
+													}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
@@ -987,10 +1125,13 @@ export default function EditBitsPage() {
 													onBlur={handleParametersBlur}
 												/>
 												{parametersError ? (
-													<p className="text-xs text-destructive">{parametersError}</p>
+													<p className="text-xs text-destructive">
+														{parametersError}
+													</p>
 												) : (
 													<p className="text-xs text-muted-foreground">
-														Advanced overrides remain available here. Structured model fields above keep this JSON in sync.
+														Advanced overrides remain available here. Structured
+														model fields above keep this JSON in sync.
 													</p>
 												)}
 											</div>
@@ -1000,10 +1141,15 @@ export default function EditBitsPage() {
 											<div>
 												<p className="font-medium">Danger Zone</p>
 												<p className="text-sm text-muted-foreground">
-													Deleting a bit removes it from the registry and deletes the stored artifact.
+													Deleting a bit removes it from the registry and
+													deletes the stored artifact.
 												</p>
 											</div>
-											<Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+											<Button
+												variant="destructive"
+												onClick={handleDelete}
+												disabled={isDeleting}
+											>
 												<Trash2 className="mr-2 h-4 w-4" />
 												Delete Bit
 											</Button>

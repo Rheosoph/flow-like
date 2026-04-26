@@ -33,6 +33,7 @@ impl NodeLogic for FetchMailNode {
             "Email/IMAP",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
         node.add_output_pin(
@@ -100,21 +101,22 @@ impl NodeLogic for EmailHeadersNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(1);
 
         node.add_input_pin("email", "Email", "Email struct", VariableType::Struct)
             .set_schema::<Email>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_output_pin("from", "From", "From addresses", VariableType::Struct)
-            .set_schema::<MailAddress>();
+        node.add_output_pin("from", "From", "Primary from address", VariableType::Struct)
+            .set_schema::<Option<MailAddress>>();
         node.add_output_pin("sender", "Sender", "Sender addresses", VariableType::Struct)
-            .set_schema::<MailAddress>()
+            .set_schema::<Vec<MailAddress>>()
             .set_value_type(ValueType::Array);
         node.add_output_pin("to", "To", "To addresses", VariableType::Struct)
-            .set_schema::<MailAddress>()
+            .set_schema::<Vec<MailAddress>>()
             .set_value_type(ValueType::Array);
         node.add_output_pin("cc", "Cc", "Carbon copy addresses", VariableType::Struct)
-            .set_schema::<MailAddress>()
+            .set_schema::<Vec<MailAddress>>()
             .set_value_type(ValueType::Array);
         node.add_output_pin(
             "bcc",
@@ -122,7 +124,7 @@ impl NodeLogic for EmailHeadersNode {
             "Blind carbon copy addresses",
             VariableType::Struct,
         )
-        .set_schema::<MailAddress>()
+        .set_schema::<Vec<MailAddress>>()
         .set_value_type(ValueType::Array);
 
         node
@@ -130,21 +132,12 @@ impl NodeLogic for EmailHeadersNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let email: Email = context.evaluate_pin("email").await?;
-        let from = email.from.map(|i| i.first().cloned());
 
-        context.set_pin_value("from", json!(from)).await?;
-        context
-            .set_pin_value("sender", json!(email.sender.unwrap_or_default()))
-            .await?;
-        context
-            .set_pin_value("to", json!(email.to.unwrap_or_default()))
-            .await?;
-        context
-            .set_pin_value("cc", json!(email.cc.unwrap_or_default()))
-            .await?;
-        context
-            .set_pin_value("bcc", json!(email.bcc.unwrap_or_default()))
-            .await?;
+        context.set_pin_value("from", json!(email.from)).await?;
+        context.set_pin_value("sender", json!(email.sender)).await?;
+        context.set_pin_value("to", json!(email.to)).await?;
+        context.set_pin_value("cc", json!(email.cc)).await?;
+        context.set_pin_value("bcc", json!(email.bcc)).await?;
 
         Ok(())
     }
@@ -170,6 +163,7 @@ impl NodeLogic for EmailContentNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(1);
 
         node.add_input_pin("email", "Email", "Email struct", VariableType::Struct)
             .set_schema::<Email>()
@@ -217,6 +211,7 @@ impl NodeLogic for EmailAttachmentsNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(1);
 
         node.add_input_pin("email", "Email", "Email struct", VariableType::Struct)
             .set_schema::<Email>()
@@ -229,7 +224,7 @@ impl NodeLogic for EmailAttachmentsNode {
             VariableType::Struct,
         )
         .set_value_type(ValueType::Array)
-        .set_schema::<Attachment>();
+        .set_schema::<Vec<Attachment>>();
 
         node
     }
@@ -237,7 +232,7 @@ impl NodeLogic for EmailAttachmentsNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let email: Email = context.evaluate_pin("email").await?;
         context
-            .set_pin_value("attachments", json!(email.attachments.unwrap_or_default()))
+            .set_pin_value("attachments", json!(email.attachments))
             .await?;
         Ok(())
     }
@@ -372,6 +367,7 @@ impl NodeLogic for ToMailReferenceNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(1);
 
         node.add_input_pin("mail", "Mail", "Mail struct", VariableType::Struct)
             .set_schema::<Email>()

@@ -1,49 +1,68 @@
 export const frSecurity = {
 	"security.meta.title": "Sécurité et Conformité | Flow-Like",
-	"security.meta.description": "Construit sur Rust avec sécurité mémoire, RBAC, pistes d'audit complètes, souveraineté des données et transparence open source. Sécurité d'entreprise sans la complexité d'entreprise.",
+	"security.meta.description":
+		"Construit sur Rust avec sécurité mémoire, RBAC, pistes d'audit complètes, souveraineté des données et transparence open source. Sécurité d'entreprise sans la complexité d'entreprise.",
 	"security.hero.tagline": "Sécurité d'abord",
 	"security.hero.headline": "Une sécurité que vous pouvez",
 	"security.hero.headline.highlight": "vérifier",
-	"security.hero.description": "Flow-Like est open source. Chaque ligne de code est auditable. Combinez les composants internes sécurisés en mémoire de Rust avec le contrôle d'accès basé sur les rôles, le chiffrement au repos et des pistes d'audit complètes.",
+	"security.hero.description":
+		"Flow-Like est open source. Chaque ligne de code est auditable. Combinez les composants internes sécurisés en mémoire de Rust avec le contrôle d'accès basé sur les rôles, le chiffrement au repos et des pistes d'audit complètes.",
 	"security.hero.cta": "Voir le code source",
 	"security.hero.cta.report": "Signaler une vulnérabilité",
 	"security.arch.tagline": "Architecture de sécurité",
 	"security.arch.headline": "Défense en profondeur",
-	"security.arch.description": "Plusieurs couches de sécurité — du runtime du langage jusqu'aux limites du déploiement.",
+	"security.arch.description":
+		"Plusieurs couches de sécurité — du runtime du langage jusqu'aux limites du déploiement.",
 	"security.arch.rust.title": "Runtime à mémoire sécurisée",
-	"security.arch.rust.desc": "L'ensemble du moteur d'exécution est écrit en Rust — éliminant les débordements de tampon, les utilisations après libération et les courses de données à la compilation. Aucune pause du ramasse-miettes, aucune surprise à l'exécution.",
+	"security.arch.rust.desc":
+		"L'ensemble du moteur d'exécution est écrit en Rust — éliminant les débordements de tampon, les utilisations après libération et les courses de données à la compilation. Aucune pause du ramasse-miettes, aucune surprise à l'exécution.",
 	"security.arch.wasm.title": "Extensions sandboxées",
-	"security.arch.wasm.desc": "Les nœuds personnalisés s'exécutent dans des sandboxes WASM avec une sécurité basée sur les capacités. Aucun accès au système de fichiers ou au réseau sauf autorisation explicite. Le code malveillant ne peut pas s'échapper du sandbox.",
+	"security.arch.wasm.desc":
+		"Les nœuds personnalisés s'exécutent dans des sandboxes WASM avec une sécurité basée sur les capacités. Aucun accès au système de fichiers ou au réseau sauf autorisation explicite. Le code malveillant ne peut pas s'échapper du sandbox.",
 	"security.arch.rbac.title": "Contrôle d'accès basé sur les rôles",
-	"security.arch.rbac.desc": "Permissions granulaires pour les workflows, les nœuds, les secrets et les déploiements. Attribuez des rôles au niveau de l'organisation, de l'équipe ou du projet. Appliquez le principe du moindre privilège par défaut.",
+	"security.arch.rbac.desc":
+		"Permissions granulaires pour les workflows, les nœuds, les secrets et les déploiements. Attribuez des rôles au niveau de l'organisation, de l'équipe ou du projet. Appliquez le principe du moindre privilège par défaut.",
 	"security.arch.encryption.title": "Chiffrement partout",
-	"security.arch.encryption.desc": "TLS 1.3 pour les données en transit. Chiffrement AES-256 au repos pour les secrets, les identifiants et les données sensibles des workflows. Clés gérées via votre KMS ou le nôtre.",
+	"security.arch.encryption.desc":
+		"TLS 1.3 pour les données en transit. Chiffrement AES-256 au repos pour les secrets, les identifiants et les données sensibles des workflows. Clés gérées via votre KMS ou le nôtre.",
 	"security.arch.audit.title": "Piste d'audit complète",
-	"security.arch.audit.desc": "Chaque exécution de workflow, changement de configuration et événement d'accès est enregistré avec horodatage, identité utilisateur et contexte complet. Exportez vers votre SIEM ou vos outils de conformité.",
+	"security.arch.audit.desc":
+		"Chaque exécution de workflow, changement de configuration et événement d'accès est enregistré avec horodatage, identité utilisateur et contexte complet. Exportez vers votre SIEM ou vos outils de conformité.",
 	"security.arch.supply.title": "Sécurité de la chaîne d'approvisionnement",
-	"security.arch.supply.desc": "Toutes les dépendances sont suivies avec des SBOMs. Les licences tierces sont auditées en continu. Les mises à jour de dépendances sont testées en CI avant publication.",
+	"security.arch.supply.desc":
+		"Toutes les dépendances sont suivies avec des SBOMs. Les licences tierces sont auditées en continu. Les mises à jour de dépendances sont testées en CI avant publication.",
 	"security.data.tagline": "Souveraineté des données",
 	"security.data.headline": "Vos données, vos règles",
-	"security.data.description": "Flow-Like n'exige jamais que vos données quittent votre infrastructure. Déployez sur site, dans votre VPC ou sur le bureau — sans aucune télémétrie sauf si vous y consentez.",
+	"security.data.description":
+		"Flow-Like n'exige jamais que vos données quittent votre infrastructure. Déployez sur site, dans votre VPC ou sur le bureau — sans aucune télémétrie sauf si vous y consentez.",
 	"security.data.local.title": "Architecture local-first",
-	"security.data.local.desc": "L'application de bureau fonctionne entièrement hors ligne. Aucune dépendance cloud requise. Vos workflows, données et secrets restent sur votre machine.",
+	"security.data.local.desc":
+		"L'application de bureau fonctionne entièrement hors ligne. Aucune dépendance cloud requise. Vos workflows, données et secrets restent sur votre machine.",
 	"security.data.selfhost.title": "Déploiement auto-hébergé",
-	"security.data.selfhost.desc": "Déployez Flow-Like dans votre propre cloud ou infrastructure sur site. Docker, Kubernetes et bare-metal pris en charge.",
+	"security.data.selfhost.desc":
+		"Déployez Flow-Like dans votre propre cloud ou infrastructure sur site. Docker, Kubernetes et bare-metal pris en charge.",
 	"security.data.residency.title": "Contrôles de résidence des données",
-	"security.data.residency.desc": "Choisissez où vos données sont traitées et stockées. Respectez les exigences RGPD, CCPA et réglementaires avec des contrôles au niveau du déploiement.",
+	"security.data.residency.desc":
+		"Choisissez où vos données sont traitées et stockées. Respectez les exigences RGPD, CCPA et réglementaires avec des contrôles au niveau du déploiement.",
 	"security.compliance.tagline": "Conformité et transparence",
 	"security.compliance.headline": "Conçu pour les industries réglementées",
-	"security.compliance.description": "De la santé à la finance en passant par le gouvernement — Flow-Like fournit les contrôles exigés par les environnements réglementés.",
+	"security.compliance.description":
+		"De la santé à la finance en passant par le gouvernement — Flow-Like fournit les contrôles exigés par les environnements réglementés.",
 	"security.compliance.gdpr.title": "Prêt pour le RGPD",
-	"security.compliance.gdpr.desc": "Workflows de suppression de données, gestion du consentement et registres de traitement. Demandez la suppression de vos données à tout moment.",
+	"security.compliance.gdpr.desc":
+		"Workflows de suppression de données, gestion du consentement et registres de traitement. Demandez la suppression de vos données à tout moment.",
 	"security.compliance.soc.title": "Contrôles SOC 2",
-	"security.compliance.soc.desc": "Contrôles d'accès, gestion des changements et surveillance alignés sur les critères de services de confiance SOC 2.",
+	"security.compliance.soc.desc":
+		"Contrôles d'accès, gestion des changements et surveillance alignés sur les critères de services de confiance SOC 2.",
 	"security.compliance.open.title": "Transparence open source",
-	"security.compliance.open.desc": "Chaque dépendance, chaque licence, chaque ligne de code — auditable publiquement. Consultez l'avis complet sur les tiers.",
+	"security.compliance.open.desc":
+		"Chaque dépendance, chaque licence, chaque ligne de code — auditable publiquement. Consultez l'avis complet sur les tiers.",
 	"security.compliance.sbom.title": "SBOM disponible",
-	"security.compliance.sbom.desc": "Nomenclature logicielle générée pour chaque version. Arbre de dépendances complet avec données de licences et de vulnérabilités.",
+	"security.compliance.sbom.desc":
+		"Nomenclature logicielle générée pour chaque version. Arbre de dépendances complet avec données de licences et de vulnérabilités.",
 	"security.cta.headline": "Des questions sur la sécurité ?",
-	"security.cta.description": "Notre équipe de sécurité est prête à discuter de vos besoins. Pour les signalements de vulnérabilités, veuillez utiliser notre processus de divulgation responsable.",
+	"security.cta.description":
+		"Notre équipe de sécurité est prête à discuter de vos besoins. Pour les signalements de vulnérabilités, veuillez utiliser notre processus de divulgation responsable.",
 	"security.cta.button": "Contacter l'équipe de sécurité",
 	"security.cta.thirdparty": "Voir les avis sur les tiers",
 } as const;

@@ -75,6 +75,16 @@ pub struct UpdateSinkRequest {
     pub auth_token: Option<String>,
 }
 
+fn normalize_http_auth_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
 /// GET /sink
 /// List all active sinks for apps the user has WriteEvents permission
 #[utoipa::path(
@@ -296,10 +306,11 @@ pub async fn update_sink(
     }
 
     if let Some(auth_token) = body.auth_token {
+        let auth_token = normalize_http_auth_token(&auth_token);
         active_model.auth_token = Set(if auth_token.is_empty() {
             None
         } else {
-            Some(auth_token)
+            Some(auth_token.to_string())
         });
     }
 

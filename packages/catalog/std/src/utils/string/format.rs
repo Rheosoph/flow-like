@@ -7,10 +7,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait, json::json};
 use regex::Regex;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 #[crate::register_node]
 pub struct FormatStringNode {

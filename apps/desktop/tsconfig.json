@@ -19,7 +19,9 @@
 		],
 		"target": "ES2022",
 		"paths": {
-			"tauri-plugin-remote-push-api": ["../../node_modules/tauri-plugin-remote-push-api/guest-js/index.ts"]
+			"tauri-plugin-remote-push-api": [
+				"../../node_modules/tauri-plugin-remote-push-api/guest-js/index.ts"
+			]
 		}
 	},
 	"include": [

@@ -7,7 +7,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::sync::Arc;
 
 /// Helper to get string value from a pin's default value
 fn get_pin_string_value(node: &Node, name: &str) -> String {

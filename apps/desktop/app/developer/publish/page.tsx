@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
-	type PackageManifest,
 	Badge,
 	Button,
 	Card,
@@ -16,6 +15,7 @@ import {
 	Input,
 	Label,
 	MemoryTier,
+	type PackageManifest,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -282,7 +282,12 @@ function DeveloperPublishPageContent() {
 			const result = await post<{
 				available: boolean;
 				owned_by_caller: boolean;
-			}>(profile.data.hub_profile, "registry/check-id", { id: formData.id }, auth);
+			}>(
+				profile.data.hub_profile,
+				"registry/check-id",
+				{ id: formData.id },
+				auth,
+			);
 			if (result.available && result.owned_by_caller) {
 				setIdCheckState("owned");
 			} else if (result.available) {
@@ -312,7 +317,9 @@ function DeveloperPublishPageContent() {
 				const bumped = bumpPatch(formData.version);
 				setFormData((prev) => ({ ...prev, version: bumped }));
 				setVersionCheckState("bumped");
-				toast.info(`Version ${formData.version} already exists — bumped to ${bumped}`);
+				toast.info(
+					`Version ${formData.version} already exists — bumped to ${bumped}`,
+				);
 			}
 		} catch {
 			setVersionCheckState("idle");
@@ -325,17 +332,25 @@ function DeveloperPublishPageContent() {
 		setPublishing(true);
 		try {
 			// Use release-mode wasm detection for publish
-			const publishWasmPath = await invoke<string>("developer_find_publish_wasm", {
-				projectPath,
-			});
+			const publishWasmPath = await invoke<string>(
+				"developer_find_publish_wasm",
+				{
+					projectPath,
+				},
+			);
 
 			const { upload_url } = await post<{
 				upload_url: string;
 				expires_in_secs: number;
-			}>(profile.data.hub_profile, "registry/upload-url", {
-				id: formData.id,
-				version: formData.version,
-			}, auth);
+			}>(
+				profile.data.hub_profile,
+				"registry/upload-url",
+				{
+					id: formData.id,
+					version: formData.version,
+				},
+				auth,
+			);
 
 			const wasmBytes = await readFile(publishWasmPath);
 			const uploadResponse = await tauriFetch(upload_url, {
@@ -411,9 +426,14 @@ function DeveloperPublishPageContent() {
 				package_id: string;
 				version: string;
 				message?: string;
-			}>(profile.data.hub_profile, "registry/publish", {
-				manifest: toSnakeCaseKeys(manifest),
-			}, auth);
+			}>(
+				profile.data.hub_profile,
+				"registry/publish",
+				{
+					manifest: toSnakeCaseKeys(manifest),
+				},
+				auth,
+			);
 
 			toast.success(
 				response.message ??
@@ -438,7 +458,10 @@ function DeveloperPublishPageContent() {
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Button variant="outline" onClick={() => router.push("/store/packages?tab=projects")}>
+						<Button
+							variant="outline"
+							onClick={() => router.push("/store/packages?tab=projects")}
+						>
 							<ArrowLeft className="mr-2 h-4 w-4" />
 							Back to Projects
 						</Button>
@@ -576,7 +599,8 @@ function DeveloperPublishPageContent() {
 											<Button
 												type="button"
 												variant={
-													idCheckState === "available" || idCheckState === "owned"
+													idCheckState === "available" ||
+													idCheckState === "owned"
 														? "outline"
 														: "secondary"
 												}
@@ -587,7 +611,8 @@ function DeveloperPublishPageContent() {
 											>
 												{idCheckState === "checking" ? (
 													<Loader2 className="h-4 w-4 animate-spin" />
-												) : idCheckState === "available" || idCheckState === "owned" ? (
+												) : idCheckState === "available" ||
+													idCheckState === "owned" ? (
 													<Check className="h-4 w-4 text-green-500" />
 												) : idCheckState === "taken" ? (
 													<AlertTriangle className="h-4 w-4 text-destructive" />
@@ -600,10 +625,14 @@ function DeveloperPublishPageContent() {
 											<p className="text-xs text-green-500">ID is available</p>
 										)}
 										{idCheckState === "owned" && (
-											<p className="text-xs text-green-500">You own this package</p>
+											<p className="text-xs text-green-500">
+												You own this package
+											</p>
 										)}
 										{idCheckState === "taken" && (
-											<p className="text-xs text-destructive">ID is already taken by another user</p>
+											<p className="text-xs text-destructive">
+												ID is already taken by another user
+											</p>
 										)}
 									</div>
 									<div className="space-y-2">
@@ -621,15 +650,25 @@ function DeveloperPublishPageContent() {
 											/>
 											<Button
 												type="button"
-												variant={versionCheckState === "available" || versionCheckState === "bumped" ? "outline" : "secondary"}
+												variant={
+													versionCheckState === "available" ||
+													versionCheckState === "bumped"
+														? "outline"
+														: "secondary"
+												}
 												size="sm"
-												disabled={!formData.version || !formData.id || versionCheckState === "checking"}
+												disabled={
+													!formData.version ||
+													!formData.id ||
+													versionCheckState === "checking"
+												}
 												onClick={handleCheckVersion}
 												className="shrink-0"
 											>
 												{versionCheckState === "checking" ? (
 													<Loader2 className="h-4 w-4 animate-spin" />
-												) : versionCheckState === "available" || versionCheckState === "bumped" ? (
+												) : versionCheckState === "available" ||
+													versionCheckState === "bumped" ? (
 													<Check className="h-4 w-4 text-green-500" />
 												) : (
 													"Check"
@@ -637,10 +676,14 @@ function DeveloperPublishPageContent() {
 											</Button>
 										</div>
 										{versionCheckState === "available" && (
-											<p className="text-xs text-green-500">Version is available</p>
+											<p className="text-xs text-green-500">
+												Version is available
+											</p>
 										)}
 										{versionCheckState === "bumped" && (
-											<p className="text-xs text-yellow-500">Auto-bumped to available version</p>
+											<p className="text-xs text-yellow-500">
+												Auto-bumped to available version
+											</p>
 										)}
 									</div>
 								</div>
@@ -746,9 +789,7 @@ function DeveloperPublishPageContent() {
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="minimal">
-													Minimal (16 MB)
-												</SelectItem>
+												<SelectItem value="minimal">Minimal (16 MB)</SelectItem>
 												<SelectItem value="light">Light (32 MB)</SelectItem>
 												<SelectItem value="standard">
 													Standard (64 MB)
@@ -777,21 +818,15 @@ function DeveloperPublishPageContent() {
 											</SelectTrigger>
 											<SelectContent>
 												<SelectItem value="quick">Quick (5s)</SelectItem>
-												<SelectItem value="standard">
-													Standard (30s)
-												</SelectItem>
-												<SelectItem value="extended">
-													Extended (60s)
-												</SelectItem>
+												<SelectItem value="standard">Standard (30s)</SelectItem>
+												<SelectItem value="extended">Extended (60s)</SelectItem>
 												<SelectItem value="long_running">
 													Long Running (5min)
 												</SelectItem>
 												<SelectItem value="very_long">
 													Very Long (10min)
 												</SelectItem>
-												<SelectItem value="maximum">
-													Maximum (30min)
-												</SelectItem>
+												<SelectItem value="maximum">Maximum (30min)</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -846,9 +881,7 @@ function DeveloperPublishPageContent() {
 												updateField("tcpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="tcpEnabled">
-											Enable TCP sockets
-										</Label>
+										<Label htmlFor="tcpEnabled">Enable TCP sockets</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -858,9 +891,7 @@ function DeveloperPublishPageContent() {
 												updateField("udpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="udpEnabled">
-											Enable UDP sockets
-										</Label>
+										<Label htmlFor="udpEnabled">Enable UDP sockets</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -870,9 +901,7 @@ function DeveloperPublishPageContent() {
 												updateField("dnsEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="dnsEnabled">
-											Enable DNS lookups
-										</Label>
+										<Label htmlFor="dnsEnabled">Enable DNS lookups</Label>
 									</div>
 								</div>
 
@@ -941,9 +970,7 @@ function DeveloperPublishPageContent() {
 											<Checkbox
 												id="a2ui"
 												checked={formData.a2ui}
-												onCheckedChange={(c) =>
-													updateField("a2ui", c === true)
-												}
+												onCheckedChange={(c) => updateField("a2ui", c === true)}
 											/>
 											<Label htmlFor="a2ui">A2UI</Label>
 										</div>
@@ -1063,42 +1090,43 @@ function DeveloperPublishPageContent() {
 											<Badge variant="outline">Streaming</Badge>
 										)}
 										{formData.a2ui && <Badge variant="outline">A2UI</Badge>}
-										{formData.models && (
-											<Badge variant="outline">Models</Badge>
-										)}
+										{formData.models && <Badge variant="outline">Models</Badge>}
 									</div>
 								</div>
 
-							{!inspection?.wasmPath && (
-								<div className="rounded-lg bg-destructive/10 border border-destructive/20 p-4">
+								{!inspection?.wasmPath && (
+									<div className="rounded-lg bg-destructive/10 border border-destructive/20 p-4">
+										<div className="flex items-start gap-2">
+											<AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+											<div>
+												<h4 className="font-medium text-destructive">
+													Build Required
+												</h4>
+												<p className="text-sm text-muted-foreground mt-1">
+													No compiled WASM found. Run{" "}
+													<code>mise run build</code> in your project directory
+													before publishing.
+												</p>
+											</div>
+										</div>
+									</div>
+								)}
+
+								<div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-4">
 									<div className="flex items-start gap-2">
-										<AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+										<AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
 										<div>
-											<h4 className="font-medium text-destructive">Build Required</h4>
+											<h4 className="font-medium text-yellow-500">
+												Private Package
+											</h4>
 											<p className="text-sm text-muted-foreground mt-1">
-												No compiled WASM found. Run <code>mise run build</code> in
-												your project directory before publishing.
+												Your package will be published as a private project. You
+												can request public visibility later from the registry
+												management page.
 											</p>
 										</div>
 									</div>
 								</div>
-							)}
-
-							<div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-4">
-								<div className="flex items-start gap-2">
-									<AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
-									<div>
-										<h4 className="font-medium text-yellow-500">
-											Private Package
-										</h4>
-										<p className="text-sm text-muted-foreground mt-1">
-											Your package will be published as a private project. You
-											can request public visibility later from the registry
-											management page.
-										</p>
-									</div>
-								</div>
-							</div>
 							</CardContent>
 						</>
 					)}
@@ -1107,12 +1135,19 @@ function DeveloperPublishPageContent() {
 					<div className="flex justify-between p-6 pt-0">
 						<Button
 							variant="outline"
-							onClick={step === "manifest" ? () => router.push("/store/packages?tab=projects") : prevStep}
+							onClick={
+								step === "manifest"
+									? () => router.push("/store/packages?tab=projects")
+									: prevStep
+							}
 						>
 							Back
 						</Button>
 						{step === "review" ? (
-							<Button onClick={handlePublish} disabled={publishing || !inspection?.wasmPath}>
+							<Button
+								onClick={handlePublish}
+								disabled={publishing || !inspection?.wasmPath}
+							>
 								{publishing ? (
 									<>
 										<RefreshCw className="mr-2 h-4 w-4 animate-spin" />

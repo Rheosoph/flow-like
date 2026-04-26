@@ -1,4 +1,9 @@
-import type { AAModel, GlobalMaxes, ModelClassification, TodoEntry } from "./types";
+import type {
+	AAModel,
+	GlobalMaxes,
+	ModelClassification,
+	TodoEntry,
+} from "./types";
 
 const MANUAL_FIELDS: (keyof ModelClassification)[] = [];
 const COMPUTED_FIELDS = [
@@ -45,7 +50,10 @@ function safeNormalizedAvg(
 	};
 }
 
-function normalizeCoding(model: AAModel, maxes: GlobalMaxes): { value: number; missing: boolean } {
+function normalizeCoding(
+	model: AAModel,
+	maxes: GlobalMaxes,
+): { value: number; missing: boolean } {
 	const e = model.evaluations;
 	const raw = [
 		e.artificial_analysis_coding_index,
@@ -68,7 +76,10 @@ function normalizeCreativity(model: AAModel): number {
 	return clampUnit(score / 10);
 }
 
-function normalizeReasoning(model: AAModel, maxes: GlobalMaxes): { value: number; missing: boolean } {
+function normalizeReasoning(
+	model: AAModel,
+	maxes: GlobalMaxes,
+): { value: number; missing: boolean } {
 	const e = model.evaluations;
 	const raw = [
 		e.artificial_analysis_math_index,
@@ -91,14 +102,20 @@ function normalizeReasoning(model: AAModel, maxes: GlobalMaxes): { value: number
 	return safeNormalizedAvg(raw, max);
 }
 
-function normalizeFactuality(model: AAModel, maxes: GlobalMaxes): { value: number; missing: boolean } {
+function normalizeFactuality(
+	model: AAModel,
+	maxes: GlobalMaxes,
+): { value: number; missing: boolean } {
 	const e = model.evaluations;
 	const raw = [e.mmlu_pro, e.artificial_analysis_intelligence_index, e.gpqa];
 	const max = [maxes.mmlu_pro, maxes.intelligence_index, maxes.gpqa];
 	return safeNormalizedAvg(raw, max);
 }
 
-function normalizeFunctionCalling(model: AAModel, maxes: GlobalMaxes): { value: number; missing: boolean } {
+function normalizeFunctionCalling(
+	model: AAModel,
+	maxes: GlobalMaxes,
+): { value: number; missing: boolean } {
 	const e = model.evaluations;
 	const raw = [e.tau2, e.ifbench, e.terminalbench_hard];
 	const max = [maxes.tau2, maxes.ifbench, maxes.terminalbench_hard];
@@ -123,7 +140,7 @@ function normalizeCost(
 ): number {
 	if (price == null || price <= 0) return 0;
 
-	let effectivePrice = isLocal ? price / 3 : price;
+	const effectivePrice = isLocal ? price / 3 : price;
 
 	const validPrices = allPrices.filter((p) => p > 0);
 	if (validPrices.length === 0) return 0;
@@ -141,7 +158,8 @@ function normalizeCost(
 }
 
 function normalizeMultilinguality(model: AAModel): number {
-	const score = model.evaluations.artificial_analysis_multilingual_index_normalized;
+	const score =
+		model.evaluations.artificial_analysis_multilingual_index_normalized;
 	if (score == null || score <= 0) return 0;
 	return clampUnit(score);
 }
@@ -158,13 +176,19 @@ function normalizeOpenness(model: AAModel): number {
 	return OPENNESS_FALLS_BACK_TO_SCORE(category);
 }
 
-function normalizeSafety(
-	model: AAModel,
-): { value: number; missing: boolean; partial: boolean } {
+function normalizeSafety(model: AAModel): {
+	value: number;
+	missing: boolean;
+	partial: boolean;
+} {
 	const e = model.evaluations;
 	const normalizedIndex = e.artificial_analysis_omniscience_index_normalized;
 	if (normalizedIndex != null && normalizedIndex > 0) {
-		return { value: clampUnit(normalizedIndex), missing: false, partial: false };
+		return {
+			value: clampUnit(normalizedIndex),
+			missing: false,
+			partial: false,
+		};
 	}
 
 	const components: number[] = [];
@@ -189,7 +213,8 @@ function normalizeSafety(
 	}
 
 	return {
-		value: components.reduce((sum, value) => sum + value, 0) / components.length,
+		value:
+			components.reduce((sum, value) => sum + value, 0) / components.length,
 		missing: false,
 		partial: components.length < 2,
 	};
@@ -218,7 +243,8 @@ export function computeClassification(
 	if (factuality.missing) missingFields.push("factuality (partial benchmarks)");
 
 	const functionCalling = normalizeFunctionCalling(model, maxes);
-	if (functionCalling.missing) missingFields.push("function_calling (partial benchmarks)");
+	if (functionCalling.missing)
+		missingFields.push("function_calling (partial benchmarks)");
 
 	const speed = normalizeSpeed(model, maxes);
 	if (speed === 0) missingFields.push("speed (no data)");
@@ -228,7 +254,8 @@ export function computeClassification(
 	if (cost === 0) missingFields.push("cost (no pricing data)");
 
 	const multilinguality = normalizeMultilinguality(model);
-	if (multilinguality === 0) missingFields.push("multilinguality (no benchmark data)");
+	if (multilinguality === 0)
+		missingFields.push("multilinguality (no benchmark data)");
 
 	const openness = normalizeOpenness(model);
 	if (openness === 0) missingFields.push("openness (no benchmark data)");
@@ -263,7 +290,12 @@ export function computeClassification(
 		}
 	}
 
-	for (const field of ["creativity", "multilinguality", "openness", "safety"] as const) {
+	for (const field of [
+		"creativity",
+		"multilinguality",
+		"openness",
+		"safety",
+	] as const) {
 		const override = todoOverrides?.[field];
 		if (override != null && override > 0) {
 			classification[field] = round(override);

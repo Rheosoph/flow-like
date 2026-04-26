@@ -75,7 +75,8 @@ export default function CallbackPage() {
 						{auth.error ? "Authentication Error" : "Authentication timed out"}
 					</div>
 					<div className="text-sm text-muted-foreground">
-						{auth.error?.message || "The sign-in process did not complete. This can happen on mobile browsers."}
+						{auth.error?.message ||
+							"The sign-in process did not complete. This can happen on mobile browsers."}
 					</div>
 					<div className="flex gap-3 justify-center">
 						<button

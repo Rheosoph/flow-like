@@ -692,28 +692,32 @@ export function BuilderProvider({
 	}, []);
 
 	const undo = useCallback(() => {
-		setHistory((prev) => {
-			if (prev.past.length === 0) return prev;
-			const newPresent = prev.past[prev.past.length - 1];
-			return {
-				past: prev.past.slice(0, -1),
-				present: newPresent,
-				future: [prev.present, ...prev.future],
-			};
-		});
-	}, []);
+		const newPresent = history.past[history.past.length - 1];
+		if (!newPresent) return;
+
+		setComponentsMap(
+			new Map(newPresent.map((component) => [component.id, component])),
+		);
+		setHistory((prev) => ({
+			past: prev.past.slice(0, -1),
+			present: newPresent,
+			future: [prev.present, ...prev.future],
+		}));
+	}, [history]);
 
 	const redo = useCallback(() => {
-		setHistory((prev) => {
-			if (prev.future.length === 0) return prev;
-			const newPresent = prev.future[0];
-			return {
-				past: [...prev.past, prev.present],
-				present: newPresent,
-				future: prev.future.slice(1),
-			};
-		});
-	}, []);
+		const newPresent = history.future[0];
+		if (!newPresent) return;
+
+		setComponentsMap(
+			new Map(newPresent.map((component) => [component.id, component])),
+		);
+		setHistory((prev) => ({
+			past: [...prev.past, prev.present],
+			present: newPresent,
+			future: prev.future.slice(1),
+		}));
+	}, [history]);
 
 	// Component methods
 	const addComponent = useCallback(
@@ -831,63 +835,84 @@ export function BuilderProvider({
 
 	const deleteComponents = useCallback(
 		(ids: string[]) => {
+			const collectDescendants = (
+				map: Map<string, SurfaceComponent>,
+				componentId: string,
+			): string[] => {
+				const descendants: string[] = [];
+				const component = map.get(componentId);
+				if (!component?.component) return descendants;
+
+				const props = component.component as unknown as Record<string, unknown>;
+				const childIds: string[] = [];
+
+				if ("children" in props && props.children) {
+					const children = props.children as { explicitList?: string[] };
+					if (children.explicitList) {
+						childIds.push(...children.explicitList);
+					}
+				}
+				if ("child" in props && typeof props.child === "string") {
+					childIds.push(props.child);
+				}
+				if (
+					"entryPointChild" in props &&
+					typeof props.entryPointChild === "string"
+				) {
+					childIds.push(props.entryPointChild);
+				}
+				if ("contentChild" in props && typeof props.contentChild === "string") {
+					childIds.push(props.contentChild);
+				}
+
+				for (const childId of childIds) {
+					descendants.push(childId);
+					descendants.push(...collectDescendants(map, childId));
+				}
+
+				return descendants;
+			};
+
+			const allIdsToDelete = new Set<string>();
+			for (const id of ids) {
+				allIdsToDelete.add(id);
+				for (const descendantId of collectDescendants(componentsMap, id)) {
+					allIdsToDelete.add(descendantId);
+				}
+			}
+
 			pushHistory();
 			setComponentsMap((prev) => {
 				const next = new Map(prev);
 
-				// Recursively collect all descendant IDs
-				const collectDescendants = (componentId: string): string[] => {
-					const descendants: string[] = [];
-					const component = next.get(componentId);
-					if (!component?.component) return descendants;
+				for (const [componentId, component] of next) {
+					if (allIdsToDelete.has(componentId) || !component.component) continue;
 
 					const props = component.component as unknown as Record<
 						string,
 						unknown
 					>;
-					const childIds: string[] = [];
-
-					// Collect children from various child properties
-					if ("children" in props && props.children) {
-						const children = props.children as { explicitList?: string[] };
-						if (children.explicitList) {
-							childIds.push(...children.explicitList);
-						}
-					}
-					if ("child" in props && typeof props.child === "string") {
-						childIds.push(props.child);
-					}
-					if (
-						"entryPointChild" in props &&
-						typeof props.entryPointChild === "string"
-					) {
-						childIds.push(props.entryPointChild);
-					}
-					if (
-						"contentChild" in props &&
-						typeof props.contentChild === "string"
-					) {
-						childIds.push(props.contentChild);
+					const children = props.children as
+						| { explicitList?: string[] }
+						| undefined;
+					if (!children?.explicitList?.some((id) => allIdsToDelete.has(id))) {
+						continue;
 					}
 
-					for (const childId of childIds) {
-						descendants.push(childId);
-						descendants.push(...collectDescendants(childId));
-					}
-
-					return descendants;
-				};
-
-				// Collect all IDs to delete (including descendants)
-				const allIdsToDelete = new Set<string>();
-				for (const id of ids) {
-					allIdsToDelete.add(id);
-					for (const descendantId of collectDescendants(id)) {
-						allIdsToDelete.add(descendantId);
-					}
+					next.set(componentId, {
+						...component,
+						component: {
+							...component.component,
+							children: {
+								...children,
+								explicitList: children.explicitList.filter(
+									(id) => !allIdsToDelete.has(id),
+								),
+							},
+						} as A2UIComponent,
+					});
 				}
 
-				// Delete all collected IDs
 				for (const id of allIdsToDelete) {
 					next.delete(id);
 				}
@@ -896,10 +921,10 @@ export function BuilderProvider({
 			});
 			setSelection((prev) => ({
 				...prev,
-				componentIds: prev.componentIds.filter((id) => !ids.includes(id)),
+				componentIds: prev.componentIds.filter((id) => !allIdsToDelete.has(id)),
 			}));
 		},
-		[pushHistory],
+		[componentsMap, pushHistory],
 	);
 
 	const moveComponent = useCallback(

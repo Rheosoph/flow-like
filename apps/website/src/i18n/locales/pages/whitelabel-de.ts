@@ -18,20 +18,17 @@ export const deWhitelabel = {
 		"Integrieren Sie Flow-Like als iframe oder Web Component in Ihre bestehende App. Ihre Nutzer verlassen nie Ihre Oberfläche.",
 	"whitelabel.modes.embed.feat1": "iframe- & Web-Component-SDKs",
 	"whitelabel.modes.embed.feat2": "Session-Passthrough-Authentifizierung",
-	"whitelabel.modes.embed.feat3":
-		"Event-Bus für Eltern- ↔ Kind-Kommunikation",
+	"whitelabel.modes.embed.feat3": "Event-Bus für Eltern- ↔ Kind-Kommunikation",
 	"whitelabel.modes.headless.title": "Headless",
 	"whitelabel.modes.headless.desc":
 		"Nutzen Sie die Engine-API direkt. Erstellen Sie Ihre eigene Oberfläche oder führen Sie Automatisierungen ohne sichtbares Frontend aus.",
 	"whitelabel.modes.headless.feat1": "Vollständige REST- + WebSocket-API",
 	"whitelabel.modes.headless.feat2": "SDKs für TypeScript, Python, Rust",
-	"whitelabel.modes.headless.feat3":
-		"Workflows von jedem System aus auslösen",
+	"whitelabel.modes.headless.feat3": "Workflows von jedem System aus auslösen",
 	"whitelabel.modes.hybrid.title": "Hybrid",
 	"whitelabel.modes.hybrid.desc":
 		"Nutzen Sie unsere ausgereifte Oberfläche für das Workflow-Design. Headless-API für Ausführung und individuelle Dashboards.",
-	"whitelabel.modes.hybrid.feat1":
-		"Visueller Editor mit Ihrem Branding",
+	"whitelabel.modes.hybrid.feat1": "Visueller Editor mit Ihrem Branding",
 	"whitelabel.modes.hybrid.feat2": "API-gesteuerte Ausführungs-Pipeline",
 	"whitelabel.modes.hybrid.feat3": "Das Beste aus beiden Welten",
 	"whitelabel.theming.tagline": "Vollständige Theming-Kontrolle",

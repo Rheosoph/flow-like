@@ -125,10 +125,7 @@ export default function Page() {
 
 				{metaData?.long_description && (
 					<div className="leading-relaxed">
-						<TextEditor
-							initialContent={metaData.long_description}
-							isMarkdown
-						/>
+						<TextEditor initialContent={metaData.long_description} isMarkdown />
 					</div>
 				)}
 

@@ -102,19 +102,14 @@ impl Command for CopyPasteCommand {
                 board.nodes.insert(node.id.clone(), node.clone());
 
                 for pin in node.pins.values() {
-                    if pin.name == "var_ref" {
-                        if let Some(var_ref) = pin.default_value.as_ref() {
-                            if let Ok(var_ref) = from_slice::<String>(var_ref) {
-                                if board.variables.get(&var_ref).is_none() {
-                                    if let Some(orig) =
-                                        self.original_variables.iter().find(|v| v.id == var_ref)
-                                    {
-                                        board.variables.insert(var_ref.clone(), orig.clone());
-                                        self.added_variables.push(var_ref);
-                                    }
-                                }
-                            }
-                        }
+                    if pin.name == "var_ref"
+                        && let Some(var_ref) = pin.default_value.as_ref()
+                        && let Ok(var_ref) = from_slice::<String>(var_ref)
+                        && board.variables.get(&var_ref).is_none()
+                        && let Some(orig) = self.original_variables.iter().find(|v| v.id == var_ref)
+                    {
+                        board.variables.insert(var_ref.clone(), orig.clone());
+                        self.added_variables.push(var_ref);
                     }
                 }
             }
@@ -326,10 +321,8 @@ impl Command for CopyPasteCommand {
                                     } else {
                                         new_node.friendly_name.clone()
                                     };
-                                    let value_ref_pin = new_node
-                                        .pins
-                                        .values()
-                                        .find(|p| p.name == "value_ref");
+                                    let value_ref_pin =
+                                        new_node.pins.values().find(|p| p.name == "value_ref");
                                     let mut new_var = Variable::new(
                                         &var_name,
                                         value_ref_pin

@@ -1,11 +1,6 @@
 "use client";
 
-import {
-	type ComponentType,
-	useEffect,
-	useMemo,
-	useState,
-} from "react";
+import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { type ChartInput, parseChartData } from "./chart-data-parser";
 
@@ -63,7 +58,7 @@ function ChartModuleFallback({
 			</button>
 		</div>
 	);
-	}
+}
 
 /**
  * ChartCodeBlock renders ```nivo``` or ```plotly``` code blocks as interactive charts.
@@ -119,7 +114,9 @@ export function ChartCodeBlock({
 				if (cancelled) return;
 				const component = (mod.default ?? null) as ChartPreviewComponent | null;
 				if (!component) {
-					setModuleError("Chart preview module loaded without a default export.");
+					setModuleError(
+						"Chart preview module loaded without a default export.",
+					);
 					return;
 				}
 				setChartComponent(() => component);
@@ -127,7 +124,9 @@ export function ChartCodeBlock({
 			.catch((error) => {
 				if (cancelled) return;
 				const message =
-					error instanceof Error ? error.message : "Failed to load chart preview.";
+					error instanceof Error
+						? error.message
+						: "Failed to load chart preview.";
 				setModuleError(message);
 			})
 			.finally(() => {

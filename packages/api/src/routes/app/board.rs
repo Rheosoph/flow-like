@@ -45,10 +45,7 @@ pub fn routes() -> Router<AppState> {
             get(realtime::jwks).post(realtime::access),
         )
         .route("/{board_id}/runs", get(get_runs::get_runs))
-        .route(
-            "/{board_id}/runs/report",
-            post(report_run::report_run),
-        )
+        .route("/{board_id}/runs/report", post(report_run::report_run))
         .route("/{board_id}/logs", get(query_logs::query_logs))
         .route(
             "/{board_id}/elements",

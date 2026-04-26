@@ -126,7 +126,11 @@ export class WebDatabaseState implements IDatabaseState {
 		}
 	}
 
-	async countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number> {
+	async countItems(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<number> {
 		try {
 			const result = await apiGet<number>(
 				`apps/${appId}/db/${tableName}/count${this.scopeQuery(userScoped)}`,
@@ -138,14 +142,22 @@ export class WebDatabaseState implements IDatabaseState {
 		}
 	}
 
-	async getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any> {
+	async getSchema(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<any> {
 		return apiGet<any>(
 			`apps/${appId}/db/${tableName}/schema${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
 		);
 	}
 
-	async getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]> {
+	async getIndices(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IIndexConfig[]> {
 		try {
 			return await apiGet<IIndexConfig[]>(
 				`apps/${appId}/db/${tableName}/indices${this.scopeQuery(userScoped)}`,

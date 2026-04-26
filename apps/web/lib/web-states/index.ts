@@ -13,6 +13,7 @@ export { WebPageState } from "./page-state";
 export { WebRouteState } from "./route-state";
 export { WebRegistryState } from "./registry-state";
 export { WebDatabaseState } from "./database-state";
+export { WebGraphState } from "./graph-state";
 export { WebAIState } from "./ai-state";
 export { WebApiState } from "./api-state";
 export { WebHelperState } from "./helper-state";

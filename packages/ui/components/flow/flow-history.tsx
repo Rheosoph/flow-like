@@ -22,7 +22,8 @@ const db = new UndoRedoDB();
 
 const MAX_STACK_SIZE = 100;
 
-const serializeBatch = (commands: IGenericCommand[]) => JSON.stringify(commands);
+const serializeBatch = (commands: IGenericCommand[]) =>
+	JSON.stringify(commands);
 
 export const useUndoRedo = (appId: string, boardId: string) => {
 	const key = `${appId}_${boardId}`;

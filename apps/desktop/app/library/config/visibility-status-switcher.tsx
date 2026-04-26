@@ -4,15 +4,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	type IApp,
 	type IAppVisibility,
-	useInvoke,
 	useBackend,
 	useInvalidateInvoke,
+	useInvoke,
 } from "@tm9657/flow-like-ui";
 import {
-	AppPublicationReviewCard,
-	normalizeAppPublicationRequests,
 	type AppPublicationRequestItem,
+	AppPublicationReviewCard,
 	type RawAppPublicationRequestItem,
+	normalizeAppPublicationRequests,
 } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@tm9657/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
 import { useCallback } from "react";
@@ -79,8 +79,8 @@ export function VisibilityStatusSwitcher({
 				isLoading={publicationRequests.isLoading}
 				error={
 					publicationRequests.isError
-						? publicationRequests.error?.message ??
-							"Failed to load publication review history"
+						? (publicationRequests.error?.message ??
+							"Failed to load publication review history")
 						: null
 				}
 			/>

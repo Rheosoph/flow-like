@@ -13,7 +13,8 @@ import {
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
-import type { BoundValue, CardComponent, Children } from "../types";
+import { resolveChildSpecs } from "../children";
+import type { BoundValue, CardComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -21,24 +22,19 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
-function getChildIds(children: Children | undefined): string[] {
-	if (!children) return [];
-	if ("explicitList" in children) return children.explicitList;
-	return [];
-}
-
 export function A2UICard({
 	component,
 	style,
 	renderChild,
 }: ComponentProps<CardComponent>) {
+	const { resolve } = useData();
 	const title = useResolved<string>(component.title);
 	const description = useResolved<string>(component.description);
 	const footer = useResolved<string>(component.footer);
 	const hoverable = useResolved<boolean>(component.hoverable);
 	const clickable = useResolved<boolean>(component.clickable);
 
-	const childIds = getChildIds(component.children);
+	const children = resolveChildSpecs(component.children, resolve);
 
 	return (
 		<ShadCard
@@ -55,10 +51,12 @@ export function A2UICard({
 					{description && <CardDescription>{description}</CardDescription>}
 				</CardHeader>
 			)}
-			{childIds.length > 0 && (
+			{children.length > 0 && (
 				<CardContent>
-					{childIds.map((id) => (
-						<Fragment key={id}>{renderChild(id)}</Fragment>
+					{children.map((child) => (
+						<Fragment key={child.key}>
+							{renderChild(child.id, child.scope)}
+						</Fragment>
 					))}
 				</CardContent>
 			)}

@@ -14,11 +14,11 @@ import {
 import PuffLoader from "react-spinners/PuffLoader";
 import type { IEventPayloadChat } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
+import { VoiceMode } from "./VoiceMode";
 import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
-import { VoiceMode } from "./VoiceMode";
 
 type ChatItem =
 	| { type: "message"; data: IMessage; timestamp: number }
@@ -436,13 +436,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							)}
 						{currentMessage && (
-								<div
-									className="w-full max-w-5xl px-4"
-									key={`msg-${currentMessage.id}`}
-								>
-									<MessageComponent loading message={currentMessage} />
-								</div>
-							)}
+							<div
+								className="w-full max-w-5xl px-4"
+								key={`msg-${currentMessage.id}`}
+							>
+								<MessageComponent loading message={currentMessage} />
+							</div>
+						)}
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div

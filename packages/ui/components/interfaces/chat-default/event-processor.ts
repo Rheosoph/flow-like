@@ -1,7 +1,12 @@
 import { createId } from "@paralleldrive/cuid2";
 import { IRole, Response } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
-import type { IAttachment, IChatUsageStat, IMessage, IPlanStep } from "./chat-db";
+import type {
+	IAttachment,
+	IChatUsageStat,
+	IMessage,
+	IPlanStep,
+} from "./chat-db";
 
 export interface ProcessChatEventsResult {
 	intermediateResponse: Response;
@@ -20,7 +25,9 @@ interface BackendReasoning {
 	current_message: string;
 }
 
-function hasVisibleReasoning(reasoning: string | undefined): reasoning is string {
+function hasVisibleReasoning(
+	reasoning: string | undefined,
+): reasoning is string {
 	return Boolean(reasoning && reasoning.trim() !== "");
 }
 
@@ -300,7 +307,8 @@ export function processChatEvents(
 				const lastMessage = intermediateResponse.lastMessageOfRole(
 					IRole.Assistant,
 				);
-				const finalContent = lastMessage?.content ?? responseMessage.inner.content;
+				const finalContent =
+					lastMessage?.content ?? responseMessage.inner.content;
 				if (finalContent !== responseMessage.inner.content) {
 					responseMessage.inner.content = finalContent ?? "";
 					shouldUpdate = true;

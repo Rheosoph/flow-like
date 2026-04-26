@@ -18,21 +18,18 @@ export const jaWhitelabel = {
 		"Flow-Like を iframe または Web Component として既存アプリに統合。ユーザーは貴社のインターフェースから離れません。",
 	"whitelabel.modes.embed.feat1": "iframe & Web Component SDK",
 	"whitelabel.modes.embed.feat2": "セッションパススルー認証",
-	"whitelabel.modes.embed.feat3":
-		"親子間通信用イベントバス",
+	"whitelabel.modes.embed.feat3": "親子間通信用イベントバス",
 	"whitelabel.modes.headless.title": "ヘッドレス",
 	"whitelabel.modes.headless.desc":
 		"エンジン API を直接使用。独自の UI を構築するか、フロントエンドなしで自動化を実行できます。",
 	"whitelabel.modes.headless.feat1": "完全な REST + WebSocket API",
-	"whitelabel.modes.headless.feat2":
-		"TypeScript、Python、Rust 向け SDK",
+	"whitelabel.modes.headless.feat2": "TypeScript、Python、Rust 向け SDK",
 	"whitelabel.modes.headless.feat3":
 		"あらゆるシステムからワークフローをトリガー",
 	"whitelabel.modes.hybrid.title": "ハイブリッド",
 	"whitelabel.modes.hybrid.desc":
 		"洗練された UI でワークフローを設計。ヘッドレス API で実行とカスタムダッシュボードを構築。",
-	"whitelabel.modes.hybrid.feat1":
-		"貴社ブランドのビジュアルエディター",
+	"whitelabel.modes.hybrid.feat1": "貴社ブランドのビジュアルエディター",
 	"whitelabel.modes.hybrid.feat2": "API 駆動の実行パイプライン",
 	"whitelabel.modes.hybrid.feat3": "双方の長所を併せ持つ",
 	"whitelabel.theming.tagline": "フルテーマコントロール",

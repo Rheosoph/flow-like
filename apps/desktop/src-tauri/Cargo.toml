@@ -75,7 +75,7 @@ async-trait.workspace = true
 dashmap.workspace = true
 cron = "0.15.0"
 chrono.workspace = true
-axum = "0.8.6"
+axum = { version = "0.8.6", features = ["multipart"] }
 tower = "0.5.2"
 chrono-tz.workspace = true
 mimalloc.workspace = true

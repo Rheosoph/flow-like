@@ -11,8 +11,8 @@ import { NetworkStatusIndicator } from "@tm9657/flow-like-ui/components/ui/netwo
 import { Toaster } from "@tm9657/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@tm9657/flow-like-ui/components/ui/tooltip";
 import { useNetworkStatus } from "@tm9657/flow-like-ui/hooks/use-network-status";
-import { createIDBPersister } from "@tm9657/flow-like-ui/lib/persister";
 import { runIDBCleanup } from "@tm9657/flow-like-ui/lib/idb-cleanup";
+import { createIDBPersister } from "@tm9657/flow-like-ui/lib/persister";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { WebAuthProvider } from "../components/auth-provider";

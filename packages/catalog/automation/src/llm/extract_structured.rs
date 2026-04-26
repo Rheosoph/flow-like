@@ -17,7 +17,6 @@ use rig::completion::{Completion, Message, ToolDefinition};
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
-use std::sync::Arc;
 
 #[cfg(feature = "execute")]
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

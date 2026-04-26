@@ -64,13 +64,10 @@ import { IVariableType } from "../../../lib/schema/flow/node";
 import { IValueType } from "../../../lib/schema/flow/pin";
 import { convertJsonToUint8Array } from "../../../lib/uint8";
 import { cn } from "../../../lib/utils";
+import { FunctionsList, useCreateFunction } from "../functions/functions-menu";
 import { typeToColor } from "../utils";
 import { NewVariableDialog } from "./new-variable-dialog";
 import { VariablesMenuEdit } from "./variables-menu-edit";
-import {
-	FunctionsList,
-	useCreateFunction,
-} from "../functions/functions-menu";
 
 export function VariablesMenu({
 	board,
@@ -197,19 +194,19 @@ export function VariablesMenu({
 					</div>
 				)}
 
-			<NewVariableDialog
-				open={showNewVariableDialog}
-				onOpenChange={setShowNewVariableDialog}
-				onCreateVariable={upsertVariable}
-			/>
-
-			{currentFunctionLayer && (
 				<NewVariableDialog
-					open={showNewLocalVariableDialog}
-					onOpenChange={setShowNewLocalVariableDialog}
-					onCreateVariable={upsertLocalVariable}
+					open={showNewVariableDialog}
+					onOpenChange={setShowNewVariableDialog}
+					onCreateVariable={upsertVariable}
 				/>
-			)}
+
+				{currentFunctionLayer && (
+					<NewVariableDialog
+						open={showNewLocalVariableDialog}
+						onOpenChange={setShowNewLocalVariableDialog}
+						onCreateVariable={upsertLocalVariable}
+					/>
+				)}
 
 				{currentFunctionLayer && localTree && (
 					<>

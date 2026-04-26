@@ -328,9 +328,14 @@ impl Copilot {
         let mut full_response = String::new();
         let mut all_commands: Vec<BoardCommand> = Vec::new();
         let max_iterations = 10u64;
+        let max_discovery_rounds_before_emit = 4u64;
+        let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call emit_commands with a concrete command batch. Use exact existing node IDs and exact case-sensitive pin names from the tool results. Batch AddNode commands first, ConnectPins commands second, and UpdateNodePin commands last. If emit_commands returns validation errors, fix the reported issues and call emit_commands again; do not answer in text instead.";
         let mut plan_step_counter = 0u32;
         let mut invalid_emit_attempts = 0u8;
+        let mut discovery_rounds_without_emit = 0u64;
+        let mut forced_emit_prompt_sent = false;
         let mut last_emit_validation: Option<String> = None;
+        let mut successful_emit_message: Option<String> = None;
         let mut current_prompt = prompt_message.clone();
 
         for iteration in 0..max_iterations {
@@ -515,6 +520,8 @@ impl Copilot {
 
             if tool_calls_found {
                 current_history.push(current_prompt.clone());
+                let command_count_before_round = all_commands.len();
+                let mut emit_attempted_this_round = false;
 
                 // Emit plan steps for all tool calls starting
                 let mut step_ids: Vec<(String, String, u32)> = Vec::new();
@@ -575,6 +582,7 @@ impl Copilot {
 
                     // Parse commands from emit_commands tool output
                     if name == "emit_commands" {
+                        emit_attempted_this_round = true;
                         let parsed = Self::parse_commands(tool_output);
                         println!("[Copilot] emit_commands parsed {} commands:", parsed.len());
                         for (idx, cmd) in parsed.iter().enumerate() {
@@ -604,6 +612,12 @@ impl Copilot {
                                 "[Copilot] all_commands now has {} total commands (after dedup)",
                                 all_commands.len()
                             );
+
+                            let cleaned = Self::clean_message(tool_output);
+                            let cleaned = Self::clean_validation_message(&cleaned);
+                            if !cleaned.is_empty() {
+                                successful_emit_message = Some(cleaned);
+                            }
                         }
                     }
 
@@ -625,6 +639,24 @@ impl Copilot {
                     }
                 }
 
+                let commands_added_this_round = all_commands.len() > command_count_before_round;
+                if commands_added_this_round {
+                    break;
+                }
+
+                let force_emit_next = if emit_attempted_this_round {
+                    discovery_rounds_without_emit = 0;
+                    false
+                } else {
+                    discovery_rounds_without_emit = discovery_rounds_without_emit.saturating_add(1);
+                    all_commands.is_empty()
+                        && !forced_emit_prompt_sent
+                        && discovery_rounds_without_emit >= max_discovery_rounds_before_emit
+                };
+                if force_emit_next {
+                    forced_emit_prompt_sent = true;
+                }
+
                 // Add assistant message with tool calls to history
                 let assistant_msg = rig::message::Message::Assistant {
                     id: None,
@@ -641,7 +673,7 @@ impl Copilot {
                 // the assistant's tool call message in a single message. We use that
                 // combined tool-result message as the prompt for the next turn.
                 if !tool_results.is_empty() {
-                    let tool_result_contents: Vec<UserContent> = tool_results
+                    let mut tool_result_contents: Vec<UserContent> = tool_results
                         .iter()
                         .map(|(tool_id, _tool_name, tool_output)| {
                             UserContent::ToolResult(RigToolResult {
@@ -653,6 +685,12 @@ impl Copilot {
                             })
                         })
                         .collect();
+
+                    if force_emit_next {
+                        tool_result_contents.push(UserContent::Text(rig::message::Text {
+                            text: force_emit_instruction.to_string(),
+                        }));
+                    }
 
                     let combined_tool_results = if tool_result_contents.len() == 1 {
                         OneOrMany::one(tool_result_contents.into_iter().next().unwrap())
@@ -675,6 +713,28 @@ impl Copilot {
                     break;
                 }
             } else {
+                if all_commands.is_empty()
+                    && !forced_emit_prompt_sent
+                    && iteration + 1 < max_iterations
+                {
+                    forced_emit_prompt_sent = true;
+                    current_history.push(current_prompt.clone());
+                    current_history.push(rig::message::Message::Assistant {
+                        id: None,
+                        content: OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
+                            OneOrMany::one(AssistantContent::Text(rig::message::Text {
+                                text: iteration_text.clone(),
+                            }))
+                        }),
+                    });
+                    current_prompt = rig::message::Message::User {
+                        content: OneOrMany::one(UserContent::Text(rig::message::Text {
+                            text: force_emit_instruction.to_string(),
+                        })),
+                    };
+                    continue;
+                }
+
                 // No tool calls, we're done
                 full_response.push_str(&iteration_text);
                 break;
@@ -700,10 +760,15 @@ impl Copilot {
         // Log the serialized response for debugging
         let cleaned_message = Self::clean_message(&full_response);
         let final_message = if cleaned_message.is_empty() {
-            last_emit_validation
-                .as_deref()
-                .map(Self::clean_validation_message)
-                .unwrap_or_default()
+            if has_commands {
+                successful_emit_message
+                    .unwrap_or_else(|| "I queued workflow changes for review.".to_string())
+            } else {
+                last_emit_validation
+                    .as_deref()
+                    .map(Self::clean_validation_message)
+                    .unwrap_or_default()
+            }
         } else {
             cleaned_message
         };

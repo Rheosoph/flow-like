@@ -9,6 +9,7 @@ import {
 	HttpConfig,
 	type IEventMapping,
 	SimpleChatConfig,
+	TelegramConfig,
 	UserMailConfig,
 } from "@tm9657/flow-like-ui";
 
@@ -17,6 +18,7 @@ export const EVENT_CONFIG: IEventMapping = {
 		configInterfaces: {
 			simple_chat: SimpleChatConfig,
 			discord: DiscordConfig,
+			telegram: TelegramConfig,
 		},
 		useInterfaces: {
 			simple_chat: ChatInterface,
@@ -31,6 +33,7 @@ export const EVENT_CONFIG: IEventMapping = {
 				example_messages: [],
 			},
 			discord: {
+				sink_type: "discord",
 				token: "",
 				bot_name: "Flow-Like Bot",
 				bot_description: "",
@@ -41,14 +44,29 @@ export const EVENT_CONFIG: IEventMapping = {
 				respond_to_dms: true,
 				command_prefix: "!",
 			},
+			telegram: {
+				sink_type: "telegram",
+				bot_token: "",
+				bot_name: "Flow-Like Bot",
+				bot_description: "",
+				chat_whitelist: [],
+				chat_blacklist: [],
+				respond_to_mentions: true,
+				respond_to_private: true,
+				command_prefix: "/",
+			},
 		},
 		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "advanced_chat", "discord"],
-		withSink: ["discord"],
+		eventTypes: ["simple_chat", "advanced_chat", "discord", "telegram"],
+		withSink: ["discord", "telegram"],
 		sinkAvailability: {
 			discord: {
 				availability: "local",
 				description: "Requires persistent connection to Discord",
+			},
+			telegram: {
+				availability: "local",
+				description: "Requires persistent connection to Telegram",
 			},
 		},
 	},
@@ -60,6 +78,7 @@ export const EVENT_CONFIG: IEventMapping = {
 		eventTypes: ["email"],
 		configs: {
 			email: {
+				sink_type: "email",
 				imap_server: "",
 				imap_port: 993,
 				username: "",
@@ -93,6 +112,7 @@ export const EVENT_CONFIG: IEventMapping = {
 				public_endpoint: false,
 			},
 			deeplink: {
+				sink_type: "deeplink",
 				route: createId(),
 			},
 		},

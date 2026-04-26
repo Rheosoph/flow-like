@@ -31,7 +31,6 @@ use linfa::traits::{Fit, Predict};
 use linfa_reduction::Pca;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

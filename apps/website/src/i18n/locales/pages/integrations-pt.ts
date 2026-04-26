@@ -77,8 +77,7 @@ export const ptIntegrations = {
 		"Análise de PDF, processamento de Excel/CSV, manipulação de imagens, OCR e geração de documentos.",
 	"integrations.cat.files.count": "10+ formatos",
 	"integrations.custom.tagline": "Estenda com Qualquer Linguagem",
-	"integrations.custom.headline":
-		"Construa Nós Personalizados em Minutos",
+	"integrations.custom.headline": "Construa Nós Personalizados em Minutos",
 	"integrations.custom.description":
 		"O Flow-Like executa nós personalizados como módulos WASM — isolados, portáteis e rápidos. Escreva na sua linguagem preferida, compile para WASM e funciona em qualquer lugar onde o Flow-Like executa.",
 	"integrations.custom.lang.title": "Linguagens Suportadas",

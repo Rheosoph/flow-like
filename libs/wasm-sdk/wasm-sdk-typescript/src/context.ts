@@ -171,7 +171,10 @@ export class Context {
 		const writeId = this._host.storageWriteStart(flowPath, data.byteLength);
 		if (writeId === null) return false;
 		for (let offset = 0; offset < data.byteLength; offset += CHUNK_SIZE) {
-			const chunk = data.subarray(offset, Math.min(offset + CHUNK_SIZE, data.byteLength));
+			const chunk = data.subarray(
+				offset,
+				Math.min(offset + CHUNK_SIZE, data.byteLength),
+			);
 			if (!this._host.storageWriteChunk(writeId, chunk)) return false;
 		}
 		return this._host.storageWriteFinish(writeId);
@@ -201,7 +204,9 @@ export class Context {
 		const parsed = JSON.parse(result);
 		if (parsed.body_base64 && !parsed.body) {
 			try {
-				const bytes = Uint8Array.from(atob(parsed.body_base64), (c) => c.charCodeAt(0));
+				const bytes = Uint8Array.from(atob(parsed.body_base64), (c) =>
+					c.charCodeAt(0),
+				);
 				parsed.body = new TextDecoder().decode(bytes);
 			} catch {
 				parsed.body = "";

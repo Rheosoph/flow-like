@@ -26,6 +26,7 @@ import {
 	AvatarFallback,
 	AvatarImage,
 } from "@tm9657/flow-like-ui/components/ui/avatar";
+import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
@@ -41,7 +42,6 @@ import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
 import { usePackageStatusMap } from "../../../hooks/use-package-status";
 
 function InstalledPackageCard({
@@ -59,7 +59,13 @@ function InstalledPackageCard({
 	onUpdate: () => void;
 	isUpdating: boolean;
 	isUninstalling: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
+	compileStatus?:
+		| "idle"
+		| "downloading"
+		| "compiling"
+		| "ready"
+		| "error"
+		| "stale";
 }) {
 	const displayName = pkg.metadata?.name ?? pkg.manifest.name;
 	const displayDesc = pkg.metadata?.description ?? pkg.manifest.description;
@@ -218,7 +224,9 @@ export default function InstalledPackagesPage() {
 	const availableUpdates = useQuery({
 		queryKey: ["available-updates"],
 		queryFn: async () => {
-			return invoke<PackageUpdate[]>("registry_check_for_updates", { token: auth.user?.access_token });
+			return invoke<PackageUpdate[]>("registry_check_for_updates", {
+				token: auth.user?.access_token,
+			});
 		},
 		enabled: registryReady.data === true,
 	});
@@ -229,7 +237,11 @@ export default function InstalledPackagesPage() {
 			version,
 		}: { packageId: string; version?: string }) => {
 			setUpdatingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_update_package", { packageId, version, token: auth.user?.access_token });
+			await invoke("registry_update_package", {
+				packageId,
+				version,
+				token: auth.user?.access_token,
+			});
 		},
 		onSuccess: (
 			_: void,

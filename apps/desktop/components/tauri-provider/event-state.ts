@@ -3,7 +3,6 @@ import {
 	type IBoard,
 	type IEvent,
 	type IEventState,
-	IExecutionMode,
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
@@ -193,7 +192,10 @@ export class EventState implements IEventState {
 				return remoteData;
 			} catch (error) {
 				if (events.length === 0) throw error;
-				console.warn("[EventSync] Forced event fetch failed, falling back to local events:", error);
+				console.warn(
+					"[EventSync] Forced event fetch failed, falling back to local events:",
+					error,
+				);
 				return events;
 			}
 		}
@@ -323,36 +325,37 @@ export class EventState implements IEventState {
 	}
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
+
+		if (!isOffline) {
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				throw new Error(
+					"Profile, auth or query client not set. Cannot delete event.",
+				);
+			}
+
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/events/${eventId}`,
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		}
+
+		try {
 			await invoke("delete_event", {
 				appId: appId,
 				eventId: eventId,
 			});
-			return;
+		} catch (e) {
+			if (isOffline) throw e;
+			console.warn("[EventState] Local event deletion failed (non-fatal):", e);
 		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			throw new Error(
-				"Profile, auth or query client not set. Cannot delete event.",
-			);
-		}
-
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}/events/${eventId}`,
-			{
-				method: "DELETE",
-			},
-			this.backend.auth,
-		);
-		await invoke("delete_event", {
-			appId: appId,
-			eventId: eventId,
-		});
 	}
 	async validateEvent(
 		appId: string,
@@ -566,7 +569,7 @@ export class EventState implements IEventState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -658,7 +661,7 @@ export class EventState implements IEventState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				if (event.event_type === "completed") {
@@ -830,18 +833,18 @@ export class EventState implements IEventState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/events/${eventId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/events/${eventId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunEventResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunEventResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

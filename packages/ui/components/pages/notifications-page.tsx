@@ -41,6 +41,58 @@ import {
 
 type NotificationsTab = "all" | "invitations" | "notifications";
 
+const FLOWLIKE_NOTIFICATION_ICON = "/app-logo.webp";
+
+function isImageIcon(icon: string): boolean {
+	const value = icon.trim();
+	return (
+		value.startsWith("http://") ||
+		value.startsWith("https://") ||
+		value.startsWith("data:image/") ||
+		value.startsWith("asset://") ||
+		value.startsWith("/") ||
+		/\.(avif|gif|jpe?g|png|svg|webp)([?#].*)?$/i.test(value)
+	);
+}
+
+function NotificationIcon({
+	icon,
+	read,
+}: Readonly<{ icon?: string; read: boolean }>) {
+	const value = icon?.trim();
+
+	if (value && isImageIcon(value)) {
+		return (
+			<img
+				src={value}
+				alt=""
+				className="size-4 rounded-sm object-contain"
+				onError={(event) => {
+					const image = event.currentTarget;
+					if (image.dataset.fallbackIcon === "true") return;
+					image.dataset.fallbackIcon = "true";
+					image.src = FLOWLIKE_NOTIFICATION_ICON;
+				}}
+			/>
+		);
+	}
+
+	if (value) {
+		return <span className="text-sm leading-none">{value}</span>;
+	}
+
+	return (
+		<img
+			src={FLOWLIKE_NOTIFICATION_ICON}
+			alt=""
+			className={cn(
+				"size-4 rounded-sm object-contain",
+				read && "opacity-70 grayscale",
+			)}
+		/>
+	);
+}
+
 export function NotificationsPageScreen() {
 	const backend = useBackend();
 	const auth = useAuth();
@@ -87,10 +139,13 @@ export function NotificationsPageScreen() {
 		!isSummaryLoading &&
 		(notificationsQuery.isFetching || invitationsQuery.isFetching);
 	const isFetchingMore =
-		notificationsQuery.isFetchingNextPage || invitationsQuery.isFetchingNextPage;
+		notificationsQuery.isFetchingNextPage ||
+		invitationsQuery.isFetchingNextPage;
 
 	const totalCount = invitations.length + notifications.length;
-	const unreadCount = notifications.filter((notification) => !notification.read).length;
+	const unreadCount = notifications.filter(
+		(notification) => !notification.read,
+	).length;
 	const subtitle = isSummaryLoading
 		? "Pulling together workflow activity and team invites..."
 		: totalCount > 0
@@ -168,7 +223,8 @@ export function NotificationsPageScreen() {
 	}, [backend, notificationsQuery, syncOverview]);
 
 	const showAllSkeleton =
-		totalCount === 0 && (isNotificationsBootLoading || isInvitationsBootLoading);
+		totalCount === 0 &&
+		(isNotificationsBootLoading || isInvitationsBootLoading);
 	const showInvitationsSkeleton =
 		invitations.length === 0 && isInvitationsBootLoading;
 	const showNotificationsSkeleton =
@@ -208,9 +264,7 @@ export function NotificationsPageScreen() {
 										<LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
 									)}
 								</div>
-								<p className="text-xs text-muted-foreground">
-									{subtitle}
-								</p>
+								<p className="text-xs text-muted-foreground">{subtitle}</p>
 							</div>
 						</div>
 
@@ -321,7 +375,10 @@ export function NotificationsPageScreen() {
 						</div>
 					</div>
 
-					<TabsContent value="all" className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
+					<TabsContent
+						value="all"
+						className="mt-3 min-h-0 flex-1 overflow-auto pr-1"
+					>
 						<NotificationsPanel>
 							<AnimatePresence mode="popLayout">
 								{showAllSkeleton ? (
@@ -351,7 +408,8 @@ export function NotificationsPageScreen() {
 												onDelete={handleDeleteNotification}
 											/>
 										))}
-										{(invitationsQuery.hasNextPage || notificationsQuery.hasNextPage) && (
+										{(invitationsQuery.hasNextPage ||
+											notificationsQuery.hasNextPage) && (
 											<LoadMoreButton
 												onClick={() => {
 													if (invitationsQuery.hasNextPage) {
@@ -470,7 +528,9 @@ function SummaryTile({
 				<Skeleton className="h-4 w-16" />
 			) : (
 				<div className="flex items-baseline gap-1.5">
-					<span className="text-lg font-semibold tabular-nums text-foreground">{value}</span>
+					<span className="text-lg font-semibold tabular-nums text-foreground">
+						{value}
+					</span>
 					<span className="text-xs text-muted-foreground">{label}</span>
 				</div>
 			)}
@@ -479,11 +539,7 @@ function SummaryTile({
 }
 
 function NotificationsPanel({ children }: { children: ReactNode }) {
-	return (
-		<div className="flex flex-col gap-2 py-1">
-			{children}
-		</div>
-	);
+	return <div className="flex flex-col gap-2 py-1">{children}</div>;
 }
 
 function NotificationsEmptyState({
@@ -508,12 +564,8 @@ function NotificationsEmptyState({
 					<Icon className="size-6 text-muted-foreground" />
 				</div>
 				<div className="space-y-1">
-					<h3 className="text-sm font-medium text-foreground">
-						{title}
-					</h3>
-					<p className="text-xs text-muted-foreground">
-						{description}
-					</p>
+					<h3 className="text-sm font-medium text-foreground">{title}</h3>
+					<p className="text-xs text-muted-foreground">{description}</p>
 				</div>
 			</div>
 		</motion.div>
@@ -623,12 +675,17 @@ function InvitationCard({
 						</div>
 
 						<div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-							<Badge variant="outline" className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700">
+							<Badge
+								variant="outline"
+								className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700"
+							>
 								Invitation
 							</Badge>
 							<span>from</span>
 							{inviterLabel ? (
-								<span className="font-medium text-foreground/80">{inviterLabel}</span>
+								<span className="font-medium text-foreground/80">
+									{inviterLabel}
+								</span>
 							) : (
 								<Skeleton className="h-3 w-16" />
 							)}
@@ -723,24 +780,20 @@ function NotificationCard({
 								: "border-primary/20 bg-primary/8",
 						)}
 					>
-						{notification.icon ? (
-							<span className="text-sm leading-none">{notification.icon}</span>
-						) : (
-							<Workflow
-								className={cn(
-									"size-4",
-									notification.read ? "text-muted-foreground" : "text-primary",
-								)}
-							/>
-						)}
+						<NotificationIcon
+							icon={notification.icon}
+							read={notification.read}
+						/>
 					</div>
 
 					<div className="min-w-0 flex-1">
 						<div className="flex items-center justify-between gap-2">
-							<p className={cn(
-								"truncate text-sm font-medium",
-								notification.read ? "text-foreground/80" : "text-foreground",
-							)}>
+							<p
+								className={cn(
+									"truncate text-sm font-medium",
+									notification.read ? "text-foreground/80" : "text-foreground",
+								)}
+							>
 								{notification.title}
 							</p>
 							<span className="shrink-0 text-xs text-muted-foreground">
@@ -750,10 +803,16 @@ function NotificationCard({
 
 						<div className="mt-0.5 flex items-center gap-1.5">
 							<Badge
-								variant={notification.notification_type === "WORKFLOW" ? "default" : "secondary"}
+								variant={
+									notification.notification_type === "WORKFLOW"
+										? "default"
+										: "secondary"
+								}
 								className="px-1.5 py-0 text-[10px]"
 							>
-								{notification.notification_type === "WORKFLOW" ? "Workflow" : "System"}
+								{notification.notification_type === "WORKFLOW"
+									? "Workflow"
+									: "System"}
 							</Badge>
 							{!notification.read && (
 								<span className="size-1.5 rounded-full bg-primary" />

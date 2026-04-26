@@ -47,3 +47,11 @@ impl From<flow_like_types::Error> for TauriFunctionError {
         }
     }
 }
+
+impl From<serde_json::Error> for TauriFunctionError {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            error: error.to_string(),
+        }
+    }
+}

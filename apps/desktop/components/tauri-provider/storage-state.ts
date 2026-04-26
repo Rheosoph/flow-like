@@ -115,7 +115,10 @@ export class StorageState implements IStorageState {
 			prefixes: prefixes,
 		});
 	}
-	async deleteStorageItemsUser(appId: string, prefixes: string[]): Promise<void> {
+	async deleteStorageItemsUser(
+		appId: string,
+		prefixes: string[],
+	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {

@@ -14,8 +14,8 @@ import {
 	ContextMenuTrigger,
 } from "../../components/ui/context-menu";
 import { type IBoard, doPinsMatch } from "../../lib";
-import type { INode } from "../../lib/schema/flow/node";
 import { ILayerType } from "../../lib/schema/flow/board";
+import type { INode } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { IVariable } from "../../lib/schema/flow/variable";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -322,7 +322,7 @@ export function FlowContextMenu({
 			});
 		}
 
-			return normalNodes;
+		return normalNodes;
 	}, [nodes, board, allVariables]);
 
 	const searchableNodes = useMemo(() => {
@@ -402,7 +402,8 @@ export function FlowContextMenu({
 			const isRefOutHandle = droppedPin.id.startsWith("ref_out_");
 
 			if (isRefInHandle) return node.fn_refs?.can_reference_fns ?? false;
-			if (isRefOutHandle) return node.fn_refs?.can_be_referenced_by_fns ?? false;
+			if (isRefOutHandle)
+				return node.fn_refs?.can_be_referenced_by_fns ?? false;
 
 			const pins = Object.values(node.pins);
 			return pins.some((pin) => {
@@ -415,7 +416,6 @@ export function FlowContextMenu({
 	useEffect(() => {
 		inputRef.current?.focus();
 	}, [filter]);
-
 
 	return (
 		<>

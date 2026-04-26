@@ -45,6 +45,8 @@ struct KnownEntity {
     pins: Vec<KnownPin>,
 }
 
+const MAX_EMIT_COMMANDS: usize = 20;
+
 pub async fn validate_emit_commands(
     args: &EmitCommandsArgs,
     graph_context: &GraphContext,
@@ -53,7 +55,35 @@ pub async fn validate_emit_commands(
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
+    if args.commands.is_empty() {
+        errors.push(issue(
+            "error",
+            "empty-command-batch",
+            None,
+            "emit_commands requires at least one command".to_string(),
+        ));
+    }
+
+    if args.commands.len() > MAX_EMIT_COMMANDS {
+        errors.push(issue(
+            "error",
+            "too-many-commands",
+            None,
+            format!("emit_commands is limited to {MAX_EMIT_COMMANDS} commands per turn"),
+        ));
+    }
+
     let mut entities = build_known_entities(graph_context);
+    let mut known_layer_refs: HashSet<String> = graph_context
+        .layers
+        .iter()
+        .map(|layer| layer.id.clone())
+        .collect();
+    let known_variables: HashSet<String> = graph_context
+        .variables
+        .iter()
+        .map(|variable| variable.id.clone())
+        .collect();
     let existing_connections: HashSet<(String, String, String, String)> = graph_context
         .edges
         .iter()
@@ -80,6 +110,8 @@ pub async fn validate_emit_commands(
             BoardCommand::AddNode {
                 node_type,
                 ref_id,
+                position,
+                target_layer,
                 summary,
                 ..
             } => {
@@ -91,6 +123,26 @@ pub async fn validate_emit_commands(
                         format!("AddNode '{}' is missing a summary field", node_type),
                     ));
                 }
+
+                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "missing-ref-id",
+                        Some(index),
+                        format!("AddNode '{}' requires a ref_id like '$0'", node_type),
+                    ));
+                }
+
+                if position.is_none() {
+                    errors.push(issue(
+                        "error",
+                        "missing-position",
+                        Some(index),
+                        format!("AddNode '{}' requires a position", node_type),
+                    ));
+                }
+
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
 
                 let key = ref_id
                     .clone()
@@ -122,7 +174,9 @@ pub async fn validate_emit_commands(
             BoardCommand::AddPlaceholder {
                 name,
                 ref_id,
+                position,
                 pins,
+                target_layer,
                 summary,
                 ..
             } => {
@@ -134,6 +188,27 @@ pub async fn validate_emit_commands(
                         format!("AddPlaceholder '{}' is missing a summary field", name),
                     ));
                 }
+
+                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "missing-ref-id",
+                        Some(index),
+                        format!("AddPlaceholder '{}' requires a ref_id like '$0'", name),
+                    ));
+                }
+
+                if position.is_none() {
+                    errors.push(issue(
+                        "error",
+                        "missing-position",
+                        Some(index),
+                        format!("AddPlaceholder '{}' requires a position", name),
+                    ));
+                }
+
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
+                validate_placeholder_pins(index, pins.as_deref(), &mut errors);
 
                 let key = ref_id
                     .clone()
@@ -150,6 +225,7 @@ pub async fn validate_emit_commands(
                 }
 
                 entities.insert(key.clone(), entity_from_placeholder(&key, name, pins));
+                known_layer_refs.insert(key.clone());
                 entities_to_check.insert(key);
             }
             BoardCommand::RemoveNode { node_id, .. } => {
@@ -174,10 +250,7 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-from-node",
                         Some(index),
-                        format!(
-                            "Source node '{}' does not exist in the current plan",
-                            from_node
-                        ),
+                        unknown_entity_message(&entities, from_node, "Source"),
                     ));
                     continue;
                 };
@@ -187,10 +260,7 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-to-node",
                         Some(index),
-                        format!(
-                            "Target node '{}' does not exist in the current plan",
-                            to_node
-                        ),
+                        unknown_entity_message(&entities, to_node, "Target"),
                     ));
                     continue;
                 };
@@ -213,10 +283,7 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-from-pin",
                         Some(index),
-                        format!(
-                            "Pin '{}.{}' was not found",
-                            from_entity.display_name, from_pin
-                        ),
+                        pin_not_found_message(from_entity, from_pin, Some(PinDirection::Output)),
                     ));
                     continue;
                 };
@@ -226,7 +293,7 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-to-pin",
                         Some(index),
-                        format!("Pin '{}.{}' was not found", to_entity.display_name, to_pin),
+                        pin_not_found_message(to_entity, to_pin, Some(PinDirection::Input)),
                     ));
                     continue;
                 };
@@ -356,7 +423,7 @@ pub async fn validate_emit_commands(
                         "error",
                         "unknown-pin",
                         Some(index),
-                        format!("Pin '{}.{}' was not found", entity.display_name, pin_id),
+                        pin_not_found_message(entity, pin_id, Some(PinDirection::Input)),
                     ));
                     continue;
                 };
@@ -376,7 +443,11 @@ pub async fn validate_emit_commands(
                 explicit_values.insert((entity.key.clone(), pin.name.clone()));
                 entities_to_check.insert(entity.key.clone());
             }
-            BoardCommand::MoveNode { node_id, .. } => {
+            BoardCommand::MoveNode {
+                node_id,
+                target_layer,
+                ..
+            } => {
                 if !entities.contains_key(node_id) {
                     errors.push(issue(
                         "error",
@@ -385,13 +456,130 @@ pub async fn validate_emit_commands(
                         format!("Cannot move unknown node '{}'", node_id),
                     ));
                 }
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
             }
-            BoardCommand::CreateLayer { .. }
-            | BoardCommand::RemoveLayer { .. }
-            | BoardCommand::CreateVariable { .. }
-            | BoardCommand::RemoveVariable { .. }
-            | BoardCommand::AddComment { .. }
-            | BoardCommand::RemoveComment { .. } => {}
+            BoardCommand::CreateLayer {
+                name,
+                node_ids,
+                position,
+                target_layer,
+                summary,
+                ..
+            } => {
+                if summary.as_deref().unwrap_or_default().trim().is_empty() {
+                    warnings.push(issue(
+                        "warning",
+                        "missing-summary",
+                        Some(index),
+                        format!("CreateLayer '{}' is missing a summary field", name),
+                    ));
+                }
+                if node_ids.is_empty() && position.is_none() {
+                    errors.push(issue(
+                        "error",
+                        "empty-layer-without-position",
+                        Some(index),
+                        format!(
+                            "CreateLayer '{}' needs either node_ids to group or a position for an empty layer",
+                            name
+                        ),
+                    ));
+                }
+                for node_id in node_ids {
+                    if !entities.contains_key(node_id) {
+                        errors.push(issue(
+                            "error",
+                            "unknown-layer-node",
+                            Some(index),
+                            format!(
+                                "CreateLayer '{}' references unknown node '{}'",
+                                name, node_id
+                            ),
+                        ));
+                    }
+                }
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
+            }
+            BoardCommand::RemoveLayer { layer_id, .. } => {
+                if !known_layer_refs.contains(layer_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-layer",
+                        Some(index),
+                        format!("Cannot remove unknown layer '{}'", layer_id),
+                    ));
+                }
+            }
+            BoardCommand::CreateVariable {
+                name,
+                data_type,
+                value_type,
+                summary,
+                ..
+            } => {
+                if name.trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "missing-variable-name",
+                        Some(index),
+                        "CreateVariable requires a non-empty name".to_string(),
+                    ));
+                }
+                if data_type.trim().is_empty() || value_type.trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "missing-variable-type",
+                        Some(index),
+                        format!(
+                            "CreateVariable '{}' requires data_type and value_type",
+                            name
+                        ),
+                    ));
+                }
+                if summary.as_deref().unwrap_or_default().trim().is_empty() {
+                    warnings.push(issue(
+                        "warning",
+                        "missing-summary",
+                        Some(index),
+                        format!("CreateVariable '{}' is missing a summary field", name),
+                    ));
+                }
+            }
+            BoardCommand::RemoveVariable { variable_id, .. } => {
+                if !known_variables.contains(variable_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-variable",
+                        Some(index),
+                        format!("Cannot remove unknown variable '{}'", variable_id),
+                    ));
+                }
+            }
+            BoardCommand::AddComment {
+                content,
+                target_layer,
+                summary,
+                ..
+            } => {
+                if content.trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "empty-comment",
+                        Some(index),
+                        "CreateComment requires non-empty content".to_string(),
+                    ));
+                }
+                validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
+                if summary.as_deref().unwrap_or_default().trim().is_empty() {
+                    warnings.push(issue(
+                        "warning",
+                        "missing-summary",
+                        Some(index),
+                        "CreateComment is missing a summary field".to_string(),
+                    ));
+                }
+            }
+            BoardCommand::RemoveComment { .. } => {}
         }
     }
 
@@ -439,6 +627,83 @@ pub async fn validate_emit_commands(
         validated_command_count: args.commands.len(),
         errors,
         warnings,
+    }
+}
+
+fn validate_target_layer(
+    command_index: usize,
+    target_layer: &Option<String>,
+    known_layers: &HashSet<String>,
+    errors: &mut Vec<ValidationIssue>,
+) {
+    if let Some(layer_id) = target_layer
+        && !known_layers.contains(layer_id)
+    {
+        errors.push(issue(
+            "error",
+            "unknown-target-layer",
+            Some(command_index),
+            format!(
+                "target_layer '{}' does not exist in the current graph",
+                layer_id
+            ),
+        ));
+    }
+}
+
+fn validate_placeholder_pins(
+    command_index: usize,
+    pins: Option<&[PlaceholderPinDef]>,
+    errors: &mut Vec<ValidationIssue>,
+) {
+    let Some(pins) = pins else {
+        return;
+    };
+
+    let mut seen = HashSet::new();
+    for pin in pins {
+        if pin.name.trim().is_empty() {
+            errors.push(issue(
+                "error",
+                "empty-placeholder-pin-name",
+                Some(command_index),
+                "Placeholder pin names cannot be empty".to_string(),
+            ));
+            continue;
+        }
+        if !seen.insert(pin.name.clone()) {
+            errors.push(issue(
+                "error",
+                "duplicate-placeholder-pin",
+                Some(command_index),
+                format!("Placeholder pin '{}' is defined more than once", pin.name),
+            ));
+        }
+        if !matches!(pin.pin_type.as_str(), "Input" | "Output") {
+            errors.push(issue(
+                "error",
+                "invalid-placeholder-pin-direction",
+                Some(command_index),
+                format!(
+                    "Placeholder pin '{}' has invalid pin_type '{}'; use Input or Output",
+                    pin.name, pin.pin_type
+                ),
+            ));
+        }
+        if !matches!(
+            pin.data_type.as_str(),
+            "String" | "Integer" | "Float" | "Boolean" | "Struct" | "Generic" | "Execution"
+        ) {
+            errors.push(issue(
+                "error",
+                "invalid-placeholder-pin-data-type",
+                Some(command_index),
+                format!(
+                    "Placeholder pin '{}' has unsupported data_type '{}'",
+                    pin.name, pin.data_type
+                ),
+            ));
+        }
     }
 }
 
@@ -623,11 +888,70 @@ fn pin_from_metadata_output(pin: &PinMetadata) -> KnownPin {
 }
 
 fn find_pin<'a>(entity: &'a KnownEntity, pin_name: &str) -> Option<&'a KnownPin> {
+    entity.pins.iter().find(|pin| pin.name == pin_name)
+}
+
+fn find_pin_case_insensitive<'a>(entity: &'a KnownEntity, pin_name: &str) -> Option<&'a KnownPin> {
     let normalized = pin_name.to_lowercase();
     entity
         .pins
         .iter()
-        .find(|pin| pin.name == pin_name || pin.name.to_lowercase() == normalized)
+        .find(|pin| pin.name.to_lowercase() == normalized)
+}
+
+fn pin_not_found_message(
+    entity: &KnownEntity,
+    requested_pin: &str,
+    expected_direction: Option<PinDirection>,
+) -> String {
+    if let Some(pin) = find_pin_case_insensitive(entity, requested_pin) {
+        return format!(
+            "Pin '{}.{}' was not found. Pin names are case-sensitive; use exact pin name '{}'",
+            entity.display_name, requested_pin, pin.name
+        );
+    }
+
+    let expected_pins: Vec<_> = entity
+        .pins
+        .iter()
+        .filter(|pin| expected_direction.map_or(true, |direction| pin.direction == direction))
+        .map(|pin| pin.name.as_str())
+        .collect();
+
+    if expected_pins.is_empty() {
+        format!(
+            "Pin '{}.{}' was not found",
+            entity.display_name, requested_pin
+        )
+    } else {
+        format!(
+            "Pin '{}.{}' was not found. Available matching pins: {}",
+            entity.display_name,
+            requested_pin,
+            expected_pins.join(", ")
+        )
+    }
+}
+
+fn unknown_entity_message(
+    entities: &HashMap<String, KnownEntity>,
+    requested_id: &str,
+    role: &str,
+) -> String {
+    if let Some(entity) = entities
+        .values()
+        .find(|entity| entity.display_name.eq_ignore_ascii_case(requested_id))
+    {
+        return format!(
+            "{} node '{}' does not exist in the current plan. Use exact node id/ref_id '{}' for '{}'",
+            role, requested_id, entity.key, entity.display_name
+        );
+    }
+
+    format!(
+        "{} node '{}' does not exist in the current plan",
+        role, requested_id
+    )
 }
 
 fn pin_types_compatible(source: &KnownPin, target: &KnownPin) -> bool {

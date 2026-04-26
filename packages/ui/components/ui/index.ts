@@ -28,6 +28,10 @@ export * from "./event-card";
 export * from "./event-form";
 export * from "./file-previewer";
 export * from "./flow-background";
+// graph components use sigma.js (WebGL) — import from ./graph directly with ssr:false
+export * from "./graph/overlay-builder";
+export * from "./graph/icons";
+export * from "./graph/presets";
 export * from "./hover-card";
 export * from "./input";
 export * from "./label";

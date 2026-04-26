@@ -3,6 +3,7 @@
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
+import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { GridComponent } from "../types";
@@ -39,7 +40,7 @@ export function A2UIGrid({
 		columnDense: "grid-flow-col-dense",
 	};
 
-	const children = resolveChildren(component, resolve);
+	const children = resolveChildSpecs(component.children, resolve);
 
 	const gridStyle: React.CSSProperties = {
 		...resolveInlineStyle(style),
@@ -70,29 +71,11 @@ export function A2UIGrid({
 			)}
 			style={gridStyle}
 		>
-			{children.map((childId) => (
-				<Fragment key={childId}>{renderChild(childId)}</Fragment>
+			{children.map((child) => (
+				<Fragment key={child.key}>
+					{renderChild(child.id, child.scope)}
+				</Fragment>
 			))}
 		</div>
 	);
-}
-
-function resolveChildren(
-	component: GridComponent,
-	resolve: (boundValue: any) => unknown,
-): string[] {
-	if (!component.children) return [];
-
-	if ("explicitList" in component.children) {
-		return component.children.explicitList;
-	}
-
-	if ("template" in component.children) {
-		const { template } = component.children;
-		const items = resolve({ path: template.dataPath }) as unknown[];
-		if (!Array.isArray(items)) return [];
-		return items.map((_, i) => `${template.templateComponentId}[${i}]`);
-	}
-
-	return [];
 }

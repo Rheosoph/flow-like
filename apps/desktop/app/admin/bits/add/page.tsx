@@ -31,20 +31,20 @@ import {
 	useInvoke,
 } from "@tm9657/flow-like-ui";
 import {
+	Binary,
+	Cpu,
+	Eye,
 	FileTextIcon,
 	GaugeIcon,
 	HashIcon,
+	ImageIcon,
 	Loader2Icon,
 	PackageIcon,
+	ScanLine,
 	TimerIcon,
 	UploadCloudIcon,
 	X,
 	Zap,
-	Cpu,
-	Eye,
-	Binary,
-	ImageIcon,
-	ScanLine,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -205,17 +205,18 @@ function HostedLLMForm({
 			...old,
 			parameters: {
 				...old.parameters,
-				provider: { ...((old.parameters as ILlmParameters).provider ?? {}), ...update },
+				provider: {
+					...((old.parameters as ILlmParameters).provider ?? {}),
+					...update,
+				},
 			},
 		}));
 	};
 
 	const updateProviderParam = (key: string, value: string) => {
 		setBit((old) => {
-			const current = ((old.parameters as ILlmParameters).provider?.params ?? {}) as Record<
-				string,
-				unknown
-			>;
+			const current = ((old.parameters as ILlmParameters).provider?.params ??
+				{}) as Record<string, unknown>;
 			return {
 				...old,
 				parameters: {
@@ -273,7 +274,8 @@ function HostedLLMForm({
 				<CardHeader>
 					<CardTitle>Model Identity</CardTitle>
 					<CardDescription>
-						The slug drives auto-computed capability scores — no manual sliders needed.
+						The slug drives auto-computed capability scores — no manual sliders
+						needed.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -371,7 +373,10 @@ function HostedLLMForm({
 								type="number"
 								value={params.context_length ?? 2048}
 								onChange={(e) =>
-									updateParam("context_length", parseInt(e.target.value) || 2048)
+									updateParam(
+										"context_length",
+										Number.parseInt(e.target.value) || 2048,
+									)
 								}
 							/>
 						</div>
@@ -386,7 +391,9 @@ function HostedLLMForm({
 										? providerParams.endpoint
 										: ""
 								}
-								onChange={(e) => updateProviderParam("endpoint", e.target.value)}
+								onChange={(e) =>
+									updateProviderParam("endpoint", e.target.value)
+								}
 								placeholder="https://api.example.com/v1"
 							/>
 						</div>
@@ -395,7 +402,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-tier"
 								value={
-									typeof providerParams.tier === "string" ? providerParams.tier : ""
+									typeof providerParams.tier === "string"
+										? providerParams.tier
+										: ""
 								}
 								onChange={(e) => updateProviderParam("tier", e.target.value)}
 								placeholder="FREE"
@@ -409,7 +418,9 @@ function HostedLLMForm({
 			<Card>
 				<CardHeader>
 					<CardTitle>Registry Info</CardTitle>
-					<CardDescription>Hub, version, license, and repository.</CardDescription>
+					<CardDescription>
+						Hub, version, license, and repository.
+					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
@@ -418,7 +429,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-hub"
 								value={bit.hub ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, hub: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, hub: e.target.value }))
+								}
 								placeholder="https://flow-like.com/models"
 							/>
 						</div>
@@ -427,7 +440,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-version"
 								value={bit.version ?? "0.0.1"}
-								onChange={(e) => setBit((old) => ({ ...old, version: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, version: e.target.value }))
+								}
 								placeholder="0.0.1"
 							/>
 						</div>
@@ -436,7 +451,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-license"
 								value={bit.license ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, license: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, license: e.target.value }))
+								}
 								placeholder="e.g. MIT, Apache-2.0"
 							/>
 						</div>
@@ -445,7 +462,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-repository"
 								value={bit.repository ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, repository: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, repository: e.target.value }))
+								}
 								placeholder="https://huggingface.co/…"
 							/>
 						</div>
@@ -506,10 +525,17 @@ function HostedLLMForm({
 							<Input
 								value={authorInput}
 								onChange={(e) => setAuthorInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAuthor(); } }}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										addAuthor();
+									}
+								}}
 								placeholder="Add author and press Enter"
 							/>
-							<Button type="button" variant="outline" onClick={addAuthor}>Add</Button>
+							<Button type="button" variant="outline" onClick={addAuthor}>
+								Add
+							</Button>
 						</div>
 						{authors.length > 0 && (
 							<div className="flex flex-wrap gap-1 pt-1">
@@ -530,10 +556,17 @@ function HostedLLMForm({
 							<Input
 								value={tagInput}
 								onChange={(e) => setTagInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										addTag();
+									}
+								}}
 								placeholder="Add tag and press Enter"
 							/>
-							<Button type="button" variant="outline" onClick={addTag}>Add</Button>
+							<Button type="button" variant="outline" onClick={addTag}>
+								Add
+							</Button>
 						</div>
 						{tags.length > 0 && (
 							<div className="flex flex-wrap gap-1 pt-1">
@@ -590,23 +623,38 @@ const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
 
 export default function Page() {
 	const backend = useBackend();
-	const profile = useInvoke(backend.userState.getProfile, backend.userState, [], true);
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+		true,
+	);
 
 	const [mode, setMode] = useState<BitMode>("local-llm");
 	const [bit, setBit] = useState<IBit>(DEFAULT_BIT);
 	const [loading, setLoading] = useState(false);
 	const [projection, setProjection] = useState<IBit | undefined>(undefined);
-	const [textEmbeddingModel, setTextEmbeddingModel] = useState<IBit | undefined>(undefined);
+	const [textEmbeddingModel, setTextEmbeddingModel] = useState<
+		IBit | undefined
+	>(undefined);
 	const [tokenizer, setTokenizer] = useState<IBit | undefined>(undefined);
-	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(undefined);
-	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(undefined);
+	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(
+		undefined,
+	);
+	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(
+		undefined,
+	);
 	const [config, setConfig] = useState<IBit | undefined>(undefined);
 	const [imageEmbeddingPreprocessor, setImageEmbeddingPreprocessor] = useState<
 		IBit | undefined
 	>(undefined);
-	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<IBit | undefined>(undefined);
+	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<
+		IBit | undefined
+	>(undefined);
 	const [progress, setProgress] = useState(0);
-	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(null);
+	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
+		null,
+	);
 	const [progressTotal, setProgressTotal] = useState<number | null>(null);
 	const [progressLabel, setProgressLabel] = useState<string | null>(null);
 	const [progressBit, setProgressBit] = useState<IBit | undefined>(undefined);
@@ -659,11 +707,17 @@ export default function Page() {
 					const totRaw = data?.total;
 					const pRaw = data?.percent;
 					const downloaded =
-						typeof dlRaw === "string" ? Number(dlRaw) : (dlRaw as number | undefined);
+						typeof dlRaw === "string"
+							? Number(dlRaw)
+							: (dlRaw as number | undefined);
 					const total =
-						typeof totRaw === "string" ? Number(totRaw) : (totRaw as number | undefined);
+						typeof totRaw === "string"
+							? Number(totRaw)
+							: (totRaw as number | undefined);
 					let percent =
-						typeof pRaw === "string" ? Number(pRaw) : (pRaw as number | undefined);
+						typeof pRaw === "string"
+							? Number(pRaw)
+							: (pRaw as number | undefined);
 					if (
 						(percent == null || !Number.isFinite(percent)) &&
 						typeof downloaded === "number" &&
@@ -686,7 +740,11 @@ export default function Page() {
 								const bps = (downloaded - last.downloaded) / dt;
 								if (Number.isFinite(bps)) {
 									setSpeedBps(bps);
-									if (typeof total === "number" && total > downloaded && bps > 0) {
+									if (
+										typeof total === "number" &&
+										total > downloaded &&
+										bps > 0
+									) {
 										setEtaSec((total - downloaded) / bps);
 									}
 								}
@@ -725,7 +783,8 @@ export default function Page() {
 			const size = await getModelSize(bit.download_link);
 			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository =
+				(await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -763,7 +822,8 @@ export default function Page() {
 		if (
 			!bit.download_link ||
 			bit.download_link === "" ||
-			(bit.type !== IBitTypes.Embedding && bit.type !== IBitTypes.ImageEmbedding)
+			(bit.type !== IBitTypes.Embedding &&
+				bit.type !== IBitTypes.ImageEmbedding)
 		)
 			return;
 		setLoading(true);
@@ -771,7 +831,8 @@ export default function Page() {
 			const size = await getModelSize(bit.download_link);
 			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository =
+				(await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -780,7 +841,12 @@ export default function Page() {
 				...old,
 				meta: {
 					...old.meta,
-					en: { ...old.meta.en, icon: userInfo.avatarUrl, tags, name: modelName || old.meta.en.name },
+					en: {
+						...old.meta.en,
+						icon: userInfo.avatarUrl,
+						tags,
+						name: modelName || old.meta.en.name,
+					},
 				},
 				file_name: old.download_link?.split("/").pop()?.split("?")[0] || "",
 				repository: bit.repository,
@@ -791,7 +857,8 @@ export default function Page() {
 
 			if (
 				bit.type === IBitTypes.Embedding ||
-				(bit.type === IBitTypes.ImageEmbedding && textEmbeddingModel?.download_link)
+				(bit.type === IBitTypes.ImageEmbedding &&
+					textEmbeddingModel?.download_link)
 			) {
 				const downloadLink =
 					bit.type === IBitTypes.ImageEmbedding
@@ -800,13 +867,17 @@ export default function Page() {
 				let repo = bit.repository;
 				if (downloadLink && downloadLink !== "")
 					repo = (await getOriginalRepo(downloadLink)) ?? repo;
-				const [tokenizerUrl, tokenizerConfigUrl, specialTokensMapUrl, configUrl] =
-					await Promise.all([
-						guessedModelLink(downloadLink, "tokenizer.json"),
-						guessedModelLink(downloadLink, "tokenizer_config.json"),
-						guessedModelLink(downloadLink, "special_tokens_map.json"),
-						guessedModelLink(downloadLink, "config.json"),
-					]);
+				const [
+					tokenizerUrl,
+					tokenizerConfigUrl,
+					specialTokensMapUrl,
+					configUrl,
+				] = await Promise.all([
+					guessedModelLink(downloadLink, "tokenizer.json"),
+					guessedModelLink(downloadLink, "tokenizer_config.json"),
+					guessedModelLink(downloadLink, "special_tokens_map.json"),
+					guessedModelLink(downloadLink, "config.json"),
+				]);
 				setTokenizer((old) => ({
 					...(old || getDefaultBit(IBitTypes.Tokenizer)),
 					download_link: tokenizerUrl,
@@ -882,7 +953,9 @@ export default function Page() {
 			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
 			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
 			setConfig(getDefaultBit(IBitTypes.Config));
-			setImageEmbeddingPreprocessor(getDefaultBit(IBitTypes.PreprocessorConfig));
+			setImageEmbeddingPreprocessor(
+				getDefaultBit(IBitTypes.PreprocessorConfig),
+			);
 			setImageEmbeddingConfig(getDefaultBit(IBitTypes.Config));
 			setTextEmbeddingModel(getDefaultBit(IBitTypes.Embedding));
 			return;
@@ -906,7 +979,8 @@ export default function Page() {
 			parameters:
 				bitType === IBitTypes.Llm || bitType === IBitTypes.Vlm
 					? createDefaultLlmParameters(providerName)
-					: bitType === IBitTypes.Embedding || bitType === IBitTypes.ImageEmbedding
+					: bitType === IBitTypes.Embedding ||
+							bitType === IBitTypes.ImageEmbedding
 						? { ...DEFAULT_EMBEDDING_PARAMETERS }
 						: {},
 			download_link: isHostedMode ? "" : old.download_link,
@@ -919,13 +993,24 @@ export default function Page() {
 	}, [mode]);
 
 	useEffect(() => {
-		if ((bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) && !isHostedModel) {
+		if (
+			(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) &&
+			!isHostedModel
+		) {
 			prefillLLM();
 		}
-		if (bit.type === IBitTypes.Embedding || bit.type === IBitTypes.ImageEmbedding) {
+		if (
+			bit.type === IBitTypes.Embedding ||
+			bit.type === IBitTypes.ImageEmbedding
+		) {
 			prefillEmbeddingModel();
 		}
-	}, [bit.download_link, bit.type, isHostedModel, textEmbeddingModel?.download_link]);
+	}, [
+		bit.download_link,
+		bit.type,
+		isHostedModel,
+		textEmbeddingModel?.download_link,
+	]);
 
 	// ── submit ─────────────────────────────────────────────────────────────
 
@@ -944,9 +1029,13 @@ export default function Page() {
 				}
 				const tokReg = await uploadBit(mergeBitParameters(tokenizer, bit));
 				dependencies.push(tokReg);
-				const tokCfgReg = await uploadBit(mergeBitParameters(tokenizerConfig, bit));
+				const tokCfgReg = await uploadBit(
+					mergeBitParameters(tokenizerConfig, bit),
+				);
 				dependencies.push(tokCfgReg);
-				const stmReg = await uploadBit(mergeBitParameters(specialTokensMap, bit));
+				const stmReg = await uploadBit(
+					mergeBitParameters(specialTokensMap, bit),
+				);
 				dependencies.push(stmReg);
 				const cfgReg = await uploadBit(mergeBitParameters(config, bit));
 				dependencies.push(cfgReg);
@@ -954,7 +1043,11 @@ export default function Page() {
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			if (bit.type === IBitTypes.ImageEmbedding) {
@@ -967,11 +1060,15 @@ export default function Page() {
 					!imageEmbeddingPreprocessor ||
 					!imageEmbeddingConfig
 				) {
-					throw new Error("Missing required dependencies for Image Embedding model");
+					throw new Error(
+						"Missing required dependencies for Image Embedding model",
+					);
 				}
 				textEmbeddingModel.license = bit.license;
 				textEmbeddingModel.authors = bit.authors;
-				const tokReg = await uploadBit(mergeBitParameters(tokenizer, textEmbeddingModel));
+				const tokReg = await uploadBit(
+					mergeBitParameters(tokenizer, textEmbeddingModel),
+				);
 				dependencies.push(tokReg);
 				const tokCfgReg = await uploadBit(
 					mergeBitParameters(tokenizerConfig, textEmbeddingModel),
@@ -981,7 +1078,9 @@ export default function Page() {
 					mergeBitParameters(specialTokensMap, textEmbeddingModel),
 				);
 				dependencies.push(stmReg);
-				const cfgReg = await uploadBit(mergeBitParameters(config, textEmbeddingModel));
+				const cfgReg = await uploadBit(
+					mergeBitParameters(config, textEmbeddingModel),
+				);
 				dependencies.push(cfgReg);
 				const textEmbReg = await uploadBit({
 					...textEmbeddingModel,
@@ -990,15 +1089,23 @@ export default function Page() {
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
 				dependencies = [textEmbReg];
-				const ppReg = await uploadBit(mergeBitParameters(imageEmbeddingPreprocessor, bit));
+				const ppReg = await uploadBit(
+					mergeBitParameters(imageEmbeddingPreprocessor, bit),
+				);
 				dependencies.push(ppReg);
-				const imgCfgReg = await uploadBit(mergeBitParameters(imageEmbeddingConfig, bit));
+				const imgCfgReg = await uploadBit(
+					mergeBitParameters(imageEmbeddingConfig, bit),
+				);
 				dependencies.push(imgCfgReg);
 				const response = await uploadBit({
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			if (bit.type === IBitTypes.Vlm) {
@@ -1017,7 +1124,11 @@ export default function Page() {
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			toast.success("Bit added successfully");
@@ -1031,7 +1142,9 @@ export default function Page() {
 			setImageEmbeddingConfig(undefined);
 			setTextEmbeddingModel(undefined);
 		} catch (error: unknown) {
-			toast.error(`Failed to add bit: ${error instanceof Error ? error.message : error}`);
+			toast.error(
+				`Failed to add bit: ${error instanceof Error ? error.message : error}`,
+			);
 		} finally {
 			setLoading(false);
 		}
@@ -1067,7 +1180,9 @@ export default function Page() {
 					<Card>
 						<CardHeader>
 							<CardTitle>Bit Type</CardTitle>
-							<CardDescription>Choose what kind of bit you want to add.</CardDescription>
+							<CardDescription>
+								Choose what kind of bit you want to add.
+							</CardDescription>
 						</CardHeader>
 						<CardContent>
 							<div className="flex flex-wrap gap-2">
@@ -1116,9 +1231,13 @@ export default function Page() {
 							</div>
 
 							{/* model-type-specific configuration */}
-							{(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) ? (
+							{bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm ? (
 								<>
-									<LLMConfiguration bit={bit} setBit={setBit} isHosted={false} />
+									<LLMConfiguration
+										bit={bit}
+										setBit={setBit}
+										isHosted={false}
+									/>
 									<Separator className="my-4" />
 								</>
 							) : null}
@@ -1133,8 +1252,8 @@ export default function Page() {
 									<Separator className="my-4" />
 								</>
 							) : null}
-							{(bit.type === IBitTypes.Embedding ||
-								bit.type === IBitTypes.ImageEmbedding) ? (
+							{bit.type === IBitTypes.Embedding ||
+							bit.type === IBitTypes.ImageEmbedding ? (
 								<>
 									<div className="flex flex-col items-start gap-6 w-full max-w-5xl">
 										<EmbeddingConfiguration bit={bit} setBit={setBit} />
@@ -1234,7 +1353,12 @@ export default function Page() {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function mergeBitParameters(bit: IBit, parent: IBit): IBit {
-	return { ...bit, license: parent.license, authors: parent.authors, repository: parent.repository };
+	return {
+		...bit,
+		license: parent.license,
+		authors: parent.authors,
+		repository: parent.repository,
+	};
 }
 
 function UploadProgressCard(props: {
@@ -1309,7 +1433,10 @@ function UploadProgressCard(props: {
 function formatBytes(bytes: number): string {
 	if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
 	const units = ["B", "KB", "MB", "GB", "TB"];
-	const i = Math.min(Math.floor(Math.log(bytes || 1) / Math.log(1024)), units.length - 1);
+	const i = Math.min(
+		Math.floor(Math.log(bytes || 1) / Math.log(1024)),
+		units.length - 1,
+	);
 	const value = bytes / 1024 ** i;
 	return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[i]}`;
 }

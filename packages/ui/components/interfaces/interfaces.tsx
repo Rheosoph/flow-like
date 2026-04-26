@@ -1,5 +1,6 @@
 import type { JSX, ReactElement, RefObject } from "react";
 import type { IEvent, IEventPayload, INode } from "../../lib";
+import type { IEventExecutionMode } from "../../lib/schema/flow/event";
 import type { IHub } from "../../lib/schema/hub/hub";
 
 export interface IToolBarActions {
@@ -36,6 +37,12 @@ export interface IConfigInterfaceProps {
 	eventId?: string;
 	/** Whether local execution is available (desktop app) */
 	canExecuteLocally?: boolean;
+	/**
+	 * The event's own execution mode. Drives which URL/tutorial to render:
+	 * Local events show localhost + tunnel setup; Remote events show the
+	 * server endpoint. Defaults to Local when unset.
+	 */
+	eventExecutionMode?: IEventExecutionMode;
 }
 
 /** Where a sink can run */

@@ -19,7 +19,6 @@ import {
 } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
 import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
-import { toast } from "sonner";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
@@ -118,8 +117,7 @@ export class AppState implements IAppState {
 				rating: comment.rating,
 				userId: comment.userId ?? comment.user_id ?? "",
 				userName: comment.userName ?? comment.user_name ?? undefined,
-				userAvatar:
-					comment.userAvatar ?? comment.user_avatar ?? undefined,
+				userAvatar: comment.userAvatar ?? comment.user_avatar ?? undefined,
 				createdAt: comment.createdAt ?? comment.created_at ?? "",
 				updatedAt: comment.updatedAt ?? comment.updated_at ?? "",
 			})),
@@ -429,10 +427,7 @@ export class AppState implements IAppState {
 			console.warn("Failed to get app meta from local cache:", e);
 		}
 
-		if (
-			!this.backend.profile ||
-			!this.backend.queryClient
-		) {
+		if (!this.backend.profile || !this.backend.queryClient) {
 			if (meta) {
 				return meta;
 			}
@@ -786,7 +781,11 @@ export class AppState implements IAppState {
 		return invoke("app_list_packages", { appId });
 	}
 
-	async addPackage(appId: string, packageId: string, version: string): Promise<void> {
+	async addPackage(
+		appId: string,
+		packageId: string,
+		version: string,
+	): Promise<void> {
 		return invoke("app_add_package", { appId, packageId, version });
 	}
 

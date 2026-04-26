@@ -760,330 +760,326 @@ export function SalesDashboard() {
 
 	return (
 		<div className="space-y-6">
-				{/* Header */}
+			{/* Header */}
+			<div className="flex items-center justify-between">
+				<div>
+					<h1 className="text-2xl font-bold">Sales Dashboard</h1>
+					<p className="text-muted-foreground">
+						Track your app&apos;s revenue and manage pricing
+					</p>
+				</div>
+				<div className="flex items-center gap-2">
+					<Select
+						value={dateRange}
+						onValueChange={(v) => setDateRange(v as typeof dateRange)}
+					>
+						<SelectTrigger className="w-32">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="7d">Last 7 days</SelectItem>
+							<SelectItem value="30d">Last 30 days</SelectItem>
+							<SelectItem value="90d">Last 90 days</SelectItem>
+						</SelectContent>
+					</Select>
+					<Button variant="outline" onClick={() => setPriceDialogOpen(true)}>
+						<DollarSignIcon className="h-4 w-4 mr-2" />
+						{overview ? formatCurrency(overview.currentPrice) : "Set Price"}
+					</Button>
+				</div>
+			</div>
+
+			{/* Stats Cards */}
+			<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+				<StatCard
+					title="Total Revenue"
+					value={formatCurrency(overview?.totalRevenue ?? 0)}
+					change={overview?.revenueChangePercent}
+					icon={DollarSignIcon}
+				/>
+				<StatCard
+					title="Total Purchases"
+					value={(overview?.totalPurchases ?? 0).toString()}
+					change={overview?.purchasesChangePercent}
+					icon={ShoppingCartIcon}
+				/>
+				<StatCard
+					title="Unique Buyers"
+					value={(overview?.uniqueBuyers ?? 0).toString()}
+					icon={UsersIcon}
+				/>
+				<StatCard
+					title="Avg. Order Value"
+					value={formatCurrency(overview?.avgOrderValue ?? 0)}
+					icon={TrendingUpIcon}
+				/>
+			</div>
+
+			{/* Charts */}
+			<Tabs defaultValue="revenue" className="space-y-4">
+				<TabsList>
+					<TabsTrigger value="revenue">Revenue</TabsTrigger>
+					<TabsTrigger value="purchases">Purchases</TabsTrigger>
+					<TabsTrigger value="breakdown">Breakdown</TabsTrigger>
+				</TabsList>
+
+				<TabsContent value="revenue">
+					<Card>
+						<CardHeader>
+							<CardTitle>Revenue Over Time</CardTitle>
+							<CardDescription>
+								Daily revenue for the selected period
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<RevenueChart data={dailyStats} />
+						</CardContent>
+					</Card>
+				</TabsContent>
+
+				<TabsContent value="purchases">
+					<Card>
+						<CardHeader>
+							<CardTitle>Purchases & Refunds</CardTitle>
+							<CardDescription>
+								Daily purchase and refund activity
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<PurchasesChart data={dailyStats} />
+						</CardContent>
+					</Card>
+				</TabsContent>
+
+				<TabsContent value="breakdown">
+					<Card>
+						<CardHeader>
+							<CardTitle>Revenue Breakdown</CardTitle>
+							<CardDescription>
+								Net revenue vs refunds and discounts
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							{overview && <RevenueBreakdownChart data={overview} />}
+						</CardContent>
+					</Card>
+				</TabsContent>
+			</Tabs>
+
+			<Separator />
+
+			{/* Discounts Section */}
+			<div className="space-y-4">
 				<div className="flex items-center justify-between">
 					<div>
-						<h1 className="text-2xl font-bold">Sales Dashboard</h1>
-						<p className="text-muted-foreground">
-							Track your app&apos;s revenue and manage pricing
-						</p>
-					</div>
-					<div className="flex items-center gap-2">
-						<Select
-							value={dateRange}
-							onValueChange={(v) => setDateRange(v as typeof dateRange)}
-						>
-							<SelectTrigger className="w-32">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="7d">Last 7 days</SelectItem>
-								<SelectItem value="30d">Last 30 days</SelectItem>
-								<SelectItem value="90d">Last 90 days</SelectItem>
-							</SelectContent>
-						</Select>
-						<Button variant="outline" onClick={() => setPriceDialogOpen(true)}>
-							<DollarSignIcon className="h-4 w-4 mr-2" />
-							{overview ? formatCurrency(overview.currentPrice) : "Set Price"}
-						</Button>
-					</div>
-				</div>
-
-				{/* Stats Cards */}
-				<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-					<StatCard
-						title="Total Revenue"
-						value={formatCurrency(overview?.totalRevenue ?? 0)}
-						change={overview?.revenueChangePercent}
-						icon={DollarSignIcon}
-					/>
-					<StatCard
-						title="Total Purchases"
-						value={(overview?.totalPurchases ?? 0).toString()}
-						change={overview?.purchasesChangePercent}
-						icon={ShoppingCartIcon}
-					/>
-					<StatCard
-						title="Unique Buyers"
-						value={(overview?.uniqueBuyers ?? 0).toString()}
-						icon={UsersIcon}
-					/>
-					<StatCard
-						title="Avg. Order Value"
-						value={formatCurrency(overview?.avgOrderValue ?? 0)}
-						icon={TrendingUpIcon}
-					/>
-				</div>
-
-				{/* Charts */}
-				<Tabs defaultValue="revenue" className="space-y-4">
-					<TabsList>
-						<TabsTrigger value="revenue">Revenue</TabsTrigger>
-						<TabsTrigger value="purchases">Purchases</TabsTrigger>
-						<TabsTrigger value="breakdown">Breakdown</TabsTrigger>
-					</TabsList>
-
-					<TabsContent value="revenue">
-						<Card>
-							<CardHeader>
-								<CardTitle>Revenue Over Time</CardTitle>
-								<CardDescription>
-									Daily revenue for the selected period
-								</CardDescription>
-							</CardHeader>
-							<CardContent>
-								<RevenueChart data={dailyStats} />
-							</CardContent>
-						</Card>
-					</TabsContent>
-
-					<TabsContent value="purchases">
-						<Card>
-							<CardHeader>
-								<CardTitle>Purchases & Refunds</CardTitle>
-								<CardDescription>
-									Daily purchase and refund activity
-								</CardDescription>
-							</CardHeader>
-							<CardContent>
-								<PurchasesChart data={dailyStats} />
-							</CardContent>
-						</Card>
-					</TabsContent>
-
-					<TabsContent value="breakdown">
-						<Card>
-							<CardHeader>
-								<CardTitle>Revenue Breakdown</CardTitle>
-								<CardDescription>
-									Net revenue vs refunds and discounts
-								</CardDescription>
-							</CardHeader>
-							<CardContent>
-								{overview && <RevenueBreakdownChart data={overview} />}
-							</CardContent>
-						</Card>
-					</TabsContent>
-				</Tabs>
-
-				<Separator />
-
-				{/* Discounts Section */}
-				<div className="space-y-4">
-					<div className="flex items-center justify-between">
-						<div>
-							<h2 className="text-xl font-semibold">Discount Codes</h2>
-							<p className="text-sm text-muted-foreground">
-								Manage promotional discounts for your app
-							</p>
-						</div>
-						<Button
-							onClick={() => {
-								setEditingDiscount(undefined);
-								setDiscountDialogOpen(true);
-							}}
-						>
-							<PlusIcon className="h-4 w-4 mr-2" />
-							Add Discount
-						</Button>
-					</div>
-
-					{discounts.length === 0 ? (
-						<Card>
-							<CardContent className="flex flex-col items-center justify-center py-12">
-								<TagIcon className="h-12 w-12 text-muted-foreground mb-4" />
-								<p className="text-muted-foreground">
-									No discounts created yet
-								</p>
-								<Button
-									variant="outline"
-									className="mt-4"
-									onClick={() => {
-										setEditingDiscount(undefined);
-										setDiscountDialogOpen(true);
-									}}
-								>
-									Create your first discount
-								</Button>
-							</CardContent>
-						</Card>
-					) : (
-						<Card>
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>Code</TableHead>
-										<TableHead>Name</TableHead>
-										<TableHead>Discount</TableHead>
-										<TableHead>Uses</TableHead>
-										<TableHead>Status</TableHead>
-										<TableHead className="text-right">Actions</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{discounts.map((discount) => (
-										<TableRow key={discount.id}>
-											<TableCell>
-												<div className="flex items-center gap-2">
-													<code className="bg-muted px-2 py-1 rounded text-sm">
-														{discount.code}
-													</code>
-													<Button
-														variant="ghost"
-														size="icon"
-														className="h-6 w-6"
-														onClick={() => copyDiscountCode(discount.code)}
-													>
-														<CopyIcon className="h-3 w-3" />
-													</Button>
-												</div>
-											</TableCell>
-											<TableCell>{discount.name}</TableCell>
-											<TableCell>
-												{discount.discountType === "Percentage" ? (
-													<span className="flex items-center gap-1">
-														<PercentIcon className="h-3 w-3" />
-														{discount.discountValue}%
-													</span>
-												) : (
-													formatCurrency(discount.discountValue)
-												)}
-											</TableCell>
-											<TableCell>
-												{discount.usedCount}
-												{discount.maxUses && ` / ${discount.maxUses}`}
-											</TableCell>
-											<TableCell>
-												<div className="flex items-center gap-2">
-													<Switch
-														checked={discount.isActive}
-														onCheckedChange={() =>
-															handleToggleDiscount(discount.id)
-														}
-													/>
-													{discount.isValid ? (
-														<Badge variant="default">Active</Badge>
-													) : discount.isActive ? (
-														<Badge variant="secondary">Expired</Badge>
-													) : (
-														<Badge variant="outline">Disabled</Badge>
-													)}
-												</div>
-											</TableCell>
-											<TableCell className="text-right">
-												<div className="flex justify-end gap-2">
-													<Button
-														variant="ghost"
-														size="sm"
-														onClick={() => {
-															setEditingDiscount(discount);
-															setDiscountDialogOpen(true);
-														}}
-													>
-														Edit
-													</Button>
-													<Button
-														variant="ghost"
-														size="sm"
-														className="text-destructive"
-														onClick={() => handleDeleteDiscount(discount.id)}
-													>
-														Delete
-													</Button>
-												</div>
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</Card>
-					)}
-				</div>
-
-				<Separator />
-
-				{/* Recent Purchases */}
-				<div className="space-y-4">
-					<div>
-						<h2 className="text-xl font-semibold">Recent Purchases</h2>
+						<h2 className="text-xl font-semibold">Discount Codes</h2>
 						<p className="text-sm text-muted-foreground">
-							{purchaseTotal} total purchases
+							Manage promotional discounts for your app
 						</p>
 					</div>
-
-					{purchases.length === 0 ? (
-						<Card>
-							<CardContent className="flex flex-col items-center justify-center py-12">
-								<ShoppingCartIcon className="h-12 w-12 text-muted-foreground mb-4" />
-								<p className="text-muted-foreground">No purchases yet</p>
-							</CardContent>
-						</Card>
-					) : (
-						<Card>
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>User</TableHead>
-										<TableHead>Amount</TableHead>
-										<TableHead>Discount</TableHead>
-										<TableHead>Status</TableHead>
-										<TableHead>Date</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{purchases.map((purchase) => (
-										<TableRow key={purchase.id}>
-											<TableCell>
-												<div className="flex items-center gap-2">
-													{purchase.userAvatar && (
-														<img
-															src={purchase.userAvatar}
-															alt=""
-															className="h-6 w-6 rounded-full"
-														/>
-													)}
-													<span>
-														{purchase.userName || purchase.userId.slice(0, 8)}
-													</span>
-												</div>
-											</TableCell>
-											<TableCell>
-												{formatCurrency(purchase.pricePaid)}
-											</TableCell>
-											<TableCell>
-												{purchase.discountAmount > 0 ? (
-													<Badge variant="secondary">
-														-{formatCurrency(purchase.discountAmount)}
-													</Badge>
-												) : (
-													<span className="text-muted-foreground">-</span>
-												)}
-											</TableCell>
-											<TableCell>
-												<Badge
-													variant={
-														purchase.status === "Completed"
-															? "default"
-															: purchase.status === "Refunded"
-																? "destructive"
-																: "secondary"
-													}
-												>
-													{purchase.status}
-												</Badge>
-											</TableCell>
-											<TableCell>
-												{purchase.completedAt
-													? formatDate(purchase.completedAt)
-													: "-"}
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</Card>
-					)}
+					<Button
+						onClick={() => {
+							setEditingDiscount(undefined);
+							setDiscountDialogOpen(true);
+						}}
+					>
+						<PlusIcon className="h-4 w-4 mr-2" />
+						Add Discount
+					</Button>
 				</div>
+
+				{discounts.length === 0 ? (
+					<Card>
+						<CardContent className="flex flex-col items-center justify-center py-12">
+							<TagIcon className="h-12 w-12 text-muted-foreground mb-4" />
+							<p className="text-muted-foreground">No discounts created yet</p>
+							<Button
+								variant="outline"
+								className="mt-4"
+								onClick={() => {
+									setEditingDiscount(undefined);
+									setDiscountDialogOpen(true);
+								}}
+							>
+								Create your first discount
+							</Button>
+						</CardContent>
+					</Card>
+				) : (
+					<Card>
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>Code</TableHead>
+									<TableHead>Name</TableHead>
+									<TableHead>Discount</TableHead>
+									<TableHead>Uses</TableHead>
+									<TableHead>Status</TableHead>
+									<TableHead className="text-right">Actions</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{discounts.map((discount) => (
+									<TableRow key={discount.id}>
+										<TableCell>
+											<div className="flex items-center gap-2">
+												<code className="bg-muted px-2 py-1 rounded text-sm">
+													{discount.code}
+												</code>
+												<Button
+													variant="ghost"
+													size="icon"
+													className="h-6 w-6"
+													onClick={() => copyDiscountCode(discount.code)}
+												>
+													<CopyIcon className="h-3 w-3" />
+												</Button>
+											</div>
+										</TableCell>
+										<TableCell>{discount.name}</TableCell>
+										<TableCell>
+											{discount.discountType === "Percentage" ? (
+												<span className="flex items-center gap-1">
+													<PercentIcon className="h-3 w-3" />
+													{discount.discountValue}%
+												</span>
+											) : (
+												formatCurrency(discount.discountValue)
+											)}
+										</TableCell>
+										<TableCell>
+											{discount.usedCount}
+											{discount.maxUses && ` / ${discount.maxUses}`}
+										</TableCell>
+										<TableCell>
+											<div className="flex items-center gap-2">
+												<Switch
+													checked={discount.isActive}
+													onCheckedChange={() =>
+														handleToggleDiscount(discount.id)
+													}
+												/>
+												{discount.isValid ? (
+													<Badge variant="default">Active</Badge>
+												) : discount.isActive ? (
+													<Badge variant="secondary">Expired</Badge>
+												) : (
+													<Badge variant="outline">Disabled</Badge>
+												)}
+											</div>
+										</TableCell>
+										<TableCell className="text-right">
+											<div className="flex justify-end gap-2">
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() => {
+														setEditingDiscount(discount);
+														setDiscountDialogOpen(true);
+													}}
+												>
+													Edit
+												</Button>
+												<Button
+													variant="ghost"
+													size="sm"
+													className="text-destructive"
+													onClick={() => handleDeleteDiscount(discount.id)}
+												>
+													Delete
+												</Button>
+											</div>
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					</Card>
+				)}
+			</div>
+
+			<Separator />
+
+			{/* Recent Purchases */}
+			<div className="space-y-4">
+				<div>
+					<h2 className="text-xl font-semibold">Recent Purchases</h2>
+					<p className="text-sm text-muted-foreground">
+						{purchaseTotal} total purchases
+					</p>
+				</div>
+
+				{purchases.length === 0 ? (
+					<Card>
+						<CardContent className="flex flex-col items-center justify-center py-12">
+							<ShoppingCartIcon className="h-12 w-12 text-muted-foreground mb-4" />
+							<p className="text-muted-foreground">No purchases yet</p>
+						</CardContent>
+					</Card>
+				) : (
+					<Card>
+						<Table>
+							<TableHeader>
+								<TableRow>
+									<TableHead>User</TableHead>
+									<TableHead>Amount</TableHead>
+									<TableHead>Discount</TableHead>
+									<TableHead>Status</TableHead>
+									<TableHead>Date</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{purchases.map((purchase) => (
+									<TableRow key={purchase.id}>
+										<TableCell>
+											<div className="flex items-center gap-2">
+												{purchase.userAvatar && (
+													<img
+														src={purchase.userAvatar}
+														alt=""
+														className="h-6 w-6 rounded-full"
+													/>
+												)}
+												<span>
+													{purchase.userName || purchase.userId.slice(0, 8)}
+												</span>
+											</div>
+										</TableCell>
+										<TableCell>{formatCurrency(purchase.pricePaid)}</TableCell>
+										<TableCell>
+											{purchase.discountAmount > 0 ? (
+												<Badge variant="secondary">
+													-{formatCurrency(purchase.discountAmount)}
+												</Badge>
+											) : (
+												<span className="text-muted-foreground">-</span>
+											)}
+										</TableCell>
+										<TableCell>
+											<Badge
+												variant={
+													purchase.status === "Completed"
+														? "default"
+														: purchase.status === "Refunded"
+															? "destructive"
+															: "secondary"
+												}
+											>
+												{purchase.status}
+											</Badge>
+										</TableCell>
+										<TableCell>
+											{purchase.completedAt
+												? formatDate(purchase.completedAt)
+												: "-"}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					</Card>
+				)}
+			</div>
 
 			{/* Dialogs */}
 			<DiscountDialog

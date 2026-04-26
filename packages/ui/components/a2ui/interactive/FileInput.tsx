@@ -162,9 +162,7 @@ export function A2UIFileInput({
 			}
 
 			const urls = successfulUploads.map((f) => f.backendUrl as string);
-			const actionValue = multiple
-				? urls
-				: urls[0];
+			const actionValue = multiple ? urls : urls[0];
 
 			onAction?.({
 				type: "userAction",

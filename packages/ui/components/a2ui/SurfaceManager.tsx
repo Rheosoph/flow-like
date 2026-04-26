@@ -51,6 +51,7 @@ export function useSurfaceManager() {
 						id: message.surfaceId,
 						rootComponentId: message.rootComponentId,
 						components: componentsMap,
+						dataModel: message.dataModel,
 						catalogId: message.catalogId,
 					});
 					break;
@@ -63,9 +64,7 @@ export function useSurfaceManager() {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					next.set(message.surfaceId, {
@@ -101,7 +100,18 @@ export function useSurfaceManager() {
 				}
 
 				case "dataModelUpdate": {
-					// Handle data model updates if needed
+					const existing = next.get(message.surfaceId);
+					if (!existing) break;
+					const entries = new Map(
+						(existing.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+					next.set(message.surfaceId, {
+						...existing,
+						dataModel: Array.from(entries.values()),
+					});
 					break;
 				}
 
@@ -141,7 +151,8 @@ export function useSurfaceManager() {
 						if (updateValue?.type === "createComponent") {
 							const newComponent: SurfaceComponent = {
 								id: componentId,
-								component: updateValue.component as SurfaceComponent["component"],
+								component:
+									updateValue.component as SurfaceComponent["component"],
 								style: updateValue.style as SurfaceComponent["style"],
 							};
 							next.set(surfaceId, {
@@ -349,8 +360,12 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-									...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+									...(updateValue.layout !== undefined && {
+										layout: { literalJson: JSON.stringify(configOrLayout) },
+									}),
+									...(updateValue.config !== undefined && {
+										config: { literalJson: JSON.stringify(configOrLayout) },
+									}),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;

@@ -18,7 +18,7 @@ use rmcp::{
     model::{ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParams, Tool},
     transport::StreamableHttpClientTransport,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 const TOOL_PIN_PREFIX: &str = "mcp_tool_";
 

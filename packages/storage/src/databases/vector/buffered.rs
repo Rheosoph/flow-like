@@ -1,7 +1,7 @@
 use super::VectorStore;
 use flow_like_types::{Cacheable, Result, Value, anyhow, async_trait};
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 const DEFAULT_BATCH_SIZE: usize = 1000;
 
@@ -113,6 +113,34 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         }
     }
 
+    fn dedupe_upsert_items(items: Vec<Value>, id_field: &str) -> Vec<Value> {
+        if items.len() <= 1 {
+            return items;
+        }
+
+        let mut seen_ids = HashSet::new();
+        let mut deduped = Vec::with_capacity(items.len());
+
+        for item in items.into_iter().rev() {
+            let Some(id_value) = item.get(id_field) else {
+                deduped.push(item);
+                continue;
+            };
+
+            let Ok(id_key) = flow_like_types::json::to_string(id_value) else {
+                deduped.push(item);
+                continue;
+            };
+
+            if seen_ids.insert(id_key) {
+                deduped.push(item);
+            }
+        }
+
+        deduped.reverse();
+        deduped
+    }
+
     /// Partition items by schema compatibility.
     /// Uses the existing table schema (if any) to separate records whose
     /// key set matches the schema from those that don't.
@@ -150,21 +178,41 @@ impl<T: VectorStore> BufferedVectorStore<T> {
             return 0;
         }
 
+        // If the table doesn't exist yet, try inserting everything directly
+        // to bootstrap the table — schema partitioning is meaningless without a table.
+        let has_table = inner.schema().await.is_ok();
+
+        if !has_table {
+            match inner.insert(items.clone()).await {
+                Ok(()) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "[BufferedVectorStore] Batch insert failed (no existing table, {} records): {err:#}",
+                        items.len()
+                    );
+                    return Self::insert_divide_and_conquer(inner, items).await;
+                }
+            }
+        }
+
         let (compatible, outliers) = Self::partition_by_schema(inner, items).await;
         let mut skipped = 0;
 
         // Tier 1: batch-insert schema-compatible records
         if !compatible.is_empty()
-            && let Err(_) = inner.insert(compatible.clone()).await
+            && let Err(err) = inner.insert(compatible.clone()).await
         {
-            // Tier 2: divide & conquer on the "compatible" batch
+            eprintln!(
+                "[BufferedVectorStore] Batch insert of {} compatible records failed: {err:#}",
+                compatible.len()
+            );
             skipped += Self::insert_divide_and_conquer(inner, compatible).await;
         }
 
         // Outliers go straight to divide & conquer (may form sub-groups)
         if !outliers.is_empty() {
-            println!(
-                "Schema mismatch: {} outlier record(s) detected, using divide & conquer",
+            eprintln!(
+                "[BufferedVectorStore] Schema mismatch: {} outlier records, using divide & conquer",
                 outliers.len()
             );
             skipped += Self::insert_divide_and_conquer(inner, outliers).await;
@@ -176,22 +224,45 @@ impl<T: VectorStore> BufferedVectorStore<T> {
     /// 3-tier upsert: schema filter → divide & conquer → single record.
     /// Returns the number of skipped records.
     async fn upsert_smart(inner: &mut T, items: Vec<Value>, id_field: String) -> usize {
+        let items = Self::dedupe_upsert_items(items, &id_field);
+
         if items.is_empty() {
             return 0;
+        }
+
+        // If the table doesn't exist yet, try upserting everything directly
+        // to bootstrap the table — schema partitioning is meaningless without a table.
+        let has_table = inner.schema().await.is_ok();
+
+        if !has_table {
+            match inner.upsert(items.clone(), id_field.clone()).await {
+                Ok(()) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "[BufferedVectorStore] Batch upsert failed (no existing table, {} records): {err:#}",
+                        items.len()
+                    );
+                    return Self::upsert_divide_and_conquer(inner, items, id_field).await;
+                }
+            }
         }
 
         let (compatible, outliers) = Self::partition_by_schema(inner, items).await;
         let mut skipped = 0;
 
         if !compatible.is_empty()
-            && let Err(_) = inner.upsert(compatible.clone(), id_field.clone()).await
+            && let Err(err) = inner.upsert(compatible.clone(), id_field.clone()).await
         {
+            eprintln!(
+                "[BufferedVectorStore] Batch upsert of {} compatible records failed: {err:#}",
+                compatible.len()
+            );
             skipped += Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await;
         }
 
         if !outliers.is_empty() {
-            println!(
-                "Schema mismatch: {} outlier record(s) detected, using divide & conquer",
+            eprintln!(
+                "[BufferedVectorStore] Schema mismatch: {} outlier records, using divide & conquer",
                 outliers.len()
             );
             skipped += Self::upsert_divide_and_conquer(inner, outliers, id_field).await;
@@ -215,7 +286,9 @@ impl<T: VectorStore> BufferedVectorStore<T> {
             }
             // Tier 3: single record — skip on failure
             if items.len() == 1 {
-                println!("Skipping insert for incompatible record");
+                if let Err(err) = inner.insert(items).await {
+                    eprintln!("[BufferedVectorStore] Skipping insert for record: {err:#}");
+                }
                 return 1;
             }
             let mid = items.len() / 2;
@@ -240,7 +313,9 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                 return 0;
             }
             if items.len() == 1 {
-                println!("Skipping upsert for incompatible record");
+                if let Err(err) = inner.upsert(items, id_field).await {
+                    eprintln!("[BufferedVectorStore] Skipping upsert for record: {err:#}");
+                }
                 return 1;
             }
             let mid = items.len() / 2;

@@ -672,6 +672,27 @@ interface HandleEdgesChangeParams {
 	applyEdgeChanges: (changes: any[], edges: any[]) => any[];
 }
 
+function isHandleOwnedByDeletingNode(
+	handleId: string | undefined,
+	pinCache: Map<string, [IPin, INode | ILayer, boolean]>,
+	deletingNodesRef: React.MutableRefObject<Set<string>>,
+): boolean {
+	if (!handleId) {
+		return false;
+	}
+
+	if (handleId.startsWith("ref_in_")) {
+		return deletingNodesRef.current.has(handleId.replace("ref_in_", ""));
+	}
+
+	if (handleId.startsWith("ref_out_")) {
+		return deletingNodesRef.current.has(handleId.replace("ref_out_", ""));
+	}
+
+	const [, pinOwner] = pinCache.get(handleId) || [];
+	return pinOwner ? deletingNodesRef.current.has(pinOwner.id) : false;
+}
+
 export function handleEdgesChange({
 	changes,
 	currentEdges,
@@ -719,6 +740,17 @@ export function handleEdgesChange({
 				.map((change: any) => {
 					const selectedId = change.id;
 					const [fromPinId, toPinId] = selectedId.split("-");
+
+					if (
+						isHandleOwnedByDeletingNode(
+							fromPinId,
+							pinCache,
+							deletingNodesRef,
+						) ||
+						isHandleOwnedByDeletingNode(toPinId, pinCache, deletingNodesRef)
+					) {
+						return undefined;
+					}
 
 					const isRefInConnection =
 						fromPinId?.startsWith("ref_in_") || toPinId?.startsWith("ref_in_");

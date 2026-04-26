@@ -590,9 +590,7 @@ export default function PublishPackagePage() {
 												<SelectItem value="very_long">
 													Very Long (10min)
 												</SelectItem>
-												<SelectItem value="maximum">
-													Maximum (30min)
-												</SelectItem>
+												<SelectItem value="maximum">Maximum (30min)</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>

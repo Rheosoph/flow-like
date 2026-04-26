@@ -31,6 +31,10 @@ pub struct A2UIChatMessage {
 pub struct A2UICopilotResponse {
     pub message: String,
     pub components: Vec<SurfaceComponent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_settings: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_component_id: Option<String>,
     pub suggestions: Vec<A2UISuggestion>,
 }
 

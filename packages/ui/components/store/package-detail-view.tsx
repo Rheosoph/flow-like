@@ -664,13 +664,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</>
 										)}
 									</Button>
-									) : !isInstallable ? (
-										<>
-											<Button disabled>{unavailableActionLabel}</Button>
-											<p className="max-w-xs text-sm text-muted-foreground">
-												{unavailableActionMessage}
-											</p>
-										</>
+								) : !isInstallable ? (
+									<>
+										<Button disabled>{unavailableActionLabel}</Button>
+										<p className="max-w-xs text-sm text-muted-foreground">
+											{unavailableActionMessage}
+										</p>
+									</>
 								) : (
 									<Button
 										onClick={() => onInstall(undefined)}
@@ -752,7 +752,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 														Where this package fits best
 													</CardTitle>
 													<CardDescription>
-														The primary workflow or scenario this package is designed for.
+														The primary workflow or scenario this package is
+														designed for.
 													</CardDescription>
 												</div>
 											</div>

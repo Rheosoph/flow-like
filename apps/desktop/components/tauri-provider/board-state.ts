@@ -6,7 +6,7 @@ import {
 	type IBoardState,
 	ICommentType,
 	IConnectionMode,
-	IExecutionMode,
+	type IExecutionMode,
 	type IExecutionStage,
 	type IGenericCommand,
 	type IHub,
@@ -1275,7 +1275,7 @@ export class BoardState implements IBoardState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId, boardId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -1363,7 +1363,7 @@ export class BoardState implements IBoardState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId, boardId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				// Check for terminal events and finish progress toasts
@@ -1930,18 +1930,18 @@ export class BoardState implements IBoardState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/board/${boardId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/board/${boardId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunBoardResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunBoardResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

@@ -81,9 +81,12 @@ export function A2UIButton({
 		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
 
 		if (!hasPointerIntent && !hasKeyboardIntent) {
-			console.log("[A2UI Button] Ignoring click without local activation intent:", {
-				componentId,
-			});
+			console.log(
+				"[A2UI Button] Ignoring click without local activation intent:",
+				{
+					componentId,
+				},
+			);
 			return;
 		}
 
@@ -91,7 +94,12 @@ export function A2UIButton({
 		keyboardActivationAtRef.current = 0;
 
 		const action = component.actions?.[0];
-		console.log("[A2UI Button] handleClick:", { componentId, action, hasActions: !!component.actions, actionsLength: component.actions?.length });
+		console.log("[A2UI Button] handleClick:", {
+			componentId,
+			action,
+			hasActions: !!component.actions,
+			actionsLength: component.actions?.length,
+		});
 		if (action) {
 			executeAction(action);
 		} else if (onAction) {

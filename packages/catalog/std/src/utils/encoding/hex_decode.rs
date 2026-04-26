@@ -26,12 +26,7 @@ impl NodeLogic for HexDecodeNode {
         );
         node.add_icon("/flow/icons/hash.svg");
 
-        node.add_input_pin(
-            "input",
-            "Input",
-            "Hex-encoded string",
-            VariableType::String,
-        );
+        node.add_input_pin("input", "Input", "Hex-encoded string", VariableType::String);
         node.add_output_pin(
             "output",
             "Decoded",
@@ -52,7 +47,7 @@ impl NodeLogic for HexDecodeNode {
 }
 
 fn hex_decode(s: &str) -> flow_like_types::Result<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(flow_like_types::anyhow!("Hex string has odd length"));
     }
     (0..s.len())

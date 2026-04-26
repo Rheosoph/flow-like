@@ -2351,7 +2351,9 @@ function TableEditor({
 			const accessor =
 				typeof col.accessor === "string"
 					? col.accessor
-					: col.accessor && typeof col.accessor === "object" && "literalString" in col.accessor
+					: col.accessor &&
+							typeof col.accessor === "object" &&
+							"literalString" in col.accessor
 						? col.accessor.literalString
 						: col.id;
 			newRow[accessor] = "";
@@ -2381,7 +2383,11 @@ function TableEditor({
 	// Get accessor string from column
 	const getAccessor = (col: TableColumn): string => {
 		if (typeof col.accessor === "string") return col.accessor;
-		if (col.accessor && typeof col.accessor === "object" && "literalString" in col.accessor) {
+		if (
+			col.accessor &&
+			typeof col.accessor === "object" &&
+			"literalString" in col.accessor
+		) {
 			return col.accessor.literalString;
 		}
 		return col.id;
@@ -2390,7 +2396,11 @@ function TableEditor({
 	// Get header string from column
 	const getHeader = (col: TableColumn): string => {
 		if (typeof col.header === "string") return col.header;
-		if (col.header && typeof col.header === "object" && "literalString" in col.header) {
+		if (
+			col.header &&
+			typeof col.header === "object" &&
+			"literalString" in col.header
+		) {
 			return col.header.literalString;
 		}
 		return col.id;
@@ -2483,9 +2493,13 @@ function TableEditor({
 								<Label className="text-xs">Sortable</Label>
 								<Switch
 									checked={
-										col.sortable && typeof col.sortable === "object" && "literalBool" in col.sortable
+										col.sortable &&
+										typeof col.sortable === "object" &&
+										"literalBool" in col.sortable
 											? col.sortable.literalBool
-											: typeof col.sortable === "boolean" ? col.sortable : false
+											: typeof col.sortable === "boolean"
+												? col.sortable
+												: false
 									}
 									onCheckedChange={(v) =>
 										updateColumn(idx, { sortable: { literalBool: v } })
@@ -3009,8 +3023,14 @@ function BoundValueEditor({
 		if ("literalNumber" in value) return value.literalNumber;
 		if ("literalBool" in value) return value.literalBool;
 		if ("literalJson" in value) return value.literalJson as string;
-		if ("path" in value && value.defaultValue !== undefined)
+		if (
+			"path" in value &&
+			(typeof value.defaultValue === "string" ||
+				typeof value.defaultValue === "number" ||
+				typeof value.defaultValue === "boolean")
+		) {
 			return value.defaultValue;
+		}
 		return undefined;
 	});
 
@@ -3991,7 +4011,11 @@ interface ActionsEditorProps {
 	onUpdate: (updates: Partial<SurfaceComponent>) => void;
 }
 
-type ActionType = "widget_event" | "navigate_page" | "external_link" | "workflow_event";
+type ActionType =
+	| "widget_event"
+	| "navigate_page"
+	| "external_link"
+	| "workflow_event";
 
 interface ActionValue {
 	name: string;
@@ -4030,32 +4054,32 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 							No events defined. Add events in Widget Settings → Events tab.
 						</p>
 					) : (
-					<Select
-						value={
-							currentType === "widget_event"
-								? (context.actionId as string) ?? ""
-								: "none"
-						}
-						onValueChange={(v) => {
-							if (v === "none") {
-								setAction(null);
-							} else {
-								setAction({ name: "widget_event", context: { actionId: v } });
+						<Select
+							value={
+								currentType === "widget_event"
+									? ((context.actionId as string) ?? "")
+									: "none"
 							}
-						}}
-					>
-						<SelectTrigger className="h-8 text-sm">
-							<SelectValue placeholder="No event" />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="none">No event</SelectItem>
-							{widgetActions.map((wa) => (
-								<SelectItem key={wa.id} value={wa.id}>
-									{wa.label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+							onValueChange={(v) => {
+								if (v === "none") {
+									setAction(null);
+								} else {
+									setAction({ name: "widget_event", context: { actionId: v } });
+								}
+							}}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue placeholder="No event" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="none">No event</SelectItem>
+								{widgetActions.map((wa) => (
+									<SelectItem key={wa.id} value={wa.id}>
+										{wa.label}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
 					)
 				) : (
 					<Select
@@ -4086,11 +4110,16 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					{widgetActions?.find((wa) => wa.id === (context.actionId as string))
 						?.description && (
 						<p className="text-xs text-muted-foreground">
-							{widgetActions.find((wa) => wa.id === (context.actionId as string))?.description}
+							{
+								widgetActions.find(
+									(wa) => wa.id === (context.actionId as string),
+								)?.description
+							}
 						</p>
 					)}
 					<p className="text-xs text-muted-foreground">
-						This event will be available for binding when the widget is instantiated.
+						This event will be available for binding when the widget is
+						instantiated.
 					</p>
 				</div>
 			)}

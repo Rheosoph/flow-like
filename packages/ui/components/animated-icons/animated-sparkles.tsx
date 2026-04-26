@@ -15,7 +15,10 @@ export function AnimatedSparklesIcon({ className }: { className?: string }) {
 			strokeWidth="2"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			className={cn("group-hover/icon:text-yellow-400 transition-colors duration-150", className)}
+			className={cn(
+				"group-hover/icon:text-yellow-400 transition-colors duration-150",
+				className,
+			)}
 		>
 			{/* Large star */}
 			<motion.path
@@ -25,7 +28,12 @@ export function AnimatedSparklesIcon({ className }: { className?: string }) {
 					hover: {
 						scale: [0.5, 1.2, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.4, type: "spring", stiffness: 300, damping: 12 },
+						transition: {
+							duration: 0.4,
+							type: "spring",
+							stiffness: 300,
+							damping: 12,
+						},
 					},
 				}}
 				style={{ transformOrigin: "12px 12px" }}
@@ -38,7 +46,13 @@ export function AnimatedSparklesIcon({ className }: { className?: string }) {
 					hover: {
 						scale: [0, 1.3, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.35, delay: 0.2, type: "spring", stiffness: 350, damping: 10 },
+						transition: {
+							duration: 0.35,
+							delay: 0.2,
+							type: "spring",
+							stiffness: 350,
+							damping: 10,
+						},
 					},
 				}}
 				style={{ transformOrigin: "19px 6px" }}
@@ -51,7 +65,13 @@ export function AnimatedSparklesIcon({ className }: { className?: string }) {
 					hover: {
 						scale: [0, 1.3, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.35, delay: 0.35, type: "spring", stiffness: 350, damping: 10 },
+						transition: {
+							duration: 0.35,
+							delay: 0.35,
+							type: "spring",
+							stiffness: 350,
+							damping: 10,
+						},
 					},
 				}}
 				style={{ transformOrigin: "5px 18px" }}

@@ -7,7 +7,9 @@ import {
 } from "@xyflow/react";
 import { memo, useMemo } from "react";
 
-export const FlowExecutionEdge = memo(function FlowExecutionEdge(props: EdgeProps) {
+export const FlowExecutionEdge = memo(function FlowExecutionEdge(
+	props: EdgeProps,
+) {
 	const {
 		id,
 		sourceX,

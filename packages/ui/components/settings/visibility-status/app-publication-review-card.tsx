@@ -1,6 +1,12 @@
 "use client";
 
-import { CheckCircle2, Clock3, MessageSquare, PauseCircle, XCircle } from "lucide-react";
+import {
+	CheckCircle2,
+	Clock3,
+	MessageSquare,
+	PauseCircle,
+	XCircle,
+} from "lucide-react";
 import {
 	Avatar,
 	AvatarFallback,
@@ -125,7 +131,9 @@ function formatLabel(value: string) {
 	return value.replaceAll("_", " ");
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" {
+function statusVariant(
+	status: string,
+): "default" | "secondary" | "destructive" {
 	switch (status) {
 		case "accepted":
 			return "default";
@@ -186,7 +194,10 @@ export function AppPublicationReviewCard({
 				) : (
 					<div className="space-y-4">
 						{requests.map((request) => (
-							<div key={request.id} className="rounded-lg border bg-background/80 p-4">
+							<div
+								key={request.id}
+								className="rounded-lg border bg-background/80 p-4"
+							>
 								<div className="flex flex-wrap items-center gap-2">
 									<Badge variant={statusVariant(request.status)}>
 										<span className="flex items-center gap-1">
@@ -198,7 +209,11 @@ export function AppPublicationReviewCard({
 										Target: {formatLabel(request.targetVisibility)}
 									</Badge>
 									<span className="text-xs text-muted-foreground">
-										Submitted <RelativeTime value={request.createdAt} fallback={request.createdAt || "Unknown"} />
+										Submitted{" "}
+										<RelativeTime
+											value={request.createdAt}
+											fallback={request.createdAt || "Unknown"}
+										/>
 									</span>
 								</div>
 
@@ -222,16 +237,25 @@ export function AppPublicationReviewCard({
 														<div className="flex flex-wrap items-center gap-2 text-sm">
 															<span className="font-medium">{label}</span>
 															<span className="text-muted-foreground">
-																<RelativeTime value={log.createdAt} fallback={log.createdAt || "Unknown"} />
+																<RelativeTime
+																	value={log.createdAt}
+																	fallback={log.createdAt || "Unknown"}
+																/>
 															</span>
 															{log.visibility ? (
-																<Badge variant="outline">{formatLabel(log.visibility)}</Badge>
+																<Badge variant="outline">
+																	{formatLabel(log.visibility)}
+																</Badge>
 															) : null}
 														</div>
 														{log.message ? (
-															<p className="text-sm text-muted-foreground">{log.message}</p>
+															<p className="text-sm text-muted-foreground">
+																{log.message}
+															</p>
 														) : (
-															<p className="text-sm text-muted-foreground">No comment provided.</p>
+															<p className="text-sm text-muted-foreground">
+																No comment provided.
+															</p>
 														)}
 													</div>
 												</div>

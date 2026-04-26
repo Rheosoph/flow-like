@@ -1,5 +1,4 @@
 use crate::{
-    ensure_permission,
     entity::{membership, sea_orm_active_enums::NotificationType},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -99,8 +98,13 @@ pub async fn create_notification(
     Json(params): Json<CreateNotificationParams>,
 ) -> Result<Json<CreateNotificationResponse>, ApiError> {
     // Verify caller has execution permission in the project
-    let caller = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let caller = user.execution_app_permission(&app_id, &state).await?;
     let caller_sub = caller.sub()?;
+
+    if !caller.has_permission(RolePermissions::ExecuteEvents) {
+        state.invalidate_permission(&caller_sub, &app_id);
+        return Err(ApiError::FORBIDDEN);
+    }
 
     let event_id = params
         .event_id

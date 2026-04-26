@@ -11,7 +11,7 @@ export type BoundValue =
 	| { literalBool: boolean }
 	| { literalOptions: SelectOption[] }
 	| { literalJson: string }
-	| { path: string; defaultValue?: string | number | boolean };
+	| { path: string; defaultValue?: unknown };
 
 export interface Action {
 	name: string;
@@ -26,6 +26,13 @@ export interface ChildrenTemplate {
 	dataPath: string;
 	itemIdPath?: string;
 	templateComponentId: string;
+}
+
+export interface DataScope {
+	dataPath?: string;
+	index?: number;
+	item?: unknown;
+	itemId?: string;
 }
 
 export interface Style {
@@ -1465,6 +1472,7 @@ export interface Surface {
 	id: string;
 	rootComponentId: string;
 	components: Record<string, SurfaceComponent>;
+	dataModel?: DataEntry[];
 	canvasSettings?: CanvasSettings;
 	catalogId?: string;
 }

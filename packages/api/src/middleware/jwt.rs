@@ -459,6 +459,70 @@ impl AppUser {
             "User does not have app permissions"
         )))
     }
+
+    pub async fn execution_app_permission(
+        &self,
+        app_id: &str,
+        state: &AppState,
+    ) -> Result<AppPermissionResponse, ApiError> {
+        if let AppUser::Executor(executor) = self {
+            if executor.app_id != app_id {
+                tracing::warn!(
+                    token_app_id = %executor.app_id,
+                    path_app_id = %app_id,
+                    run_id = %executor.run_id,
+                    "Executor token app_id does not match request path"
+                );
+                return Err(ApiError::FORBIDDEN);
+            }
+
+            if let Some(role_model) = state.check_permission(&executor.sub, app_id) {
+                let permissions = RolePermissions::from_bits(role_model.permissions)
+                    .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+                return Ok(AppPermissionResponse {
+                    state: state.clone(),
+                    permissions,
+                    role: role_model.clone(),
+                    sub: Some(executor.sub.clone()),
+                    identifier: executor.sub.clone(),
+                });
+            }
+
+            let role_model = role::Entity::find()
+                .join(JoinType::InnerJoin, role::Relation::Membership.def())
+                .filter(
+                    membership::Column::UserId
+                        .eq(&executor.sub)
+                        .and(membership::Column::AppId.eq(app_id)),
+                )
+                .one(&state.db)
+                .await?
+                .ok_or_else(|| {
+                    tracing::debug!(
+                        user_id = %executor.sub,
+                        app_id = %app_id,
+                        run_id = %executor.run_id,
+                        "Role not found for executor user in app"
+                    );
+                    ApiError::FORBIDDEN
+                })?;
+
+            let permissions = RolePermissions::from_bits(role_model.permissions)
+                .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+
+            state.put_permission(&executor.sub, app_id, Arc::new(role_model.clone()));
+
+            return Ok(AppPermissionResponse {
+                state: state.clone(),
+                permissions,
+                role: Arc::new(role_model),
+                sub: Some(executor.sub.clone()),
+                identifier: executor.sub.clone(),
+            });
+        }
+
+        self.app_permission(app_id, state).await
+    }
 }
 
 fn hash_token(token: &str) -> String {

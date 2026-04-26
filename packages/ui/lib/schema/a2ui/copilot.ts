@@ -1,4 +1,7 @@
-import type { SurfaceComponent } from "../../../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../../../components/a2ui/types";
 
 /** Role in the A2UI chat conversation */
 export type A2UIChatRole = "User" | "Assistant";
@@ -40,6 +43,10 @@ export interface A2UICopilotResponse {
 	message: string;
 	/** Generated or modified UI components */
 	components: SurfaceComponent[];
+	/** Optional canvas settings emitted with the generated surface */
+	canvas_settings?: CanvasSettings;
+	/** Optional root component id emitted with the generated surface */
+	root_component_id?: string;
 	/** Optional follow-up suggestions */
 	suggestions: string[];
 }

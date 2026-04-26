@@ -221,7 +221,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             let _ = context.deactivate_exec_pin(&tool.function.name).await;
         }
 
-        let provider = model_bit
+        let _provider = model_bit
             .try_to_provider()
             .ok_or_else(|| anyhow!("Model Bit does not contain provider information"))?;
 

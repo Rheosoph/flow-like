@@ -136,8 +136,8 @@ pub(crate) async fn execute_imported_code(
         memory_limit: 256 * 1024 * 1024,
     };
 
-    let runtime = RUNTIME
-        .get_or_try_init(|| PyodideRuntime::new(RuntimeConfig::default()).map(Arc::new))?;
+    let runtime =
+        RUNTIME.get_or_try_init(|| PyodideRuntime::new(RuntimeConfig::default()).map(Arc::new))?;
     let response = runtime.execute(request).await;
 
     if let serde_json::Value::Object(ref outputs) = response.outputs {
@@ -178,9 +178,7 @@ pub(crate) async fn execute_imported_code(
 
 #[cfg(any(feature = "execute", test))]
 fn wrap_main_call(code: &str) -> String {
-    format!(
-        "{code}\n\n_r = main(inputs)\nif isinstance(_r, dict):\n    outputs.update(_r)\n"
-    )
+    format!("{code}\n\n_r = main(inputs)\nif isinstance(_r, dict):\n    outputs.update(_r)\n")
 }
 
 #[cfg(test)]

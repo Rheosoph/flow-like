@@ -100,11 +100,16 @@ export class UserState implements IUserState {
 		);
 
 		const merged = new Map<string, INotification>();
-		for (const notification of localNotifications.flat().map(localToINotification)) {
+		for (const notification of localNotifications
+			.flat()
+			.map(localToINotification)) {
 			merged.set(notification.id, notification);
 		}
 
-		return sortNotificationsByCreatedAtDesc([...merged.values()]).slice(0, limit);
+		return sortNotificationsByCreatedAtDesc([...merged.values()]).slice(
+			0,
+			limit,
+		);
 	}
 
 	private async markAllRelevantLocalNotificationsRead(): Promise<number> {

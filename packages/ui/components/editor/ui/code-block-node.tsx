@@ -70,7 +70,11 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 		const isSpoiler = directiveType === "spoiler";
 		return (
 			<PlateElement className="py-1" {...props}>
-				<React.Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+				<React.Suspense
+					fallback={
+						<div className="h-16 animate-pulse bg-muted/20 rounded-md" />
+					}
+				>
 					{isSpoiler ? (
 						<SpoilerBlock content={content} />
 					) : (
@@ -86,7 +90,11 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 	if (isCustomBlockLanguage(lang)) {
 		return (
 			<PlateElement className="py-1" {...props}>
-				<React.Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+				<React.Suspense
+					fallback={
+						<div className="h-16 animate-pulse bg-muted/20 rounded-md" />
+					}
+				>
 					{lang === "embed" ? (
 						<EmbedCodeBlock content={content} />
 					) : (

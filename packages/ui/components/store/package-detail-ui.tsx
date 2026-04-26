@@ -239,9 +239,7 @@ export function PackageDetailUI({
 				<Tabs defaultValue="overview" className="w-full">
 					<TabsList className="h-auto flex-wrap justify-start">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
-						<TabsTrigger value="nodes">
-							Nodes ({pkg.nodes.length})
-						</TabsTrigger>
+						<TabsTrigger value="nodes">Nodes ({pkg.nodes.length})</TabsTrigger>
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})

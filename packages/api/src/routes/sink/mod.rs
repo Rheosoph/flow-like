@@ -14,7 +14,7 @@
 use crate::state::AppState;
 use axum::{
     Router,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, head, options, patch, post, put},
 };
 
 pub mod management;
@@ -43,6 +43,7 @@ pub fn routes() -> Router<AppState> {
             "/trigger/http/{app_id}/{*path}",
             post(trigger::trigger_http),
         )
+        .route("/trigger/http/{app_id}/{*path}", put(trigger::trigger_http))
         .route(
             "/trigger/http/{app_id}/{*path}",
             patch(trigger::trigger_http),
@@ -50,6 +51,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/trigger/http/{app_id}/{*path}",
             delete(trigger::trigger_http),
+        )
+        .route(
+            "/trigger/http/{app_id}/{*path}",
+            head(trigger::trigger_http),
+        )
+        .route(
+            "/trigger/http/{app_id}/{*path}",
+            options(trigger::trigger_http),
         )
         // Telegram webhook trigger - async execution with secret token verification
         .route(

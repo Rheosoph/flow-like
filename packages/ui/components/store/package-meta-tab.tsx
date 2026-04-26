@@ -10,19 +10,19 @@ import {
 	Loader2,
 	Save,
 	Tag,
-	Trash2,
 	Upload,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useInvoke } from "../../hooks/use-invoke";
 import type {
 	PackageMeta,
 	PushMediaResponse,
 	UpsertPackageMetaRequest,
 } from "../../lib/schema/wasm";
-import { useInvoke } from "../../hooks/use-invoke";
 import { useBackend } from "../../state/backend-state";
+import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
 	Badge,
 	Button,
@@ -32,11 +32,8 @@ import {
 	CardTitle,
 	Input,
 	Label,
-	Separator,
-	Textarea,
 	TextEditor,
 } from "../ui";
-import type { GenericFetcher } from "../pages/store/store-package-detail";
 
 const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/webp";
 const MAX_ICON_SIZE = 20 * 1024 * 1024;
@@ -229,8 +226,7 @@ export function PackageMetaTab({
 		(item: "icon" | "thumbnail", e: React.ChangeEvent<HTMLInputElement>) => {
 			const file = e.target.files?.[0];
 			if (!file) return;
-			const maxSize =
-				item === "icon" ? MAX_ICON_SIZE : MAX_THUMBNAIL_SIZE;
+			const maxSize = item === "icon" ? MAX_ICON_SIZE : MAX_THUMBNAIL_SIZE;
 			if (file.size > maxSize) {
 				toast.error(
 					`File too large. Maximum size is ${Math.round(maxSize / 1024 / 1024)}MB`,
@@ -347,11 +343,7 @@ export function PackageMetaTab({
 					{(form.tags?.length ?? 0) > 0 && (
 						<div className="flex flex-wrap gap-1.5">
 							{form.tags?.map((tag) => (
-								<Badge
-									key={tag}
-									variant="secondary"
-									className="gap-1 pr-1"
-								>
+								<Badge key={tag} variant="secondary" className="gap-1 pr-1">
 									{tag}
 									<button
 										type="button"

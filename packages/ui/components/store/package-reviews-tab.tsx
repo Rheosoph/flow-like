@@ -188,11 +188,11 @@ export function PackageReviewsTab({ packageId }: PackageReviewsTabProps) {
 		queryKey,
 		queryFn: async () =>
 			normalizeCommentsResponse(
-				await backend.registryState.getPackageComments(
+				(await backend.registryState.getPackageComments(
 					packageId,
 					page * PAGE_SIZE,
 					PAGE_SIZE,
-				) as RawPackageCommentsResponse,
+				)) as RawPackageCommentsResponse,
 			),
 	});
 

@@ -1,6 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { XIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
+import { getErrorMessage } from "../lib/error-message";
 import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { IBoard } from "../lib/schema/flow/board";
@@ -58,7 +59,10 @@ export function useCommandExecution({
 				return result;
 			} catch (error) {
 				console.error("[executeCommand] Failed:", command.command_type, error);
-				toastError(`Command failed: ${error}`, <XIcon />);
+				toastError(
+					`Command failed: ${getErrorMessage(error, "Unknown error")}`,
+					<XIcon />,
+				);
 				throw error;
 			}
 		},
@@ -96,7 +100,10 @@ export function useCommandExecution({
 				return result;
 			} catch (error) {
 				console.error("[executeCommands] Failed:", error);
-				toastError(`Commands failed: ${error}`, <XIcon />);
+				toastError(
+					`Commands failed: ${getErrorMessage(error, "Unknown error")}`,
+					<XIcon />,
+				);
 				throw error;
 			}
 		},

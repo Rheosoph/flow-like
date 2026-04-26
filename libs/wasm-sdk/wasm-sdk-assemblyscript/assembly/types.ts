@@ -206,9 +206,12 @@ export class PinDefinition {
 			json += `,"value_type":${jsonString(this.value_type!)}`;
 		if (this.schema !== null) json += `,"schema":${jsonString(this.schema!)}`;
 		if (this.has_step) json += `,"step":${this.step.toString()}`;
-		if (this.has_sensitive) json += `,"sensitive":${this.sensitive ? "true" : "false"}`;
-		if (this.has_enforce_schema) json += `,"enforce_schema":${this.enforce_schema_flag ? "true" : "false"}`;
-		if (this.has_enforce_generic_value_type) json += `,"enforce_generic_value_type":${this.enforce_generic_value_type ? "true" : "false"}`;
+		if (this.has_sensitive)
+			json += `,"sensitive":${this.sensitive ? "true" : "false"}`;
+		if (this.has_enforce_schema)
+			json += `,"enforce_schema":${this.enforce_schema_flag ? "true" : "false"}`;
+		if (this.has_enforce_generic_value_type)
+			json += `,"enforce_generic_value_type":${this.enforce_generic_value_type ? "true" : "false"}`;
 		json += "}";
 		return json;
 	}

@@ -125,7 +125,8 @@ export default function RuntimeVariablesPage() {
 								Runtime Variables
 							</h1>
 							<p className="text-sm text-muted-foreground">
-								Set secrets and user-specific values that your flows need at runtime
+								Set secrets and user-specific values that your flows need at
+								runtime
 							</p>
 						</div>
 						<StatusBadge

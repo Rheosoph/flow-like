@@ -4,7 +4,12 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {},
-	"workspaces": ["packages/*", "packages/dexie-tauri-adapter/*", "apps/*", "libs/*/*"],
+	"workspaces": [
+		"packages/*",
+		"packages/dexie-tauri-adapter/*",
+		"apps/*",
+		"libs/*/*"
+	],
 	"overrides": {
 		"@sentry/nextjs": "^10.38.0"
 	},

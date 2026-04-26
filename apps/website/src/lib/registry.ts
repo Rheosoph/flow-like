@@ -170,9 +170,7 @@ export async function getPackage(id: string): Promise<RegistryEntry | null> {
 	});
 	if (res.status === 404) return null;
 	if (!res.ok)
-		throw new Error(
-			`Package fetch failed: ${res.status} ${res.statusText}`,
-		);
+		throw new Error(`Package fetch failed: ${res.status} ${res.statusText}`);
 	return res.json();
 }
 
@@ -235,9 +233,7 @@ export async function getAppMeta(
 
 export function formatCategory(cat?: string): string {
 	if (!cat) return "Other";
-	return cat
-		.replace(/_/g, " ")
-		.replace(/\b\w/g, (c) => c.toUpperCase());
+	return cat.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function formatPrice(price?: number): string {
@@ -306,9 +302,7 @@ export function extractPlainText(content: string, maxLength = 300): string {
 	if (content.startsWith(PLATE_JSON_PREFIX)) {
 		try {
 			const nodes = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
-			text = extractTextFromPlateNodes(
-				Array.isArray(nodes) ? nodes : [],
-			);
+			text = extractTextFromPlateNodes(Array.isArray(nodes) ? nodes : []);
 		} catch {
 			text = content.slice(PLATE_JSON_PREFIX.length);
 		}
@@ -335,7 +329,11 @@ export function contentIsMarkdown(content: string): boolean {
 /** Safely format a date string – returns null if invalid. */
 export function formatDate(
 	dateStr?: string | null,
-	opts: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" },
+	opts: Intl.DateTimeFormatOptions = {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	},
 ): string | null {
 	if (!dateStr) return null;
 	const d = new Date(dateStr);

@@ -268,7 +268,9 @@ function createResponseMessage(
 	};
 }
 
-function cloneResponseMessageForCompletion(responseMessage: IMessage): IMessage {
+function cloneResponseMessageForCompletion(
+	responseMessage: IMessage,
+): IMessage {
 	const clonedMessage =
 		typeof structuredClone === "function"
 			? structuredClone(responseMessage)
@@ -1074,211 +1076,212 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			setIsStreamActive(true);
 
 			try {
-			const isOffline = await backend.isOffline(appId);
-			const history_elements =
-				parseUint8ArrayToJson(event.config)?.history_elements ?? 5;
+				const isOffline = await backend.isOffline(appId);
+				const history_elements =
+					parseUint8ArrayToJson(event.config)?.history_elements ?? 5;
 
-			// Check OAuth BEFORE adding message to DB (skip if consent was just granted)
-			console.log(
-				"[Chat] Checking OAuth. isOffline:",
-				isOffline,
-				"skipConsentCheck:",
-				skipConsentCheck,
-			);
-			if (!skipConsentCheck && backend.eventState.checkEventOAuth) {
-				const oauthResult = await backend.eventState.checkEventOAuth(
-					appId,
-					event,
-				);
+				// Check OAuth BEFORE adding message to DB (skip if consent was just granted)
 				console.log(
-					"[Chat] OAuth check result:",
-					oauthResult.missingProviders.length,
-					"missing providers",
+					"[Chat] Checking OAuth. isOffline:",
+					isOffline,
+					"skipConsentCheck:",
+					skipConsentCheck,
 				);
-				if (oauthResult.missingProviders.length > 0) {
-					// Store pending message for retry
-					pendingMessageRef.current = {
-						content,
-						filesAttached,
-						activeTools,
-						audioFile,
-					};
-					// Emit OAuth required event
-					window.dispatchEvent(
-						new CustomEvent("flow:oauth-required", {
-							detail: {
-								missingProviders: oauthResult.missingProviders,
-								appId,
-								boardId: event.board_id,
-								nodeId: event.node_id,
-								payload: {},
-							},
-						}),
-					);
-					return; // Don't add message to DB yet
-				}
-			}
-
-			// Clear pending message since OAuth is satisfied
-			pendingMessageRef.current = null;
-
-			const { imageAttachments, otherAttachments } = await prepareAttachments(
-				filesAttached,
-				audioFile,
-				backend,
-				isOffline,
-			);
-
-			const historyMessage = createHistoryMessage(content, imageAttachments);
-
-			const userMessage = createUserMessage(
-				sessionIdParameter,
-				appId,
-				otherAttachments,
-				historyMessage,
-				activeTools ?? [],
-			);
-
-			await updateSession(sessionIdParameter, appId, content);
-			await chatDb.messages.add(userMessage);
-
-			const lastMessages = messagesRef.current?.slice(-history_elements) ?? [];
-
-			const payload = createPayload(
-				userMessage,
-				lastMessages,
-				historyMessage,
-				localState,
-				globalState,
-				activeTools ?? [],
-				otherAttachments,
-			);
-
-			const responseMessage = createResponseMessage(
-				sessionIdParameter,
-				appId,
-				event.name,
-			);
-
-			chatRef.current?.pushCurrentMessageUpdate({ ...responseMessage });
-			chatRef.current?.scrollToBottom();
-
-			let intermediateResponse = Response.default();
-			let tmpLocalState = localState;
-			let tmpGlobalState = globalState;
-			let done = false;
-			const attachments: Map<string, IAttachment> = new Map();
-
-			// Refs for incremental save to access current state
-			const localStateRef = { current: tmpLocalState };
-			const globalStateRef = { current: tmpGlobalState };
-
-			const subscriberId = `chat-${responseMessage.id}`;
-			activeSubscriptions.current.push(subscriberId);
-
-			// Clear stale completion tracking so this stream's completion is processed
-			processedCompletedStreams.current.delete(streamId);
-			reconnectSubscribed.current.delete(
-				`chat-reconnect-${sessionIdParameter}`,
-			);
-
-			// Create incremental save function for robust message persistence
-			// This saves the message every N events to prevent data loss
-			const incrementalSave = createChatIncrementalSaver(
-				responseMessage,
-				localStateRef,
-				globalStateRef,
-			);
-
-			// Start execution first to reset the stream state
-			const executionPromise = executionEngine.executeEvent(streamId, {
-				appId,
-				eventId: event.id,
-				payload: {
-					id: event.node_id,
-					payload: payload,
-				},
-				streamState: false,
-				onExecutionStart: (execution_id: string) => {},
-				path: `${pathname}?id=${appId}&eventId=${event.id}&sessionId=${sessionIdParameter}`,
-				title: event.name || "Chat",
-				interfaceType: "chat",
-				skipConsentCheck,
-				// Save to Dexie every 10 events and on completion for robustness
-				onIncrementalSave: incrementalSave,
-				saveIntervalEvents: 10,
-			});
-			executionEngine.subscribeToEventStream(
-				streamId,
-				subscriberId,
-				(events) => {
-					handleNavigationEvents(events);
-
-					const result = processChatEvents(events, {
-						intermediateResponse,
-						responseMessage,
-						attachments,
-						tmpLocalState,
-						tmpGlobalState,
-						done,
+				if (!skipConsentCheck && backend.eventState.checkEventOAuth) {
+					const oauthResult = await backend.eventState.checkEventOAuth(
 						appId,
-						eventId: event.id,
-						sessionId: sessionIdParameter,
-					});
-
-					intermediateResponse = result.intermediateResponse;
-					tmpLocalState = result.tmpLocalState;
-					tmpGlobalState = result.tmpGlobalState;
-					done = result.done;
-
-					// Update refs for incremental save to access
-					localStateRef.current = result.tmpLocalState;
-					globalStateRef.current = result.tmpGlobalState;
-
-					// Update responseMessage in place for incremental save
-					Object.assign(responseMessage, result.responseMessage);
-
-					if (result.interactions?.length) {
-						addInteractions(result.interactions);
+						event,
+					);
+					console.log(
+						"[Chat] OAuth check result:",
+						oauthResult.missingProviders.length,
+						"missing providers",
+					);
+					if (oauthResult.missingProviders.length > 0) {
+						// Store pending message for retry
+						pendingMessageRef.current = {
+							content,
+							filesAttached,
+							activeTools,
+							audioFile,
+						};
+						// Emit OAuth required event
+						window.dispatchEvent(
+							new CustomEvent("flow:oauth-required", {
+								detail: {
+									missingProviders: oauthResult.missingProviders,
+									appId,
+									boardId: event.board_id,
+									nodeId: event.node_id,
+									payload: {},
+								},
+							}),
+						);
+						return; // Don't add message to DB yet
 					}
+				}
 
-					if (result.shouldUpdate) {
-						chatRef.current?.pushCurrentMessageUpdate({
-							...result.responseMessage,
-						});
-						chatRef.current?.scrollToBottom();
-					}
-				},
-				async (events) => {
-					handleNavigationEvents(events);
+				// Clear pending message since OAuth is satisfied
+				pendingMessageRef.current = null;
 
-					try {
-						await handleStreamCompletion(
-							responseMessage,
-							chatRef,
-							executionEngine,
-							streamId,
-							subscriberId,
-							processedCompletedStreams,
-							events,
+				const { imageAttachments, otherAttachments } = await prepareAttachments(
+					filesAttached,
+					audioFile,
+					backend,
+					isOffline,
+				);
+
+				const historyMessage = createHistoryMessage(content, imageAttachments);
+
+				const userMessage = createUserMessage(
+					sessionIdParameter,
+					appId,
+					otherAttachments,
+					historyMessage,
+					activeTools ?? [],
+				);
+
+				await updateSession(sessionIdParameter, appId, content);
+				await chatDb.messages.add(userMessage);
+
+				const lastMessages =
+					messagesRef.current?.slice(-history_elements) ?? [];
+
+				const payload = createPayload(
+					userMessage,
+					lastMessages,
+					historyMessage,
+					localState,
+					globalState,
+					activeTools ?? [],
+					otherAttachments,
+				);
+
+				const responseMessage = createResponseMessage(
+					sessionIdParameter,
+					appId,
+					event.name,
+				);
+
+				chatRef.current?.pushCurrentMessageUpdate({ ...responseMessage });
+				chatRef.current?.scrollToBottom();
+
+				let intermediateResponse = Response.default();
+				let tmpLocalState = localState;
+				let tmpGlobalState = globalState;
+				let done = false;
+				const attachments: Map<string, IAttachment> = new Map();
+
+				// Refs for incremental save to access current state
+				const localStateRef = { current: tmpLocalState };
+				const globalStateRef = { current: tmpGlobalState };
+
+				const subscriberId = `chat-${responseMessage.id}`;
+				activeSubscriptions.current.push(subscriberId);
+
+				// Clear stale completion tracking so this stream's completion is processed
+				processedCompletedStreams.current.delete(streamId);
+				reconnectSubscribed.current.delete(
+					`chat-reconnect-${sessionIdParameter}`,
+				);
+
+				// Create incremental save function for robust message persistence
+				// This saves the message every N events to prevent data loss
+				const incrementalSave = createChatIncrementalSaver(
+					responseMessage,
+					localStateRef,
+					globalStateRef,
+				);
+
+				// Start execution first to reset the stream state
+				const executionPromise = executionEngine.executeEvent(streamId, {
+					appId,
+					eventId: event.id,
+					payload: {
+						id: event.node_id,
+						payload: payload,
+					},
+					streamState: false,
+					onExecutionStart: (execution_id: string) => {},
+					path: `${pathname}?id=${appId}&eventId=${event.id}&sessionId=${sessionIdParameter}`,
+					title: event.name || "Chat",
+					interfaceType: "chat",
+					skipConsentCheck,
+					// Save to Dexie every 10 events and on completion for robustness
+					onIncrementalSave: incrementalSave,
+					saveIntervalEvents: 10,
+				});
+				executionEngine.subscribeToEventStream(
+					streamId,
+					subscriberId,
+					(events) => {
+						handleNavigationEvents(events);
+
+						const result = processChatEvents(events, {
 							intermediateResponse,
+							responseMessage,
 							attachments,
-							appId,
-							event.id,
-							sessionIdParameter,
 							tmpLocalState,
 							tmpGlobalState,
-							addInteractions,
-						);
-					} finally {
-						activeSubscriptions.current = activeSubscriptions.current.filter(
-							(id) => id !== subscriberId,
-						);
-					}
-				},
-			);
+							done,
+							appId,
+							eventId: event.id,
+							sessionId: sessionIdParameter,
+						});
 
-			await executionPromise;
+						intermediateResponse = result.intermediateResponse;
+						tmpLocalState = result.tmpLocalState;
+						tmpGlobalState = result.tmpGlobalState;
+						done = result.done;
+
+						// Update refs for incremental save to access
+						localStateRef.current = result.tmpLocalState;
+						globalStateRef.current = result.tmpGlobalState;
+
+						// Update responseMessage in place for incremental save
+						Object.assign(responseMessage, result.responseMessage);
+
+						if (result.interactions?.length) {
+							addInteractions(result.interactions);
+						}
+
+						if (result.shouldUpdate) {
+							chatRef.current?.pushCurrentMessageUpdate({
+								...result.responseMessage,
+							});
+							chatRef.current?.scrollToBottom();
+						}
+					},
+					async (events) => {
+						handleNavigationEvents(events);
+
+						try {
+							await handleStreamCompletion(
+								responseMessage,
+								chatRef,
+								executionEngine,
+								streamId,
+								subscriberId,
+								processedCompletedStreams,
+								events,
+								intermediateResponse,
+								attachments,
+								appId,
+								event.id,
+								sessionIdParameter,
+								tmpLocalState,
+								tmpGlobalState,
+								addInteractions,
+							);
+						} finally {
+							activeSubscriptions.current = activeSubscriptions.current.filter(
+								(id) => id !== subscriberId,
+							);
+						}
+					},
+				);
+
+				await executionPromise;
 			} finally {
 				pendingSendSessions.current.delete(streamId);
 				setIsStreamActive(

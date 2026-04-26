@@ -131,7 +131,10 @@ export class WebStorageState implements IStorageState {
 		await apiDelete(`apps/${appId}/data`, this.backend.auth, { prefixes });
 	}
 
-	async deleteStorageItemsUser(appId: string, prefixes: string[]): Promise<void> {
+	async deleteStorageItemsUser(
+		appId: string,
+		prefixes: string[],
+	): Promise<void> {
 		await apiDelete(`apps/${appId}/data/user`, this.backend.auth, { prefixes });
 	}
 
@@ -171,7 +174,12 @@ export class WebStorageState implements IStorageState {
 		files: File[],
 		onProgress?: (progress: number) => void,
 	): Promise<void> {
-		await this.uploadWithEndpoint(`apps/${appId}/data`, prefix, files, onProgress);
+		await this.uploadWithEndpoint(
+			`apps/${appId}/data`,
+			prefix,
+			files,
+			onProgress,
+		);
 	}
 
 	async uploadStorageItemsUser(

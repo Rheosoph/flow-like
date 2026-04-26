@@ -54,6 +54,7 @@ impl ScopedPaginationParams {
 }
 
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
+/// Also rejects reserved table names (e.g. `__graph_overlays__`).
 pub fn validate_table_name(name: &str) -> Result<(), ApiError> {
     if name.is_empty() || name.len() > 256 {
         return Err(ApiError::bad_request(
@@ -71,6 +72,11 @@ pub fn validate_table_name(name: &str) -> Result<(), ApiError> {
     {
         return Err(ApiError::bad_request(
             "Table name contains invalid characters".to_string(),
+        ));
+    }
+    if flow_like_catalog_core::is_reserved_table(name) {
+        return Err(ApiError::bad_request(
+            "Table name is reserved for internal use".to_string(),
         ));
     }
     Ok(())

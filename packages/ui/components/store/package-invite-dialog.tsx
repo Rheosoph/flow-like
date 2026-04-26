@@ -2,10 +2,8 @@
 
 import { Loader2, Send } from "lucide-react";
 import { useCallback, useState } from "react";
+import { PackagePermissionBits } from "../../lib/permission/wasm-package-permission";
 import type { InviteUserRequest } from "../../lib/schema/wasm";
-import {
-	PackagePermissionBits,
-} from "../../lib/permission/wasm-package-permission";
 import {
 	Button,
 	Dialog,
