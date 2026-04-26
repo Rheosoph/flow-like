@@ -694,7 +694,7 @@ export class WebBoardState implements IBoardState {
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
 
-		const headers: HeadersInit = {
+		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
 		};
 		if (onToken) {

@@ -210,7 +210,7 @@ impl BufferedInterComHandler {
 
 impl Drop for BufferedInterComHandler {
     fn drop(&mut self) {
-        let _ = self.flush();
+        std::mem::drop(self.flush());
     }
 }
 

@@ -9,17 +9,15 @@ import type {
 } from "@tm9657/flow-like-ui";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import { oauthTokenStore } from "../lib/oauth-db";
 import {
-	broadcastOAuthCallbackCompletion,
-	clearOAuthCallbackCompletion,
-	clearPendingOAuthCallback,
 	type IStoredOAuthCallbackCompletion,
 	OAUTH_CALLBACK_CHANNEL,
-	OAUTH_CALLBACK_COMPLETE_KEY,
+	broadcastOAuthCallbackCompletion,
+	clearPendingOAuthCallback,
 	parseOAuthCallbackCompletion,
 	readPendingOAuthCallback,
 } from "../lib/oauth-callback-storage";
+import { oauthTokenStore } from "../lib/oauth-db";
 import { getOAuthService } from "../lib/oauth-service";
 
 type OAuthCallbackListener = (
@@ -38,7 +36,6 @@ export function useOAuthCallbackListener(
 	callback: OAuthCallbackListener,
 	deps: React.DependencyList = [],
 ) {
-	// biome-ignore lint/correctness/useExhaustiveDependencies: we want to allow custom deps
 	const memoizedCallback = useCallback(callback, deps);
 
 	useEffect(() => {
@@ -59,10 +56,7 @@ export function clearProviderCache() {
 	providerCache = null;
 }
 
-function notifyListeners(
-	pending: IOAuthPendingAuth,
-	token: IStoredOAuthToken,
-) {
+function notifyListeners(pending: IOAuthPendingAuth, token: IStoredOAuthToken) {
 	for (const listener of listeners) {
 		try {
 			listener(pending, token);
@@ -151,8 +145,16 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 		let token: Awaited<ReturnType<OAuthService["handleCallback"]>>;
 
 		if (isImplicitFlow) {
+			if (!access_token) {
+				console.error(
+					"[Web OAuth] Invalid implicit callback: missing access token",
+				);
+				toast.error("Invalid callback: missing access token");
+				return false;
+			}
+
 			token = await oauthService.handleImplicitCallback(pending, provider, {
-				access_token: access_token!,
+				access_token,
 				id_token: id_token ?? undefined,
 				token_type: token_type ?? "Bearer",
 				expires_in: expires_in ? Number.parseInt(expires_in, 10) : undefined,
@@ -166,10 +168,7 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 		toast.success(`Connected to ${provider.name}`);
 
 		notifyListeners(pending, token as IStoredOAuthToken);
-		broadcastOAuthCallbackCompletion(
-			pending,
-			token as IStoredOAuthToken,
-		);
+		broadcastOAuthCallbackCompletion(pending, token as IStoredOAuthToken);
 
 		return true;
 	} catch (e) {
@@ -188,7 +187,29 @@ export function OAuthCallbackHandler({
 }) {
 	useEffect(() => {
 		const seenCompletionKeys = new Set<string>();
+		const processingCallbackStates = new Set<string>();
 		let channel: BroadcastChannel | null = null;
+
+		const processCallbackOnce = (payload: IOAuthCallbackData) => {
+			const callbackState = payload.state;
+			if (callbackState && processingCallbackStates.has(callbackState)) {
+				return;
+			}
+			if (callbackState) {
+				processingCallbackStates.add(callbackState);
+			}
+
+			void processCallback(payload).then((processed) => {
+				if (processed) {
+					clearPendingOAuthCallback();
+					return;
+				}
+
+				if (callbackState) {
+					processingCallbackStates.delete(callbackState);
+				}
+			});
+		};
 
 		const handleCompletion = (rawValue: string | null) => {
 			if (!rawValue) {
@@ -197,13 +218,11 @@ export function OAuthCallbackHandler({
 
 			const completion = parseOAuthCallbackCompletion(rawValue);
 			if (!completion) {
-				clearOAuthCallbackCompletion();
 				return;
 			}
 
 			const completionKey = getCompletionKey(completion);
 			if (seenCompletionKeys.has(completionKey)) {
-				clearOAuthCallbackCompletion();
 				return;
 			}
 			seenCompletionKeys.add(completionKey);
@@ -213,7 +232,6 @@ export function OAuthCallbackHandler({
 				completion.pending.providerId,
 			);
 			notifyListeners(completion.pending, completion.token);
-			clearOAuthCallbackCompletion();
 		};
 
 		const handleOAuthEvent = (event: Event) => {
@@ -222,11 +240,7 @@ export function OAuthCallbackHandler({
 			if (!payload) return;
 
 			console.log("[Web OAuth] Event received:", payload);
-			void processCallback(payload).then((processed) => {
-				if (processed) {
-					clearPendingOAuthCallback();
-				}
-			});
+			processCallbackOnce(payload);
 		};
 
 		const checkPendingCallback = () => {
@@ -236,7 +250,7 @@ export function OAuthCallbackHandler({
 			}
 
 			console.log("[Web OAuth] Processing pending callback from storage");
-			void processCallback({
+			processCallbackOnce({
 				url: data.url,
 				code: data.code,
 				state: data.state,
@@ -247,19 +261,7 @@ export function OAuthCallbackHandler({
 				scope: data.scope,
 				error: null,
 				error_description: null,
-			}).then((processed) => {
-				if (processed) {
-					clearPendingOAuthCallback();
-				}
 			});
-		};
-
-		const handleStorageChange = (event: StorageEvent) => {
-			if (event.key !== OAUTH_CALLBACK_COMPLETE_KEY) {
-				return;
-			}
-
-			handleCompletion(event.newValue);
 		};
 
 		const handleChannelMessage = (event: MessageEvent) => {
@@ -271,7 +273,6 @@ export function OAuthCallbackHandler({
 		};
 
 		window.addEventListener("thirdparty-oauth-callback", handleOAuthEvent);
-		window.addEventListener("storage", handleStorageChange);
 
 		try {
 			channel = new BroadcastChannel(OAUTH_CALLBACK_CHANNEL);
@@ -284,7 +285,6 @@ export function OAuthCallbackHandler({
 
 		return () => {
 			window.removeEventListener("thirdparty-oauth-callback", handleOAuthEvent);
-			window.removeEventListener("storage", handleStorageChange);
 			if (channel) {
 				channel.removeEventListener("message", handleChannelMessage);
 				channel.close();

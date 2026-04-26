@@ -8,6 +8,7 @@ WORKDIR /app
 
 RUN yum update -y && \
     yum install -y \
+        binutils \
         clang \
         gcc \
         gcc-c++ \

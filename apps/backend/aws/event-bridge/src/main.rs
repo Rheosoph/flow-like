@@ -133,8 +133,8 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
             .await
             .unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
 
-        // Most 4xx responses are hard failures. Keep retrying transient client
-        // failures such as 408/429 so EventBridge Scheduler can back off.
+        // Most 4xx responses are hard failures. Retry only transient client
+        // failures where the same scheduled firing can plausibly succeed later.
         if status.is_client_error() && !is_retryable_status(status) {
             tracing::error!(
                 status = %status,

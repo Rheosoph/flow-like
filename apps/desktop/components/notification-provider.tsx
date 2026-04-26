@@ -511,9 +511,7 @@ export default function NotificationProvider({
 
 		const handleNotificationBatch = async (
 			events: IIntercomEvent[],
-			_persistViaApi: boolean,
 			notificationAppId?: string,
-			boardId?: string,
 		) => {
 			for (const event of events) {
 				const notification = event.payload as INotificationEvent;
@@ -562,18 +560,13 @@ export default function NotificationProvider({
 				return;
 			}
 
-			void handleNotificationBatch(
-				detail.events,
-				detail.persistViaApi,
-				detail.appId ?? appId,
-				detail.boardId,
-			);
+			void handleNotificationBatch(detail.events, detail.appId ?? appId);
 		};
 
 		const unlistenFn = listen(
 			"flow_notification",
 			async (events: Event<IIntercomEvent[]>) => {
-				await handleNotificationBatch(events.payload, true, appId);
+				await handleNotificationBatch(events.payload, appId);
 			},
 		);
 

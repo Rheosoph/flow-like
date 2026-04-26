@@ -1275,7 +1275,7 @@ export class BoardState implements IBoardState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId, boardId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -1363,7 +1363,7 @@ export class BoardState implements IBoardState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId, boardId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				// Check for terminal events and finish progress toasts

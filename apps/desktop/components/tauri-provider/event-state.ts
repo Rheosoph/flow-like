@@ -569,7 +569,7 @@ export class EventState implements IEventState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -661,7 +661,7 @@ export class EventState implements IEventState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				if (event.event_type === "completed") {
