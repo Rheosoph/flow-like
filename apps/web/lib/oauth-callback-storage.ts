@@ -5,7 +5,7 @@ import type {
 
 export const OAUTH_CALLBACK_CHANNEL = "flow-like-oauth";
 export const OAUTH_CALLBACK_PENDING_KEY = "oauth-callback-pending";
-export const OAUTH_CALLBACK_MAX_AGE_MS = 10 * 60 * 1000;
+export const OAUTH_CALLBACK_MAX_AGE_MS = 60 * 1000;
 
 export interface IStoredOAuthCallback {
 	url: string;

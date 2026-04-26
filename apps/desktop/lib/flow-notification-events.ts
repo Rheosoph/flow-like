@@ -7,6 +7,7 @@ export interface FlowNotificationBatchDetail {
 	appId?: string;
 }
 
+// UI-only fanout. Notification nodes/backend routes own remote persistence.
 export function dispatchFlowNotificationEvents(
 	events: IIntercomEvent[],
 	appId?: string,

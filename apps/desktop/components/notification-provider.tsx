@@ -527,6 +527,8 @@ export default function NotificationProvider({
 					continue;
 				}
 
+				// Store locally for immediate/offline desktop history. Remote
+				// persistence is handled by notification nodes and backend routes.
 				await storeNotification({
 					title: notification.title,
 					description: notification.description,

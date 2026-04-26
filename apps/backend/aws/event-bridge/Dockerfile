@@ -30,19 +30,10 @@ ENV CARGO_BUILD_JOBS=2
 
 COPY . .
 
-RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
-    sed -i '/apps\/backend\/local\/api/d' Cargo.toml && \
-    sed -i '/apps\/backend\/local\/runtime/d' Cargo.toml && \
-    sed -i '/apps\/backend\/docker-compose\/api/d' Cargo.toml && \
-    sed -i '/apps\/backend\/docker-compose\/runtime/d' Cargo.toml && \
-    sed -i '/apps\/backend\/kubernetes\/api/d' Cargo.toml && \
-    sed -i '/apps\/backend\/kubernetes\/executor/d' Cargo.toml && \
-    sed -i '/dexie-tauri-adapter/d' Cargo.toml
-
 RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/root/.cargo/git,id=cargo-git \
     --mount=type=cache,target=/app/target,id=cargo-target-aws-event-bridge \
-    cargo build --release --package aws-event-bridge && \
+    cargo build --release --manifest-path apps/backend/aws/event-bridge/Cargo.toml && \
     cp /app/target/release/aws-event-bridge /tmp/bootstrap && \
     strip --strip-all /tmp/bootstrap
 

@@ -4,6 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use flow_like_types::tokio;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use reqwest::StatusCode;
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::OnceLock;
@@ -26,14 +27,24 @@ fn is_retryable_status(status: StatusCode) -> bool {
         )
 }
 
-fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
-            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-            .build()
-            .expect("Failed to build reqwest client")
-    })
+fn get_http_client() -> Result<&'static reqwest::Client, Error> {
+    if let Some(client) = HTTP_CLIENT.get() {
+        return Ok(client);
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to build HTTP client");
+            Error::from(format!("Failed to build HTTP client: {}", e))
+        })?;
+
+    let _ = HTTP_CLIENT.set(client);
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| Error::from("HTTP client failed to initialize"))
 }
 
 fn get_sink_jwt() -> Result<&'static str, Error> {
@@ -106,7 +117,7 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
         "Processing scheduled event"
     );
 
-    let client = get_http_client();
+    let client = get_http_client()?;
     let trigger_url = format!("{}/api/v1/sink/trigger/async", api_base_url);
 
     let request_body = TriggerRequest {
@@ -149,8 +160,43 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }
 
-    let trigger_response = response.json::<TriggerResponse>().await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to parse trigger response");
+    if response.status() == StatusCode::NO_CONTENT {
+        tracing::info!(event_id = %payload.event_id, "API returned 204; treating trigger as successful");
+        return Ok(());
+    }
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let response_body = response.text().await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to read trigger response");
+        Error::from(format!("Failed to read trigger response: {}", e))
+    })?;
+    let trimmed_body = response_body.trim();
+
+    if trimmed_body.is_empty() {
+        tracing::info!(event_id = %payload.event_id, "API returned empty success body; treating trigger as successful");
+        return Ok(());
+    }
+
+    let looks_like_json = content_type
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
+        || trimmed_body.starts_with('{');
+    if !looks_like_json {
+        tracing::warn!(
+            event_id = %payload.event_id,
+            content_type = ?content_type,
+            body = %trimmed_body,
+            "API returned non-JSON success body; treating trigger as successful"
+        );
+        return Ok(());
+    }
+
+    let trigger_response = serde_json::from_str::<TriggerResponse>(trimmed_body).map_err(|e| {
+        tracing::error!(error = %e, body = %trimmed_body, "Failed to parse trigger response");
         Error::from(format!("Failed to parse trigger response: {}", e))
     })?;
 

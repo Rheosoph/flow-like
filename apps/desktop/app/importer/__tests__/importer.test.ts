@@ -96,6 +96,20 @@ describe("detectFormat", () => {
 		expect(result.parsed).toBeNull();
 	});
 
+	it("returns unknown for JSON array input", () => {
+		const result = detectFormat(
+			JSON.stringify([{ nodes: [], connections: {} }]),
+		);
+		expect(result.format).toBe("unknown");
+		expect(result.parsed).toBeNull();
+	});
+
+	it("returns unknown for YAML non-object input", () => {
+		const result = detectFormat("- alpha\n- beta");
+		expect(result.format).toBe("unknown");
+		expect(result.parsed).toBeNull();
+	});
+
 	it("parses Dify YAML arrays and block scalars", () => {
 		const raw = `kind: app
 app:
