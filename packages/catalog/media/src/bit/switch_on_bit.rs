@@ -80,6 +80,18 @@ impl NodeLogic for SwitchOnBitNode {
             VariableType::Execution,
         );
         node.add_output_pin(
+            "image_generation",
+            "Image Generation",
+            "Execution if Bit is Image Generation Model",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "video_generation",
+            "Video Generation",
+            "Execution if Bit is Video Generation Model",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
             "template",
             "Template",
             "Execution if Bit is Template",
@@ -167,6 +179,8 @@ impl NodeLogic for SwitchOnBitNode {
         context.deactivate_exec_pin("image_embedding").await?;
         context.deactivate_exec_pin("file").await?;
         context.deactivate_exec_pin("media").await?;
+        context.deactivate_exec_pin("image_generation").await?;
+        context.deactivate_exec_pin("video_generation").await?;
         context.deactivate_exec_pin("template").await?;
         context.deactivate_exec_pin("tokenizer").await?;
         context.deactivate_exec_pin("tokenizer_config").await?;
@@ -189,6 +203,8 @@ impl NodeLogic for SwitchOnBitNode {
             BitTypes::ImageEmbedding => "image_embedding",
             BitTypes::File => "file",
             BitTypes::Media => "media",
+            BitTypes::ImageGeneration => "image_generation",
+            BitTypes::VideoGeneration => "video_generation",
             BitTypes::Template => "template",
             BitTypes::Tokenizer => "tokenizer",
             BitTypes::TokenizerConfig => "tokenizer_config",

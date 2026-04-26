@@ -16,6 +16,7 @@ pub mod build_openai;
 pub mod build_openrouter;
 pub mod build_perplexity;
 pub mod build_together;
+pub mod build_vertex;
 pub mod build_voyageai;
 pub mod build_xai;
 
@@ -37,5 +38,6 @@ pub use build_openai::BuildOpenAiNode;
 pub use build_openrouter::BuildOpenRouterNode;
 pub use build_perplexity::BuildPerplexityNode;
 pub use build_together::BuildTogetherNode;
+pub use build_vertex::BuildVertexNode;
 pub use build_voyageai::BuildVoyageAINode;
 pub use build_xai::BuildXAINode;
