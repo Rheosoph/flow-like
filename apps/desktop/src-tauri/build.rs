@@ -52,6 +52,18 @@ fn ensure_ios_deeplink_scheme(scheme: &str) -> Result<(), String> {
                 )
             })?;
 
+        let original_url_type_count = url_types.len();
+        url_types.retain(|entry| {
+            entry
+                .as_dictionary()
+                .and_then(|dict| dict.get("CFBundleURLSchemes"))
+                .and_then(plist::Value::as_array)
+                .map_or(true, |schemes| !schemes.is_empty())
+        });
+        if url_types.len() != original_url_type_count {
+            changed = true;
+        }
+
         let has_scheme = url_types.iter().any(|entry| {
             entry
                 .as_dictionary()

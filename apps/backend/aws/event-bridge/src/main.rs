@@ -3,6 +3,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_types::tokio;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::OnceLock;
@@ -16,6 +17,14 @@ const HTTP_TIMEOUT_SECS: u64 = 120;
 static SINK_JWT: OnceLock<String> = OnceLock::new();
 static API_BASE_URL: OnceLock<String> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn is_retryable_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+        )
+}
 
 fn get_http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
@@ -124,11 +133,9 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
             .await
             .unwrap_or_else(|e| format!("<failed to read response body: {}>", e));
 
-        // 4xx responses are not retryable — returning Ok prevents EventBridge
-        // Scheduler from burning its retry budget on a request that will
-        // always fail (e.g. revoked token, missing sink). 5xx and network
-        // errors bubble up so the scheduler's RetryPolicy can kick in.
-        if status.is_client_error() {
+        // Most 4xx responses are hard failures. Keep retrying transient client
+        // failures such as 408/429 so EventBridge Scheduler can back off.
+        if status.is_client_error() && !is_retryable_status(status) {
             tracing::error!(
                 status = %status,
                 body = %body,
@@ -138,7 +145,7 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
             return Ok(());
         }
 
-        tracing::error!(status = %status, body = %body, "API returned error");
+        tracing::error!(status = %status, body = %body, "API returned retryable error");
         return Err(Error::from(format!("API error: {} - {}", status, body)));
     }
 

@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { Button } from "@tm9657/flow-like-ui";
 import { storePendingOAuthCallback } from "../../../lib/oauth-callback-storage";
 
 function ThirdpartyCallbackContent() {
@@ -77,13 +78,13 @@ function ThirdpartyCallbackContent() {
 						Authentication Error
 					</div>
 					<div className="text-sm text-muted-foreground">{error}</div>
-					<button
+					<Button
 						type="button"
 						onClick={() => router.push("/flow")}
-						className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded"
+						className="mt-4"
 					>
 						Return to Flow
-					</button>
+					</Button>
 				</div>
 			</div>
 		);
@@ -109,13 +110,13 @@ function ThirdpartyCallbackContent() {
 						You can return to the previous tab while Flow-Like finishes the
 						authorization.
 					</div>
-					<button
+					<Button
 						type="button"
 						onClick={() => router.push("/")}
-						className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded"
+						className="mt-4"
 					>
 						Open Flow-Like
-					</button>
+					</Button>
 				</div>
 			</div>
 		);

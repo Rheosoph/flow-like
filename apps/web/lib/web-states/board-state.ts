@@ -765,7 +765,11 @@ export class WebBoardState implements IBoardState {
 				}
 
 				if (eventName === "final") {
-					result = JSON.parse(data) as UnifiedCopilotResponse;
+					try {
+						result = JSON.parse(data) as UnifiedCopilotResponse;
+					} catch {
+						streamError = new Error("Failed to parse final Copilot response");
+					}
 					return;
 				}
 

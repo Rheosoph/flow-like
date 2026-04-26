@@ -12,7 +12,9 @@ import { toast } from "sonner";
 import { oauthTokenStore } from "../lib/oauth-db";
 import {
 	broadcastOAuthCallbackCompletion,
+	clearOAuthCallbackCompletion,
 	clearPendingOAuthCallback,
+	type IStoredOAuthCallbackCompletion,
 	OAUTH_CALLBACK_CHANNEL,
 	OAUTH_CALLBACK_COMPLETE_KEY,
 	parseOAuthCallbackCompletion,
@@ -68,6 +70,16 @@ function notifyListeners(
 			console.error("[Web OAuth] Callback listener error:", e);
 		}
 	}
+}
+
+function getCompletionKey(completion: IStoredOAuthCallbackCompletion): string {
+	return [
+		completion.pending.providerId,
+		completion.pending.state,
+		completion.token.providerId,
+		completion.token.storedAt,
+		completion.timestamp,
+	].join(":");
 }
 
 async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
@@ -175,7 +187,7 @@ export function OAuthCallbackHandler({
 	children: React.ReactNode;
 }) {
 	useEffect(() => {
-		const seenCompletionTimestamps = new Set<number>();
+		const seenCompletionKeys = new Set<string>();
 		let channel: BroadcastChannel | null = null;
 
 		const handleCompletion = (rawValue: string | null) => {
@@ -185,19 +197,23 @@ export function OAuthCallbackHandler({
 
 			const completion = parseOAuthCallbackCompletion(rawValue);
 			if (!completion) {
+				clearOAuthCallbackCompletion();
 				return;
 			}
 
-			if (seenCompletionTimestamps.has(completion.timestamp)) {
+			const completionKey = getCompletionKey(completion);
+			if (seenCompletionKeys.has(completionKey)) {
+				clearOAuthCallbackCompletion();
 				return;
 			}
-			seenCompletionTimestamps.add(completion.timestamp);
+			seenCompletionKeys.add(completionKey);
 
 			console.log(
 				"[Web OAuth] Received cross-tab OAuth completion for provider:",
 				completion.pending.providerId,
 			);
 			notifyListeners(completion.pending, completion.token);
+			clearOAuthCallbackCompletion();
 		};
 
 		const handleOAuthEvent = (event: Event) => {

@@ -54,6 +54,10 @@ export function clearPendingOAuthCallback() {
 	getStorage("session")?.removeItem(OAUTH_CALLBACK_PENDING_KEY);
 }
 
+export function clearOAuthCallbackCompletion() {
+	getStorage("local")?.removeItem(OAUTH_CALLBACK_COMPLETE_KEY);
+}
+
 export function storePendingOAuthCallback(payload: OAuthCallbackPayload) {
 	const serialized = JSON.stringify({
 		...payload,
@@ -80,13 +84,21 @@ export function broadcastOAuthCallbackCompletion(
 	} satisfies IStoredOAuthCallbackCompletion;
 
 	const channel = createBroadcastChannel();
+	let broadcasted = false;
 	try {
-		channel?.postMessage({
-			type: "oauth-complete",
-			payload,
-		});
+		if (channel) {
+			channel.postMessage({
+				type: "oauth-complete",
+				payload,
+			});
+			broadcasted = true;
+		}
 	} finally {
 		channel?.close();
+	}
+
+	if (broadcasted) {
+		return;
 	}
 
 	try {
@@ -94,8 +106,11 @@ export function broadcastOAuthCallbackCompletion(
 			OAUTH_CALLBACK_COMPLETE_KEY,
 			JSON.stringify(payload),
 		);
+		if (typeof window !== "undefined") {
+			window.setTimeout(clearOAuthCallbackCompletion, 1000);
+		}
 	} catch {
-		// Ignore storage write failures and rely on BroadcastChannel.
+		// Best effort fallback for browsers without BroadcastChannel.
 	}
 }
 

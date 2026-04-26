@@ -18,7 +18,9 @@ export function getApiOrigin(profile?: Partial<IProfile> | null): string {
 		(profile?.hub as string | undefined) ??
 		"api.flow-like.com";
 
-	raw = raw.replace(/\/+$/, "");
+	while (raw.endsWith("/")) {
+		raw = raw.slice(0, -1);
+	}
 	if (raw.startsWith("http://") || raw.startsWith("https://")) {
 		return raw;
 	}

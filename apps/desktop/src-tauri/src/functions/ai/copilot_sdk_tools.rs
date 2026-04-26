@@ -1644,6 +1644,8 @@ const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions"];
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
+const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
+const MAX_UI_ACTIONS: usize = 20;
 
 /// Validate an array of components and return (validated_components, errors)
 fn validate_ui_components(
@@ -1791,7 +1793,7 @@ fn validate_ui_components(
         if let Some(obj) = component.as_object() {
             for (key, value) in obj {
                 let k = key.as_str();
-                if BASE_PROPS.contains(&k) || k == "type" {
+                if BASE_PROPS.contains(&k) {
                     continue;
                 }
                 if matches!(
@@ -1823,23 +1825,47 @@ fn validate_ui_components(
             }
         }
 
+        if let Some(style) = comp.get("style") {
+            validate_style_value(id, "style", style, &mut errors);
+        }
+        if let Some(style) = component.get("style") {
+            validate_style_value(id, "component.style", style, &mut errors);
+        }
+        if let Some(actions) = component.get("actions") {
+            validate_actions_value(id, actions, &mut errors);
+        }
+
+        let mut component_refs = Vec::new();
         if let Some(children) = component.get("children") {
-            let child_refs = collect_child_refs(id, children, &all_ids, &mut errors);
-            if !child_refs.is_empty() {
-                child_graph.insert(id.to_string(), child_refs);
-            }
+            component_refs.extend(collect_child_refs(id, children, &all_ids, &mut errors));
         }
 
         if let Some(content_component_id) = component
             .get("contentComponentId")
-            .and_then(|value| value.get("literalString").or(Some(value)))
-            .and_then(|value| value.as_str())
-            && !all_ids.contains(content_component_id)
+            .and_then(bound_or_plain_string)
         {
-            errors.push(format!(
-                "{}: contentComponentId references '{}' which doesn't exist",
-                id, content_component_id
-            ));
+            push_component_ref(
+                id,
+                content_component_id,
+                "contentComponentId",
+                &all_ids,
+                &mut errors,
+                &mut component_refs,
+            );
+        }
+
+        if let Some(base_component_id) = component
+            .get("baseComponentId")
+            .and_then(bound_or_plain_string)
+        {
+            push_component_ref(
+                id,
+                base_component_id,
+                "baseComponentId",
+                &all_ids,
+                &mut errors,
+                &mut component_refs,
+            );
         }
 
         if let Some(overlays) = component.get("overlays").and_then(|value| value.as_array()) {
@@ -1847,15 +1873,44 @@ fn validate_ui_components(
                 if let Some(overlay_id) = overlay
                     .get("componentId")
                     .or_else(|| overlay.get("id"))
-                    .and_then(|value| value.as_str())
-                    && !all_ids.contains(overlay_id)
+                    .and_then(bound_or_plain_string)
                 {
-                    errors.push(format!(
-                        "{}: overlay references '{}' which doesn't exist",
-                        id, overlay_id
-                    ));
+                    push_component_ref(
+                        id,
+                        overlay_id,
+                        "overlays[].componentId",
+                        &all_ids,
+                        &mut errors,
+                        &mut component_refs,
+                    );
                 }
             }
+        }
+
+        for (array_prop, ref_prop) in [
+            ("tabs", "contentComponentId"),
+            ("items", "contentComponentId"),
+        ] {
+            if let Some(items) = component.get(array_prop).and_then(|value| value.as_array()) {
+                for item in items {
+                    if let Some(content_component_id) =
+                        item.get(ref_prop).and_then(bound_or_plain_string)
+                    {
+                        push_component_ref(
+                            id,
+                            content_component_id,
+                            &format!("{array_prop}[].{ref_prop}"),
+                            &all_ids,
+                            &mut errors,
+                            &mut component_refs,
+                        );
+                    }
+                }
+            }
+        }
+
+        if !component_refs.is_empty() {
+            child_graph.insert(id.to_string(), component_refs);
         }
 
         validated.push(comp.clone());
@@ -1863,12 +1918,203 @@ fn validate_ui_components(
 
     if let Some(cycle) = find_child_cycle(&child_graph) {
         errors.push(format!(
-            "Component children contain a cycle: {}",
+            "Component references contain a cycle: {}",
             cycle.join(" -> ")
         ));
     }
 
     (json!(validated), errors)
+}
+
+fn bound_or_plain_string(value: &Value) -> Option<&str> {
+    value
+        .get("literalString")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+}
+
+fn push_component_ref(
+    parent_id: &str,
+    target_id: &str,
+    field: &str,
+    all_ids: &HashSet<String>,
+    errors: &mut Vec<String>,
+    refs: &mut Vec<String>,
+) {
+    if target_id == parent_id {
+        errors.push(format!("{}: {} cannot reference itself", parent_id, field));
+    }
+    if !all_ids.contains(target_id) {
+        errors.push(format!(
+            "{}: {} references '{}' which doesn't exist",
+            parent_id, field, target_id
+        ));
+    }
+    refs.push(target_id.to_string());
+}
+
+fn is_known_style_prop(key: &str) -> bool {
+    matches!(
+        key,
+        "className"
+            | "background"
+            | "border"
+            | "shadow"
+            | "position"
+            | "transform"
+            | "overflow"
+            | "responsiveOverrides"
+            | "margin"
+            | "padding"
+            | "gap"
+            | "width"
+            | "height"
+            | "minWidth"
+            | "minHeight"
+            | "maxWidth"
+            | "maxHeight"
+            | "flex"
+            | "flexGrow"
+            | "flexShrink"
+            | "flexBasis"
+            | "alignSelf"
+            | "gridColumn"
+            | "gridRow"
+            | "gridArea"
+            | "justifySelf"
+            | "color"
+            | "fontSize"
+            | "fontWeight"
+            | "fontFamily"
+            | "lineHeight"
+            | "letterSpacing"
+            | "textAlign"
+            | "textDecoration"
+            | "textTransform"
+            | "whiteSpace"
+            | "wordBreak"
+            | "opacity"
+            | "visibility"
+            | "cursor"
+            | "userSelect"
+            | "pointerEvents"
+            | "zIndex"
+            | "transition"
+            | "animation"
+            | "display"
+            | "outline"
+            | "outlineOffset"
+            | "filter"
+            | "backdropFilter"
+            | "aspectRatio"
+    )
+}
+
+fn validate_style_value(component_id: &str, path: &str, style: &Value, errors: &mut Vec<String>) {
+    let Some(style_obj) = style.as_object() else {
+        errors.push(format!("{}: {} must be an object", component_id, path));
+        return;
+    };
+
+    for (key, value) in style_obj {
+        if !is_known_style_prop(key) {
+            errors.push(format!(
+                "{}: unknown style prop '{}.{}'",
+                component_id, path, key
+            ));
+        }
+        validate_style_strings(component_id, &format!("{path}.{key}"), value, errors);
+    }
+}
+
+fn validate_style_strings(component_id: &str, path: &str, value: &Value, errors: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if text.len() > MAX_UI_STYLE_STRING_CHARS {
+                errors.push(format!(
+                    "{}: {} is too long; maximum is {MAX_UI_STYLE_STRING_CHARS} bytes",
+                    component_id, path
+                ));
+            }
+
+            let lowered = text.to_ascii_lowercase();
+            let compact: String = lowered.chars().filter(|ch| !ch.is_whitespace()).collect();
+            if compact.contains("javascript:")
+                || compact.contains("vbscript:")
+                || compact.contains("data:text/html")
+                || compact.contains("-moz-binding")
+            {
+                errors.push(format!(
+                    "{}: {} contains an unsafe CSS value",
+                    component_id, path
+                ));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                validate_style_strings(component_id, &format!("{path}[{index}]"), item, errors);
+            }
+        }
+        Value::Object(obj) => {
+            for (key, item) in obj {
+                validate_style_strings(component_id, &format!("{path}.{key}"), item, errors);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<String>) {
+    let Some(actions) = actions.as_array() else {
+        errors.push(format!("{}: actions must be an array", component_id));
+        return;
+    };
+
+    if actions.len() > MAX_UI_ACTIONS {
+        errors.push(format!(
+            "{}: actions is limited to {MAX_UI_ACTIONS} entries",
+            component_id
+        ));
+    }
+
+    for (index, action) in actions.iter().enumerate() {
+        let Some(action_obj) = action.as_object() else {
+            errors.push(format!(
+                "{}: actions[{index}] must be an object",
+                component_id
+            ));
+            continue;
+        };
+
+        for key in action_obj.keys() {
+            if !matches!(key.as_str(), "name" | "context") {
+                errors.push(format!(
+                    "{}: unknown action prop 'actions[{index}].{}'",
+                    component_id, key
+                ));
+            }
+        }
+
+        match action_obj.get("name").and_then(Value::as_str) {
+            Some(name) if !name.trim().is_empty() => {}
+            _ => errors.push(format!(
+                "{}: actions[{index}].name must be a non-empty string",
+                component_id
+            )),
+        }
+
+        match action_obj.get("context") {
+            Some(Value::Object(_)) => {}
+            Some(_) => errors.push(format!(
+                "{}: actions[{index}].context must be an object",
+                component_id
+            )),
+            None => errors.push(format!(
+                "{}: actions[{index}].context is required",
+                component_id
+            )),
+        }
+    }
 }
 
 fn validate_canvas_settings(canvas: &Value, errors: &mut Vec<String>) {

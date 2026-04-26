@@ -23,12 +23,6 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array/>
-			<key>CFBundleURLName</key>
-			<string>https</string>
-		</dict>
-		<dict>
 			<key>CFBundleURLName</key>
 			<string>flow-like</string>
 			<key>CFBundleURLSchemes</key>
