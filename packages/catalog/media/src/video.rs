@@ -18,11 +18,12 @@ use flow_like_storage::blake3;
 use flow_like_types::{
     Value, anyhow, async_trait, bail,
     base64::{Engine as _, engine::general_purpose::STANDARD},
-    json::{from_str, from_value, json, to_value},
+    json::{Deserialize, Serialize, from_str, from_value, json, to_value},
     reqwest,
 };
 use google_cloud_auth::credentials::{self as google_credentials, CacheableResource};
 use http::{Extensions, header::AUTHORIZATION};
+use schemars::JsonSchema;
 
 const PROVIDER_OPENAI: &str = "custom:openai";
 const PROVIDER_VERTEX: &str = "custom:vertex";
@@ -60,6 +61,293 @@ struct GeneratedVideo {
     bytes: Vec<u8>,
     mime_type: Option<String>,
     provider_metadata: Value,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAspectRatio {
+    #[default]
+    Auto,
+    #[serde(rename = "16:9")]
+    Landscape16x9,
+    #[serde(rename = "9:16")]
+    Portrait9x16,
+    #[serde(rename = "1:1")]
+    Square1x1,
+    #[serde(rename = "4:3")]
+    Landscape4x3,
+    #[serde(rename = "3:4")]
+    Portrait3x4,
+}
+
+impl VideoAspectRatio {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::Landscape16x9 => Some("16:9".to_string()),
+            Self::Portrait9x16 => Some("9:16".to_string()),
+            Self::Square1x1 => Some("1:1".to_string()),
+            Self::Landscape4x3 => Some("4:3".to_string()),
+            Self::Portrait3x4 => Some("3:4".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoSize {
+    #[default]
+    Auto,
+    #[serde(rename = "480p")]
+    P480,
+    #[serde(rename = "720p")]
+    P720,
+    #[serde(rename = "1080p")]
+    P1080,
+    #[serde(rename = "1280x720")]
+    Landscape1280x720,
+    #[serde(rename = "720x1280")]
+    Portrait720x1280,
+    #[serde(rename = "960x960")]
+    Square960,
+    #[serde(rename = "1024x1024")]
+    Square1024,
+    #[serde(rename = "1920x1080")]
+    Landscape1920x1080,
+    #[serde(rename = "1080x1920")]
+    Portrait1080x1920,
+}
+
+impl VideoSize {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::P480 => Some("480p".to_string()),
+            Self::P720 => Some("720p".to_string()),
+            Self::P1080 => Some("1080p".to_string()),
+            Self::Landscape1280x720 => Some("1280x720".to_string()),
+            Self::Portrait720x1280 => Some("720x1280".to_string()),
+            Self::Square960 => Some("960x960".to_string()),
+            Self::Square1024 => Some("1024x1024".to_string()),
+            Self::Landscape1920x1080 => Some("1920x1080".to_string()),
+            Self::Portrait1080x1920 => Some("1080x1920".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct OpenAiSoraVideoOptions {
+    #[serde(default)]
+    pub size: VideoSize,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_wait_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct VertexVeoVideoOptions {
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub aspect_ratio: VideoAspectRatio,
+    #[serde(default)]
+    pub size: VideoSize,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_wait_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct RunwayVideoOptions {
+    #[serde(default)]
+    pub aspect_ratio: VideoAspectRatio,
+    #[serde(default)]
+    pub size: VideoSize,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_wait_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct FalVideoOptions {
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub aspect_ratio: VideoAspectRatio,
+    #[serde(default)]
+    pub size: VideoSize,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub generate_audio: Option<bool>,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_wait_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct ReplicateVideoOptions {
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub aspect_ratio: VideoAspectRatio,
+    #[serde(default)]
+    pub size: VideoSize,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub generate_audio: Option<bool>,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_wait_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(tag = "provider", content = "options", rename_all = "snake_case")]
+pub enum VideoGenerationProviderOptions {
+    #[default]
+    Default,
+    OpenAiSora(OpenAiSoraVideoOptions),
+    VertexVeo(VertexVeoVideoOptions),
+    Runway(RunwayVideoOptions),
+    Fal(FalVideoOptions),
+    Replicate(ReplicateVideoOptions),
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedVideoProviderOptions {
+    negative_prompt: Option<String>,
+    aspect_ratio: Option<String>,
+    size: Option<String>,
+    duration_seconds: Option<u32>,
+    seed: Option<u64>,
+    generate_audio: Option<bool>,
+    count: u32,
+    provider_options: HashMap<String, Value>,
+    poll_interval_seconds: u64,
+    max_wait_seconds: u64,
+}
+
+impl Default for NormalizedVideoProviderOptions {
+    fn default() -> Self {
+        Self {
+            negative_prompt: None,
+            aspect_ratio: None,
+            size: None,
+            duration_seconds: None,
+            seed: None,
+            generate_audio: Some(true),
+            count: 1,
+            provider_options: HashMap::new(),
+            poll_interval_seconds: 10,
+            max_wait_seconds: 900,
+        }
+    }
+}
+
+fn normalized_wait(
+    options: &mut NormalizedVideoProviderOptions,
+    poll_interval_seconds: Option<u64>,
+    max_wait_seconds: Option<u64>,
+) {
+    if let Some(poll_interval_seconds) = poll_interval_seconds {
+        options.poll_interval_seconds = poll_interval_seconds.max(1);
+    }
+    if let Some(max_wait_seconds) = max_wait_seconds {
+        options.max_wait_seconds = max_wait_seconds.max(1);
+    }
+}
+
+impl VideoGenerationProviderOptions {
+    fn normalized(&self) -> NormalizedVideoProviderOptions {
+        let mut options = NormalizedVideoProviderOptions::default();
+        match self {
+            Self::Default => {}
+            Self::OpenAiSora(openai) => {
+                options.size = openai.size.as_provider_value();
+                options.duration_seconds = openai.duration_seconds.filter(|duration| *duration > 0);
+                normalized_wait(
+                    &mut options,
+                    openai.poll_interval_seconds,
+                    openai.max_wait_seconds,
+                );
+            }
+            Self::VertexVeo(vertex) => {
+                options.negative_prompt = vertex.negative_prompt.clone().and_then(optional_clean);
+                options.aspect_ratio = vertex.aspect_ratio.as_provider_value();
+                options.size = vertex.size.as_provider_value();
+                options.duration_seconds = vertex.duration_seconds.filter(|duration| *duration > 0);
+                options.seed = vertex.seed.filter(|seed| *seed > 0);
+                options.count = vertex.count.unwrap_or(1).clamp(1, 4);
+                normalized_wait(
+                    &mut options,
+                    vertex.poll_interval_seconds,
+                    vertex.max_wait_seconds,
+                );
+            }
+            Self::Runway(runway) => {
+                options.aspect_ratio = runway.aspect_ratio.as_provider_value();
+                options.size = runway.size.as_provider_value();
+                options.duration_seconds = runway.duration_seconds.filter(|duration| *duration > 0);
+                options.seed = runway.seed.filter(|seed| *seed > 0);
+                normalized_wait(
+                    &mut options,
+                    runway.poll_interval_seconds,
+                    runway.max_wait_seconds,
+                );
+            }
+            Self::Fal(fal) => {
+                options.negative_prompt = fal.negative_prompt.clone().and_then(optional_clean);
+                options.aspect_ratio = fal.aspect_ratio.as_provider_value();
+                options.size = fal.size.as_provider_value();
+                options.duration_seconds = fal.duration_seconds.filter(|duration| *duration > 0);
+                options.seed = fal.seed.filter(|seed| *seed > 0);
+                options.generate_audio = fal.generate_audio;
+                normalized_wait(
+                    &mut options,
+                    fal.poll_interval_seconds,
+                    fal.max_wait_seconds,
+                );
+            }
+            Self::Replicate(replicate) => {
+                options.negative_prompt =
+                    replicate.negative_prompt.clone().and_then(optional_clean);
+                options.aspect_ratio = replicate.aspect_ratio.as_provider_value();
+                options.size = replicate.size.as_provider_value();
+                options.duration_seconds =
+                    replicate.duration_seconds.filter(|duration| *duration > 0);
+                options.seed = replicate.seed.filter(|seed| *seed > 0);
+                options.generate_audio = replicate.generate_audio;
+                normalized_wait(
+                    &mut options,
+                    replicate.poll_interval_seconds,
+                    replicate.max_wait_seconds,
+                );
+            }
+        }
+        options
+    }
 }
 
 struct MultipartFile {
@@ -1223,6 +1511,477 @@ async fn set_provider_output(
     Ok(())
 }
 
+fn option_node_scores() -> NodeScores {
+    NodeScores::new()
+        .set_privacy(10)
+        .set_security(10)
+        .set_performance(9)
+        .set_governance(9)
+        .set_reliability(10)
+        .set_cost(10)
+        .build()
+}
+
+fn string_values(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn add_select_pin(
+    node: &mut Node,
+    name: &str,
+    label: &str,
+    description: &str,
+    values: &[&str],
+    default: &str,
+) {
+    node.add_input_pin(name, label, description, VariableType::String)
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(string_values(values))
+                .build(),
+        )
+        .set_default_value(Some(json!(default)));
+}
+
+fn add_video_options_output(node: &mut Node) {
+    node.add_output_pin(
+        "options",
+        "Options",
+        "Typed video generation provider options",
+        VariableType::Struct,
+    )
+    .set_schema::<VideoGenerationProviderOptions>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
+}
+
+fn add_negative_prompt_pin(node: &mut Node) {
+    node.add_input_pin(
+        "negative_prompt",
+        "Negative Prompt",
+        "Text describing what to avoid",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_duration_pin(node: &mut Node) {
+    node.add_input_pin(
+        "duration_seconds",
+        "Duration",
+        "Requested duration in seconds. Use 0 for provider default.",
+        VariableType::Integer,
+    )
+    .set_default_value(Some(json!(0)));
+}
+
+fn add_seed_pin(node: &mut Node) {
+    node.add_input_pin(
+        "seed",
+        "Seed",
+        "Optional deterministic seed. Use 0 for provider default.",
+        VariableType::Integer,
+    )
+    .set_default_value(Some(json!(0)));
+}
+
+fn add_polling_pins(node: &mut Node) {
+    node.add_input_pin(
+        "poll_interval_seconds",
+        "Poll Interval",
+        "Seconds between provider status checks",
+        VariableType::Integer,
+    )
+    .set_default_value(Some(json!(10)));
+    node.add_input_pin(
+        "max_wait_seconds",
+        "Max Wait",
+        "Maximum seconds to wait for completion",
+        VariableType::Integer,
+    )
+    .set_default_value(Some(json!(900)));
+}
+
+fn add_generate_audio_pin(node: &mut Node) {
+    node.add_input_pin(
+        "generate_audio",
+        "Generate Audio",
+        "Generate native audio when the provider supports it",
+        VariableType::Boolean,
+    )
+    .set_default_value(Some(json!(true)));
+}
+
+fn parse_video_aspect_ratio(value: &str) -> VideoAspectRatio {
+    match value.trim() {
+        "16:9" => VideoAspectRatio::Landscape16x9,
+        "9:16" => VideoAspectRatio::Portrait9x16,
+        "1:1" => VideoAspectRatio::Square1x1,
+        "4:3" => VideoAspectRatio::Landscape4x3,
+        "3:4" => VideoAspectRatio::Portrait3x4,
+        _ => VideoAspectRatio::Auto,
+    }
+}
+
+fn parse_video_size(value: &str) -> VideoSize {
+    match value.trim() {
+        "480p" => VideoSize::P480,
+        "720p" => VideoSize::P720,
+        "1080p" => VideoSize::P1080,
+        "1280x720" => VideoSize::Landscape1280x720,
+        "720x1280" => VideoSize::Portrait720x1280,
+        "960x960" => VideoSize::Square960,
+        "1024x1024" => VideoSize::Square1024,
+        "1920x1080" => VideoSize::Landscape1920x1080,
+        "1080x1920" => VideoSize::Portrait1080x1920,
+        _ => VideoSize::Auto,
+    }
+}
+
+async fn eval_string_pin(context: &mut ExecutionContext, name: &str, default: &str) -> String {
+    context
+        .evaluate_pin(name)
+        .await
+        .unwrap_or_else(|_| default.to_string())
+}
+
+async fn eval_optional_text_pin(context: &mut ExecutionContext, name: &str) -> Option<String> {
+    context
+        .evaluate_pin(name)
+        .await
+        .ok()
+        .and_then(optional_clean)
+}
+
+async fn eval_positive_u32_pin(context: &mut ExecutionContext, name: &str) -> Option<u32> {
+    let value: i64 = context.evaluate_pin(name).await.unwrap_or(0);
+    if value > 0 { Some(value as u32) } else { None }
+}
+
+async fn eval_positive_u64_pin(context: &mut ExecutionContext, name: &str) -> Option<u64> {
+    let value: i64 = context.evaluate_pin(name).await.unwrap_or(0);
+    if value > 0 { Some(value as u64) } else { None }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeOpenAiSoraVideoOptionsNode {}
+
+impl MakeOpenAiSoraVideoOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeOpenAiSoraVideoOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_video_options_openai_sora",
+            "OpenAI Sora Options",
+            "Creates typed video options for OpenAI Sora models.",
+            "AI/Generative/Video/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "Sora video size",
+            &["auto", "1280x720", "720x1280", "1024x1024"],
+            "auto",
+        );
+        add_duration_pin(&mut node);
+        add_polling_pins(&mut node);
+        add_video_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let size = eval_string_pin(context, "size", "auto").await;
+        let options = VideoGenerationProviderOptions::OpenAiSora(OpenAiSoraVideoOptions {
+            size: parse_video_size(&size),
+            duration_seconds: eval_positive_u32_pin(context, "duration_seconds").await,
+            poll_interval_seconds: eval_positive_u64_pin(context, "poll_interval_seconds").await,
+            max_wait_seconds: eval_positive_u64_pin(context, "max_wait_seconds").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeVertexVeoVideoOptionsNode {}
+
+impl MakeVertexVeoVideoOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeVertexVeoVideoOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_video_options_vertex_veo",
+            "Vertex Veo Options",
+            "Creates typed video options for Google Vertex Veo models.",
+            "AI/Generative/Video/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_negative_prompt_pin(&mut node);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Veo aspect ratio",
+            &["auto", "16:9", "9:16", "1:1"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Resolution",
+            "Veo output resolution",
+            &["auto", "720p", "1080p"],
+            "auto",
+        );
+        add_duration_pin(&mut node);
+        add_seed_pin(&mut node);
+        node.add_input_pin(
+            "count",
+            "Count",
+            "Number of videos to request",
+            VariableType::Integer,
+        )
+        .set_options(PinOptions::new().set_range((1., 4.)).build())
+        .set_default_value(Some(json!(1)));
+        add_polling_pins(&mut node);
+        add_video_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let count: i64 = context.evaluate_pin("count").await.unwrap_or(1);
+        let options = VideoGenerationProviderOptions::VertexVeo(VertexVeoVideoOptions {
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            aspect_ratio: parse_video_aspect_ratio(&aspect_ratio),
+            size: parse_video_size(&size),
+            duration_seconds: eval_positive_u32_pin(context, "duration_seconds").await,
+            seed: eval_positive_u64_pin(context, "seed").await,
+            count: Some(count.clamp(1, 4) as u32),
+            poll_interval_seconds: eval_positive_u64_pin(context, "poll_interval_seconds").await,
+            max_wait_seconds: eval_positive_u64_pin(context, "max_wait_seconds").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeRunwayVideoOptionsNode {}
+
+impl MakeRunwayVideoOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeRunwayVideoOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_video_options_runway",
+            "Runway Options",
+            "Creates typed video options for Runway models.",
+            "AI/Generative/Video/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Runway aspect ratio",
+            &["auto", "16:9", "9:16", "1:1"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "Runway output size",
+            &["auto", "1280x720", "720x1280", "960x960"],
+            "auto",
+        );
+        add_duration_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_polling_pins(&mut node);
+        add_video_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let options = VideoGenerationProviderOptions::Runway(RunwayVideoOptions {
+            aspect_ratio: parse_video_aspect_ratio(&aspect_ratio),
+            size: parse_video_size(&size),
+            duration_seconds: eval_positive_u32_pin(context, "duration_seconds").await,
+            seed: eval_positive_u64_pin(context, "seed").await,
+            poll_interval_seconds: eval_positive_u64_pin(context, "poll_interval_seconds").await,
+            max_wait_seconds: eval_positive_u64_pin(context, "max_wait_seconds").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeFalVideoOptionsNode {}
+
+impl MakeFalVideoOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeFalVideoOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_video_options_fal",
+            "fal Video Options",
+            "Creates typed video options for fal.ai video models.",
+            "AI/Generative/Video/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_negative_prompt_pin(&mut node);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "fal aspect ratio",
+            &["auto", "16:9", "9:16", "1:1", "4:3", "3:4"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Resolution",
+            "fal output resolution",
+            &["auto", "480p", "720p", "1080p"],
+            "auto",
+        );
+        add_duration_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_generate_audio_pin(&mut node);
+        add_polling_pins(&mut node);
+        add_video_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let generate_audio: bool = context.evaluate_pin("generate_audio").await.unwrap_or(true);
+        let options = VideoGenerationProviderOptions::Fal(FalVideoOptions {
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            aspect_ratio: parse_video_aspect_ratio(&aspect_ratio),
+            size: parse_video_size(&size),
+            duration_seconds: eval_positive_u32_pin(context, "duration_seconds").await,
+            seed: eval_positive_u64_pin(context, "seed").await,
+            generate_audio: Some(generate_audio),
+            poll_interval_seconds: eval_positive_u64_pin(context, "poll_interval_seconds").await,
+            max_wait_seconds: eval_positive_u64_pin(context, "max_wait_seconds").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeReplicateVideoOptionsNode {}
+
+impl MakeReplicateVideoOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeReplicateVideoOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_video_options_replicate",
+            "Replicate Video Options",
+            "Creates typed video options for Replicate video models.",
+            "AI/Generative/Video/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_negative_prompt_pin(&mut node);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Replicate aspect ratio",
+            &["auto", "16:9", "9:16", "1:1", "4:3", "3:4"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Resolution",
+            "Replicate output resolution",
+            &["auto", "480p", "720p", "1080p"],
+            "auto",
+        );
+        add_duration_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_generate_audio_pin(&mut node);
+        add_polling_pins(&mut node);
+        add_video_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let generate_audio: bool = context.evaluate_pin("generate_audio").await.unwrap_or(true);
+        let options = VideoGenerationProviderOptions::Replicate(ReplicateVideoOptions {
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            aspect_ratio: parse_video_aspect_ratio(&aspect_ratio),
+            size: parse_video_size(&size),
+            duration_seconds: eval_positive_u32_pin(context, "duration_seconds").await,
+            seed: eval_positive_u64_pin(context, "seed").await,
+            generate_audio: Some(generate_audio),
+            poll_interval_seconds: eval_positive_u64_pin(context, "poll_interval_seconds").await,
+            max_wait_seconds: eval_positive_u64_pin(context, "max_wait_seconds").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct BuildRunwayVideoProviderNode {}
@@ -1474,13 +2233,6 @@ impl NodeLogic for GenerateVideoNode {
         node.add_input_pin("prompt", "Prompt", "Video prompt", VariableType::String)
             .set_default_value(Some(json!("")));
         node.add_input_pin(
-            "negative_prompt",
-            "Negative Prompt",
-            "Optional negative prompt",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
             "output_path",
             "Output Path",
             "Destination FlowPath for generated video",
@@ -1488,13 +2240,6 @@ impl NodeLogic for GenerateVideoNode {
         )
         .set_schema::<FlowPath>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Optional video model override",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
         node.add_input_pin(
             "first_frame",
             "First Frame",
@@ -1517,74 +2262,14 @@ impl NodeLogic for GenerateVideoNode {
         )
         .set_schema::<FlowPath>();
         node.add_input_pin(
-            "aspect_ratio",
-            "Aspect Ratio",
-            "Video aspect ratio",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["16:9".into(), "9:16".into(), "1:1".into()])
-                .build(),
-        )
-        .set_default_value(Some(json!("16:9")));
-        node.add_input_pin(
-            "size",
-            "Size",
-            "Provider-specific size or resolution. Leave auto for provider default.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "duration_seconds",
-            "Duration",
-            "Requested duration in seconds. Use 0 for provider default.",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(0)));
-        node.add_input_pin(
-            "seed",
-            "Seed",
-            "Optional deterministic seed. Use 0 for provider default.",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(0)));
-        node.add_input_pin(
-            "generate_audio",
-            "Generate Audio",
-            "Generate native audio when the provider supports it",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(true)));
-        node.add_input_pin(
-            "count",
-            "Count",
-            "Number of videos to request when the provider supports it",
-            VariableType::Integer,
-        )
-        .set_options(PinOptions::new().set_range((1., 4.)).build())
-        .set_default_value(Some(json!(1)));
-        node.add_input_pin(
-            "poll_interval_seconds",
-            "Poll Interval",
-            "Seconds between provider status checks",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(10)));
-        node.add_input_pin(
-            "max_wait_seconds",
-            "Max Wait",
-            "Maximum seconds to wait for completion",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(900)));
-        node.add_input_pin(
             "provider_options",
             "Provider Options",
-            "Raw provider-specific overrides",
+            "Typed provider-specific video options",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_schema::<VideoGenerationProviderOptions>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build())
+        .set_default_value(Some(json!(VideoGenerationProviderOptions::default())));
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
         node.add_output_pin(
@@ -1616,21 +2301,13 @@ impl NodeLogic for GenerateVideoNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let mut provider = provider_from_bit(&bit)?;
-        let model_id: String = context.evaluate_pin("model_id").await.unwrap_or_default();
-        if !model_id.trim().is_empty() {
-            provider.model_id = Some(model_id.trim().to_string());
-        }
+        let provider = provider_from_bit(&bit)?;
 
         let prompt: String = context.evaluate_pin("prompt").await?;
         if prompt.trim().is_empty() {
             bail!("Generate Video requires a non-empty prompt");
         }
 
-        let negative_prompt: String = context
-            .evaluate_pin("negative_prompt")
-            .await
-            .unwrap_or_default();
         let output_path: FlowPath = context.evaluate_pin("output_path").await?;
         let first_frame_path: Option<FlowPath> = context.evaluate_pin("first_frame").await.ok();
         let last_frame_path: Option<FlowPath> = context.evaluate_pin("last_frame").await.ok();
@@ -1638,50 +2315,27 @@ impl NodeLogic for GenerateVideoNode {
         let first_frame = media_input_from_path(context, first_frame_path).await?;
         let last_frame = media_input_from_path(context, last_frame_path).await?;
         let input_video = media_input_from_path(context, input_video_path).await?;
-        let aspect_ratio: String = context
-            .evaluate_pin("aspect_ratio")
-            .await
-            .unwrap_or_else(|_| "16:9".to_string());
-        let size: String = context
-            .evaluate_pin("size")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let duration_seconds: i64 = context.evaluate_pin("duration_seconds").await.unwrap_or(0);
-        let seed: i64 = context.evaluate_pin("seed").await.unwrap_or(0);
-        let generate_audio: bool = context.evaluate_pin("generate_audio").await.unwrap_or(true);
-        let count: i64 = context.evaluate_pin("count").await.unwrap_or(1);
-        let poll_interval_seconds: i64 = context
-            .evaluate_pin("poll_interval_seconds")
-            .await
-            .unwrap_or(10);
-        let max_wait_seconds: i64 = context
-            .evaluate_pin("max_wait_seconds")
-            .await
-            .unwrap_or(900);
-        let provider_options: HashMap<String, Value> = context
+        let typed_provider_options: VideoGenerationProviderOptions = context
             .evaluate_pin("provider_options")
             .await
             .unwrap_or_default();
+        let provider_options = typed_provider_options.normalized();
 
         let request = VideoGenerationRequest {
             prompt,
-            negative_prompt: optional_clean(negative_prompt),
+            negative_prompt: provider_options.negative_prompt,
             first_frame,
             last_frame,
             input_video,
-            aspect_ratio: optional_clean(aspect_ratio),
-            size: optional_clean(size),
-            duration_seconds: if duration_seconds > 0 {
-                Some(duration_seconds as u32)
-            } else {
-                None
-            },
-            seed: if seed > 0 { Some(seed as u64) } else { None },
-            generate_audio: Some(generate_audio),
-            count: count.clamp(1, 4) as u32,
-            provider_options,
-            poll_interval_seconds: poll_interval_seconds.max(1) as u64,
-            max_wait_seconds: max_wait_seconds.max(1) as u64,
+            aspect_ratio: provider_options.aspect_ratio,
+            size: provider_options.size,
+            duration_seconds: provider_options.duration_seconds,
+            seed: provider_options.seed,
+            generate_audio: provider_options.generate_audio,
+            count: provider_options.count,
+            provider_options: provider_options.provider_options,
+            poll_interval_seconds: provider_options.poll_interval_seconds,
+            max_wait_seconds: provider_options.max_wait_seconds,
         };
 
         context.log_message(

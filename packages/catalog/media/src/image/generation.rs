@@ -12,18 +12,18 @@ use flow_like::{
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_model_provider::{
-    history::{History, HistoryMessage, Role},
+    history::History,
     provider::{ImageGenerationModelProvider, ModelProvider},
 };
-use flow_like_storage::blake3;
 use flow_like_types::{
     Value, anyhow, async_trait, bail,
     base64::{Engine as _, engine::general_purpose::STANDARD},
-    json::{from_str, from_value, json, to_value},
+    json::{Deserialize, Serialize, from_str, from_value, json},
     reqwest,
 };
 use google_cloud_auth::credentials::{self as google_credentials, CacheableResource};
 use http::{Extensions, header::AUTHORIZATION};
+use schemars::JsonSchema;
 
 const PROVIDER_OPENAI: &str = "custom:openai";
 const PROVIDER_GEMINI: &str = "custom:gemini";
@@ -55,6 +55,310 @@ struct GeneratedImage {
     bytes: Vec<u8>,
     mime_type: Option<String>,
     provider_metadata: Value,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOutputFormat {
+    #[default]
+    Png,
+    Jpeg,
+    Webp,
+}
+
+impl ImageOutputFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+            Self::Webp => "webp",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageQuality {
+    #[default]
+    Auto,
+    Low,
+    Medium,
+    High,
+    Standard,
+    Premium,
+}
+
+impl ImageQuality {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::Low => Some("low".to_string()),
+            Self::Medium => Some("medium".to_string()),
+            Self::High => Some("high".to_string()),
+            Self::Standard => Some("standard".to_string()),
+            Self::Premium => Some("premium".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageBackground {
+    #[default]
+    Auto,
+    Opaque,
+    Transparent,
+}
+
+impl ImageBackground {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::Opaque => Some("opaque".to_string()),
+            Self::Transparent => Some("transparent".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageAspectRatio {
+    #[default]
+    Auto,
+    #[serde(rename = "1:1")]
+    Square1x1,
+    #[serde(rename = "16:9")]
+    Landscape16x9,
+    #[serde(rename = "9:16")]
+    Portrait9x16,
+    #[serde(rename = "4:3")]
+    Landscape4x3,
+    #[serde(rename = "3:4")]
+    Portrait3x4,
+    #[serde(rename = "3:2")]
+    Landscape3x2,
+    #[serde(rename = "2:3")]
+    Portrait2x3,
+}
+
+impl ImageAspectRatio {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::Square1x1 => Some("1:1".to_string()),
+            Self::Landscape16x9 => Some("16:9".to_string()),
+            Self::Portrait9x16 => Some("9:16".to_string()),
+            Self::Landscape4x3 => Some("4:3".to_string()),
+            Self::Portrait3x4 => Some("3:4".to_string()),
+            Self::Landscape3x2 => Some("3:2".to_string()),
+            Self::Portrait2x3 => Some("2:3".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSize {
+    #[default]
+    Auto,
+    #[serde(rename = "512x512")]
+    Square512,
+    #[serde(rename = "768x768")]
+    Square768,
+    #[serde(rename = "1024x1024")]
+    Square1024,
+    #[serde(rename = "1024x1536")]
+    Portrait1024x1536,
+    #[serde(rename = "1536x1024")]
+    Landscape1536x1024,
+    #[serde(rename = "768x1024")]
+    Portrait768x1024,
+    #[serde(rename = "1024x768")]
+    Landscape1024x768,
+    #[serde(rename = "768x1152")]
+    Portrait768x1152,
+    #[serde(rename = "1152x768")]
+    Landscape1152x768,
+    #[serde(rename = "640x1152")]
+    Portrait640x1152,
+    #[serde(rename = "1173x640")]
+    Landscape1173x640,
+}
+
+impl ImageSize {
+    fn as_provider_value(&self) -> Option<String> {
+        match self {
+            Self::Auto => None,
+            Self::Square512 => Some("512x512".to_string()),
+            Self::Square768 => Some("768x768".to_string()),
+            Self::Square1024 => Some("1024x1024".to_string()),
+            Self::Portrait1024x1536 => Some("1024x1536".to_string()),
+            Self::Landscape1536x1024 => Some("1536x1024".to_string()),
+            Self::Portrait768x1024 => Some("768x1024".to_string()),
+            Self::Landscape1024x768 => Some("1024x768".to_string()),
+            Self::Portrait768x1152 => Some("768x1152".to_string()),
+            Self::Landscape1152x768 => Some("1152x768".to_string()),
+            Self::Portrait640x1152 => Some("640x1152".to_string()),
+            Self::Landscape1173x640 => Some("1173x640".to_string()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct OpenAiImageOptions {
+    #[serde(default)]
+    pub size: ImageSize,
+    #[serde(default)]
+    pub quality: ImageQuality,
+    #[serde(default)]
+    pub output_format: ImageOutputFormat,
+    #[serde(default)]
+    pub background: ImageBackground,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct GoogleImagenImageOptions {
+    #[serde(default)]
+    pub aspect_ratio: ImageAspectRatio,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub output_format: ImageOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct AwsBedrockImageOptions {
+    #[serde(default)]
+    pub aspect_ratio: ImageAspectRatio,
+    #[serde(default)]
+    pub size: ImageSize,
+    #[serde(default)]
+    pub quality: ImageQuality,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub output_format: ImageOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct XaiImageOptions {
+    #[serde(default)]
+    pub aspect_ratio: ImageAspectRatio,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct TogetherImageOptions {
+    #[serde(default)]
+    pub aspect_ratio: ImageAspectRatio,
+    #[serde(default)]
+    pub size: ImageSize,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub output_format: ImageOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct HuggingFaceImageOptions {
+    #[serde(default)]
+    pub size: ImageSize,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub output_format: ImageOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct OpenRouterImageOptions {
+    #[serde(default)]
+    pub aspect_ratio: ImageAspectRatio,
+    #[serde(default)]
+    pub size: ImageSize,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(tag = "provider", content = "options", rename_all = "snake_case")]
+pub enum ImageGenerationProviderOptions {
+    #[default]
+    Default,
+    OpenAi(OpenAiImageOptions),
+    GoogleImagen(GoogleImagenImageOptions),
+    AwsBedrock(AwsBedrockImageOptions),
+    Xai(XaiImageOptions),
+    Together(TogetherImageOptions),
+    HuggingFace(HuggingFaceImageOptions),
+    OpenRouter(OpenRouterImageOptions),
+}
+
+#[derive(Debug, Clone, Default)]
+struct NormalizedImageProviderOptions {
+    negative_prompt: Option<String>,
+    aspect_ratio: Option<String>,
+    size: Option<String>,
+    quality: Option<String>,
+    output_format: Option<String>,
+    seed: Option<u64>,
+    background: Option<String>,
+    provider_options: HashMap<String, Value>,
+}
+
+impl ImageGenerationProviderOptions {
+    fn normalized(&self) -> NormalizedImageProviderOptions {
+        let mut options = NormalizedImageProviderOptions::default();
+        match self {
+            Self::Default => {}
+            Self::OpenAi(openai) => {
+                options.size = openai.size.as_provider_value();
+                options.quality = openai.quality.as_provider_value();
+                options.output_format = Some(openai.output_format.as_str().to_string());
+                options.background = openai.background.as_provider_value();
+            }
+            Self::GoogleImagen(google) => {
+                options.aspect_ratio = google.aspect_ratio.as_provider_value();
+                options.negative_prompt = google.negative_prompt.clone().and_then(optional_clean);
+                options.seed = google.seed;
+                options.output_format = Some(google.output_format.as_str().to_string());
+            }
+            Self::AwsBedrock(bedrock) => {
+                options.aspect_ratio = bedrock.aspect_ratio.as_provider_value();
+                options.size = bedrock.size.as_provider_value();
+                options.quality = bedrock.quality.as_provider_value();
+                options.negative_prompt = bedrock.negative_prompt.clone().and_then(optional_clean);
+                options.seed = bedrock.seed;
+                options.output_format = Some(bedrock.output_format.as_str().to_string());
+            }
+            Self::Xai(xai) => {
+                options.aspect_ratio = xai.aspect_ratio.as_provider_value();
+            }
+            Self::Together(together) => {
+                options.aspect_ratio = together.aspect_ratio.as_provider_value();
+                options.size = together.size.as_provider_value();
+                options.negative_prompt = together.negative_prompt.clone().and_then(optional_clean);
+                options.seed = together.seed;
+                options.output_format = Some(together.output_format.as_str().to_string());
+            }
+            Self::HuggingFace(huggingface) => {
+                options.size = huggingface.size.as_provider_value();
+                options.negative_prompt =
+                    huggingface.negative_prompt.clone().and_then(optional_clean);
+                options.seed = huggingface.seed;
+                options.output_format = Some(huggingface.output_format.as_str().to_string());
+            }
+            Self::OpenRouter(openrouter) => {
+                options.aspect_ratio = openrouter.aspect_ratio.as_provider_value();
+                options.size = openrouter.size.as_provider_value();
+            }
+        }
+        options
+    }
 }
 
 fn optional_clean(value: String) -> Option<String> {
@@ -1262,40 +1566,6 @@ async fn generate_with_provider(
     }
 }
 
-fn build_provider_bit(
-    provider_name: &str,
-    model_id: Option<String>,
-    version: Option<String>,
-    mut params: HashMap<String, Value>,
-) -> Bit {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(provider_name.as_bytes());
-    if let Some(model_id) = &model_id {
-        hasher.update(model_id.as_bytes());
-    }
-    if let Some(version) = &version {
-        hasher.update(version.as_bytes());
-    }
-    for (key, value) in &params {
-        hasher.update(key.as_bytes());
-        hasher.update(value.to_string().as_bytes());
-    }
-
-    let provider = ModelProvider {
-        provider_name: provider_name.to_string(),
-        model_id,
-        version,
-        params: Some(std::mem::take(&mut params)),
-    };
-    let parameters = to_value(ImageGenerationModelProvider { provider }).unwrap_or_default();
-
-    let mut bit = Bit::default();
-    bit.id = hasher.finalize().to_hex().to_string();
-    bit.bit_type = BitTypes::ImageGeneration;
-    bit.parameters = parameters;
-    bit
-}
-
 fn media_scores() -> NodeScores {
     NodeScores::new()
         .set_privacy(4)
@@ -1307,756 +1577,596 @@ fn media_scores() -> NodeScores {
         .build()
 }
 
-fn add_provider_output(node: &mut Node) {
+fn option_node_scores() -> NodeScores {
+    NodeScores::new()
+        .set_privacy(10)
+        .set_security(10)
+        .set_performance(9)
+        .set_governance(9)
+        .set_reliability(10)
+        .set_cost(10)
+        .build()
+}
+
+fn string_values(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn add_options_output(node: &mut Node) {
     node.add_output_pin(
-        "exec_out",
-        "Output",
-        "Fires when the image provider Bit is ready",
-        VariableType::Execution,
-    );
-    node.add_output_pin(
-        "provider",
-        "Provider",
-        "Bit containing the image generation provider configuration",
+        "options",
+        "Options",
+        "Typed image generation provider options",
         VariableType::Struct,
     )
-    .set_schema::<Bit>()
+    .set_schema::<ImageGenerationProviderOptions>()
     .set_options(PinOptions::new().set_enforce_schema(true).build());
 }
 
-fn add_exec_input(node: &mut Node) {
-    node.add_input_pin(
-        "exec_in",
-        "Input",
-        "Execution trigger",
-        VariableType::Execution,
+fn add_select_pin(
+    node: &mut Node,
+    name: &str,
+    label: &str,
+    description: &str,
+    values: &[&str],
+    default: &str,
+) {
+    node.add_input_pin(name, label, description, VariableType::String)
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(string_values(values))
+                .build(),
+        )
+        .set_default_value(Some(json!(default)));
+}
+
+fn add_output_format_pin(node: &mut Node) {
+    add_select_pin(
+        node,
+        "output_format",
+        "Format",
+        "Requested output image format",
+        &["png", "jpeg", "webp"],
+        "png",
     );
 }
 
-fn add_sensitive_string_pin(node: &mut Node, name: &str, label: &str, description: &str) {
-    node.add_input_pin(name, label, description, VariableType::String)
-        .set_default_value(Some(json!("")))
-        .set_options(PinOptions::new().set_sensitive(true).build());
+fn add_seed_pin(node: &mut Node) {
+    node.add_input_pin(
+        "seed",
+        "Seed",
+        "Optional seed. Use 0 for provider default.",
+        VariableType::Integer,
+    )
+    .set_default_value(Some(json!(0)));
 }
 
-async fn set_provider_output(
-    context: &mut ExecutionContext,
-    provider_name: &str,
-    model_id: String,
-    version: Option<String>,
-    params: HashMap<String, Value>,
-) -> flow_like_types::Result<()> {
-    let bit = build_provider_bit(provider_name, optional_clean(model_id), version, params);
-    context.set_pin_value("provider", json!(bit)).await?;
-    context.activate_exec_pin("exec_out").await?;
-    Ok(())
+fn add_negative_prompt_pin(node: &mut Node) {
+    node.add_input_pin(
+        "negative_prompt",
+        "Negative Prompt",
+        "Text describing what to avoid",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn parse_output_format_option(value: &str) -> ImageOutputFormat {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => ImageOutputFormat::Jpeg,
+        "webp" => ImageOutputFormat::Webp,
+        _ => ImageOutputFormat::Png,
+    }
+}
+
+fn parse_quality_option(value: &str) -> ImageQuality {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "low" => ImageQuality::Low,
+        "medium" => ImageQuality::Medium,
+        "high" => ImageQuality::High,
+        "standard" => ImageQuality::Standard,
+        "premium" => ImageQuality::Premium,
+        _ => ImageQuality::Auto,
+    }
+}
+
+fn parse_background_option(value: &str) -> ImageBackground {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "opaque" => ImageBackground::Opaque,
+        "transparent" => ImageBackground::Transparent,
+        _ => ImageBackground::Auto,
+    }
+}
+
+fn parse_aspect_ratio_option(value: &str) -> ImageAspectRatio {
+    match value.trim() {
+        "1:1" => ImageAspectRatio::Square1x1,
+        "16:9" => ImageAspectRatio::Landscape16x9,
+        "9:16" => ImageAspectRatio::Portrait9x16,
+        "4:3" => ImageAspectRatio::Landscape4x3,
+        "3:4" => ImageAspectRatio::Portrait3x4,
+        "3:2" => ImageAspectRatio::Landscape3x2,
+        "2:3" => ImageAspectRatio::Portrait2x3,
+        _ => ImageAspectRatio::Auto,
+    }
+}
+
+fn parse_size_option(value: &str) -> ImageSize {
+    match value.trim() {
+        "512x512" => ImageSize::Square512,
+        "768x768" => ImageSize::Square768,
+        "1024x1024" => ImageSize::Square1024,
+        "1024x1536" => ImageSize::Portrait1024x1536,
+        "1536x1024" => ImageSize::Landscape1536x1024,
+        "768x1024" => ImageSize::Portrait768x1024,
+        "1024x768" => ImageSize::Landscape1024x768,
+        "768x1152" => ImageSize::Portrait768x1152,
+        "1152x768" => ImageSize::Landscape1152x768,
+        "640x1152" => ImageSize::Portrait640x1152,
+        "1173x640" => ImageSize::Landscape1173x640,
+        _ => ImageSize::Auto,
+    }
+}
+
+async fn eval_string_pin(context: &mut ExecutionContext, name: &str, default: &str) -> String {
+    context
+        .evaluate_pin(name)
+        .await
+        .unwrap_or_else(|_| default.to_string())
+}
+
+async fn eval_optional_text_pin(context: &mut ExecutionContext, name: &str) -> Option<String> {
+    context
+        .evaluate_pin(name)
+        .await
+        .ok()
+        .and_then(optional_clean)
+}
+
+async fn eval_seed_pin(context: &mut ExecutionContext) -> Option<u64> {
+    let seed: i64 = context.evaluate_pin("seed").await.unwrap_or(0);
+    if seed > 0 { Some(seed as u64) } else { None }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildChatGptImageProviderNode {}
+pub struct MakeOpenAiImageOptionsNode {}
 
-impl BuildChatGptImageProviderNode {
+impl MakeOpenAiImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildChatGptImageProviderNode {
+impl NodeLogic for MakeOpenAiImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_chatgpt",
-            "ChatGPT Image Model",
-            "Builds an OpenAI/ChatGPT Images provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_openai",
+            "OpenAI Image Options",
+            "Creates typed image options for OpenAI and Azure OpenAI image generation.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "OpenAI API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "OpenAI API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("https://api.openai.com/v1")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "OpenAI image model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("gpt-image-1")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
-        node
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-        let bit = build_provider_bit(PROVIDER_OPENAI, optional_clean(model_id), None, params);
-
-        context.set_pin_value("provider", json!(bit)).await?;
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-}
-
-#[crate::register_node]
-#[derive(Default)]
-pub struct BuildAzureImageProviderNode {}
-
-impl BuildAzureImageProviderNode {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[async_trait]
-impl NodeLogic for BuildAzureImageProviderNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "ai_image_build_azure",
-            "Azure OpenAI Image Model",
-            "Builds an Azure OpenAI image provider Bit.",
-            "AI/Generative/Image/Provider",
-        );
-        node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
-
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "Azure OpenAI API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Azure OpenAI endpoint, for example https://resource.openai.azure.com",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "deployment",
-            "Deployment",
-            "Azure OpenAI image deployment name",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("gpt-image-1")));
-        node.add_input_pin(
-            "api_version",
-            "API Version",
-            "Azure OpenAI API version",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("2025-04-01-preview")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
-        node
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let deployment: String = context.evaluate_pin("deployment").await?;
-        let api_version: String = context.evaluate_pin("api_version").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-        params.insert("deployment".to_string(), json!(deployment.clone()));
-        params.insert("api_version".to_string(), json!(api_version.clone()));
-        params.insert("is_azure".to_string(), json!(true));
-        let bit = build_provider_bit(
-            PROVIDER_OPENAI,
-            optional_clean(deployment),
-            optional_clean(api_version),
-            params,
-        );
-
-        context.set_pin_value("provider", json!(bit)).await?;
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-}
-
-#[crate::register_node]
-#[derive(Default)]
-pub struct BuildGoogleAiStudioImageProviderNode {}
-
-impl BuildGoogleAiStudioImageProviderNode {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[async_trait]
-impl NodeLogic for BuildGoogleAiStudioImageProviderNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "ai_image_build_google_ai_studio",
-            "Google AI Studio Image Model",
-            "Builds a Google AI Studio Gemini API Imagen provider Bit.",
-            "AI/Generative/Image/Provider",
-        );
-        node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
-
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "Gemini API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Gemini API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!(
-            "https://generativelanguage.googleapis.com/v1beta"
-        )));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Imagen model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("imagen-4.0-generate-001")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
-        node
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-        let bit = build_provider_bit(PROVIDER_GEMINI, optional_clean(model_id), None, params);
-
-        context.set_pin_value("provider", json!(bit)).await?;
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-}
-
-#[crate::register_node]
-#[derive(Default)]
-pub struct BuildGcpVertexImageProviderNode {}
-
-impl BuildGcpVertexImageProviderNode {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[async_trait]
-impl NodeLogic for BuildGcpVertexImageProviderNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "ai_image_build_gcp_vertex",
-            "GCP Vertex Image Model",
-            "Builds a Google Vertex AI Imagen provider Bit.",
-            "AI/Generative/Image/Provider",
-        );
-        node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
-        node.add_oauth_provider("google");
-        node.add_required_oauth_scopes(
-            "google",
-            vec!["https://www.googleapis.com/auth/cloud-platform"],
-        );
-
-        node.add_input_pin(
-            "project_id",
-            "Project ID",
-            "Google Cloud project ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "location",
-            "Location",
-            "Vertex AI location",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("us-central1")));
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Optional Vertex AI endpoint override. Leave empty to derive from location.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        add_sensitive_string_pin(
+        add_select_pin(
             &mut node,
-            "access_token",
-            "Access Token",
-            "Optional Google OAuth access token. If empty, the node uses the connected Google OAuth token.",
+            "size",
+            "Size",
+            "OpenAI image size",
+            &["auto", "1024x1024", "1024x1536", "1536x1024"],
+            "auto",
         );
-        add_sensitive_string_pin(
+        add_select_pin(
             &mut node,
-            "service_account_json",
-            "Service Account JSON",
-            "Optional Google Cloud service account key JSON. Leave empty to use OAuth or ADC.",
+            "quality",
+            "Quality",
+            "OpenAI image quality",
+            &["auto", "low", "medium", "high"],
+            "auto",
         );
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Vertex Imagen model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("imagen-4.0-generate-001")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "background",
+            "Background",
+            "OpenAI background behavior",
+            &["auto", "opaque", "transparent"],
+            "auto",
+        );
+        add_output_format_pin(&mut node);
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let project_id: String = context.evaluate_pin("project_id").await?;
-        let location: String = context.evaluate_pin("location").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let access_token: String = context.evaluate_pin("access_token").await?;
-        let service_account_json: String = context
-            .evaluate_pin("service_account_json")
-            .await
-            .unwrap_or_default();
-        let model_id: String = context.evaluate_pin("model_id").await?;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let quality = eval_string_pin(context, "quality", "auto").await;
+        let background = eval_string_pin(context, "background", "auto").await;
+        let output_format = eval_string_pin(context, "output_format", "png").await;
 
-        let access_token = if access_token.trim().is_empty() {
-            context
-                .get_oauth_token("google")
-                .map(|token| token.access_token.clone())
-                .unwrap_or_default()
-        } else {
-            access_token
-        };
-
-        let mut params = HashMap::new();
-        params.insert("project_id".to_string(), json!(project_id));
-        params.insert("location".to_string(), json!(location));
-        params.insert("access_token".to_string(), json!(access_token));
-        if !service_account_json.trim().is_empty() {
-            params.insert(
-                "service_account_json".to_string(),
-                json!(service_account_json),
-            );
-        }
-        if !endpoint.trim().is_empty() {
-            params.insert("endpoint".to_string(), json!(endpoint));
-        }
-
-        let bit = build_provider_bit(PROVIDER_VERTEX, optional_clean(model_id), None, params);
-
-        context.set_pin_value("provider", json!(bit)).await?;
-        context.activate_exec_pin("exec_out").await?;
+        let options = ImageGenerationProviderOptions::OpenAi(OpenAiImageOptions {
+            size: parse_size_option(&size),
+            quality: parse_quality_option(&quality),
+            output_format: parse_output_format_option(&output_format),
+            background: parse_background_option(&background),
+        });
+        context.set_pin_value("options", json!(options)).await?;
         Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildAwsBedrockImageProviderNode {}
+pub struct MakeGoogleImagenOptionsNode {}
 
-impl BuildAwsBedrockImageProviderNode {
+impl MakeGoogleImagenOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildAwsBedrockImageProviderNode {
+impl NodeLogic for MakeGoogleImagenOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_aws_bedrock",
-            "AWS Bedrock Image Model",
-            "Builds an AWS Bedrock Titan Image Generator provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_google_imagen",
+            "Google Imagen Options",
+            "Creates typed image options for Google AI Studio and Vertex Imagen models.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(
+        add_select_pin(
             &mut node,
-            "api_key",
-            "Bedrock API Key",
-            "Amazon Bedrock API key used as a bearer token",
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Imagen aspect ratio",
+            &["auto", "1:1", "16:9", "9:16", "4:3", "3:4"],
+            "auto",
         );
-        node.add_input_pin(
-            "region",
-            "Region",
-            "AWS Bedrock runtime region",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("us-east-1")));
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Optional Bedrock Runtime endpoint override. Leave empty to derive from region.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Bedrock image model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("amazon.titan-image-generator-v2:0")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_negative_prompt_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_output_format_pin(&mut node);
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let region: String = context.evaluate_pin("region").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("region".to_string(), json!(region.clone()));
-        if !endpoint.trim().is_empty() {
-            params.insert("endpoint".to_string(), json!(endpoint));
-        }
-        let bit = build_provider_bit(PROVIDER_BEDROCK, optional_clean(model_id), None, params);
-
-        context.set_pin_value("provider", json!(bit)).await?;
-        context.activate_exec_pin("exec_out").await?;
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let output_format = eval_string_pin(context, "output_format", "png").await;
+        let options = ImageGenerationProviderOptions::GoogleImagen(GoogleImagenImageOptions {
+            aspect_ratio: parse_aspect_ratio_option(&aspect_ratio),
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            seed: eval_seed_pin(context).await,
+            output_format: parse_output_format_option(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
         Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildXaiImageProviderNode {}
+pub struct MakeAwsBedrockImageOptionsNode {}
 
-impl BuildXaiImageProviderNode {
+impl MakeAwsBedrockImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildXaiImageProviderNode {
+impl NodeLogic for MakeAwsBedrockImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_xai",
-            "xAI Image Model",
-            "Builds an xAI Grok image generation provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_aws_bedrock",
+            "AWS Bedrock Image Options",
+            "Creates typed image options for AWS Bedrock image models.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "xAI API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "xAI API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("https://api.x.ai/v1")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "xAI image generation model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("grok-imagine-image")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Bedrock image aspect ratio. Ignored when Size is set.",
+            &["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "Bedrock output size",
+            &[
+                "auto",
+                "1024x1024",
+                "1152x768",
+                "768x1152",
+                "1173x640",
+                "640x1152",
+            ],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "quality",
+            "Quality",
+            "Bedrock image quality",
+            &["auto", "standard", "premium"],
+            "auto",
+        );
+        add_negative_prompt_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output image format",
+            &["png", "jpeg"],
+            "png",
+        );
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-
-        set_provider_output(context, PROVIDER_XAI, model_id, None, params).await
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let quality = eval_string_pin(context, "quality", "auto").await;
+        let output_format = eval_string_pin(context, "output_format", "png").await;
+        let options = ImageGenerationProviderOptions::AwsBedrock(AwsBedrockImageOptions {
+            aspect_ratio: parse_aspect_ratio_option(&aspect_ratio),
+            size: parse_size_option(&size),
+            quality: parse_quality_option(&quality),
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            seed: eval_seed_pin(context).await,
+            output_format: parse_output_format_option(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildTogetherImageProviderNode {}
+pub struct MakeXaiImageOptionsNode {}
 
-impl BuildTogetherImageProviderNode {
+impl MakeXaiImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildTogetherImageProviderNode {
+impl NodeLogic for MakeXaiImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_together",
-            "Together Image Model",
-            "Builds a Together AI image generation provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_xai",
+            "xAI Image Options",
+            "Creates typed image options for xAI image generation.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "Together API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Together API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("https://api.together.xyz/v1")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Together image model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("black-forest-labs/FLUX.1-schnell")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "xAI image aspect ratio",
+            &["auto", "1:1", "16:9", "9:16"],
+            "auto",
+        );
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-
-        set_provider_output(context, PROVIDER_TOGETHER, model_id, None, params).await
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let options = ImageGenerationProviderOptions::Xai(XaiImageOptions {
+            aspect_ratio: parse_aspect_ratio_option(&aspect_ratio),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildHuggingFaceImageProviderNode {}
+pub struct MakeTogetherImageOptionsNode {}
 
-impl BuildHuggingFaceImageProviderNode {
+impl MakeTogetherImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildHuggingFaceImageProviderNode {
+impl NodeLogic for MakeTogetherImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_huggingface",
-            "Hugging Face Image Model",
-            "Builds a Hugging Face Inference Providers text-to-image Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_together",
+            "Together Image Options",
+            "Creates typed image options for Together text-to-image models.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "Hugging Face token");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Hugging Face inference endpoint or endpoint template containing {model}",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!(
-            "https://router.huggingface.co/hf-inference/models"
-        )));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Hugging Face text-to-image model ID",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("black-forest-labs/FLUX.1-schnell")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "Together aspect ratio. Ignored when Size is set.",
+            &["auto", "1:1", "16:9", "9:16", "4:3", "3:4"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "Together output size",
+            &[
+                "auto",
+                "512x512",
+                "768x768",
+                "1024x1024",
+                "1024x768",
+                "768x1024",
+            ],
+            "auto",
+        );
+        add_negative_prompt_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output image format",
+            &["png", "jpeg"],
+            "png",
+        );
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-
-        set_provider_output(context, PROVIDER_HUGGINGFACE, model_id, None, params).await
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let output_format = eval_string_pin(context, "output_format", "png").await;
+        let options = ImageGenerationProviderOptions::Together(TogetherImageOptions {
+            aspect_ratio: parse_aspect_ratio_option(&aspect_ratio),
+            size: parse_size_option(&size),
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            seed: eval_seed_pin(context).await,
+            output_format: parse_output_format_option(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildOpenRouterImageProviderNode {}
+pub struct MakeHuggingFaceImageOptionsNode {}
 
-impl BuildOpenRouterImageProviderNode {
+impl MakeHuggingFaceImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildOpenRouterImageProviderNode {
+impl NodeLogic for MakeHuggingFaceImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_openrouter",
-            "OpenRouter Image Model",
-            "Builds an OpenRouter image-output model provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_huggingface",
+            "Hugging Face Image Options",
+            "Creates typed image options for Hugging Face text-to-image models.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "OpenRouter API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "OpenRouter API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("https://openrouter.ai/api/v1")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "OpenRouter model with image output modality",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("google/gemini-2.5-flash-image")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "Hugging Face output size",
+            &[
+                "auto",
+                "512x512",
+                "768x768",
+                "1024x1024",
+                "1024x768",
+                "768x1024",
+            ],
+            "auto",
+        );
+        add_negative_prompt_pin(&mut node);
+        add_seed_pin(&mut node);
+        add_output_format_pin(&mut node);
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-
-        set_provider_output(context, PROVIDER_OPENROUTER, model_id, None, params).await
+        let size = eval_string_pin(context, "size", "auto").await;
+        let output_format = eval_string_pin(context, "output_format", "png").await;
+        let options = ImageGenerationProviderOptions::HuggingFace(HuggingFaceImageOptions {
+            size: parse_size_option(&size),
+            negative_prompt: eval_optional_text_pin(context, "negative_prompt").await,
+            seed: eval_seed_pin(context).await,
+            output_format: parse_output_format_option(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
     }
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct BuildMistralImageProviderNode {}
+pub struct MakeOpenRouterImageOptionsNode {}
 
-impl BuildMistralImageProviderNode {
+impl MakeOpenRouterImageOptionsNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for BuildMistralImageProviderNode {
+impl NodeLogic for MakeOpenRouterImageOptionsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "ai_image_build_mistral",
-            "Mistral Image Model",
-            "Builds a Mistral image-generation tool provider Bit.",
-            "AI/Generative/Image/Provider",
+            "ai_image_options_openrouter",
+            "OpenRouter Image Options",
+            "Creates typed image options for OpenRouter image-output models.",
+            "AI/Generative/Image/Options",
         );
-        node.add_icon("/flow/icons/find_model.svg");
+        node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
-        node.set_scores(media_scores());
-        add_exec_input(&mut node);
+        node.set_scores(option_node_scores());
 
-        add_sensitive_string_pin(&mut node, "api_key", "API Key", "Mistral API key");
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Mistral API endpoint",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("https://api.mistral.ai/v1")));
-        node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Mistral model used by the image generation tool",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("mistral-medium-latest")));
-        node.add_input_pin(
-            "agent_id",
-            "Agent ID",
-            "Optional existing Mistral agent ID with image_generation enabled",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-
-        add_provider_output(&mut node);
-        node.set_long_running(true);
+        add_select_pin(
+            &mut node,
+            "aspect_ratio",
+            "Aspect Ratio",
+            "OpenRouter image aspect ratio",
+            &["auto", "1:1", "16:9", "9:16", "4:3", "3:4"],
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "size",
+            "Size",
+            "OpenRouter image size",
+            &["auto", "1024x1024", "1024x768", "768x1024"],
+            "auto",
+        );
+        add_options_output(&mut node);
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-        let api_key: String = context.evaluate_pin("api_key").await?;
-        let endpoint: String = context.evaluate_pin("endpoint").await?;
-        let model_id: String = context.evaluate_pin("model_id").await?;
-        let agent_id: String = context.evaluate_pin("agent_id").await.unwrap_or_default();
-
-        let mut params = HashMap::new();
-        params.insert("api_key".to_string(), json!(api_key));
-        params.insert("endpoint".to_string(), json!(endpoint));
-        if !agent_id.trim().is_empty() {
-            params.insert("agent_id".to_string(), json!(agent_id));
-        }
-
-        set_provider_output(context, PROVIDER_MISTRAL, model_id, None, params).await
+        let aspect_ratio = eval_string_pin(context, "aspect_ratio", "auto").await;
+        let size = eval_string_pin(context, "size", "auto").await;
+        let options = ImageGenerationProviderOptions::OpenRouter(OpenRouterImageOptions {
+            aspect_ratio: parse_aspect_ratio_option(&aspect_ratio),
+            size: parse_size_option(&size),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
     }
 }
 
@@ -2076,7 +2186,7 @@ impl NodeLogic for GenerateImageNode {
         let mut node = Node::new(
             "ai_image_generate",
             "Generate Image",
-            "Generates images with a configured image provider and writes the results to FlowPath.",
+            "Generates one image with an existing provider Bit and writes it to FlowPath.",
             "AI/Generative/Image",
         );
         node.add_icon("/flow/icons/image.svg");
@@ -2092,35 +2202,19 @@ impl NodeLogic for GenerateImageNode {
         node.add_input_pin(
             "provider",
             "Provider",
-            "Image generation provider Bit, or an existing LLM/VLM provider Bit",
+            "Existing provider Bit",
             VariableType::Struct,
         )
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Optional image model ID or Azure deployment override",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-
-        node.add_input_pin(
-            "message",
-            "Message",
-            "Current generation prompt",
-            VariableType::Struct,
-        )
-        .set_schema::<HistoryMessage>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build())
-        .set_default_value(Some(json!(HistoryMessage::from_string(Role::User, ""))));
-        node.add_input_pin(
             "history",
             "History",
-            "Optional conversation history/context",
+            "Conversation history. The final user message is used as the image prompt.",
             VariableType::Struct,
         )
-        .set_schema::<History>();
+        .set_schema::<History>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
             "output_path",
             "Output Path",
@@ -2129,107 +2223,15 @@ impl NodeLogic for GenerateImageNode {
         )
         .set_schema::<FlowPath>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
-
-        node.add_input_pin(
-            "negative_prompt",
-            "Negative Prompt",
-            "Text describing what to avoid",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "count",
-            "Count",
-            "Number of images to generate",
-            VariableType::Integer,
-        )
-        .set_options(PinOptions::new().set_range((1., 4.)).build())
-        .set_default_value(Some(json!(1)));
-        node.add_input_pin(
-            "aspect_ratio",
-            "Aspect Ratio",
-            "Provider aspect ratio",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "auto".into(),
-                    "1:1".into(),
-                    "16:9".into(),
-                    "9:16".into(),
-                    "4:3".into(),
-                    "3:4".into(),
-                    "3:2".into(),
-                    "2:3".into(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "size",
-            "Size",
-            "Provider size such as 1024x1024, 1536x1024, or auto",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "quality",
-            "Quality",
-            "Provider quality setting",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "auto".into(),
-                    "low".into(),
-                    "medium".into(),
-                    "high".into(),
-                    "standard".into(),
-                    "premium".into(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "output_format",
-            "Format",
-            "Output image format",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["png".into(), "jpeg".into(), "webp".into()])
-                .build(),
-        )
-        .set_default_value(Some(json!("png")));
-        node.add_input_pin(
-            "seed",
-            "Seed",
-            "Optional seed. Use 0 for provider default/random.",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(0)));
-        node.add_input_pin(
-            "background",
-            "Background",
-            "Provider background setting",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["auto".into(), "opaque".into(), "transparent".into()])
-                .build(),
-        )
-        .set_default_value(Some(json!("auto")));
         node.add_input_pin(
             "provider_options",
             "Provider Options",
-            "Raw provider-specific overrides",
+            "Typed provider-specific image options",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_schema::<ImageGenerationProviderOptions>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build())
+        .set_default_value(Some(json!(ImageGenerationProviderOptions::default())));
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
         node.add_output_pin(
@@ -2261,90 +2263,42 @@ impl NodeLogic for GenerateImageNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let mut provider = provider_from_bit(&bit)?;
-        let model_id: String = context.evaluate_pin("model_id").await.unwrap_or_default();
-        if !model_id.trim().is_empty() {
-            provider.model_id = Some(model_id.trim().to_string());
-        }
-        let message: HistoryMessage = context
-            .evaluate_pin("message")
-            .await
-            .unwrap_or_else(|_| HistoryMessage::from_string(Role::User, ""));
-        let history: Option<History> = context.evaluate_pin("history").await.ok();
+        let provider = provider_from_bit(&bit)?;
+        let history: History = context.evaluate_pin("history").await?;
         let output_path: FlowPath = context.evaluate_pin("output_path").await?;
 
-        let prompt = {
-            let message_prompt = message.as_str();
-            if !message_prompt.trim().is_empty() {
-                message_prompt
-            } else if let Some(history) = &history {
-                let (prompt, _) = history.extract_text_prompt_and_history()?;
-                prompt
-            } else {
-                String::new()
-            }
-        };
+        let (prompt, _) = history.extract_text_prompt_and_history()?;
 
         if prompt.trim().is_empty() {
-            bail!(
-                "Generate Image requires a non-empty message or a history with a final user message"
-            );
+            bail!("Generate Image requires history with a non-empty final user message");
         }
 
-        let negative_prompt: String = context
-            .evaluate_pin("negative_prompt")
-            .await
-            .unwrap_or_default();
-        let count: u32 = context
-            .evaluate_pin::<i64>("count")
-            .await
-            .unwrap_or(1)
-            .max(1) as u32;
-        let aspect_ratio: String = context
-            .evaluate_pin("aspect_ratio")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let size: String = context
-            .evaluate_pin("size")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let quality: String = context
-            .evaluate_pin("quality")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let output_format: String = context
-            .evaluate_pin("output_format")
-            .await
-            .unwrap_or_else(|_| "png".to_string());
-        let seed: i64 = context.evaluate_pin("seed").await.unwrap_or(0);
-        let background: String = context
-            .evaluate_pin("background")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let provider_options: HashMap<String, Value> = context
+        let typed_provider_options: ImageGenerationProviderOptions = context
             .evaluate_pin("provider_options")
             .await
             .unwrap_or_default();
+        let provider_options = typed_provider_options.normalized();
 
         let request = ImageGenerationRequest {
             prompt,
-            system_prompt: history.as_ref().and_then(History::get_system_prompt),
-            negative_prompt: optional_clean(negative_prompt),
-            count,
-            aspect_ratio: optional_clean(aspect_ratio),
-            size: optional_clean(size),
-            quality: optional_clean(quality),
-            output_format: normalize_output_format(output_format),
-            seed: if seed > 0 { Some(seed as u64) } else { None },
-            background: optional_clean(background),
-            provider_options,
+            system_prompt: history.get_system_prompt(),
+            negative_prompt: provider_options.negative_prompt,
+            count: 1,
+            aspect_ratio: provider_options.aspect_ratio,
+            size: provider_options.size,
+            quality: provider_options.quality,
+            output_format: normalize_output_format(
+                provider_options
+                    .output_format
+                    .unwrap_or_else(|| "png".to_string()),
+            ),
+            seed: provider_options.seed,
+            background: provider_options.background,
+            provider_options: provider_options.provider_options,
         };
 
         context.log_message(
-            &format!(
-                "Generating {} image(s) with {}",
-                request.count, provider.provider_name
-            ),
+            &format!("Generating image with {}", provider.provider_name),
             LogLevel::Info,
         );
 
@@ -2382,6 +2336,7 @@ impl NodeLogic for GenerateImageNode {
             "requested_count": request.count,
             "output_format": request.output_format,
             "system_prompt": request.system_prompt,
+            "provider_options": typed_provider_options,
             "assets": asset_metadata,
         });
 

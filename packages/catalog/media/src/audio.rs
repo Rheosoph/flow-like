@@ -18,11 +18,12 @@ use flow_like_model_provider::{
 use flow_like_types::{
     Value, anyhow, async_trait, bail,
     base64::{Engine as _, engine::general_purpose::STANDARD},
-    json::{from_str, from_value, json},
+    json::{Deserialize, Serialize, from_str, from_value, json},
     reqwest,
 };
 use google_cloud_auth::credentials::{self as google_credentials, CacheableResource};
 use http::{Extensions, header::AUTHORIZATION};
+use schemars::JsonSchema;
 
 const PROVIDER_OPENAI: &str = "custom:openai";
 const PROVIDER_GEMINI: &str = "custom:gemini";
@@ -70,6 +71,248 @@ struct SpeechToTextRequest {
 struct TranscriptionResult {
     text: String,
     provider_metadata: Value,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioOutputFormat {
+    #[default]
+    Mp3,
+    Wav,
+    Pcm,
+    Opus,
+    Aac,
+    Flac,
+    Ogg,
+    Mulaw,
+    Alaw,
+}
+
+impl AudioOutputFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::Wav => "wav",
+            Self::Pcm => "pcm",
+            Self::Opus => "opus",
+            Self::Aac => "aac",
+            Self::Flac => "flac",
+            Self::Ogg => "ogg",
+            Self::Mulaw => "mulaw",
+            Self::Alaw => "alaw",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechResponseFormat {
+    #[default]
+    Json,
+    Text,
+    VerboseJson,
+    Srt,
+    Vtt,
+}
+
+impl SpeechResponseFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Text => "text",
+            Self::VerboseJson => "verbose_json",
+            Self::Srt => "srt",
+            Self::Vtt => "vtt",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct OpenAiCompatibleTextToSpeechOptions {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub output_format: AudioOutputFormat,
+    #[serde(default)]
+    pub speed: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct XaiTextToSpeechOptions {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub output_format: AudioOutputFormat,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    #[serde(default)]
+    pub bit_rate: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct GoogleTextToSpeechOptions {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub output_format: AudioOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct HuggingFaceTextToSpeechOptions {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub output_format: AudioOutputFormat,
+    #[serde(default)]
+    pub speed: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct MistralTextToSpeechOptions {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub output_format: AudioOutputFormat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(tag = "provider", content = "options", rename_all = "snake_case")]
+pub enum TextToSpeechProviderOptions {
+    #[default]
+    Default,
+    OpenAiCompatible(OpenAiCompatibleTextToSpeechOptions),
+    Xai(XaiTextToSpeechOptions),
+    Google(GoogleTextToSpeechOptions),
+    HuggingFace(HuggingFaceTextToSpeechOptions),
+    Mistral(MistralTextToSpeechOptions),
+}
+
+#[derive(Debug, Clone, Default)]
+struct NormalizedTextToSpeechOptions {
+    voice: Option<String>,
+    instructions: Option<String>,
+    language: Option<String>,
+    output_format: Option<String>,
+    speed: Option<f64>,
+    sample_rate: Option<u32>,
+    bit_rate: Option<u32>,
+    provider_options: HashMap<String, Value>,
+}
+
+impl TextToSpeechProviderOptions {
+    fn normalized(&self) -> NormalizedTextToSpeechOptions {
+        let mut options = NormalizedTextToSpeechOptions::default();
+        match self {
+            Self::Default => {}
+            Self::OpenAiCompatible(openai) => {
+                options.voice = openai.voice.clone().and_then(optional_clean);
+                options.instructions = openai.instructions.clone().and_then(optional_clean);
+                options.output_format = Some(openai.output_format.as_str().to_string());
+                options.speed = openai.speed.filter(|speed| *speed > 0.0);
+            }
+            Self::Xai(xai) => {
+                options.voice = xai.voice.clone().and_then(optional_clean);
+                options.language = xai.language.clone().and_then(optional_clean);
+                options.output_format = Some(xai.output_format.as_str().to_string());
+                options.sample_rate = xai.sample_rate.filter(|sample_rate| *sample_rate > 0);
+                options.bit_rate = xai.bit_rate.filter(|bit_rate| *bit_rate > 0);
+            }
+            Self::Google(google) => {
+                options.voice = google.voice.clone().and_then(optional_clean);
+                options.instructions = google.instructions.clone().and_then(optional_clean);
+                options.language = google.language.clone().and_then(optional_clean);
+                options.output_format = Some(google.output_format.as_str().to_string());
+            }
+            Self::HuggingFace(huggingface) => {
+                options.voice = huggingface.voice.clone().and_then(optional_clean);
+                options.output_format = Some(huggingface.output_format.as_str().to_string());
+                options.speed = huggingface.speed.filter(|speed| *speed > 0.0);
+            }
+            Self::Mistral(mistral) => {
+                options.voice = mistral.voice.clone().and_then(optional_clean);
+                options.output_format = Some(mistral.output_format.as_str().to_string());
+            }
+        }
+        options
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct OpenAiCompatibleSpeechToTextOptions {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub response_format: SpeechResponseFormat,
+    #[serde(default)]
+    pub translate: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct XaiSpeechToTextOptions {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+pub struct GoogleSpeechToTextOptions {
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(tag = "provider", content = "options", rename_all = "snake_case")]
+pub enum SpeechToTextProviderOptions {
+    #[default]
+    Default,
+    OpenAiCompatible(OpenAiCompatibleSpeechToTextOptions),
+    Xai(XaiSpeechToTextOptions),
+    Google(GoogleSpeechToTextOptions),
+}
+
+#[derive(Debug, Clone, Default)]
+struct NormalizedSpeechToTextOptions {
+    language: Option<String>,
+    prompt: Option<String>,
+    response_format: Option<String>,
+    translate: bool,
+    provider_options: HashMap<String, Value>,
+}
+
+impl SpeechToTextProviderOptions {
+    fn normalized(&self) -> NormalizedSpeechToTextOptions {
+        let mut options = NormalizedSpeechToTextOptions::default();
+        match self {
+            Self::Default => {}
+            Self::OpenAiCompatible(openai) => {
+                options.prompt = openai.prompt.clone().and_then(optional_clean);
+                options.language = openai.language.clone().and_then(optional_clean);
+                options.response_format = Some(openai.response_format.as_str().to_string());
+                options.translate = openai.translate;
+            }
+            Self::Xai(xai) => {
+                options.prompt = xai.prompt.clone().and_then(optional_clean);
+                options.language = xai.language.clone().and_then(optional_clean);
+                options.response_format = Some(SpeechResponseFormat::Json.as_str().to_string());
+            }
+            Self::Google(google) => {
+                options.prompt = google.prompt.clone().and_then(optional_clean);
+                options.response_format = Some(SpeechResponseFormat::Json.as_str().to_string());
+            }
+        }
+        options
+    }
 }
 
 struct MultipartFile {
@@ -1553,6 +1796,607 @@ async fn transcribe_with_provider(
     }
 }
 
+fn option_node_scores() -> NodeScores {
+    NodeScores::new()
+        .set_privacy(10)
+        .set_security(10)
+        .set_performance(9)
+        .set_governance(9)
+        .set_reliability(10)
+        .set_cost(10)
+        .build()
+}
+
+fn string_values(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn add_select_pin(
+    node: &mut Node,
+    name: &str,
+    label: &str,
+    description: &str,
+    values: &[&str],
+    default: &str,
+) {
+    node.add_input_pin(name, label, description, VariableType::String)
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(string_values(values))
+                .build(),
+        )
+        .set_default_value(Some(json!(default)));
+}
+
+fn add_text_input_pin(node: &mut Node, name: &str, label: &str, description: &str, default: &str) {
+    node.add_input_pin(name, label, description, VariableType::String)
+        .set_default_value(Some(json!(default)));
+}
+
+fn add_tts_options_output(node: &mut Node) {
+    node.add_output_pin(
+        "options",
+        "Options",
+        "Typed text-to-speech provider options",
+        VariableType::Struct,
+    )
+    .set_schema::<TextToSpeechProviderOptions>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
+}
+
+fn add_stt_options_output(node: &mut Node) {
+    node.add_output_pin(
+        "options",
+        "Options",
+        "Typed speech-to-text provider options",
+        VariableType::Struct,
+    )
+    .set_schema::<SpeechToTextProviderOptions>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
+}
+
+fn add_speed_pin(node: &mut Node) {
+    node.add_input_pin(
+        "speed",
+        "Speed",
+        "Playback speed multiplier. Use 0 for provider default.",
+        VariableType::Float,
+    )
+    .set_options(PinOptions::new().set_range((0., 4.)).build())
+    .set_default_value(Some(json!(0.0)));
+}
+
+fn add_positive_integer_pin(node: &mut Node, name: &str, label: &str, description: &str) {
+    node.add_input_pin(name, label, description, VariableType::Integer)
+        .set_default_value(Some(json!(0)));
+}
+
+fn parse_audio_output_format(value: &str) -> AudioOutputFormat {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "wav" | "wave" => AudioOutputFormat::Wav,
+        "pcm" | "raw" => AudioOutputFormat::Pcm,
+        "opus" => AudioOutputFormat::Opus,
+        "aac" => AudioOutputFormat::Aac,
+        "flac" => AudioOutputFormat::Flac,
+        "ogg" => AudioOutputFormat::Ogg,
+        "mulaw" | "ulaw" => AudioOutputFormat::Mulaw,
+        "alaw" => AudioOutputFormat::Alaw,
+        _ => AudioOutputFormat::Mp3,
+    }
+}
+
+fn parse_speech_response_format(value: &str) -> SpeechResponseFormat {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "text" => SpeechResponseFormat::Text,
+        "verbose_json" => SpeechResponseFormat::VerboseJson,
+        "srt" => SpeechResponseFormat::Srt,
+        "vtt" => SpeechResponseFormat::Vtt,
+        _ => SpeechResponseFormat::Json,
+    }
+}
+
+async fn eval_string_pin(context: &mut ExecutionContext, name: &str, default: &str) -> String {
+    context
+        .evaluate_pin(name)
+        .await
+        .unwrap_or_else(|_| default.to_string())
+}
+
+async fn eval_optional_text_pin(context: &mut ExecutionContext, name: &str) -> Option<String> {
+    context
+        .evaluate_pin(name)
+        .await
+        .ok()
+        .and_then(optional_clean)
+}
+
+async fn eval_positive_f64_pin(context: &mut ExecutionContext, name: &str) -> Option<f64> {
+    let value: f64 = context.evaluate_pin(name).await.unwrap_or(0.0);
+    if value > 0.0 { Some(value) } else { None }
+}
+
+async fn eval_positive_u32_pin(context: &mut ExecutionContext, name: &str) -> Option<u32> {
+    let value: i64 = context.evaluate_pin(name).await.unwrap_or(0);
+    if value > 0 { Some(value as u32) } else { None }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeOpenAiCompatibleTextToSpeechOptionsNode {}
+
+impl MakeOpenAiCompatibleTextToSpeechOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeOpenAiCompatibleTextToSpeechOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_tts_options_openai_compatible",
+            "OpenAI-Compatible TTS Options",
+            "Creates typed text-to-speech options for OpenAI-compatible providers.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "voice",
+            "Voice",
+            "Provider voice identifier",
+            "auto",
+        );
+        add_text_input_pin(
+            &mut node,
+            "instructions",
+            "Instructions",
+            "Optional style or delivery instructions",
+            "",
+        );
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output audio format",
+            &["mp3", "wav", "pcm", "opus", "aac", "flac"],
+            "mp3",
+        );
+        add_speed_pin(&mut node);
+        add_tts_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let output_format = eval_string_pin(context, "output_format", "mp3").await;
+        let options =
+            TextToSpeechProviderOptions::OpenAiCompatible(OpenAiCompatibleTextToSpeechOptions {
+                voice: eval_optional_text_pin(context, "voice").await,
+                instructions: eval_optional_text_pin(context, "instructions").await,
+                output_format: parse_audio_output_format(&output_format),
+                speed: eval_positive_f64_pin(context, "speed").await,
+            });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeXaiTextToSpeechOptionsNode {}
+
+impl MakeXaiTextToSpeechOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeXaiTextToSpeechOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_tts_options_xai",
+            "xAI TTS Options",
+            "Creates typed text-to-speech options for xAI speech models.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(&mut node, "voice", "Voice", "xAI voice identifier", "auto");
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional language code",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output audio codec",
+            &[
+                "mp3", "wav", "pcm", "opus", "aac", "flac", "ogg", "mulaw", "alaw",
+            ],
+            "mp3",
+        );
+        add_positive_integer_pin(
+            &mut node,
+            "sample_rate",
+            "Sample Rate",
+            "Optional output sample rate. Use 0 for provider default.",
+        );
+        add_positive_integer_pin(
+            &mut node,
+            "bit_rate",
+            "Bit Rate",
+            "Optional MP3 bit rate. Use 0 for provider default.",
+        );
+        add_tts_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let output_format = eval_string_pin(context, "output_format", "mp3").await;
+        let options = TextToSpeechProviderOptions::Xai(XaiTextToSpeechOptions {
+            voice: eval_optional_text_pin(context, "voice").await,
+            language: eval_optional_text_pin(context, "language").await,
+            output_format: parse_audio_output_format(&output_format),
+            sample_rate: eval_positive_u32_pin(context, "sample_rate").await,
+            bit_rate: eval_positive_u32_pin(context, "bit_rate").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeGoogleTextToSpeechOptionsNode {}
+
+impl MakeGoogleTextToSpeechOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeGoogleTextToSpeechOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_tts_options_google",
+            "Google TTS Options",
+            "Creates typed text-to-speech options for Gemini and Vertex speech models.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "voice",
+            "Voice",
+            "Google prebuilt voice name",
+            "auto",
+        );
+        add_text_input_pin(
+            &mut node,
+            "instructions",
+            "Instructions",
+            "Optional style or delivery instructions",
+            "",
+        );
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional BCP-47 language code",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output audio format",
+            &["wav", "pcm"],
+            "wav",
+        );
+        add_tts_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let output_format = eval_string_pin(context, "output_format", "wav").await;
+        let options = TextToSpeechProviderOptions::Google(GoogleTextToSpeechOptions {
+            voice: eval_optional_text_pin(context, "voice").await,
+            instructions: eval_optional_text_pin(context, "instructions").await,
+            language: eval_optional_text_pin(context, "language").await,
+            output_format: parse_audio_output_format(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeHuggingFaceTextToSpeechOptionsNode {}
+
+impl MakeHuggingFaceTextToSpeechOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeHuggingFaceTextToSpeechOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_tts_options_huggingface",
+            "Hugging Face TTS Options",
+            "Creates typed text-to-speech options for Hugging Face speech models.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "voice",
+            "Voice",
+            "Optional voice parameter",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output audio format",
+            &["mp3", "wav", "pcm", "opus", "aac", "flac", "ogg"],
+            "mp3",
+        );
+        add_speed_pin(&mut node);
+        add_tts_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let output_format = eval_string_pin(context, "output_format", "mp3").await;
+        let options = TextToSpeechProviderOptions::HuggingFace(HuggingFaceTextToSpeechOptions {
+            voice: eval_optional_text_pin(context, "voice").await,
+            output_format: parse_audio_output_format(&output_format),
+            speed: eval_positive_f64_pin(context, "speed").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeMistralTextToSpeechOptionsNode {}
+
+impl MakeMistralTextToSpeechOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeMistralTextToSpeechOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_tts_options_mistral",
+            "Mistral TTS Options",
+            "Creates typed text-to-speech options for Mistral speech models.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "voice",
+            "Voice",
+            "Mistral voice identifier",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "output_format",
+            "Format",
+            "Requested output audio format",
+            &["mp3", "wav", "pcm", "opus", "aac", "flac"],
+            "mp3",
+        );
+        add_tts_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let output_format = eval_string_pin(context, "output_format", "mp3").await;
+        let options = TextToSpeechProviderOptions::Mistral(MistralTextToSpeechOptions {
+            voice: eval_optional_text_pin(context, "voice").await,
+            output_format: parse_audio_output_format(&output_format),
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeOpenAiCompatibleSpeechToTextOptionsNode {}
+
+impl MakeOpenAiCompatibleSpeechToTextOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeOpenAiCompatibleSpeechToTextOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_stt_options_openai_compatible",
+            "OpenAI-Compatible STT Options",
+            "Creates typed speech-to-text options for OpenAI-compatible providers.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "prompt",
+            "Prompt",
+            "Optional transcription prompt or context",
+            "",
+        );
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional source language code",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "response_format",
+            "Format",
+            "Provider response format",
+            &["json", "text", "verbose_json", "srt", "vtt"],
+            "json",
+        );
+        node.add_input_pin(
+            "translate",
+            "Translate",
+            "Translate audio to English when the provider supports it",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+        add_stt_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let response_format = eval_string_pin(context, "response_format", "json").await;
+        let translate: bool = context.evaluate_pin("translate").await.unwrap_or(false);
+        let options =
+            SpeechToTextProviderOptions::OpenAiCompatible(OpenAiCompatibleSpeechToTextOptions {
+                prompt: eval_optional_text_pin(context, "prompt").await,
+                language: eval_optional_text_pin(context, "language").await,
+                response_format: parse_speech_response_format(&response_format),
+                translate,
+            });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeXaiSpeechToTextOptionsNode {}
+
+impl MakeXaiSpeechToTextOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeXaiSpeechToTextOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_stt_options_xai",
+            "xAI STT Options",
+            "Creates typed speech-to-text options for xAI transcription models.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "prompt",
+            "Prompt",
+            "Optional transcription prompt or context",
+            "",
+        );
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional source language code",
+            "auto",
+        );
+        add_stt_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let options = SpeechToTextProviderOptions::Xai(XaiSpeechToTextOptions {
+            prompt: eval_optional_text_pin(context, "prompt").await,
+            language: eval_optional_text_pin(context, "language").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct MakeGoogleSpeechToTextOptionsNode {}
+
+impl MakeGoogleSpeechToTextOptionsNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for MakeGoogleSpeechToTextOptionsNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_stt_options_google",
+            "Google STT Options",
+            "Creates typed speech-to-text options for Gemini and Vertex audio transcription.",
+            "AI/Generative/Audio/Options",
+        );
+        node.add_icon("/flow/icons/struct.svg");
+        node.set_version(1);
+        node.set_scores(option_node_scores());
+
+        add_text_input_pin(
+            &mut node,
+            "prompt",
+            "Prompt",
+            "Transcription instruction prompt",
+            "",
+        );
+        add_stt_options_output(&mut node);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let options = SpeechToTextProviderOptions::Google(GoogleSpeechToTextOptions {
+            prompt: eval_optional_text_pin(context, "prompt").await,
+        });
+        context.set_pin_value("options", json!(options)).await?;
+        Ok(())
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct TextToSpeechNode {}
@@ -1601,84 +2445,14 @@ impl NodeLogic for TextToSpeechNode {
         .set_schema::<FlowPath>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Optional TTS model or deployment override",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "voice",
-            "Voice",
-            "Provider voice identifier. Leave auto for provider default.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "instructions",
-            "Instructions",
-            "Optional style or delivery instructions",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "language",
-            "Language",
-            "Optional BCP-47 language code or auto",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "format",
-            "Format",
-            "Output audio format",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "mp3".into(),
-                    "wav".into(),
-                    "pcm".into(),
-                    "opus".into(),
-                    "aac".into(),
-                    "flac".into(),
-                    "ogg".into(),
-                    "mulaw".into(),
-                    "alaw".into(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("mp3")));
-        node.add_input_pin(
-            "speed",
-            "Speed",
-            "Playback speed multiplier. Use 0 for provider default.",
-            VariableType::Float,
-        )
-        .set_options(PinOptions::new().set_range((0., 4.)).build())
-        .set_default_value(Some(json!(0.0)));
-        node.add_input_pin(
-            "sample_rate",
-            "Sample Rate",
-            "Optional output sample rate. Use 0 for provider default.",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(0)));
-        node.add_input_pin(
-            "bit_rate",
-            "Bit Rate",
-            "Optional MP3 bit rate. Use 0 for provider default.",
-            VariableType::Integer,
-        )
-        .set_default_value(Some(json!(0)));
-        node.add_input_pin(
             "provider_options",
             "Provider Options",
-            "Raw provider-specific overrides",
+            "Typed provider-specific text-to-speech options",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_schema::<TextToSpeechProviderOptions>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build())
+        .set_default_value(Some(json!(TextToSpeechProviderOptions::default())));
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
         node.add_output_pin("path", "Path", "Generated audio path", VariableType::Struct)
@@ -1697,11 +2471,7 @@ impl NodeLogic for TextToSpeechNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let mut provider = provider_from_bit(&bit)?;
-        let model_id: String = context.evaluate_pin("model_id").await.unwrap_or_default();
-        if !model_id.trim().is_empty() {
-            provider.model_id = Some(model_id.trim().to_string());
-        }
+        let provider = provider_from_bit(&bit)?;
 
         let text: String = context.evaluate_pin("text").await?;
         if text.trim().is_empty() {
@@ -1709,48 +2479,26 @@ impl NodeLogic for TextToSpeechNode {
         }
 
         let output_path: FlowPath = context.evaluate_pin("output_path").await?;
-        let voice: String = context
-            .evaluate_pin("voice")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let instructions: String = context
-            .evaluate_pin("instructions")
-            .await
-            .unwrap_or_default();
-        let language: String = context
-            .evaluate_pin("language")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let format: String = context
-            .evaluate_pin("format")
-            .await
-            .unwrap_or_else(|_| "mp3".to_string());
-        let speed: f64 = context.evaluate_pin("speed").await.unwrap_or(0.0);
-        let sample_rate: i64 = context.evaluate_pin("sample_rate").await.unwrap_or(0);
-        let bit_rate: i64 = context.evaluate_pin("bit_rate").await.unwrap_or(0);
-        let provider_options: HashMap<String, Value> = context
+        let typed_provider_options: TextToSpeechProviderOptions = context
             .evaluate_pin("provider_options")
             .await
             .unwrap_or_default();
+        let provider_options = typed_provider_options.normalized();
 
         let request = TextToSpeechRequest {
             text,
-            voice: optional_clean(voice),
-            instructions: optional_clean(instructions),
-            language: optional_clean(language),
-            output_format: normalize_audio_format(format),
-            speed: if speed > 0.0 { Some(speed) } else { None },
-            sample_rate: if sample_rate > 0 {
-                Some(sample_rate as u32)
-            } else {
-                None
-            },
-            bit_rate: if bit_rate > 0 {
-                Some(bit_rate as u32)
-            } else {
-                None
-            },
-            provider_options,
+            voice: provider_options.voice,
+            instructions: provider_options.instructions,
+            language: provider_options.language,
+            output_format: normalize_audio_format(
+                provider_options
+                    .output_format
+                    .unwrap_or_else(|| "mp3".to_string()),
+            ),
+            speed: provider_options.speed,
+            sample_rate: provider_options.sample_rate,
+            bit_rate: provider_options.bit_rate,
+            provider_options: provider_options.provider_options,
         };
 
         context.log_message(
@@ -1823,58 +2571,14 @@ impl NodeLogic for SpeechToTextNode {
             .set_schema::<FlowPath>()
             .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
-            "model_id",
-            "Model ID",
-            "Optional STT model or deployment override",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "prompt",
-            "Prompt",
-            "Optional transcription prompt or context",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "language",
-            "Language",
-            "Optional source language code or auto",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("auto")));
-        node.add_input_pin(
-            "response_format",
-            "Response Format",
-            "Provider response format",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "json".into(),
-                    "text".into(),
-                    "verbose_json".into(),
-                    "srt".into(),
-                    "vtt".into(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("json")));
-        node.add_input_pin(
-            "translate",
-            "Translate",
-            "Translate audio to English when the provider supports it",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(false)));
-        node.add_input_pin(
             "provider_options",
             "Provider Options",
-            "Raw provider-specific overrides",
+            "Typed provider-specific speech-to-text options",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_schema::<SpeechToTextProviderOptions>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build())
+        .set_default_value(Some(json!(SpeechToTextProviderOptions::default())));
 
         node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
         node.add_output_pin("text", "Text", "Transcript text", VariableType::String);
@@ -1906,28 +2610,15 @@ impl NodeLogic for SpeechToTextNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let mut provider = provider_from_bit(&bit)?;
-        let model_id: String = context.evaluate_pin("model_id").await.unwrap_or_default();
-        if !model_id.trim().is_empty() {
-            provider.model_id = Some(model_id.trim().to_string());
-        }
+        let provider = provider_from_bit(&bit)?;
 
         let audio_path: FlowPath = context.evaluate_pin("audio").await?;
         let audio_bytes = audio_path.get(context, false).await?;
-        let prompt: String = context.evaluate_pin("prompt").await.unwrap_or_default();
-        let language: String = context
-            .evaluate_pin("language")
-            .await
-            .unwrap_or_else(|_| "auto".to_string());
-        let response_format: String = context
-            .evaluate_pin("response_format")
-            .await
-            .unwrap_or_else(|_| "json".to_string());
-        let translate: bool = context.evaluate_pin("translate").await.unwrap_or(false);
-        let provider_options: HashMap<String, Value> = context
+        let typed_provider_options: SpeechToTextProviderOptions = context
             .evaluate_pin("provider_options")
             .await
             .unwrap_or_default();
+        let provider_options = typed_provider_options.normalized();
         let fallback_extension = Path::new(&audio_path.path)
             .extension()
             .and_then(|extension| extension.to_str())
@@ -1938,11 +2629,13 @@ impl NodeLogic for SpeechToTextNode {
             audio_bytes,
             file_name: file_name_from_path(&audio_path.path, &fallback_extension),
             mime_type: input_mime_from_path(&audio_path.path).to_string(),
-            language: optional_clean(language),
-            prompt: optional_clean(prompt),
-            response_format,
-            translate,
-            provider_options,
+            language: provider_options.language,
+            prompt: provider_options.prompt,
+            response_format: provider_options
+                .response_format
+                .unwrap_or_else(|| "json".to_string()),
+            translate: provider_options.translate,
+            provider_options: provider_options.provider_options,
         };
 
         context.log_message(
