@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::OnceLock};
 
 use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
@@ -322,6 +322,11 @@ struct MultipartFile {
     bytes: Vec<u8>,
 }
 
+fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 fn media_scores() -> NodeScores {
     NodeScores::new()
         .set_privacy(4)
@@ -561,6 +566,13 @@ fn merge_options(
     }
 }
 
+fn form_field_value(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| value.to_string())
+}
+
 fn looks_like_tts_model(model_id: &str) -> bool {
     let model_id = model_id.to_ascii_lowercase();
     ["tts", "speech", "orpheus", "kokoro", "sonic", "voxtral"]
@@ -680,33 +692,19 @@ fn collect_text_parts(value: &Value, parts: &mut Vec<String>) {
 fn multipart_body(
     fields: Vec<(String, String)>,
     file: MultipartFile,
-) -> flow_like_types::Result<(Vec<u8>, String)> {
-    let boundary = format!("flow-like-{}", uuid::Uuid::new_v4());
-    let mut body = Vec::new();
+) -> flow_like_types::Result<reqwest::multipart::Form> {
+    let mut form = reqwest::multipart::Form::new();
 
     for (name, value) in fields {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
-        );
-        body.extend_from_slice(value.as_bytes());
-        body.extend_from_slice(b"\r\n");
+        form = form.text(name, value);
     }
 
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
-            file.field_name, file.file_name
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.mime_type).as_bytes());
-    body.extend_from_slice(&file.bytes);
-    body.extend_from_slice(b"\r\n");
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let part = reqwest::multipart::Part::bytes(file.bytes)
+        .file_name(file.file_name)
+        .mime_str(&file.mime_type)
+        .map_err(|err| anyhow!("Invalid multipart file MIME type {}: {err}", file.mime_type))?;
 
-    Ok((body, format!("multipart/form-data; boundary={boundary}")))
+    Ok(form.part(file.field_name, part))
 }
 
 fn sample_rate_from_mime(mime_type: &str) -> Option<u32> {
@@ -994,11 +992,7 @@ async fn stt_openai_like(
         fields.push(("prompt".to_string(), prompt.clone()));
     }
     for (key, value) in &req.provider_options {
-        if let Some(value) = value.as_str() {
-            fields.push((key.clone(), value.to_string()));
-        } else {
-            fields.push((key.clone(), value.to_string()));
-        }
+        fields.push((key.clone(), form_field_value(value)));
     }
 
     let file = MultipartFile {
@@ -1007,7 +1001,7 @@ async fn stt_openai_like(
         mime_type: req.mime_type.clone(),
         bytes: req.audio_bytes.clone(),
     };
-    let (body, content_type) = multipart_body(fields, file)?;
+    let form = multipart_body(fields, file)?;
     let path = if req.translate {
         "audio/translations"
     } else {
@@ -1037,8 +1031,7 @@ async fn stt_openai_like(
                 api_version
             ))
             .header("api-key", api_key)
-            .header("Content-Type", content_type)
-            .body(body)
+            .multipart(form)
             .send()
             .await?
     } else {
@@ -1049,8 +1042,7 @@ async fn stt_openai_like(
         client
             .post(format!("{}/{}", endpoint.trim_end_matches('/'), path))
             .bearer_auth(api_key)
-            .header("Content-Type", content_type)
-            .body(body)
+            .multipart(form)
             .send()
             .await?
     };
@@ -1126,7 +1118,7 @@ async fn stt_xai(
         fields.push(("prompt".to_string(), prompt.clone()));
     }
     for (key, value) in &req.provider_options {
-        fields.push((key.clone(), value.to_string()));
+        fields.push((key.clone(), form_field_value(value)));
     }
     let file = MultipartFile {
         field_name: "file".to_string(),
@@ -1134,12 +1126,11 @@ async fn stt_xai(
         mime_type: req.mime_type.clone(),
         bytes: req.audio_bytes.clone(),
     };
-    let (body, content_type) = multipart_body(fields, file)?;
+    let form = multipart_body(fields, file)?;
     let response = client
         .post(format!("{}/stt", endpoint.trim_end_matches('/')))
         .bearer_auth(api_key)
-        .header("Content-Type", content_type)
-        .body(body)
+        .multipart(form)
         .send()
         .await?;
 
@@ -1720,11 +1711,11 @@ async fn generate_speech_with_provider(
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => {
             tts_openai_like(
-                &client,
+                client,
                 provider,
                 req,
                 "gpt-4o-mini-tts",
@@ -1736,7 +1727,7 @@ async fn generate_speech_with_provider(
         }
         PROVIDER_GROQ => {
             tts_openai_like(
-                &client,
+                client,
                 provider,
                 req,
                 "canopylabs/orpheus-v1-english",
@@ -1746,13 +1737,13 @@ async fn generate_speech_with_provider(
             )
             .await
         }
-        PROVIDER_XAI => tts_xai(&client, provider, req).await,
-        PROVIDER_TOGETHER => tts_together(&client, provider, req).await,
-        PROVIDER_HUGGINGFACE => tts_huggingface(&client, provider, req).await,
-        PROVIDER_OPENROUTER => tts_openrouter(&client, provider, req).await,
-        PROVIDER_MISTRAL => tts_mistral(&client, provider, req).await,
-        PROVIDER_GEMINI => tts_google_ai_studio(&client, provider, req).await,
-        PROVIDER_VERTEX => tts_vertex(&client, provider, req).await,
+        PROVIDER_XAI => tts_xai(client, provider, req).await,
+        PROVIDER_TOGETHER => tts_together(client, provider, req).await,
+        PROVIDER_HUGGINGFACE => tts_huggingface(client, provider, req).await,
+        PROVIDER_OPENROUTER => tts_openrouter(client, provider, req).await,
+        PROVIDER_MISTRAL => tts_mistral(client, provider, req).await,
+        PROVIDER_GEMINI => tts_google_ai_studio(client, provider, req).await,
+        PROVIDER_VERTEX => tts_vertex(client, provider, req).await,
         other => bail!("Unsupported text-to-speech provider: {other}"),
     }
 }
@@ -1761,11 +1752,11 @@ async fn transcribe_with_provider(
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => {
             stt_openai_like(
-                &client,
+                client,
                 provider,
                 req,
                 "gpt-4o-mini-transcribe",
@@ -1776,7 +1767,7 @@ async fn transcribe_with_provider(
         }
         PROVIDER_GROQ => {
             stt_openai_like(
-                &client,
+                client,
                 provider,
                 req,
                 "whisper-large-v3-turbo",
@@ -1785,13 +1776,13 @@ async fn transcribe_with_provider(
             )
             .await
         }
-        PROVIDER_XAI => stt_xai(&client, provider, req).await,
-        PROVIDER_TOGETHER => stt_together(&client, provider, req).await,
-        PROVIDER_HUGGINGFACE => stt_huggingface(&client, provider, req).await,
-        PROVIDER_OPENROUTER => stt_openrouter(&client, provider, req).await,
-        PROVIDER_MISTRAL => stt_mistral(&client, provider, req).await,
-        PROVIDER_GEMINI => stt_google_ai_studio(&client, provider, req).await,
-        PROVIDER_VERTEX => stt_vertex(&client, provider, req).await,
+        PROVIDER_XAI => stt_xai(client, provider, req).await,
+        PROVIDER_TOGETHER => stt_together(client, provider, req).await,
+        PROVIDER_HUGGINGFACE => stt_huggingface(client, provider, req).await,
+        PROVIDER_OPENROUTER => stt_openrouter(client, provider, req).await,
+        PROVIDER_MISTRAL => stt_mistral(client, provider, req).await,
+        PROVIDER_GEMINI => stt_google_ai_studio(client, provider, req).await,
+        PROVIDER_VERTEX => stt_vertex(client, provider, req).await,
         other => bail!("Unsupported speech-to-text provider: {other}"),
     }
 }

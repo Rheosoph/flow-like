@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, sync::OnceLock, time::Duration};
 
 use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
@@ -357,6 +357,11 @@ struct MultipartFile {
     bytes: Vec<u8>,
 }
 
+fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 fn optional_clean(value: String) -> Option<String> {
     let value = value.trim().to_string();
     if value.is_empty() || value.eq_ignore_ascii_case("auto") {
@@ -616,6 +621,13 @@ fn merge_options(
     }
 }
 
+fn form_field_value(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| value.to_string())
+}
+
 async fn read_json_response(
     response: reqwest::Response,
     provider_label: &str,
@@ -750,36 +762,22 @@ async fn videos_from_response_urls(
 fn multipart_body(
     fields: Vec<(String, String)>,
     file: Option<MultipartFile>,
-) -> flow_like_types::Result<(Vec<u8>, String)> {
-    let boundary = format!("flow-like-{}", uuid::Uuid::new_v4());
-    let mut body = Vec::new();
+) -> flow_like_types::Result<reqwest::multipart::Form> {
+    let mut form = reqwest::multipart::Form::new();
 
     for (name, value) in fields {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
-        );
-        body.extend_from_slice(value.as_bytes());
-        body.extend_from_slice(b"\r\n");
+        form = form.text(name, value);
     }
 
     if let Some(file) = file {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
-                file.field_name, file.file_name
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.mime_type).as_bytes());
-        body.extend_from_slice(&file.bytes);
-        body.extend_from_slice(b"\r\n");
+        let part = reqwest::multipart::Part::bytes(file.bytes)
+            .file_name(file.file_name)
+            .mime_str(&file.mime_type)
+            .map_err(|err| anyhow!("Invalid multipart file MIME type {}: {err}", file.mime_type))?;
+        form = form.part(file.field_name, part);
     }
 
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-
-    Ok((body, format!("multipart/form-data; boundary={boundary}")))
+    Ok(form)
 }
 
 fn service_account_project_id(service_account_json: &str) -> Option<String> {
@@ -871,13 +869,7 @@ async fn generate_openai_sora(
         fields.push(("size".to_string(), size.clone()));
     }
     for (key, value) in &req.provider_options {
-        fields.push((
-            key.clone(),
-            value
-                .as_str()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| value.to_string()),
-        ));
+        fields.push((key.clone(), form_field_value(value)));
     }
 
     let file = req.first_frame.as_ref().map(|input| MultipartFile {
@@ -886,12 +878,11 @@ async fn generate_openai_sora(
         mime_type: input.mime_type.clone(),
         bytes: input.bytes.clone(),
     });
-    let (body, content_type) = multipart_body(fields, file)?;
+    let form = multipart_body(fields, file)?;
     let create = client
         .post(format!("{}/videos", endpoint.trim_end_matches('/')))
         .bearer_auth(api_key.clone())
-        .header("Content-Type", content_type)
-        .body(body)
+        .multipart(form)
         .send()
         .await?;
     let mut value = read_json_response(create, "OpenAI").await?;
@@ -1410,13 +1401,13 @@ async fn generate_video_with_provider(
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     match provider.provider_name.as_str() {
-        PROVIDER_OPENAI => generate_openai_sora(&client, provider, req).await,
-        PROVIDER_VERTEX => generate_vertex_veo(&client, provider, req).await,
-        PROVIDER_RUNWAY => generate_runway(&client, provider, req).await,
-        PROVIDER_FAL => generate_fal(&client, provider, req).await,
-        PROVIDER_REPLICATE => generate_replicate(&client, provider, req).await,
+        PROVIDER_OPENAI => generate_openai_sora(client, provider, req).await,
+        PROVIDER_VERTEX => generate_vertex_veo(client, provider, req).await,
+        PROVIDER_RUNWAY => generate_runway(client, provider, req).await,
+        PROVIDER_FAL => generate_fal(client, provider, req).await,
+        PROVIDER_REPLICATE => generate_replicate(client, provider, req).await,
         other => bail!("Unsupported video generation provider: {other}"),
     }
 }
