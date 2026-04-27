@@ -89,6 +89,16 @@ impl ImageEmbeddingModelProvider {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct ImageGenerationModelProvider {
+    pub provider: ModelProvider,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct VideoGenerationModelProvider {
+    pub provider: ModelProvider,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Prefix {
     pub query: String,
     pub paragraph: String,
@@ -122,6 +132,7 @@ pub struct ModelProviderConfiguration {
     pub mira_config: Vec<MiraConfig>,
     pub mozilla_config: Vec<MozillaConfig>,
     pub xai_config: Vec<XAIConfig>,
+    pub vertex_config: Vec<VertexConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +251,14 @@ pub struct MozillaConfig {
 pub struct XAIConfig {
     pub api_key: Option<String>,
     pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct VertexConfig {
+    pub project_id: Option<String>,
+    pub location: Option<String>,
+    pub service_account_json: Option<String>,
+    pub access_token: Option<String>,
 }
 
 #[derive(Clone, Debug)]

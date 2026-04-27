@@ -134,6 +134,8 @@ pub enum BitTypes {
     ImageEmbedding,
     File,
     Media,
+    ImageGeneration,
+    VideoGeneration,
     Template,
     Tokenizer,
     TokenizerConfig,
