@@ -7,7 +7,7 @@ use flow_like_model_provider::llm::{
     hyperbolic::HyperbolicModel, lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel,
     moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel,
     openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
-    voyageai::VoyageAIModel, xai::XAIModel,
+    vertex::VertexModel, voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_types::{Result, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
@@ -101,6 +101,7 @@ impl ModelFactory {
             "galadriel" => Arc::new(GaladrielModel::new(model_provider, provider_config).await?),
             "mira" => Arc::new(MiraModel::new(model_provider, provider_config).await?),
             "xai" => Arc::new(XAIModel::new(model_provider, provider_config).await?),
+            "vertex" => Arc::new(VertexModel::new(model_provider, provider_config).await?),
             _ => {
                 return Err(flow_like_types::anyhow!(
                     "Unsupported standard provider: {}",
@@ -149,6 +150,7 @@ impl ModelFactory {
             "custom:mira" => Arc::new(MiraModel::from_provider(model_provider).await?),
             "custom:mozilla" => Arc::new(MozillaModel::from_provider(model_provider).await?),
             "custom:lmstudio" => Arc::new(LMStudioModel::from_provider(model_provider).await?),
+            "custom:vertex" => Arc::new(VertexModel::from_provider(model_provider).await?),
             _ => {
                 return Err(flow_like_types::anyhow!(
                     "Unsupported custom provider: {}",

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 pub mod annotate;
 pub mod content;
+pub mod generation;
 pub mod metadata;
 pub mod overlay;
 pub mod pdf;

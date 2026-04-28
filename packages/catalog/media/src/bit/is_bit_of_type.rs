@@ -58,6 +58,8 @@ impl NodeLogic for IsBitOfTypeNode {
                     "ImageEmbedding".to_string(),
                     "File".to_string(),
                     "Media".to_string(),
+                    "ImageGeneration".to_string(),
+                    "VideoGeneration".to_string(),
                     "Template".to_string(),
                     "Tokenizer".to_string(),
                     "TokenizerConfig".to_string(),

@@ -36,6 +36,10 @@ pub enum BitType {
     File,
     #[sea_orm(string_value = "MEDIA")]
     Media,
+    #[sea_orm(string_value = "IMAGE_GENERATION")]
+    ImageGeneration,
+    #[sea_orm(string_value = "VIDEO_GENERATION")]
+    VideoGeneration,
     #[sea_orm(string_value = "TEMPLATE")]
     Template,
     #[sea_orm(string_value = "TOKENIZER")]
