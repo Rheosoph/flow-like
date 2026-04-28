@@ -140,7 +140,16 @@ impl AwsEventBridgeScheduler {
         let mut builder = Target::builder()
             .arn(&self.config.target_arn)
             .role_arn(&self.config.role_arn)
-            .input(serde_json::json!({ "event_id": event_id }).to_string())
+            .input(
+                serde_json::json!({
+                    "event_id": event_id,
+                    "schedule_arn": "<aws.scheduler.schedule-arn>",
+                    "scheduled_time": "<aws.scheduler.scheduled-time>",
+                    "execution_id": "<aws.scheduler.execution-id>",
+                    "attempt_number": "<aws.scheduler.attempt-number>"
+                })
+                .to_string(),
+            )
             .retry_policy(retry_policy);
 
         if let Some(dlq_arn) = &self.config.dlq_arn {

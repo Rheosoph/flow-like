@@ -14,6 +14,7 @@ use std::time::Duration;
 // EventBridge Scheduler to retry, producing duplicate executions.
 const HTTP_CONNECT_TIMEOUT_SECS: u64 = 5;
 const HTTP_TIMEOUT_SECS: u64 = 120;
+const SCHEDULER_CONTEXT_PLACEHOLDER_PREFIX: &str = "<aws.scheduler.";
 
 static SINK_JWT: OnceLock<String> = OnceLock::new();
 static API_BASE_URL: OnceLock<String> = OnceLock::new();
@@ -79,6 +80,14 @@ fn get_api_base_url() -> Result<&'static str, Error> {
 #[derive(Debug, Deserialize, Serialize)]
 struct ScheduledEventPayload {
     event_id: String,
+    #[serde(default)]
+    scheduled_time: Option<String>,
+    #[serde(default)]
+    schedule_arn: Option<String>,
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    attempt_number: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +103,73 @@ struct TriggerResponse {
     error: Option<String>,
 }
 
+fn scheduler_context_value(value: &Option<String>) -> Option<&str> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.starts_with(SCHEDULER_CONTEXT_PLACEHOLDER_PREFIX))
+}
+
+fn build_idempotency_key(payload: &ScheduledEventPayload, request_id: &str) -> String {
+    if let Some(scheduled_time) = scheduler_context_value(&payload.scheduled_time) {
+        let schedule_id =
+            scheduler_context_value(&payload.schedule_arn).unwrap_or(payload.event_id.as_str());
+        return format!("aws-scheduler:{}:{}", schedule_id, scheduled_time);
+    }
+
+    // Backward compatible fallback for schedules created before the target
+    // input included Scheduler context fields.
+    format!("lambda-request:{}", request_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload_with(event_id: &str, scheduled_time: Option<&str>) -> ScheduledEventPayload {
+        ScheduledEventPayload {
+            event_id: event_id.to_string(),
+            scheduled_time: scheduled_time.map(str::to_string),
+            schedule_arn: Some(
+                "arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test".to_string(),
+            ),
+            execution_id: None,
+            attempt_number: None,
+        }
+    }
+
+    #[test]
+    fn idempotency_key_uses_schedule_and_scheduled_time() {
+        let payload = payload_with("event-1", Some("2026-04-27T06:00:00Z"));
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "aws-scheduler:arn:aws:scheduler:eu-west-1:123456789012:schedule/flow-like/test:2026-04-27T06:00:00Z"
+        );
+    }
+
+    #[test]
+    fn idempotency_key_falls_back_for_old_schedule_payloads() {
+        let payload = payload_with("event-1", None);
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "lambda-request:request-1"
+        );
+    }
+
+    #[test]
+    fn idempotency_key_ignores_unexpanded_scheduler_placeholders() {
+        let payload = payload_with("event-1", Some("<aws.scheduler.scheduled-time>"));
+
+        assert_eq!(
+            build_idempotency_key(&payload, "request-1"),
+            "lambda-request:request-1"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
@@ -105,20 +181,27 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
     let sink_jwt = get_sink_jwt()?;
 
     let payload = event.payload;
-    // Lambda's per-invocation request id is the natural idempotency key:
-    // retries of the same logical invocation share it, retries originating
-    // from EventBridge Scheduler get a fresh one (which is what we want — the
-    // API should run once per scheduled firing).
-    let idempotency_key = event.context.request_id.clone();
+    let idempotency_key = build_idempotency_key(&payload, &event.context.request_id);
+    let scheduled_time = scheduler_context_value(&payload.scheduled_time);
+    let schedule_arn = scheduler_context_value(&payload.schedule_arn);
+    let execution_id = scheduler_context_value(&payload.execution_id);
+    let attempt_number = scheduler_context_value(&payload.attempt_number);
 
     tracing::info!(
         event_id = %payload.event_id,
         idempotency_key = %idempotency_key,
+        scheduled_time = ?scheduled_time,
+        schedule_arn = ?schedule_arn,
+        execution_id = ?execution_id,
+        attempt_number = ?attempt_number,
         "Processing scheduled event"
     );
 
     let client = get_http_client()?;
-    let trigger_url = format!("{}/api/v1/sink/trigger/async", api_base_url);
+    let trigger_url = format!(
+        "{}/api/v1/sink/trigger/async",
+        api_base_url.trim_end_matches('/')
+    );
 
     let request_body = TriggerRequest {
         event_id: payload.event_id.clone(),
