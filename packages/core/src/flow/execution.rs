@@ -42,6 +42,7 @@ use std::{
 };
 use trace::Trace;
 
+pub mod compiled;
 pub mod context;
 pub mod internal_node;
 pub mod internal_pin;
@@ -736,6 +737,42 @@ impl InternalRun {
         oauth_tokens: std::collections::HashMap<String, OAuthToken>,
         run_id: Option<String>,
     ) -> flow_like_types::Result<Self> {
+        // === Fast path: check for a valid compiled board in cache ===
+        if let Some(compiled_ref) = handler.compiled_boards.get(&board.id) {
+            let compiled = compiled_ref.value().clone();
+            if compiled.is_valid_for(&board) {
+                tracing::debug!(
+                    board_id = %board.id,
+                    "Using compiled board (cached)"
+                );
+                return Self::from_compiled(
+                    app_id,
+                    board,
+                    &compiled,
+                    event,
+                    handler,
+                    profile,
+                    payload,
+                    stream_state,
+                    callback,
+                    credentials,
+                    token,
+                    oauth_tokens,
+                    run_id,
+                )
+                .await;
+            } else {
+                tracing::debug!(
+                    board_id = %board.id,
+                    "Compiled board cache miss (hash mismatch), recompiling"
+                );
+                drop(compiled_ref);
+                handler.compiled_boards.remove(&board.id);
+            }
+        }
+
+        // === Slow path: full graph construction ===
+
         // Convert to AHashMap for internal use
         let oauth_tokens: AHashMap<String, OAuthToken> = oauth_tokens.into_iter().collect();
 
@@ -1063,6 +1100,23 @@ impl InternalRun {
                 .insert(REQUEST_FILES_STORE_REF.to_string(), cacheable_store);
         }
 
+        // === Cache NodeLogic for future executions ===
+        {
+            let mut node_logic_cache = AHashMap::with_capacity(nodes.len());
+            for (node_id, internal_node) in &nodes {
+                node_logic_cache.insert(node_id.clone(), internal_node.logic.clone());
+            }
+            let compiled = compiled::CompiledBoard {
+                content_hash: compiled::CompiledBoard::compute_board_hash(&board),
+                board_version: board.version,
+                node_logic: node_logic_cache,
+                compiled_at: Instant::now(),
+            };
+            handler
+                .compiled_boards
+                .insert(board.id.clone(), Arc::new(compiled));
+        }
+
         Ok(InternalRun {
             run,
             nodes: Arc::new(nodes),
@@ -1083,6 +1137,394 @@ impl InternalRun {
             user_context: None,
             has_node_errors: Arc::new(AtomicBool::new(false)),
             // Cached immutable fields from Run
+            meta: RunMeta {
+                run_id: run_id.clone(),
+                app_id: app_id.to_string(),
+                board_id: board.id.clone(),
+                board_dir: board.board_dir.clone(),
+                sub: sub_value.clone(),
+                stream_state,
+                nodes_executed: Arc::new(AtomicU64::new(0)),
+            },
+            board: board.clone(),
+        })
+    }
+
+    /// Create an `InternalRun` using cached `NodeLogic` from a compiled board.
+    ///
+    /// This is the **fast path** — it skips the expensive `registry.instantiate()`
+    /// call for each node by reusing cached `Arc<dyn NodeLogic>` instances.
+    /// All mutable runtime state (pins, nodes, variables, cache) is created fresh
+    /// per run to ensure full isolation between concurrent executions.
+    ///
+    /// # Concurrency Safety
+    ///
+    /// Each call creates its own `InternalPin`, `InternalNode`, `Run`, `variables`,
+    /// and `cache` instances. No mutable state is shared between runs.
+    pub async fn from_compiled(
+        app_id: &str,
+        board: Arc<Board>,
+        compiled: &compiled::CompiledBoard,
+        event: Option<Event>,
+        handler: &Arc<FlowLikeState>,
+        profile: &Profile,
+        payload: &RunPayload,
+        stream_state: bool,
+        callback: InterComCallback,
+        credentials: Option<SharedCredentials>,
+        token: Option<String>,
+        oauth_tokens: std::collections::HashMap<String, OAuthToken>,
+        run_id: Option<String>,
+    ) -> flow_like_types::Result<Self> {
+        let oauth_tokens: AHashMap<String, OAuthToken> = oauth_tokens.into_iter().collect();
+        let before = Instant::now();
+        let run_id = run_id.unwrap_or_else(create_id);
+
+        let (log_store, db, lance_write_options) = {
+            let guard = handler.config.read().await;
+            let log_store = guard.stores.log_store.clone();
+            let db = guard.callbacks.build_logs_database.clone();
+            let write_opts = guard.callbacks.lance_write_options.clone();
+            (log_store, db, write_opts)
+        };
+
+        let sub_value = token
+            .as_ref()
+            .and_then(|t| extract_sub_from_jwt(t).ok())
+            .unwrap_or_else(|| "local".to_string());
+
+        let run = Run {
+            id: run_id.clone(),
+            app_id: app_id.to_string(),
+            traces: vec![],
+            status: RunStatus::Running,
+            start: SystemTime::now(),
+            end: SystemTime::now(),
+            log_level: board.log_level,
+            board: board.clone(),
+            payload: Arc::new(payload.clone()),
+            sub: sub_value.clone(),
+            highest_log_level: LogLevel::Debug,
+            log_initialized: false,
+            logs: 0,
+            stream_state,
+            event_id: event.as_ref().map(|e| e.id.clone()),
+            event_version: event.as_ref().map(|e| {
+                let (major, minor, patch) = e.event_version;
+                format!("{}.{}.{}", major, minor, patch)
+            }),
+            visited_nodes: AHashMap::with_capacity(board.nodes.len()),
+            log_store,
+            log_db: db,
+            lance_write_options,
+        };
+
+        let run = Arc::new(Mutex::new(run));
+
+        let mut dependencies = AHashMap::with_capacity(board.nodes.len());
+        let mut dependency_map = AHashMap::with_capacity(board.nodes.len());
+
+        let event_variables = event
+            .as_ref()
+            .map(|e| e.variables.clone())
+            .unwrap_or_default();
+        let runtime_variables = payload.runtime_variables.clone().unwrap_or_default();
+        let filter_secrets = payload.filter_secrets.unwrap_or(true);
+
+        let variables = Arc::new(Mutex::new({
+            let mut map = AHashMap::with_capacity(board.variables.len());
+            for (variable_id, board_variable) in &board.variables {
+                let allow_runtime_override =
+                    board_variable.runtime_configured || (board_variable.secret && !filter_secrets);
+                let variable = if allow_runtime_override {
+                    runtime_variables.get(variable_id).unwrap_or(board_variable)
+                } else if board_variable.exposed {
+                    event_variables.get(variable_id).unwrap_or(board_variable)
+                } else {
+                    board_variable
+                };
+
+                let value = match &variable.default_value {
+                    Some(bytes) => {
+                        flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                    }
+                    None => Value::Null,
+                };
+
+                let mut var = variable.clone();
+                var.value = Arc::new(Mutex::new(value));
+                map.insert(variable_id.clone(), var);
+            }
+            map
+        }));
+
+        // Phase 1: Create fresh InternalPins (own mutable state per run)
+        let mut pin_to_node = AHashMap::with_capacity(board.nodes.len() * 3);
+        let mut pins: AHashMap<String, Arc<InternalPin>> =
+            AHashMap::with_capacity(board.nodes.len() * 3);
+
+        for (node_id, node) in &board.nodes {
+            for (pin_id, pin) in &node.pins {
+                let internal_pin = InternalPin::new(pin, false);
+                pin_to_node.insert(pin_id, (node_id, node.is_pure()));
+                pins.insert(pin.id.clone(), Arc::new(internal_pin));
+            }
+        }
+
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                for (pin_id, pin) in &node.pins {
+                    let internal_pin = InternalPin::new(pin, false);
+                    pin_to_node.insert(pin_id, (node_id, node.is_pure()));
+                    pins.insert(pin.id.clone(), Arc::new(internal_pin));
+                }
+            }
+        }
+
+        for layer in board.layers.values() {
+            for (pin_id, pin) in &layer.pins {
+                if pins.contains_key(pin_id) {
+                    continue;
+                }
+                let internal_pin = InternalPin::new(pin, true);
+                pins.insert(pin.id.clone(), Arc::new(internal_pin));
+            }
+        }
+
+        // Phase 2: Wire connections via OnceLock (fresh per run)
+        for node in board.nodes.values() {
+            for pin in node.pins.values() {
+                if let Some(internal_pin) = pins.get(&pin.id) {
+                    let connected: Vec<Weak<InternalPin>> = pin
+                        .connected_to
+                        .iter()
+                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                        .collect();
+                    internal_pin.init_connected_to(connected);
+
+                    let depends: Vec<Weak<InternalPin>> = pin
+                        .depends_on
+                        .iter()
+                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                        .collect();
+                    internal_pin.init_depends_on(depends);
+                }
+            }
+        }
+
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for node in layer.nodes.values() {
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        let connected: Vec<Weak<InternalPin>> = pin
+                            .connected_to
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_connected_to(connected);
+
+                        let depends: Vec<Weak<InternalPin>> = pin
+                            .depends_on
+                            .iter()
+                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                            .collect();
+                        internal_pin.init_depends_on(depends);
+                    }
+                }
+            }
+        }
+
+        for layer in board.layers.values() {
+            for pin in layer.pins.values() {
+                if let Some(internal_pin) = pins.get(&pin.id) {
+                    let connected: Vec<Weak<InternalPin>> = pin
+                        .connected_to
+                        .iter()
+                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                        .collect();
+                    internal_pin.init_connected_to(connected);
+
+                    let depends: Vec<Weak<InternalPin>> = pin
+                        .depends_on
+                        .iter()
+                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
+                        .collect();
+                    internal_pin.init_depends_on(depends);
+                }
+            }
+        }
+
+        // Phase 3: Instantiate nodes using CACHED NodeLogic
+        let mut nodes = AHashMap::with_capacity(board.nodes.len());
+        let mut stack = RunStack::with_capacity(1);
+        let registry = handler.node_registry.read().await.node_registry.clone();
+
+        for (node_id, node) in &board.nodes {
+            let logic = match compiled.node_logic.get(node_id) {
+                Some(cached_logic) => cached_logic.clone(),
+                None => registry.instantiate(node)?,
+            };
+
+            let mut node_pins = AHashMap::new();
+            let mut pin_cache = AHashMap::new();
+
+            for pin in node.pins.values() {
+                if let Some(internal_pin) = pins.get(&pin.id) {
+                    node_pins.insert(pin.id.clone(), internal_pin.clone());
+                    let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
+                    cached_array.push(internal_pin.clone());
+                }
+
+                if USE_DEPENDENCY_GRAPH {
+                    for dependency_pin_id in &pin.depends_on {
+                        if let Some((dependency_node_id, is_pure)) =
+                            pin_to_node.get(dependency_pin_id)
+                        {
+                            dependency_map
+                                .entry(node_id)
+                                .or_insert(vec![])
+                                .push((*dependency_node_id, is_pure));
+                        }
+                    }
+                }
+            }
+
+            let internal_node = Arc::new(InternalNode::new(
+                node.clone(),
+                node_pins.clone(),
+                logic,
+                pin_cache.clone(),
+            ));
+
+            for internal_pin in node_pins.values() {
+                internal_pin.init_node(Arc::downgrade(&internal_node));
+            }
+
+            if payload.id == node.id {
+                let target = ExecutionTarget {
+                    node: internal_node.clone(),
+                    through_pins: vec![],
+                };
+                stack.push(target);
+            }
+
+            nodes.insert(node_id.clone(), internal_node);
+        }
+
+        // Phase 4: Function layer nodes with cached logic
+        for layer in board.layers.values() {
+            if !matches!(layer.r#type, LayerType::Function) {
+                continue;
+            }
+            for (node_id, node) in &layer.nodes {
+                let logic = match compiled.node_logic.get(node_id) {
+                    Some(cached_logic) => cached_logic.clone(),
+                    None => registry.instantiate(node)?,
+                };
+
+                let mut node_pins = AHashMap::new();
+                let mut pin_cache = AHashMap::new();
+
+                for pin in node.pins.values() {
+                    if let Some(internal_pin) = pins.get(&pin.id) {
+                        node_pins.insert(pin.id.clone(), internal_pin.clone());
+                        let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
+                        cached_array.push(internal_pin.clone());
+                    }
+                }
+
+                let internal_node = Arc::new(InternalNode::new(
+                    node.clone(),
+                    node_pins.clone(),
+                    logic,
+                    pin_cache.clone(),
+                ));
+
+                for internal_pin in node_pins.values() {
+                    internal_pin.init_node(Arc::downgrade(&internal_node));
+                }
+
+                nodes.insert(node_id.clone(), internal_node);
+            }
+        }
+
+        if USE_DEPENDENCY_GRAPH {
+            let mut recursion_filter: AHashSet<String> = AHashSet::new();
+            for node_id in board.nodes.keys() {
+                let deps = recursive_get_deps(
+                    node_id.to_string(),
+                    &dependency_map,
+                    &nodes,
+                    &mut recursion_filter,
+                );
+                dependencies.insert(node_id.clone(), deps);
+            }
+        }
+
+        if board.log_level <= LogLevel::Info {
+            tracing::info!(
+                elapsed = ?before.elapsed(),
+                nodes = nodes.len(),
+                pins = pins.len(),
+                "InternalRun::from_compiled completed"
+            );
+        }
+
+        let cache = Arc::new(RwLock::new(AHashMap::new()));
+        let temporary_store = {
+            let config = handler.config.read().await;
+            config.stores.temporary_store.clone()
+        };
+        if let Some(temporary_store) = temporary_store {
+            let cacheable_store: Arc<dyn Cacheable> = Arc::new(temporary_store);
+            cache
+                .write()
+                .await
+                .insert(REQUEST_FILES_STORE_REF.to_string(), cacheable_store);
+        }
+
+        // Cache NodeLogic for future runs (only if not already cached)
+        if !handler.compiled_boards.contains_key(&board.id) {
+            let mut node_logic_cache = AHashMap::with_capacity(nodes.len());
+            for (nid, inode) in &nodes {
+                node_logic_cache.insert(nid.clone(), inode.logic.clone());
+            }
+            let cb = compiled::CompiledBoard {
+                content_hash: compiled::CompiledBoard::compute_board_hash(&board),
+                board_version: board.version,
+                node_logic: node_logic_cache,
+                compiled_at: Instant::now(),
+            };
+            handler
+                .compiled_boards
+                .insert(board.id.clone(), Arc::new(cb));
+        }
+
+        Ok(InternalRun {
+            run,
+            nodes: Arc::new(nodes),
+            pins,
+            variables,
+            cache,
+            stack: Arc::new(stack),
+            concurrency_limit: 128_000,
+            cpus: num_cpus::get().max(4) * 4,
+            callback,
+            credentials: credentials.map(Arc::new),
+            token,
+            oauth_tokens: Arc::new(oauth_tokens),
+            dependencies,
+            log_level: board.log_level,
+            profile: Arc::new(profile.clone()),
+            completion_callbacks: Arc::new(RwLock::new(vec![])),
+            user_context: None,
+            has_node_errors: Arc::new(AtomicBool::new(false)),
             meta: RunMeta {
                 run_id: run_id.clone(),
                 app_id: app_id.to_string(),

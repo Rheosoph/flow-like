@@ -392,6 +392,12 @@ pub struct FlowLikeState {
     pub board_registry: Arc<DashMap<String, Arc<Mutex<Board>>>>, // TODO: should board be wrapped in RWLock or Mutex?
     #[cfg(feature = "flow-runtime")]
     pub board_run_registry: Arc<DashMap<String, Arc<RunData>>>,
+    /// Cache of precompiled board graph topologies. Keyed by board ID.
+    /// Compiled boards cache the expensive graph construction (pin wiring,
+    /// node instantiation, dependency resolution) so subsequent executions
+    /// of the same board version skip all topology work.
+    #[cfg(feature = "flow-runtime")]
+    pub compiled_boards: Arc<DashMap<String, Arc<crate::flow::execution::compiled::CompiledBoard>>>,
 
     // A2UI registries for open widgets/pages
     #[cfg(feature = "flow-runtime")]
@@ -424,6 +430,8 @@ impl FlowLikeState {
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "flow-runtime")]
+            compiled_boards: Arc::new(DashMap::new()),
 
             #[cfg(feature = "flow-runtime")]
             widget_registry: Arc::new(DashMap::new()),
@@ -456,6 +464,8 @@ impl FlowLikeState {
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "flow-runtime")]
+            compiled_boards: Arc::new(DashMap::new()),
 
             #[cfg(feature = "flow-runtime")]
             widget_registry: Arc::new(DashMap::new()),
@@ -500,6 +510,8 @@ impl FlowLikeState {
             board_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             board_run_registry: Arc::new(DashMap::new()),
+            #[cfg(feature = "flow-runtime")]
+            compiled_boards: self.compiled_boards.clone(),
 
             #[cfg(feature = "flow-runtime")]
             widget_registry: Arc::new(DashMap::new()),
