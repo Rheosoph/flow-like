@@ -86,7 +86,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type ViewMode = "list" | "table";
 
 // Helper function to check if an event requires a sink based on eventMapping
@@ -119,6 +119,23 @@ export interface EventsPageProps {
 	) => Promise<IStoredOAuthToken>;
 	/** Base path for routing (defaults to /library/config/events) */
 	basePath?: string;
+	appId?: string | null;
+	eventId?: string | null;
+	embedded?: boolean;
+	onEventIdChange?: (eventId: string | null) => void;
+	onNavigateToFlow?: (target: {
+		boardId: string;
+		appId: string;
+		nodeId?: string;
+		version?: [number, number, number];
+	}) => void;
+	/**
+	 * Optional pre-filled template used to seed the "Create event" dialog
+	 * (e.g. driven by ?newEvent=... deep links from the University runtime).
+	 * When provided, the create dialog opens automatically on mount with the
+	 * template applied.
+	 */
+	newEventTemplate?: Partial<IEvent>;
 }
 
 export default function EventsPage({
@@ -130,14 +147,31 @@ export default function EventsPage({
 	onStartOAuth,
 	onRefreshToken,
 	basePath = "/library/config/events",
+	appId: appIdProp,
+	eventId: eventIdProp,
+	embedded = false,
+	onEventIdChange,
+	onNavigateToFlow,
+	newEventTemplate,
 }: Readonly<EventsPageProps>) {
 	const searchParams = useSearchParams();
-	const id = searchParams.get("id");
-	const eventId = searchParams.get("eventId");
+	const id = appIdProp ?? searchParams.get("id");
+	const eventId = eventIdProp ?? searchParams.get("eventId");
 
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+	const newEventTemplateKey = useMemo(
+		() => (newEventTemplate ? JSON.stringify(newEventTemplate) : ""),
+		[newEventTemplate],
+	);
+	const newEventTemplateAppliedRef = useRef("");
+	useEffect(() => {
+		if (!newEventTemplate) return;
+		if (newEventTemplateAppliedRef.current === newEventTemplateKey) return;
+		newEventTemplateAppliedRef.current = newEventTemplateKey;
+		setIsCreateDialogOpen(true);
+	}, [newEventTemplate, newEventTemplateKey]);
 	const [isCreating, setIsCreating] = useState(false);
 	const [editingEvent, setEditingEvent] = useState<IEvent | null>(null);
 	const [showCreatePatDialog, setShowCreatePatDialog] = useState(false);
@@ -410,6 +444,10 @@ export default function EventsPage({
 
 	const handleEditingEvent = useCallback(
 		(event?: IEvent) => {
+			if (embedded) {
+				onEventIdChange?.(event?.id ?? null);
+				return;
+			}
 			let additionalParams = "";
 			if (event?.id) {
 				additionalParams = `&eventId=${event.id}`;
@@ -417,16 +455,25 @@ export default function EventsPage({
 
 			router.push(`${basePath}?id=${id}${additionalParams}`);
 		},
-		[id, router, basePath],
+		[id, router, basePath, embedded, onEventIdChange],
 	);
 
 	const handleNavigateToNode = useCallback(
 		(event: IEvent, nodeId: string) => {
+			if (embedded && id && event.board_id) {
+				onNavigateToFlow?.({
+					boardId: event.board_id,
+					appId: id,
+					nodeId,
+					version: event.board_version as [number, number, number] | undefined,
+				});
+				return;
+			}
 			router.push(
 				`/flow?id=${event.board_id}&app=${id}&node=${nodeId}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`,
 			);
 		},
-		[id, router],
+		[id, router, embedded, onNavigateToFlow],
 	);
 
 	const handleCreateWithPat = useCallback(
@@ -504,6 +551,7 @@ export default function EventsPage({
 				hub={hub}
 				onStartOAuth={onStartOAuth}
 				onRefreshToken={onRefreshToken}
+				onNavigateToFlow={onNavigateToFlow}
 			/>
 		);
 	}
@@ -567,6 +615,7 @@ export default function EventsPage({
 								eventConfig={eventMapping}
 								uiEventTypes={uiEventTypes}
 								appId={id}
+								event={newEventTemplate as IEvent | undefined}
 								onSubmit={handleCreateEvent}
 								onCancel={() => setIsCreateDialogOpen(false)}
 								isSubmitting={isCreating}
@@ -605,6 +654,7 @@ function EventConfiguration({
 	hub,
 	onStartOAuth,
 	onRefreshToken,
+	onNavigateToFlow,
 }: Readonly<{
 	eventMapping: IEventMapping;
 	/** Optional list of event types that are UI-capable and should have a route path. */
@@ -626,6 +676,12 @@ function EventConfiguration({
 		provider: IOAuthProvider,
 		token: IStoredOAuthToken,
 	) => Promise<IStoredOAuthToken>;
+	onNavigateToFlow?: (target: {
+		boardId: string;
+		appId: string;
+		nodeId?: string;
+		version?: [number, number, number];
+	}) => void;
 }>) {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -1378,20 +1434,43 @@ function EventConfiguration({
 									</div>
 									<div>
 										<Label className="group flex items-center hover:underline">
-											<Link
-												title="Open Flow and Node"
-												className="flex flex-row items-center"
-												href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
-											>
-												Node ID
-												<Button
-													size={"icon"}
-													variant={"ghost"}
-													className="p-0! w-4 h-4 ml-1 mb-[0.1rem]"
+											{onNavigateToFlow ? (
+												<button
+													type="button"
+													title="Open Flow and Node"
+													className="flex flex-row items-center"
+													onClick={() =>
+														onNavigateToFlow({
+															boardId: event.board_id,
+															appId,
+															nodeId: event.node_id,
+															version: event.board_version as
+																| [number, number, number]
+																| undefined,
+														})
+													}
 												>
-													<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
-												</Button>
-											</Link>
+													Node ID
+													<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
+														<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+													</span>
+												</button>
+											) : (
+												<Link
+													title="Open Flow and Node"
+													className="flex flex-row items-center"
+													href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
+												>
+													Node ID
+													<Button
+														size={"icon"}
+														variant={"ghost"}
+														className="p-0! w-4 h-4 ml-1 mb-[0.1rem]"
+													>
+														<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+													</Button>
+												</Link>
+											)}
 										</Label>
 										<p className="mt-1 text-sm text-muted-foreground font-mono">
 											{board.data?.nodes?.[event.node_id]?.friendly_name ??

@@ -87,6 +87,11 @@ run = "bun run --cwd ./apps/backend/local/api dev"
 description = "Restart local API server"
 run = "pkill -f 'flow-like-api' || true && mise run dev:api"
 
+[tasks."dev:api:db"]
+description = "Push current Prisma schema to local postgres (starts postgres if needed)"
+dir = "apps/backend/local"
+run = "docker compose up -d postgres && docker compose run --rm --build db-init"
+
 [tasks."dev:runtime"]
 description = "Start local runtime server"
 run = "bun run --cwd ./apps/backend/local/runtime dev"

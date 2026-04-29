@@ -21,6 +21,8 @@ export class GlobalPermission {
 	static readonly ReadSolutions = new GlobalPermission(0b00001000_00000000n);
 	static readonly WriteSolutions = new GlobalPermission(0b00010000_00000000n);
 	static readonly ManagePackages = new GlobalPermission(0b00100000_00000000n);
+	static readonly ReadCourses = new GlobalPermission(0b01000000_00000000n);
+	static readonly WriteCourses = new GlobalPermission(0b10000000_00000000n);
 
 	constructor(value: bigint | number = 0n) {
 		this.value = typeof value === "number" ? BigInt(value) : value;

@@ -3,7 +3,8 @@ import type { IProfile } from "../../../types";
 import type { IApiState } from "../api-state";
 
 function constructUrl(profile: IProfile, path: string): string {
-	return `${getApiOrigin(profile)}/api/v1/${path}`;
+	const cleanPath = path.replace(/^\/+/, "");
+	return `${getApiOrigin(profile)}/api/v1/${cleanPath}`;
 }
 
 /**

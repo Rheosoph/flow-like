@@ -759,9 +759,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</div>
 										</div>
 									</CardHeader>
-									<CardContent className="flex items-center pt-6">
-										<div className="w-full rounded-2xl border bg-background/80 px-4 py-3 shadow-sm">
-											<div className="text-sm leading-relaxed text-foreground/90">
+									<CardContent className="flex p-6">
+										<div className="flex w-full items-center rounded-2xl border bg-background/80 px-4 py-3 shadow-sm">
+											<div className="w-full text-sm leading-relaxed text-foreground/90">
 												<TextEditor
 													initialContent={meta.useCase}
 													isMarkdown

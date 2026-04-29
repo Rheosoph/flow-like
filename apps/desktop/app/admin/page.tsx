@@ -23,6 +23,7 @@ import {
 	Clock,
 	Cpu,
 	Download,
+	GraduationCap,
 	Key,
 	Lightbulb,
 	Lock,
@@ -78,6 +79,7 @@ interface AdminSection {
 	icon: LucideIcon;
 	href: string;
 	permission: GlobalPermission;
+	alternatePermissions?: GlobalPermission[];
 	actionLabel: string;
 	color: string;
 	links?: { label: string; href: string }[];
@@ -119,6 +121,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
+		],
+	},
+	{
+		title: "University",
+		description: "Review drafts, create courses, and manage learning content.",
+		icon: GraduationCap,
+		href: "/learn/admin",
+		permission: GlobalPermission.ReadCourses,
+		alternatePermissions: [GlobalPermission.WriteCourses],
+		actionLabel: "Open Courses",
+		color: "text-sky-500",
+		links: [
+			{ label: "Catalog", href: "/learn" },
+			{ label: "Authoring", href: "/learn/admin" },
 		],
 	},
 	{
@@ -294,7 +310,7 @@ export default function AdminDashboardPage() {
 					<div>
 						<h1 className="text-3xl font-bold">Admin Dashboard</h1>
 						<p className="text-muted-foreground">
-							Central hub for registry management.
+							Central hub for registry, publishing, and learning content.
 						</p>
 					</div>
 
@@ -403,7 +419,14 @@ export default function AdminDashboardPage() {
 								<SectionCard
 									key={section.title}
 									section={section}
-									hasAccess={perms.hasPermission(section.permission)}
+									hasAccess={
+										perms.hasPermission(section.permission) ||
+										Boolean(
+											section.alternatePermissions?.some((permission) =>
+												perms.hasPermission(permission),
+											),
+										)
+									}
 								/>
 							))}
 						</div>

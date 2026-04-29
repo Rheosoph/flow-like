@@ -625,7 +625,9 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 }
 
 /// Get or create the execution state store from app state
-async fn get_state_store(state: &AppState) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
+pub(crate) async fn get_state_store(
+    state: &AppState,
+) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
     // Build config with available AppState components
     let mut config =
         crate::execution::state::StateStoreConfig::default().with_db(Arc::new(state.db.clone()));

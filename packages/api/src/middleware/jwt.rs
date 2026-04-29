@@ -218,15 +218,13 @@ impl AppUser {
         match self {
             AppUser::OpenID(user) => Ok(user.sub.clone()),
             AppUser::PAT(user) => Ok(user.sub.clone()),
-            AppUser::Executor(_) => Err(AuthorizationError::from(anyhow!(
-                "Executor user is not allowed on this endpoint"
-            ))),
-            AppUser::APIKey(_) => Err(AuthorizationError::from(anyhow!(
-                "APIKey user does not have a sub"
-            ))),
-            AppUser::Unauthorized => Err(AuthorizationError::from(anyhow!(
-                "Unauthorized user does not have a sub"
-            ))),
+            AppUser::Executor(_) => Err(ApiError::forbidden(
+                "Executor user is not allowed on this endpoint",
+            )),
+            AppUser::APIKey(_) => Err(ApiError::forbidden(
+                "APIKey user is not allowed on this endpoint",
+            )),
+            AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
 
@@ -237,12 +235,10 @@ impl AppUser {
             AppUser::OpenID(user) => Ok(user.sub.clone()),
             AppUser::PAT(user) => Ok(user.sub.clone()),
             AppUser::Executor(user) => Ok(user.sub.clone()),
-            AppUser::APIKey(_) => Err(AuthorizationError::from(anyhow!(
-                "APIKey user does not have a sub"
-            ))),
-            AppUser::Unauthorized => Err(AuthorizationError::from(anyhow!(
-                "Unauthorized user does not have a sub"
-            ))),
+            AppUser::APIKey(_) => Err(ApiError::forbidden(
+                "APIKey user is not allowed on this endpoint",
+            )),
+            AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
 

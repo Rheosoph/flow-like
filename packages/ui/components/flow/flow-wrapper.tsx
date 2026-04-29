@@ -1,7 +1,11 @@
 import { DndContext, MouseSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { ReactNode } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useInvoke } from "../../hooks/use-invoke";
+import { snapshotFromBoard } from "../../lib/learn/board-bridge";
 import type { IVariable } from "../../lib/schema/flow/variable";
+import { useBackend } from "../../state/backend-state";
+import { BoardBridgeResponder } from "../learn/board-bridge-responder";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { FlowBoard } from "./flow-board";
@@ -46,6 +50,18 @@ export function FlowWrapper({
 	>();
 
 	const sensors = useSensors(mouseSensor);
+
+	const backend = useBackend();
+	const board = useInvoke(
+		backend.boardState.getBoard,
+		backend.boardState,
+		[appId, boardId, version],
+		boardId !== "" && appId !== "",
+	);
+	const snapshotFn = useMemo(
+		() => () => (board.data ? snapshotFromBoard(appId, board.data) : null),
+		[board.data, appId],
+	);
 
 	const placeNode = useCallback(
 		async (operation: "set" | "get") => {
@@ -121,6 +137,10 @@ export function FlowWrapper({
 				extraDockItems={extraDockItems}
 				renderOverlay={renderOverlay}
 				sub={sub}
+			/>
+			<BoardBridgeResponder
+				snapshot={snapshotFn}
+				announce={{ appId, boardId }}
 			/>
 			<Dialog
 				open={detail !== undefined}

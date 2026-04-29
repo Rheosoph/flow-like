@@ -15,7 +15,8 @@ export function getApiBaseUrl(): string {
 export function constructApiUrl(path: string): string {
 	const baseUrl = getApiBaseUrl();
 	const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-	return `${cleanBase}/api/v1/${path}`;
+	const cleanPath = path.replace(/^\/+/, "");
+	return `${cleanBase}/api/v1/${cleanPath}`;
 }
 
 function jsonStringify(value: unknown): string {

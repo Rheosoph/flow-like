@@ -560,6 +560,152 @@ function handleRegularConnection(
 	executeCommand(command);
 }
 
+interface FunctionReferenceEdgeLike {
+	id?: string;
+	source?: string;
+	sourceHandle?: string | null;
+	target?: string;
+	targetHandle?: string | null;
+	data?: {
+		isFnRef?: boolean;
+		[key: string]: any;
+	};
+}
+
+interface FunctionReferenceNodeIds {
+	refOutNodeId: string;
+	refInNodeId: string;
+}
+
+function nodeIdFromRefHandle(
+	handleId: string | null | undefined,
+	prefix: "ref_out_" | "ref_in_",
+): string | undefined {
+	if (!handleId?.startsWith(prefix)) return undefined;
+	const nodeId = handleId.slice(prefix.length);
+	return nodeId.length > 0 ? nodeId : undefined;
+}
+
+function functionReferenceNodeIdsFromEdgeId(
+	edgeId: string | undefined,
+): FunctionReferenceNodeIds | undefined {
+	if (!edgeId) return undefined;
+
+	const outToInSeparator = "-ref_in_";
+	if (edgeId.startsWith("ref_out_")) {
+		const separatorIndex = edgeId.indexOf(outToInSeparator);
+		if (separatorIndex !== -1) {
+			const refOutNodeId = edgeId.slice("ref_out_".length, separatorIndex);
+			const refInNodeId = edgeId.slice(
+				separatorIndex + outToInSeparator.length,
+			);
+			if (refOutNodeId && refInNodeId) {
+				return { refOutNodeId, refInNodeId };
+			}
+		}
+	}
+
+	const inToOutSeparator = "-ref_out_";
+	if (edgeId.startsWith("ref_in_")) {
+		const separatorIndex = edgeId.indexOf(inToOutSeparator);
+		if (separatorIndex !== -1) {
+			const refInNodeId = edgeId.slice("ref_in_".length, separatorIndex);
+			const refOutNodeId = edgeId.slice(
+				separatorIndex + inToOutSeparator.length,
+			);
+			if (refOutNodeId && refInNodeId) {
+				return { refOutNodeId, refInNodeId };
+			}
+		}
+	}
+
+	return undefined;
+}
+
+export function getFunctionReferenceNodeIdsFromEdge(
+	edge: FunctionReferenceEdgeLike,
+): FunctionReferenceNodeIds | undefined {
+	const sourceRefOutNodeId = nodeIdFromRefHandle(
+		edge.sourceHandle,
+		"ref_out_",
+	);
+	const sourceRefInNodeId = nodeIdFromRefHandle(edge.sourceHandle, "ref_in_");
+	const targetRefOutNodeId = nodeIdFromRefHandle(
+		edge.targetHandle,
+		"ref_out_",
+	);
+	const targetRefInNodeId = nodeIdFromRefHandle(edge.targetHandle, "ref_in_");
+
+	if (sourceRefOutNodeId && targetRefInNodeId) {
+		return {
+			refOutNodeId: sourceRefOutNodeId,
+			refInNodeId: targetRefInNodeId,
+		};
+	}
+
+	if (targetRefOutNodeId && sourceRefInNodeId) {
+		return {
+			refOutNodeId: targetRefOutNodeId,
+			refInNodeId: sourceRefInNodeId,
+		};
+	}
+
+	const nodeIdsFromEdgeId = functionReferenceNodeIdsFromEdgeId(edge.id);
+	if (nodeIdsFromEdgeId) return nodeIdsFromEdgeId;
+
+	if (edge.data?.isFnRef && edge.source && edge.target) {
+		return {
+			refOutNodeId: edge.source,
+			refInNodeId: edge.target,
+		};
+	}
+
+	return undefined;
+}
+
+export function removeFunctionReferenceCommandForEdge({
+	edge,
+	boardNodes,
+	skippedNodeIds,
+}: {
+	edge: FunctionReferenceEdgeLike;
+	boardNodes: Record<string, INode> | undefined;
+	skippedNodeIds?: Set<string>;
+}): any | undefined {
+	const nodeIds = getFunctionReferenceNodeIdsFromEdge(edge);
+	if (!nodeIds) return undefined;
+
+	const { refOutNodeId, refInNodeId } = nodeIds;
+	if (
+		skippedNodeIds?.has(refOutNodeId) ||
+		skippedNodeIds?.has(refInNodeId)
+	) {
+		return undefined;
+	}
+
+	const refOutNode = boardNodes?.[refOutNodeId];
+	if (!refOutNode) return undefined;
+
+	const currentRefs = refOutNode.fn_refs?.fn_refs ?? [];
+	const updatedRefs = currentRefs.filter((ref: string) => ref !== refInNodeId);
+	if (updatedRefs.length === currentRefs.length) return undefined;
+
+	const updatedNode = {
+		...refOutNode,
+		fn_refs: {
+			...refOutNode.fn_refs,
+			fn_refs: updatedRefs,
+			can_reference_fns: refOutNode.fn_refs?.can_reference_fns ?? false,
+			can_be_referenced_by_fns:
+				refOutNode.fn_refs?.can_be_referenced_by_fns ?? false,
+		},
+	};
+
+	return updateNodeCommand({
+		node: updatedNode,
+	});
+}
+
 interface HandleNodesChangeParams {
 	changes: any[];
 	currentNodes: any[];
@@ -739,7 +885,12 @@ export function handleEdgesChange({
 			removeChanges
 				.map((change: any) => {
 					const selectedId = change.id;
-					const [fromPinId, toPinId] = selectedId.split("-");
+					const selectedEdge: FunctionReferenceEdgeLike | undefined = edges.find(
+						(edge) => edge.id === selectedId,
+					);
+					const [fallbackFromPinId, fallbackToPinId] = selectedId.split("-");
+					const fromPinId = selectedEdge?.sourceHandle ?? fallbackFromPinId;
+					const toPinId = selectedEdge?.targetHandle ?? fallbackToPinId;
 
 					if (
 						isHandleOwnedByDeletingNode(
@@ -752,53 +903,20 @@ export function handleEdgesChange({
 						return undefined;
 					}
 
-					const isRefInConnection =
-						fromPinId?.startsWith("ref_in_") || toPinId?.startsWith("ref_in_");
-					const isRefOutConnection =
-						fromPinId?.startsWith("ref_out_") ||
-						toPinId?.startsWith("ref_out_");
+					const functionReferenceEdge = selectedEdge ?? {
+						id: selectedId,
+						sourceHandle: fromPinId,
+						targetHandle: toPinId,
+					};
+					if (getFunctionReferenceNodeIdsFromEdge(functionReferenceEdge)) {
+						return removeFunctionReferenceCommandForEdge({
+							edge: functionReferenceEdge,
+							boardNodes: boardData?.nodes,
+							skippedNodeIds: deletingNodesRef.current,
+						});
+					}
 
-					if (isRefInConnection && isRefOutConnection) {
-						const refOutHandle = fromPinId?.startsWith("ref_out_")
-							? fromPinId
-							: toPinId;
-						const refInHandle = fromPinId?.startsWith("ref_in_")
-							? fromPinId
-							: toPinId;
-
-						const refOutNodeId = refOutHandle.replace("ref_out_", "");
-						const refInNodeId = refInHandle.replace("ref_in_", "");
-
-						if (
-							deletingNodesRef.current.has(refOutNodeId) ||
-							deletingNodesRef.current.has(refInNodeId)
-						) {
-							return undefined;
-						}
-
-						const refOutNode = boardData?.nodes[refOutNodeId];
-						if (refOutNode) {
-							const currentRefs = refOutNode.fn_refs?.fn_refs ?? [];
-							const updatedRefs = currentRefs.filter(
-								(ref: string) => ref !== refInNodeId,
-							);
-
-							const updatedNode = {
-								...refOutNode,
-								fn_refs: {
-									...refOutNode.fn_refs,
-									fn_refs: updatedRefs,
-									can_reference_fns:
-										refOutNode.fn_refs?.can_reference_fns ?? false,
-									can_be_referenced_by_fns:
-										refOutNode.fn_refs?.can_be_referenced_by_fns ?? false,
-								},
-							};
-
-							return updateNodeCommand({
-								node: updatedNode,
-							});
-						}
+					if (!fromPinId || !toPinId) {
 						return undefined;
 					}
 

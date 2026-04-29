@@ -64,7 +64,8 @@ aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 
 # ----- Azure dependencies ----
 hmac = { version = "0.12", optional = true }
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.10" }
+rand = { version = "0.9" }
 urlencoding = { workspace = true }
 # -----
 
@@ -105,8 +106,8 @@ secrets-aws = ["flow-like-secrets/aws"]
 secrets-gcp = ["flow-like-secrets/gcp"]
 secrets-azure = ["flow-like-secrets/azure"]
 aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "flow-like-sinks/aws"]
-azure = ["hmac", "sha2", "urlencoding"]
-gcp = ["sha2", "rsa", "urlencoding"]
+azure = ["hmac", "urlencoding"]
+gcp = ["rsa", "urlencoding"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
 cognito = ["aws-sdk-cognitoidentityprovider", "aws-config"]
 ses = ["aws-sdk-sesv2", "aws-config"]

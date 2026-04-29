@@ -10,6 +10,7 @@ use flow_like::hub::Lookup;
 use flow_like_types::Value;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -23,6 +24,11 @@ pub struct UserLookupResponse {
     additional_information: Option<Value>,
     description: Option<String>,
     created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct UserBatchLookupBody {
+    pub user_ids: Vec<String>,
 }
 
 impl UserLookupResponse {
@@ -96,6 +102,54 @@ pub async fn user_lookup(
     }
 
     Err(ApiError::NOT_FOUND)
+}
+
+#[utoipa::path(
+    post,
+    path = "/user/lookup",
+    tag = "user",
+    request_body = UserBatchLookupBody,
+    responses(
+        (status = 200, description = "Users found for the requested IDs", body = Vec<UserLookupResponse>),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
+#[tracing::instrument(name = "POST /user/lookup (batch)", skip(state, user, body))]
+pub async fn user_batch_lookup(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Json(body): Json<UserBatchLookupBody>,
+) -> Result<Json<Vec<UserLookupResponse>>, ApiError> {
+    user.sub()?;
+    let lookup_config = state.platform_config.lookup.clone();
+    let ids = body
+        .user_ids
+        .into_iter()
+        .filter(|id| !id.trim().is_empty())
+        .take(100)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let found_users = user::Entity::find()
+        .filter(user::Column::Id.is_in(ids))
+        .limit(100)
+        .all(&state.db)
+        .await?;
+
+    let mut responses = Vec::with_capacity(found_users.len());
+    for user_info in found_users {
+        responses.push(UserLookupResponse::parse(user_info, lookup_config.clone(), &state).await);
+    }
+
+    Ok(Json(responses))
 }
 
 #[utoipa::path(

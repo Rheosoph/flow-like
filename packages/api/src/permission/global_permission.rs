@@ -18,5 +18,7 @@ bitflags! {
         const ReadSolutions     =   0b00001000_00000000;
         const WriteSolutions    =   0b00010000_00000000;
         const ManagePackages    =   0b00100000_00000000;
+        const ReadCourses       =   0b01000000_00000000;
+        const WriteCourses      =   0b10000000_00000000;
     }
 }

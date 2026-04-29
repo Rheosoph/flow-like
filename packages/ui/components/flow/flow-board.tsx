@@ -131,6 +131,8 @@ import {
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
+	getFunctionReferenceNodeIdsFromEdge,
+	removeFunctionReferenceCommandForEdge,
 } from "../../lib/flow-board-helpers";
 import {
 	handleCopy,
@@ -1503,6 +1505,23 @@ export function FlowBoard({
 		}
 
 		for (const edge of edges.filter((currentEdge) => currentEdge.selected)) {
+			const functionReferenceNodeIds = getFunctionReferenceNodeIdsFromEdge(edge);
+			if (functionReferenceNodeIds) {
+				if (
+					selectedNodeIds.has(functionReferenceNodeIds.refOutNodeId) ||
+					selectedNodeIds.has(functionReferenceNodeIds.refInNodeId)
+				) {
+					continue;
+				}
+
+				const command = removeFunctionReferenceCommandForEdge({
+					edge,
+					boardNodes: board.data.nodes,
+				});
+				if (command) commands.push(command);
+				continue;
+			}
+
 			if (
 				isHandleOwnedBySelectedNode(edge.sourceHandle) ||
 				isHandleOwnedBySelectedNode(edge.targetHandle)
@@ -2305,6 +2324,17 @@ export function FlowBoard({
 
 			if (!edgeReconnectSuccessful.current) {
 				const { source, target, sourceHandle, targetHandle } = edge;
+				const functionReferenceCommand = removeFunctionReferenceCommandForEdge({
+					edge: { id: edge.id, source, sourceHandle, target, targetHandle },
+					boardNodes: board.data?.nodes,
+				});
+				if (functionReferenceCommand) {
+					await executeCommand(functionReferenceCommand);
+					setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+					edgeReconnectSuccessful.current = true;
+					return;
+				}
+
 				const from_node = pinToNode(sourceHandle);
 				const to_node = pinToNode(targetHandle);
 				if (!from_node || !to_node) return;
@@ -2320,7 +2350,7 @@ export function FlowBoard({
 
 			edgeReconnectSuccessful.current = true;
 		},
-		[setEdges, pinToNode, version, executeCommand],
+		[setEdges, pinToNode, version, executeCommand, board.data?.nodes],
 	);
 
 	const onContextMenuCB = useCallback((event: any) => {

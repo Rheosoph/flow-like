@@ -7,6 +7,7 @@ pub mod audit;
 pub mod auth;
 pub mod bit;
 pub mod chat;
+pub mod course;
 pub mod embeddings;
 pub mod execution;
 pub mod health;
