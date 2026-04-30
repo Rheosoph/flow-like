@@ -20,6 +20,9 @@
 		},
 		"provider": {
 			"$ref": "#/definitions/ModelProvider"
+		},
+		"remote": {
+			"$ref": "#/definitions/RemoteExecutionConfig"
 		}
 	},
 	"definitions": {
@@ -39,8 +42,36 @@
 				},
 				"version": {
 					"type": ["string", "null"]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
 				}
 			}
+		},
+		"RemoteExecutionConfig": {
+			"type": "object",
+			"properties": {
+				"endpoint": {
+					"type": ["string", "null"],
+					"description": "Deprecated per-bit endpoint URL. Remote embeddings use the shared INTERNAL_EMBEDDING_ENDPOINT secret resolved by the API."
+				},
+				"secret_name": {
+					"type": ["string", "null"],
+					"description": "Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET."
+				},
+				"implementation": {
+					"$ref": "#/definitions/RemoteEmbeddingProvider"
+				},
+				"model_id": {
+					"type": ["string", "null"],
+					"description": "Deployed model ID for the shared internal gateway"
+				}
+			}
+		},
+		"RemoteEmbeddingProvider": {
+			"type": "string",
+			"enum": ["Internal"]
 		}
 	}
 }

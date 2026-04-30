@@ -2,6 +2,7 @@ export interface IImageEmbeddingModelParameters {
 	languages: string[];
 	pooling: IPooling;
 	provider: IModelProvider;
+	remote?: null | IRemoteExecutionConfig;
 	vector_length: number;
 	[property: string]: any;
 }
@@ -14,7 +15,20 @@ export enum IPooling {
 
 export interface IModelProvider {
 	model_id?: null | string;
+	params?: { [key: string]: any } | null;
 	provider_name: string;
 	version?: null | string;
 	[property: string]: any;
+}
+
+export interface IRemoteExecutionConfig {
+	endpoint?: null | string;
+	implementation?: null | IRemoteEmbeddingProvider;
+	model_id?: null | string;
+	secret_name?: null | string;
+	[property: string]: any;
+}
+
+export enum IRemoteEmbeddingProvider {
+	Internal = "Internal",
 }

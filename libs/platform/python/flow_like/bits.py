@@ -32,16 +32,24 @@ def _has_remote_provider(bit: dict[str, Any]) -> bool:
     """Return True if the bit is backed by a remote/hosted provider."""
     params = bit.get("parameters", {}) or {}
 
-    # LLM/VLM pattern: provider_name starts with "hosted"
+    # Hosted/internal pattern: provider metadata identifies server-side models.
     provider = params.get("provider", params)
     if isinstance(provider, dict):
         name = provider.get("provider_name", "")
-        if isinstance(name, str) and name.lower().startswith("hosted"):
-            return True
+        if isinstance(name, str):
+            normalized = name.lower()
+            if normalized.startswith("hosted"):
+                return True
+            if normalized in {"premium", "internal"} and provider.get("model_id"):
+                return True
 
-    # Embedding pattern: remote config with endpoint + implementation
+    # Embedding pattern: remote config with implementation + model id.
     remote = params.get("remote")
-    if isinstance(remote, dict) and remote.get("endpoint") and remote.get("implementation"):
+    if (
+        isinstance(remote, dict)
+        and remote.get("implementation")
+        and (remote.get("model_id") or (isinstance(provider, dict) and provider.get("model_id")))
+    ):
         return True
 
     return False
