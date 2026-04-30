@@ -63,7 +63,7 @@ pub async fn create_widget(
         app.widget_ids
     );
 
-    let mut widget = Widget::new(&widget_id, &name, format!("{}-root", widget_id));
+    let mut widget = Widget::new(&widget_id, &name, "root");
     if let Some(desc) = description {
         widget = widget.with_description(desc);
     }

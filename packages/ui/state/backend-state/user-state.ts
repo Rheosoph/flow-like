@@ -54,6 +54,7 @@ export interface ITierInfo {
 	max_llm_calls?: number;
 	llm_tiers: string[];
 	price?: IPriceInfo;
+	contact_url?: string;
 }
 
 export interface IPricingResponse {

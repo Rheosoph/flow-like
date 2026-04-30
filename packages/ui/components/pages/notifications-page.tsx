@@ -60,13 +60,14 @@ function NotificationIcon({
 	read,
 }: Readonly<{ icon?: string; read: boolean }>) {
 	const value = icon?.trim();
+	const dimmed = read && "opacity-70 grayscale";
 
 	if (value && isImageIcon(value)) {
 		return (
 			<img
 				src={value}
 				alt=""
-				className="size-4 rounded-sm object-contain"
+				className={cn("size-6 rounded-sm object-contain", dimmed)}
 				onError={(event) => {
 					const image = event.currentTarget;
 					if (image.dataset.fallbackIcon === "true") return;
@@ -78,17 +79,23 @@ function NotificationIcon({
 	}
 
 	if (value) {
-		return <span className="text-sm leading-none">{value}</span>;
+		return (
+			<span
+				className={cn(
+					"flex size-6 items-center justify-center text-base leading-none",
+					dimmed,
+				)}
+			>
+				{value}
+			</span>
+		);
 	}
 
 	return (
 		<img
 			src={FLOWLIKE_NOTIFICATION_ICON}
 			alt=""
-			className={cn(
-				"size-4 rounded-sm object-contain",
-				read && "opacity-70 grayscale",
-			)}
+			className={cn("size-6 rounded-sm object-contain", dimmed)}
 		/>
 	);
 }
@@ -755,6 +762,19 @@ function NotificationCard({
 		router.push(notification.link);
 	}, [notification, onMarkRead, router]);
 
+	const hasLink = Boolean(notification.link);
+
+	const handleCardKeyDown = useCallback(
+		(event: React.KeyboardEvent<HTMLDivElement>) => {
+			if (!hasLink) return;
+			if (event.key === "Enter" || event.key === " ") {
+				event.preventDefault();
+				handleLinkClick();
+			}
+		},
+		[handleLinkClick, hasLink],
+	);
+
 	return (
 		<motion.div
 			layout
@@ -764,8 +784,14 @@ function NotificationCard({
 			transition={{ duration: 0.22, delay: index * 0.035 }}
 		>
 			<div
+				role={hasLink ? "button" : undefined}
+				tabIndex={hasLink ? 0 : undefined}
+				onClick={hasLink ? handleLinkClick : undefined}
+				onKeyDown={hasLink ? handleCardKeyDown : undefined}
 				className={cn(
 					"group rounded-xl border px-4 py-3 transition-colors",
+					hasLink &&
+						"cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
 					notification.read
 						? "border-border/50 bg-background/85 hover:border-border/70 hover:bg-background/95"
 						: "border-primary/20 bg-primary/3 hover:border-primary/30 hover:bg-primary/5",
@@ -828,7 +854,10 @@ function NotificationCard({
 						<div className="mt-2 flex gap-2">
 							{notification.link && (
 								<Button
-									onClick={handleLinkClick}
+									onClick={(event) => {
+										event.stopPropagation();
+										handleLinkClick();
+									}}
 									variant="outline"
 									size="sm"
 									className="h-7 gap-1.5 px-3 text-xs"
@@ -840,7 +869,10 @@ function NotificationCard({
 
 							{!notification.read && (
 								<Button
-									onClick={() => onMarkRead(notification.id)}
+									onClick={(event) => {
+										event.stopPropagation();
+										onMarkRead(notification.id);
+									}}
 									variant="ghost"
 									size="sm"
 									className="h-7 gap-1.5 px-3 text-xs"
@@ -851,7 +883,10 @@ function NotificationCard({
 							)}
 
 							<Button
-								onClick={() => onDelete(notification.id)}
+								onClick={(event) => {
+									event.stopPropagation();
+									onDelete(notification.id);
+								}}
 								variant="ghost"
 								size="sm"
 								className="h-7 gap-1.5 px-3 text-xs text-destructive hover:text-destructive"

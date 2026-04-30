@@ -19,6 +19,8 @@ pub struct TierInfo {
     pub llm_tiers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<PriceInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -47,9 +49,13 @@ impl From<(&str, &UserTier)> for TierInfo {
             max_llm_calls: tier.max_llm_calls,
             llm_tiers: tier.llm_tiers.clone(),
             price: None,
+            contact_url: None,
         }
     }
 }
+
+const ENTERPRISE_TIER: &str = "ENTERPRISE";
+const ENTERPRISE_CONTACT_URL: &str = "mailto:enterprise@flow-like.com";
 
 #[utoipa::path(
     get,
@@ -81,6 +87,14 @@ pub async fn get_pricing(
 
     for (tier_name, tier_config) in &state.platform_config.tiers {
         let mut tier_info = TierInfo::from((tier_name.as_str(), tier_config));
+
+        if tier_name.eq_ignore_ascii_case(ENTERPRISE_TIER) {
+            tier_info.product_id = None;
+            tier_info.price = None;
+            tier_info.contact_url = Some(ENTERPRISE_CONTACT_URL.to_string());
+            tiers.insert(tier_name.clone(), tier_info);
+            continue;
+        }
 
         if let (Some(stripe_client), Some(product_id)) =
             (&state.stripe_client, &tier_config.product_id)

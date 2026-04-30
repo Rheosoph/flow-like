@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Crown, Loader2, Sparkles, Zap } from "lucide-react";
+import { Check, Crown, Loader2, Mail, Sparkles, Zap } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type {
 	IPricingResponse,
@@ -42,6 +42,9 @@ const TIER_ICONS: Record<string, React.ReactNode> = {
 	PRO: <Crown className="h-5 w-5" />,
 	ENTERPRISE: <Crown className="h-5 w-5" />,
 };
+
+const ENTERPRISE_TIER = "ENTERPRISE";
+const ENTERPRISE_CONTACT_URL = "mailto:enterprise@flow-like.com";
 
 function formatBytes(bytes: number): string {
 	if (bytes === 0) return "0 B";
@@ -94,9 +97,11 @@ function TierCard({
 	}, [tier]);
 
 	const isPaid = tierKey !== "FREE" && tier.product_id;
+	const isEnterprise = tierKey === ENTERPRISE_TIER;
 	const hasExistingSubscription = currentTier !== "FREE";
 	const colorClass = TIER_COLORS[tierKey] || TIER_COLORS.FREE;
 	const icon = TIER_ICONS[tierKey] || TIER_ICONS.FREE;
+	const contactUrl = tier.contact_url ?? ENTERPRISE_CONTACT_URL;
 
 	return (
 		<Card
@@ -118,7 +123,9 @@ function TierCard({
 				</div>
 				<CardTitle className="text-xl">{tier.name || tierKey}</CardTitle>
 				<CardDescription>
-					{tier.price ? (
+					{isEnterprise ? (
+						<span className="text-2xl font-bold text-foreground">Custom</span>
+					) : tier.price ? (
 						<span className="text-2xl font-bold text-foreground">
 							{formatPrice(
 								tier.price.amount,
@@ -145,6 +152,13 @@ function TierCard({
 				{isCurrentTier ? (
 					<Button className="w-full" variant="outline" disabled>
 						Current Plan
+					</Button>
+				) : isEnterprise ? (
+					<Button className="w-full" asChild>
+						<a href={contactUrl}>
+							<Mail className="h-4 w-4" />
+							Contact Enterprise
+						</a>
 					</Button>
 				) : isPaid ? (
 					<Button
