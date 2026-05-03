@@ -1,8 +1,18 @@
 "use client";
 
-import { type ReactNode, createContext, useCallback, useContext } from "react";
+import {
+	type ReactNode,
+	createContext,
+	useCallback,
+	useContext,
+	useState,
+} from "react";
 import { useBackend } from "../../state/backend-state";
-import { useEventRelevantValues } from "./ActionHandler";
+import {
+	useCollectEventElements,
+	useEventRelevantValues,
+	useMarkComponentTriggering,
+} from "./ActionHandler";
 import type {
 	ActionBinding,
 	BoundValue,
@@ -16,6 +26,7 @@ export interface WidgetActionContextValue {
 	triggerAction: (
 		actionId: string,
 		context?: Record<string, unknown>,
+		triggeringComponentId?: string,
 	) => Promise<void>;
 	getBinding: (actionId: string) => ActionBinding | null;
 }
@@ -83,6 +94,8 @@ export function WidgetActionProvider({
 }: WidgetActionProviderProps) {
 	const backend = useBackend();
 	const collectInputValues = useEventRelevantValues();
+	const collectElements = useCollectEventElements();
+	const markComponentTriggering = useMarkComponentTriggering();
 
 	const getBinding = useCallback(
 		(actionId: string): ActionBinding | null => {
@@ -92,7 +105,11 @@ export function WidgetActionProvider({
 	);
 
 	const triggerAction = useCallback(
-		async (actionId: string, context: Record<string, unknown> = {}) => {
+		async (
+			actionId: string,
+			context: Record<string, unknown> = {},
+			triggeringComponentId?: string,
+		) => {
 			const binding = getBinding(actionId);
 			if (!binding) {
 				console.warn(`[WidgetAction] No binding found for action: ${actionId}`);
@@ -105,71 +122,83 @@ export function WidgetActionProvider({
 				return;
 			}
 
-			if ("workflow" in binding) {
-				const { flowId, inputMappings } = binding.workflow;
+			if (triggeringComponentId) {
+				markComponentTriggering?.(triggeringComponentId, true);
+			}
 
-				const inputValues = collectInputValues();
-				const payload: Record<string, unknown> = {
-					_action_id: actionId,
-					_widget_instance_id: instance.instanceId,
-					_widget_id: instance.widgetId,
-					_surface_id: surfaceId,
-					_input_values: inputValues,
-				};
+			try {
+				if ("workflow" in binding) {
+					const { flowId, inputMappings } = binding.workflow;
 
-				for (const field of action.contextSchema) {
-					const mapping = inputMappings?.[field.name];
-					if (mapping) {
-						payload[field.name] = resolveBoundValue(
-							mapping,
-							context,
-							field.name,
-						);
-					} else {
-						payload[field.name] = context[field.name];
+					const inputValues = collectInputValues();
+					const elements = await collectElements();
+					const payload: Record<string, unknown> = {
+						_action_id: actionId,
+						_widget_instance_id: instance.instanceId,
+						_widget_id: instance.widgetId,
+						_surface_id: surfaceId,
+						_input_values: inputValues,
+						_elements: elements,
+					};
+
+					for (const field of action.contextSchema) {
+						const mapping = inputMappings?.[field.name];
+						if (mapping) {
+							payload[field.name] = resolveBoundValue(
+								mapping,
+								context,
+								field.name,
+							);
+						} else {
+							payload[field.name] = context[field.name];
+						}
 					}
-				}
 
-				try {
-					console.log("[WidgetAction] Executing workflow:", {
-						appId,
-						flowId,
-						payload,
-					});
-
-					await backend.boardState.executeBoard(
-						appId,
-						flowId,
-						{
-							id: "widget_action",
+					try {
+						console.log("[WidgetAction] Executing workflow:", {
+							appId,
+							flowId,
 							payload,
-						},
-						false,
-						undefined,
-						onA2UIEvents,
+						});
+
+						await backend.boardState.executeBoard(
+							appId,
+							flowId,
+							{
+								id: "widget_action",
+								payload,
+							},
+							false,
+							undefined,
+							onA2UIEvents,
+						);
+					} catch (error) {
+						console.error("[WidgetAction] Failed to execute workflow:", error);
+					}
+				} else if ("command" in binding) {
+					const { commandName, args } = binding.command;
+					const resolvedArgs: Record<string, unknown> = {};
+					for (const [key, value] of Object.entries(args)) {
+						resolvedArgs[key] = resolveBoundValue(value, context, key);
+					}
+					console.log("[WidgetAction] Executing command:", {
+						command: commandName,
+						args: resolvedArgs,
+					});
+					window.dispatchEvent(
+						new CustomEvent("a2ui:command", {
+							detail: {
+								command: commandName,
+								args: resolvedArgs,
+								context,
+							},
+						}),
 					);
-				} catch (error) {
-					console.error("[WidgetAction] Failed to execute workflow:", error);
 				}
-			} else if ("command" in binding) {
-				const { commandName, args } = binding.command;
-				const resolvedArgs: Record<string, unknown> = {};
-				for (const [key, value] of Object.entries(args)) {
-					resolvedArgs[key] = resolveBoundValue(value, context, key);
+			} finally {
+				if (triggeringComponentId) {
+					markComponentTriggering?.(triggeringComponentId, false);
 				}
-				console.log("[WidgetAction] Executing command:", {
-					command: commandName,
-					args: resolvedArgs,
-				});
-				window.dispatchEvent(
-					new CustomEvent("a2ui:command", {
-						detail: {
-							command: commandName,
-							args: resolvedArgs,
-							context,
-						},
-					}),
-				);
 			}
 		},
 		[
@@ -181,6 +210,8 @@ export function WidgetActionProvider({
 			getBinding,
 			onA2UIEvents,
 			collectInputValues,
+			collectElements,
+			markComponentTriggering,
 		],
 	);
 
@@ -211,14 +242,22 @@ export function useWidgetActions(): WidgetActionContextValue {
 	return context;
 }
 
-export function useWidgetAction(actionId: string) {
+export function useWidgetAction(actionId: string, componentId?: string) {
 	const { triggerAction, getBinding, widgetActions } = useWidgetActions();
 	const action = widgetActions.find((a) => a.id === actionId);
 	const binding = getBinding(actionId);
+	const [isLoading, setIsLoading] = useState(false);
 
 	const trigger = useCallback(
-		(context?: Record<string, unknown>) => triggerAction(actionId, context),
-		[triggerAction, actionId],
+		async (context?: Record<string, unknown>) => {
+			setIsLoading(true);
+			try {
+				await triggerAction(actionId, context, componentId);
+			} finally {
+				setIsLoading(false);
+			}
+		},
+		[triggerAction, actionId, componentId],
 	);
 
 	return {
@@ -226,5 +265,6 @@ export function useWidgetAction(actionId: string) {
 		binding,
 		trigger,
 		isBound: !!binding,
+		isLoading,
 	};
 }

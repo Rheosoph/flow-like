@@ -354,6 +354,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::bit::delete_bit::delete_bit,
         crate::routes::admin::sinks::list_tokens::list_tokens,
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
+        crate::routes::admin::runs::sweep_runs,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,

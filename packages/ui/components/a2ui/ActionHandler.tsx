@@ -36,60 +36,93 @@ function toBoundValue(value: unknown): Record<string, unknown> {
 	return { literalString: JSON.stringify(value) };
 }
 
+/**
+ * Flattens surface.components plus widget-instance inline definitions into a
+ * single `surfaceId/componentId -> element` map. Widget instances expose their
+ * children through `inlineWidgetDef.components`, so a plain Object.entries on
+ * surface.components misses them and Get Element nodes can't resolve those ids.
+ */
+function flattenSurfaceComponentsForElements(
+	components: Record<string, SurfaceComponent> | undefined,
+	surfaceId: string,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	if (!components || !surfaceId) return result;
+
+	for (const [id, comp] of Object.entries(components)) {
+		result[`${surfaceId}/${id}`] = comp;
+
+		const compData = (comp as unknown as Record<string, unknown>).component as
+			| Record<string, unknown>
+			| undefined;
+
+		if (compData?.type !== "widgetInstance") continue;
+
+		const inlineDef = compData.inlineWidgetDef as
+			| {
+					components?: Array<{
+						id: string;
+						component: unknown;
+						style?: unknown;
+					}>;
+			  }
+			| undefined;
+
+		for (const inner of inlineDef?.components ?? []) {
+			if (!inner?.id) continue;
+			const key = `${surfaceId}/${inner.id}`;
+			if (result[key] !== undefined) continue;
+			result[key] = {
+				id: inner.id,
+				component: inner.component,
+				style: inner.style,
+			};
+		}
+	}
+
+	return result;
+}
+
 function mergeStoredElementValues(
 	elementsMap: Record<string, unknown>,
 	storedValues: Record<string, unknown>,
 	components: Record<string, SurfaceComponent> | undefined,
 	surfaceId: string,
 ): Record<string, unknown> {
-	const mergedElements: Record<string, unknown> = {};
+	const flatComponents = flattenSurfaceComponentsForElements(
+		components,
+		surfaceId,
+	);
+	const mergedElements: Record<string, unknown> = { ...flatComponents };
 
 	for (const [elementId, element] of Object.entries(elementsMap)) {
+		mergedElements[elementId] = element;
+	}
+
+	for (const [elementId, element] of Object.entries(mergedElements)) {
 		const storedValue = storedValues[elementId];
-		if (storedValue !== undefined) {
-			const comp = element as Record<string, unknown>;
-			const componentData = comp.component as
-				| Record<string, unknown>
-				| undefined;
-			if (componentData) {
-				mergedElements[elementId] = {
-					...comp,
-					component: {
-						...componentData,
-						value: toBoundValue(storedValue),
-					},
-				};
-			} else {
-				mergedElements[elementId] = element;
-			}
-		} else {
-			mergedElements[elementId] = element;
+		if (storedValue === undefined) continue;
+		const comp = element as Record<string, unknown>;
+		const componentData = comp.component as Record<string, unknown> | undefined;
+		if (componentData) {
+			mergedElements[elementId] = {
+				...comp,
+				component: {
+					...componentData,
+					value: toBoundValue(storedValue),
+				},
+			};
 		}
 	}
 
 	for (const [elementId, storedValue] of Object.entries(storedValues)) {
 		if (mergedElements[elementId] !== undefined) continue;
-		const prefix = `${surfaceId}/`;
-		if (!elementId.startsWith(prefix)) continue;
+		if (!elementId.startsWith(`${surfaceId}/`)) continue;
 
-		const componentId = elementId.slice(prefix.length);
-		const component = components?.[componentId];
-		if (!component) continue;
-
-		const componentRecord = component as unknown as Record<string, unknown>;
-		const componentData = componentRecord.component as
-			| Record<string, unknown>
-			| undefined;
-
-		mergedElements[elementId] = componentData
-			? {
-					...componentRecord,
-					component: {
-						...componentData,
-						value: toBoundValue(storedValue),
-					},
-				}
-			: componentRecord;
+		mergedElements[elementId] = {
+			id: elementId.slice(`${surfaceId}/`.length),
+			component: { value: toBoundValue(storedValue) },
+		};
 	}
 
 	return mergedElements;
@@ -174,6 +207,8 @@ interface ActionContextValue {
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
 	getElementValues: () => Record<string, unknown>;
+	triggeringComponents: ReadonlySet<string>;
+	markComponentTriggering: (componentId: string, on: boolean) => void;
 }
 
 const ActionContext = createContext<ActionContextValue | null>(null);
@@ -232,6 +267,29 @@ export function ActionProvider({
 		);
 		return elementValuesRef.current;
 	}, []);
+
+	// Ref-counted set of components that are currently triggering an async action.
+	// Components consume this to render a loading state for the duration of their action.
+	const triggeringCountsRef = useRef<Map<string, number>>(new Map());
+	const [triggeringComponents, setTriggeringComponents] = useState<
+		ReadonlySet<string>
+	>(() => new Set());
+
+	const markComponentTriggering = useCallback(
+		(componentId: string, on: boolean) => {
+			if (!componentId) return;
+			const counts = triggeringCountsRef.current;
+			const current = counts.get(componentId) ?? 0;
+			const next = on ? current + 1 : Math.max(0, current - 1);
+			if (next === 0) {
+				counts.delete(componentId);
+			} else {
+				counts.set(componentId, next);
+			}
+			setTriggeringComponents(new Set(counts.keys()));
+		},
+		[],
+	);
 
 	// Wrap onAction to intercept change events and store element values in memory
 	const wrappedOnAction = useCallback(
@@ -460,6 +518,8 @@ export function ActionProvider({
 				openDialog,
 				closeDialog,
 				getElementValues,
+				triggeringComponents,
+				markComponentTriggering,
 			}}
 		>
 			{children}
@@ -522,6 +582,84 @@ export function useEventRelevantValues() {
 	return collectInputValues;
 }
 
+/**
+ * Hook that returns whether a given component is currently triggering an action.
+ * Used by interactive components to show a spinner while their action runs.
+ */
+export function useIsComponentTriggering(
+	componentId: string | undefined,
+): boolean {
+	const context = useContext(ActionContext);
+	if (!componentId) return false;
+	return context?.triggeringComponents?.has(componentId) ?? false;
+}
+
+/**
+ * Hook that returns the imperative `markComponentTriggering(id, on)` function
+ * from ActionContext. Used by alternative action paths (e.g. WidgetActionHandler)
+ * to register loading state in the same central map that A2UIButton consumes.
+ */
+export function useMarkComponentTriggering() {
+	return useContext(ActionContext)?.markComponentTriggering;
+}
+
+/**
+ * Hook to fetch and merge frontend elements for the current surface.
+ * Returns a function that produces the `_elements` map sent in workflow payloads.
+ */
+export function useCollectEventElements() {
+	const context = useContext(ActionContext);
+	const backend = useBackend();
+	const appId = context?.appId;
+	const boardId = context?.boardId;
+	const surfaceId = context?.surfaceId;
+	const components = context?.components;
+	const getElementValues = context?.getElementValues;
+
+	return useCallback(async (): Promise<Record<string, unknown>> => {
+		const fallbackElements = (): Record<string, unknown> =>
+			flattenSurfaceComponentsForElements(components, surfaceId ?? "");
+
+		let elementsMap: Record<string, unknown> | undefined;
+		if (appId && boardId) {
+			try {
+				elementsMap = await backend.boardState.getExecutionElements(
+					appId,
+					boardId,
+					surfaceId || "",
+					false,
+				);
+				if (!elementsMap || Object.keys(elementsMap).length === 0) {
+					elementsMap = fallbackElements();
+				}
+			} catch (err) {
+				console.warn(
+					"[A2UI] Failed to fetch execution elements, falling back to all components:",
+					err,
+				);
+				elementsMap = fallbackElements();
+			}
+		} else {
+			elementsMap = fallbackElements();
+		}
+
+		const storedValues = getElementValues?.() ?? {};
+		return mergeStoredElementValues(
+			elementsMap,
+			storedValues,
+			components,
+			surfaceId || "",
+		);
+	}, [
+		appId,
+		boardId,
+		surfaceId,
+		components,
+		getElementValues,
+		backend.boardState,
+	]);
+}
+
 export function useActions() {
 	const context = useContext(ActionContext);
 	if (!context) {
@@ -577,6 +715,7 @@ export function useExecuteAction() {
 		openDialog,
 		closeDialog,
 		getElementValues,
+		markComponentTriggering,
 	} = useContext(ActionContext) ?? {};
 
 	const handleA2UIEvents = useCallback(
@@ -749,7 +888,7 @@ export function useExecuteAction() {
 	);
 
 	const executeAction = useCallback(
-		async (action: Action | undefined) => {
+		async (action: Action | undefined, triggeringComponentId?: string) => {
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) return;
 
@@ -760,390 +899,401 @@ export function useExecuteAction() {
 				context,
 				appId,
 				isPreviewMode,
+				triggeringComponentId,
 			});
 
-			switch (name) {
-				case "navigate_page": {
-					const route = context.route as string | undefined;
-					const queryParamsRaw = context.queryParams as
-						| string
-						| Record<string, string>
-						| undefined;
+			if (triggeringComponentId) {
+				markComponentTriggering?.(triggeringComponentId, true);
+			}
 
-					// Parse queryParams if it's a JSON string
-					let extraParams: Record<string, string> = {};
-					if (typeof queryParamsRaw === "string" && queryParamsRaw.trim()) {
-						try {
-							extraParams = JSON.parse(queryParamsRaw);
-						} catch {
-							console.warn(
-								"[ActionHandler] Invalid queryParams JSON:",
-								queryParamsRaw,
-							);
+			try {
+				switch (name) {
+					case "navigate_page": {
+						const route = context.route as string | undefined;
+						const queryParamsRaw = context.queryParams as
+							| string
+							| Record<string, string>
+							| undefined;
+
+						// Parse queryParams if it's a JSON string
+						let extraParams: Record<string, string> = {};
+						if (typeof queryParamsRaw === "string" && queryParamsRaw.trim()) {
+							try {
+								extraParams = JSON.parse(queryParamsRaw);
+							} catch {
+								console.warn(
+									"[ActionHandler] Invalid queryParams JSON:",
+									queryParamsRaw,
+								);
+							}
+						} else if (typeof queryParamsRaw === "object" && queryParamsRaw) {
+							extraParams = queryParamsRaw;
 						}
-					} else if (typeof queryParamsRaw === "object" && queryParamsRaw) {
-						extraParams = queryParamsRaw;
-					}
 
-					console.log("[ActionHandler] navigate_page:", {
-						route,
-						appId,
-						extraParams,
-					});
-					if (route) {
-						// Build query params URL for internal routes
-						if (
-							appId &&
-							!route.startsWith("/use") &&
-							!route.startsWith("http")
-						) {
-							// Parse any query params that might be in the route itself
-							const [routePath, routeQueryString] = route.split("?");
-							const params = new URLSearchParams();
-							params.set("id", appId);
-							params.set("route", routePath);
+						console.log("[ActionHandler] navigate_page:", {
+							route,
+							appId,
+							extraParams,
+						});
+						if (route) {
+							// Build query params URL for internal routes
+							if (
+								appId &&
+								!route.startsWith("/use") &&
+								!route.startsWith("http")
+							) {
+								// Parse any query params that might be in the route itself
+								const [routePath, routeQueryString] = route.split("?");
+								const params = new URLSearchParams();
+								params.set("id", appId);
+								params.set("route", routePath);
 
-							// Add query params from the route string
-							if (routeQueryString) {
-								const routeParams = new URLSearchParams(routeQueryString);
-								routeParams.forEach((value, key) => {
+								// Add query params from the route string
+								if (routeQueryString) {
+									const routeParams = new URLSearchParams(routeQueryString);
+									routeParams.forEach((value, key) => {
+										params.set(key, value);
+									});
+								}
+
+								// Add extra query params (these override route params)
+								for (const [key, value] of Object.entries(extraParams)) {
 									params.set(key, value);
-								});
+								}
+								const navUrl = `/use?${params.toString()}`;
+								console.log("[ActionHandler] Navigating to:", navUrl);
+								router.push(navUrl);
+							} else {
+								console.log("[ActionHandler] Fallback navigation to:", route);
+								router.push(route);
 							}
+						}
+						break;
+					}
+					case "external_link": {
+						const url = context.url as string | undefined;
+						if (url) {
+							window.open(url, "_blank", "noopener,noreferrer");
+						}
+						break;
+					}
+					case "workflow_event": {
+						const nodeId = context.nodeId as string | undefined;
+						const actionBoardId = context.boardId as string | undefined;
+						const boardVersion = context.boardVersion as
+							| [number, number, number]
+							| undefined;
+						const contextAppId = context.appId as string | undefined;
 
-							// Add extra query params (these override route params)
-							for (const [key, value] of Object.entries(extraParams)) {
-								params.set(key, value);
+						const effectiveAppId = contextAppId || appId;
+						const effectiveBoardId = actionBoardId || boardId;
+
+						if (nodeId && effectiveBoardId && effectiveAppId) {
+							try {
+								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
+								let elementsMap: Record<string, unknown> | undefined;
+
+								console.log("[A2UI] workflow_event execution context:", {
+									nodeId,
+									effectiveAppId,
+									effectiveBoardId,
+									boardVersion,
+									surfaceId,
+									cacheKey,
+									hadCachedElements: false,
+									componentIds: Object.keys(components ?? {}),
+								});
+
+								try {
+									const currentBoard = await backend.boardState.getBoard(
+										effectiveAppId,
+										effectiveBoardId,
+										undefined,
+									);
+									console.log(
+										"[A2UI] workflow_event local board element refs:",
+										{
+											boardId: effectiveBoardId,
+											pageIds: currentBoard.page_ids,
+											updatedAt: currentBoard.updated_at,
+											elementRefs: summarizeBoardElementRefs(currentBoard),
+										},
+									);
+								} catch (boardErr) {
+									console.warn(
+										"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
+										boardErr,
+									);
+								}
+
+								// Always fetch current execution elements in preview mode.
+								// The flow graph can change without any cache invalidation signal.
+								try {
+									elementsMap = await backend.boardState.getExecutionElements(
+										effectiveAppId,
+										effectiveBoardId,
+										surfaceId || "",
+										false,
+									);
+
+									if (!elementsMap || Object.keys(elementsMap).length === 0) {
+										elementsMap = flattenSurfaceComponentsForElements(
+											components,
+											surfaceId ?? "",
+										);
+									}
+								} catch (err) {
+									console.warn(
+										"[A2UI] Failed to fetch execution elements, falling back to all components:",
+										err,
+									);
+									elementsMap = flattenSurfaceComponentsForElements(
+										components,
+										surfaceId ?? "",
+									);
+								}
+
+								// Merge in-memory element values (user input state)
+								const storedValues = getElementValues?.() ?? {};
+								console.log("[A2UI] workflow_event merging elements:", {
+									elementsMapKeys: Object.keys(elementsMap),
+									storedValuesKeys: Object.keys(storedValues),
+									storedValues,
+								});
+
+								for (const [elementId, element] of Object.entries(
+									elementsMap,
+								)) {
+									const storedValue = storedValues[elementId];
+									console.log("[A2UI] Checking element:", {
+										elementId,
+										hasStoredValue: storedValue !== undefined,
+										storedValue,
+									});
+								}
+
+								const mergedElements = mergeStoredElementValues(
+									elementsMap,
+									storedValues,
+									components,
+									surfaceId || "",
+								);
+
+								// Build _input_values from event-relevant components
+								const inputValues: Record<string, unknown> = {};
+								if (components && surfaceId) {
+									for (const [compId, comp] of Object.entries(components)) {
+										if (!comp.eventRelevant) continue;
+										const elementId = `${surfaceId}/${compId}`;
+										if (storedValues[elementId] !== undefined) {
+											inputValues[compId] = storedValues[elementId];
+										}
+									}
+								}
+
+								const currentPageId = pathname || "default";
+
+								// Extract query params from the current URL
+								const queryParams: Record<string, string> = {};
+								if (typeof window !== "undefined") {
+									const searchParams = new URLSearchParams(
+										window.location.search,
+									);
+									searchParams.forEach((value, key) => {
+										queryParams[key] = value;
+									});
+								}
+
+								const payload = {
+									id: nodeId,
+									payload: {
+										_elements: mergedElements,
+										_input_values: inputValues,
+										_route:
+											typeof window !== "undefined"
+												? window.location.pathname
+												: "",
+										_query_params: queryParams,
+										_page_id: currentPageId,
+										_global_state: globalState || {},
+										_page_state: pageState || {},
+									},
+									version: boardVersion,
+								};
+
+								// Use execution service if available (checks runtime variables)
+								const execFn =
+									executionService?.executeBoard ??
+									backend.boardState.executeBoard;
+								await execFn(
+									effectiveAppId,
+									effectiveBoardId,
+									payload,
+									false, // streamState
+									undefined, // eventId
+									handleA2UIEvents, // callback for A2UI events
+								);
+							} catch (error) {
+								console.error("Failed to execute workflow event:", error);
 							}
-							const navUrl = `/use?${params.toString()}`;
-							console.log("[ActionHandler] Navigating to:", navUrl);
-							router.push(navUrl);
 						} else {
-							console.log("[ActionHandler] Fallback navigation to:", route);
-							router.push(route);
-						}
-					}
-					break;
-				}
-				case "external_link": {
-					const url = context.url as string | undefined;
-					if (url) {
-						window.open(url, "_blank", "noopener,noreferrer");
-					}
-					break;
-				}
-				case "workflow_event": {
-					const nodeId = context.nodeId as string | undefined;
-					const actionBoardId = context.boardId as string | undefined;
-					const boardVersion = context.boardVersion as
-						| [number, number, number]
-						| undefined;
-					const contextAppId = context.appId as string | undefined;
-
-					const effectiveAppId = contextAppId || appId;
-					const effectiveBoardId = actionBoardId || boardId;
-
-					if (nodeId && effectiveBoardId && effectiveAppId) {
-						try {
-							const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-							let elementsMap: Record<string, unknown> | undefined;
-
-							console.log("[A2UI] workflow_event execution context:", {
+							console.warn("Missing required context for workflow_event:", {
 								nodeId,
-								effectiveAppId,
-								effectiveBoardId,
-								boardVersion,
-								surfaceId,
-								cacheKey,
-								hadCachedElements: false,
-								componentIds: Object.keys(components ?? {}),
+								boardId: effectiveBoardId,
+								appId: effectiveAppId,
 							});
-
-							try {
-								const currentBoard = await backend.boardState.getBoard(
-									effectiveAppId,
-									effectiveBoardId,
-									undefined,
-								);
-								console.log("[A2UI] workflow_event local board element refs:", {
-									boardId: effectiveBoardId,
-									pageIds: currentBoard.page_ids,
-									updatedAt: currentBoard.updated_at,
-									elementRefs: summarizeBoardElementRefs(currentBoard),
-								});
-							} catch (boardErr) {
-								console.warn(
-									"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
-									boardErr,
-								);
-							}
-
-							// Always fetch current execution elements in preview mode.
-							// The flow graph can change without any cache invalidation signal.
-							try {
-								elementsMap = await backend.boardState.getExecutionElements(
-									effectiveAppId,
-									effectiveBoardId,
-									surfaceId || "",
-									false,
-								);
-
-								if (!elementsMap || Object.keys(elementsMap).length === 0) {
-									elementsMap = {};
-									if (components && surfaceId) {
-										for (const [id, comp] of Object.entries(components)) {
-											elementsMap[`${surfaceId}/${id}`] = comp;
-										}
-									}
-								}
-							} catch (err) {
-								console.warn(
-									"[A2UI] Failed to fetch execution elements, falling back to all components:",
-									err,
-								);
-								elementsMap = {};
-								if (components && surfaceId) {
-									for (const [id, comp] of Object.entries(components)) {
-										elementsMap[`${surfaceId}/${id}`] = comp;
-									}
-								}
-							}
-
-							// Merge in-memory element values (user input state)
-							const storedValues = getElementValues?.() ?? {};
-							console.log("[A2UI] workflow_event merging elements:", {
-								elementsMapKeys: Object.keys(elementsMap),
-								storedValuesKeys: Object.keys(storedValues),
-								storedValues,
-							});
-
-							for (const [elementId, element] of Object.entries(elementsMap)) {
-								const storedValue = storedValues[elementId];
-								console.log("[A2UI] Checking element:", {
-									elementId,
-									hasStoredValue: storedValue !== undefined,
-									storedValue,
-								});
-							}
-
-							const mergedElements = mergeStoredElementValues(
-								elementsMap,
-								storedValues,
-								components,
-								surfaceId || "",
-							);
-
-							// Build _input_values from event-relevant components
-							const inputValues: Record<string, unknown> = {};
-							if (components && surfaceId) {
-								for (const [compId, comp] of Object.entries(components)) {
-									if (!comp.eventRelevant) continue;
-									const elementId = `${surfaceId}/${compId}`;
-									if (storedValues[elementId] !== undefined) {
-										inputValues[compId] = storedValues[elementId];
-									}
-								}
-							}
-
-							const currentPageId = pathname || "default";
-
-							// Extract query params from the current URL
-							const queryParams: Record<string, string> = {};
-							if (typeof window !== "undefined") {
-								const searchParams = new URLSearchParams(
-									window.location.search,
-								);
-								searchParams.forEach((value, key) => {
-									queryParams[key] = value;
-								});
-							}
-
-							const payload = {
-								id: nodeId,
-								payload: {
-									_elements: mergedElements,
-									_input_values: inputValues,
-									_route:
-										typeof window !== "undefined"
-											? window.location.pathname
-											: "",
-									_query_params: queryParams,
-									_page_id: currentPageId,
-									_global_state: globalState || {},
-									_page_state: pageState || {},
-								},
-								version: boardVersion,
-							};
-
-							// Use execution service if available (checks runtime variables)
-							const execFn =
-								executionService?.executeBoard ??
-								backend.boardState.executeBoard;
-							await execFn(
-								effectiveAppId,
-								effectiveBoardId,
-								payload,
-								false, // streamState
-								undefined, // eventId
-								handleA2UIEvents, // callback for A2UI events
-							);
-						} catch (error) {
-							console.error("Failed to execute workflow event:", error);
 						}
-					} else {
-						console.warn("Missing required context for workflow_event:", {
-							nodeId,
-							boardId: effectiveBoardId,
-							appId: effectiveAppId,
-						});
-					}
-					break;
-				}
-				case "widget_event": {
-					console.log("[A2UI] widget_event triggered:", {
-						context,
-						widgetInstance,
-						appId,
-						boardId,
-					});
-					const actionId = context.actionId as string | undefined;
-					if (!actionId) {
-						console.warn("[A2UI] widget_event missing actionId");
 						break;
 					}
-
-					// Look up the binding from the widget instance's action bindings
-					const binding = widgetInstance?.actionBindings[actionId];
-					if (!binding) {
-						console.warn(
-							"[A2UI] widget_event: no binding found for actionId:",
-							actionId,
-							"available bindings:",
-							widgetInstance?.actionBindings,
-						);
-						break;
-					}
-
-					if (!("workflow" in binding)) {
-						console.warn(
-							"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
-							binding,
-						);
-						break;
-					}
-
-					const nodeId = binding.workflow.flowId;
-
-					const effectiveAppId = appId;
-					const effectiveBoardId = boardId;
-
-					if (effectiveBoardId && effectiveAppId) {
-						try {
-							const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-							let elementsMap: Record<string, unknown> | undefined;
-
-							console.log("[A2UI] widget_event execution context:", {
-								effectiveAppId,
-								effectiveBoardId,
-								surfaceId,
-								cacheKey,
-								hadCachedElements: false,
-								componentIds: Object.keys(components ?? {}),
-							});
-
-							try {
-								elementsMap = await backend.boardState.getExecutionElements(
-									effectiveAppId,
-									effectiveBoardId,
-									surfaceId || "",
-									false,
-								);
-
-								if (!elementsMap || Object.keys(elementsMap).length === 0) {
-									elementsMap = {};
-									if (components && surfaceId) {
-										for (const [id, comp] of Object.entries(components)) {
-											elementsMap[`${surfaceId}/${id}`] = comp;
-										}
-									}
-								}
-							} catch (err) {
-								console.warn(
-									"[A2UI] Failed to fetch execution elements for widget_event:",
-									err,
-								);
-								elementsMap = {};
-								if (components && surfaceId) {
-									for (const [id, comp] of Object.entries(components)) {
-										elementsMap[`${surfaceId}/${id}`] = comp;
-									}
-								}
-							}
-
-							const storedValues = getElementValues?.() ?? {};
-							const mergedElements = mergeStoredElementValues(
-								elementsMap,
-								storedValues,
-								components,
-								surfaceId || "",
-							);
-
-							// Build _input_values from event-relevant components
-							const inputValues: Record<string, unknown> = {};
-							if (components && surfaceId) {
-								for (const [compId, comp] of Object.entries(components)) {
-									if (!comp.eventRelevant) continue;
-									const elementId = `${surfaceId}/${compId}`;
-									if (storedValues[elementId] !== undefined) {
-										inputValues[compId] = storedValues[elementId];
-									}
-								}
-							}
-
-							const payload = {
-								id: nodeId,
-								payload: {
-									_elements: mergedElements,
-									_input_values: inputValues,
-									_widget_instance_id: widgetInstance?.instanceId ?? "",
-									_action_id: actionId,
-									_action_context: context,
-								},
-							};
-
-							const execFn =
-								executionService?.executeBoard ??
-								backend.boardState.executeBoard;
-							await execFn(
-								effectiveAppId,
-								effectiveBoardId,
-								payload,
-								false,
-								undefined,
-								handleA2UIEvents,
-							);
-						} catch (error) {
-							console.error("[A2UI] Failed to execute widget event:", error);
-						}
-					} else {
-						console.warn("[A2UI] Missing appId or boardId for widget_event:", {
-							appId: effectiveAppId,
-							boardId: effectiveBoardId,
-						});
-					}
-					break;
-				}
-				default:
-					if (onAction) {
-						onAction({
-							type: "userAction",
-							name,
-							surfaceId: surfaceId ?? "",
-							sourceComponentId: "",
-							timestamp: Date.now(),
+					case "widget_event": {
+						console.log("[A2UI] widget_event triggered:", {
 							context,
+							widgetInstance,
+							appId,
+							boardId,
 						});
+						const actionId = context.actionId as string | undefined;
+						if (!actionId) {
+							console.warn("[A2UI] widget_event missing actionId");
+							break;
+						}
+
+						// Look up the binding from the widget instance's action bindings
+						const binding = widgetInstance?.actionBindings[actionId];
+						if (!binding) {
+							console.warn(
+								"[A2UI] widget_event: no binding found for actionId:",
+								actionId,
+								"available bindings:",
+								widgetInstance?.actionBindings,
+							);
+							break;
+						}
+
+						if (!("workflow" in binding)) {
+							console.warn(
+								"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
+								binding,
+							);
+							break;
+						}
+
+						const nodeId = binding.workflow.flowId;
+
+						const effectiveAppId = appId;
+						const effectiveBoardId = boardId;
+
+						if (effectiveBoardId && effectiveAppId) {
+							try {
+								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
+								let elementsMap: Record<string, unknown> | undefined;
+
+								console.log("[A2UI] widget_event execution context:", {
+									effectiveAppId,
+									effectiveBoardId,
+									surfaceId,
+									cacheKey,
+									hadCachedElements: false,
+									componentIds: Object.keys(components ?? {}),
+								});
+
+								try {
+									elementsMap = await backend.boardState.getExecutionElements(
+										effectiveAppId,
+										effectiveBoardId,
+										surfaceId || "",
+										false,
+									);
+
+									if (!elementsMap || Object.keys(elementsMap).length === 0) {
+										elementsMap = flattenSurfaceComponentsForElements(
+											components,
+											surfaceId ?? "",
+										);
+									}
+								} catch (err) {
+									console.warn(
+										"[A2UI] Failed to fetch execution elements for widget_event:",
+										err,
+									);
+									elementsMap = flattenSurfaceComponentsForElements(
+										components,
+										surfaceId ?? "",
+									);
+								}
+
+								const storedValues = getElementValues?.() ?? {};
+								const mergedElements = mergeStoredElementValues(
+									elementsMap,
+									storedValues,
+									components,
+									surfaceId || "",
+								);
+
+								// Build _input_values from event-relevant components
+								const inputValues: Record<string, unknown> = {};
+								if (components && surfaceId) {
+									for (const [compId, comp] of Object.entries(components)) {
+										if (!comp.eventRelevant) continue;
+										const elementId = `${surfaceId}/${compId}`;
+										if (storedValues[elementId] !== undefined) {
+											inputValues[compId] = storedValues[elementId];
+										}
+									}
+								}
+
+								const payload = {
+									id: nodeId,
+									payload: {
+										_elements: mergedElements,
+										_input_values: inputValues,
+										_widget_instance_id: widgetInstance?.instanceId ?? "",
+										_action_id: actionId,
+										_action_context: context,
+									},
+								};
+
+								const execFn =
+									executionService?.executeBoard ??
+									backend.boardState.executeBoard;
+								await execFn(
+									effectiveAppId,
+									effectiveBoardId,
+									payload,
+									false,
+									undefined,
+									handleA2UIEvents,
+								);
+							} catch (error) {
+								console.error("[A2UI] Failed to execute widget event:", error);
+							}
+						} else {
+							console.warn(
+								"[A2UI] Missing appId or boardId for widget_event:",
+								{
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+								},
+							);
+						}
+						break;
 					}
+					default:
+						if (onAction) {
+							onAction({
+								type: "userAction",
+								name,
+								surfaceId: surfaceId ?? "",
+								sourceComponentId: "",
+								timestamp: Date.now(),
+								context,
+							});
+						}
+				}
+			} finally {
+				if (triggeringComponentId) {
+					markComponentTriggering?.(triggeringComponentId, false);
+				}
 			}
 		},
 		[
@@ -1161,6 +1311,7 @@ export function useExecuteAction() {
 			handleA2UIEvents,
 			isPreviewMode,
 			widgetInstance,
+			markComponentTriggering,
 		],
 	);
 

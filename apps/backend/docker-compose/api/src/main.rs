@@ -9,6 +9,7 @@ use axum::{
     middleware::{self, Next},
     response::IntoResponse,
 };
+use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_api::{construct_router, state::State};
 use flow_like_catalog::get_catalog;
 use std::{sync::Arc, time::Instant};
@@ -68,6 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cdn_bucket = storage::create_cdn_store(&config)?;
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
+
+    let _sweeper_handle = spawn_run_sweeper(
+        Arc::new(state.db.clone()),
+        RunSweeperConfig::from_env(),
+    );
 
     let app = Router::new()
         .merge(construct_router(state.clone()))

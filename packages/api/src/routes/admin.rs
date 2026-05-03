@@ -12,6 +12,7 @@ pub mod models;
 pub mod packages;
 pub mod profiles;
 pub mod publication;
+pub mod runs;
 pub mod sinks;
 pub mod solutions;
 pub mod users;
@@ -83,4 +84,6 @@ pub fn routes() -> Router<AppState> {
         // User management routes
         .route("/users", get(users::list_users::list_users))
         .route("/users/{user_id}", patch(users::update_user::update_user))
+        // Run reconciliation
+        .route("/runs/sweep", post(runs::sweep_runs))
 }

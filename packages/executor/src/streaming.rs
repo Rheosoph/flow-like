@@ -94,6 +94,7 @@ pub async fn execute_streaming(
         config,
         claims.run_id,
         claims.callback_url,
+        claims.sub,
         tx,
     ));
 
@@ -105,11 +106,20 @@ async fn run_execution(
     config: ExecutorConfig,
     run_id: String,
     callback_url: String,
+    executor_subject: String,
     tx: mpsc::UnboundedSender<StreamEvent>,
 ) {
     let start = Instant::now();
 
-    let result = execute_inner(&request, &config, &run_id, &callback_url, &tx).await;
+    let result = execute_inner(
+        &request,
+        &config,
+        &run_id,
+        &callback_url,
+        &executor_subject,
+        &tx,
+    )
+    .await;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -128,6 +138,7 @@ async fn execute_inner(
     config: &ExecutorConfig,
     run_id: &str,
     callback_url: &str,
+    executor_subject: &str,
     tx: &mpsc::UnboundedSender<StreamEvent>,
 ) -> Result<
     (
@@ -321,6 +332,8 @@ async fn execute_inner(
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
+    run.set_execution_sub(executor_subject.to_string()).await;
 
     // Set user context if provided
     if let Some(user_context) = request.user_context.clone() {

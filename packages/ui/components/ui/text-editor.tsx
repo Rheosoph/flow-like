@@ -257,7 +257,7 @@ function TextEditorInner({
 }>) {
 	const remarkPlugins = useMemo(
 		() => [
-			remarkMath,
+			[remarkMath, { singleDollarTextMath: false }],
 			remarkGfm,
 			remarkBreaks,
 			remarkMdx,
@@ -338,7 +338,7 @@ function TextEditorStatic({
 						remarkInlineSpoiler,
 					]
 				: [
-						remarkMath,
+						[remarkMath, { singleDollarTextMath: false }],
 						remarkGfm,
 						remarkBreaks,
 						remarkMdx,

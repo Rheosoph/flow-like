@@ -281,6 +281,8 @@ pub async fn execute(
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
 
+    run.set_execution_sub(claims.sub.clone()).await;
+
     // Set user context if provided
     if let Some(user_context) = request.user_context.clone() {
         run.set_user_context(user_context);

@@ -299,10 +299,15 @@ pub async fn push_events(
             continue;
         };
 
-        let Some(target_user_id) = notification
+        let explicit_target = notification
             .target_user_sub
-            .clone()
-            .or_else(|| execution_claim_user_id(&claims.sub).map(ToOwned::to_owned))
+            .as_deref()
+            .map(str::trim)
+            .filter(|target| !target.is_empty() && *target != "local")
+            .map(ToOwned::to_owned);
+
+        let Some(target_user_id) =
+            explicit_target.or_else(|| execution_claim_user_id(&claims.sub).map(ToOwned::to_owned))
         else {
             tracing::warn!(
                 run_id = %claims.run_id,
@@ -604,7 +609,8 @@ async fn track_execution_usage(
 }
 
 fn execution_claim_user_id(subject: &str) -> Option<&str> {
-    if subject.starts_with("sink:") {
+    let subject = subject.trim();
+    if subject.is_empty() || subject == "local" || subject.starts_with("sink:") {
         None
     } else {
         Some(subject)

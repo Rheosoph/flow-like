@@ -11,6 +11,8 @@ export {
 	ActionProvider,
 	useActions,
 	useExecuteAction,
+	useIsComponentTriggering,
+	useMarkComponentTriggering,
 	useOnAction,
 } from "./ActionHandler";
 export {
