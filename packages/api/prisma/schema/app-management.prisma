@@ -169,6 +169,7 @@ model PushNotificationTarget {
   metadata       Json?
 
   pushEnabled        Boolean   @default(true)
+  failureCount       Int       @default(0)
   lastRegisteredAt   DateTime  @default(now())
   lastSeenAt         DateTime  @default(now())
   invalidatedAt      DateTime?

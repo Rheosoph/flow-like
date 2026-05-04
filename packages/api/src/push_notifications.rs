@@ -317,15 +317,20 @@ async fn push_to_user(
         if let Err(error) = result {
             let message = error.to_string();
             if should_invalidate_target(&message) {
-                invalidate_target(state, &target.id, &message).await?;
+                record_invalidation_failure(state, &target.id, &message).await?;
             }
 
             tracing::warn!(
                 error = %message,
                 target_id = %target.id,
                 provider = ?provider,
+                failure_count = target.failure_count,
                 "Push target send failed"
             );
+        } else if target.failure_count > 0 {
+            // Successful delivery clears the consecutive-failure streak so a
+            // healthy device never accumulates toward the disable threshold.
+            reset_failure_count(state, &target.id).await?;
         }
     }
 
@@ -376,28 +381,97 @@ fn should_invalidate_target(message: &str) -> bool {
         || lower.contains("sender_id_mismatch")
 }
 
-async fn invalidate_target(
+/// Number of consecutive provider-classified "token is dead" failures we
+/// tolerate before marking a push target as invalidated. A single failure
+/// (transient FCM/APNs hiccup, fluky network) must NEVER kill a target —
+/// the device may be online and the next send will succeed and reset the
+/// counter. Only sustained, repeated invalidation-class errors disable.
+const INVALIDATION_FAILURE_THRESHOLD: i32 = 15;
+
+/// Increment the consecutive-failure counter on a target after the provider
+/// returned an invalidation-class error. When the counter crosses
+/// [`INVALIDATION_FAILURE_THRESHOLD`], the target is marked disabled with the
+/// last seen reason. Successful sends call [`reset_failure_count`] to clear
+/// the counter.
+async fn record_invalidation_failure(
     state: &AppState,
     target_id: &str,
     reason: &str,
 ) -> Result<(), sea_orm::DbErr> {
+    let now = chrono::Utc::now().naive_utc();
+
     push_notification_target::Entity::update_many()
         .col_expr(
-            push_notification_target::Column::PushEnabled,
-            sea_orm::sea_query::Expr::value(false),
+            push_notification_target::Column::FailureCount,
+            sea_orm::sea_query::Expr::col(push_notification_target::Column::FailureCount).add(1),
         )
         .col_expr(
-            push_notification_target::Column::InvalidatedAt,
-            sea_orm::sea_query::Expr::value(Some(chrono::Utc::now().naive_utc())),
-        )
-        .col_expr(
-            push_notification_target::Column::InvalidationReason,
-            sea_orm::sea_query::Expr::value(Some(reason.to_string())),
+            push_notification_target::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now),
         )
         .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
         .exec(&state.db)
         .await?;
 
+    let target = push_notification_target::Entity::find_by_id(target_id.to_string())
+        .one(&state.db)
+        .await?;
+
+    let Some(target) = target else {
+        return Ok(());
+    };
+
+    if target.failure_count >= INVALIDATION_FAILURE_THRESHOLD && target.push_enabled {
+        let summary = format!(
+            "{} consecutive invalidation-class failures; last reason: {}",
+            target.failure_count, reason
+        );
+        push_notification_target::Entity::update_many()
+            .col_expr(
+                push_notification_target::Column::PushEnabled,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidatedAt,
+                sea_orm::sea_query::Expr::value(Some(now)),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidationReason,
+                sea_orm::sea_query::Expr::value(Some(summary.clone())),
+            )
+            .col_expr(
+                push_notification_target::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
+            .exec(&state.db)
+            .await?;
+
+        tracing::warn!(
+            target_id = %target_id,
+            failure_count = target.failure_count,
+            reason = %summary,
+            "Push target disabled after exceeding failure threshold"
+        );
+    }
+
+    Ok(())
+}
+
+/// Reset the consecutive-failure counter to zero. Called after a successful
+/// send so a previously-flaky-but-recovered target doesn't accumulate
+/// failures across long windows. Filters on `FailureCount > 0` to skip the
+/// no-op write on the steady-state happy path.
+async fn reset_failure_count(state: &AppState, target_id: &str) -> Result<(), sea_orm::DbErr> {
+    push_notification_target::Entity::update_many()
+        .col_expr(
+            push_notification_target::Column::FailureCount,
+            sea_orm::sea_query::Expr::value(0),
+        )
+        .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
+        .filter(push_notification_target::Column::FailureCount.gt(0))
+        .exec(&state.db)
+        .await?;
     Ok(())
 }
 
@@ -1132,6 +1206,7 @@ mod tests {
             device_name: None,
             metadata: None,
             push_enabled: true,
+            failure_count: 0,
             last_registered_at: now,
             last_seen_at: now,
             invalidated_at: None,
