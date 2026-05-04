@@ -70,10 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
 
-    let _sweeper_handle = spawn_run_sweeper(
-        Arc::new(state.db.clone()),
-        RunSweeperConfig::from_env(),
-    );
+    let _sweeper_handle =
+        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
 
     let app = Router::new()
         .merge(construct_router(state.clone()))

@@ -94,10 +94,8 @@ async fn main() {
         flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
     );
 
-    let _sweeper_handle = spawn_run_sweeper(
-        Arc::new(state.db.clone()),
-        RunSweeperConfig::from_env(),
-    );
+    let _sweeper_handle =
+        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
 
     let app = construct_router(state);
 

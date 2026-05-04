@@ -270,6 +270,7 @@ enum CourseCategory {
   INTEGRATIONS
   DEPLOYMENT
   ADVANCED
+  EXPERT
 }
 
 enum CourseAppPurpose {
