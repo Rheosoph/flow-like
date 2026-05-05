@@ -570,6 +570,7 @@ fn fcm_message_body(
     input: &DispatchNotificationInput,
 ) -> serde_json::Value {
     let data = notification_data(notification_id, target, input);
+    let apns_data = data.clone();
 
     let mut notification_obj = serde_json::json!({
         "title": input.title,
@@ -618,6 +619,15 @@ fn fcm_message_body(
                 }
             }
         });
+
+        if let Some(payload) = apns
+            .get_mut("payload")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (key, value) in apns_data {
+                payload.insert(key, value);
+            }
+        }
 
         if let Some(image_url) = notification_image_url(input) {
             apns["payload"]["aps"]["mutable-content"] = serde_json::json!(1);
@@ -1270,6 +1280,15 @@ mod tests {
         let message = message_object(&body);
         assert!(!message.contains_key("android"));
         assert!(message.contains_key("apns"));
+        assert_eq!(
+            message["data"]["link"],
+            "flow-like://notification/target-id"
+        );
+        assert_eq!(
+            message["apns"]["payload"]["link"],
+            "flow-like://notification/target-id"
+        );
+        assert_eq!(message["apns"]["payload"]["app_id"], "app-id");
     }
 
     #[test]
