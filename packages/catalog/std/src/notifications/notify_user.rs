@@ -117,7 +117,8 @@ impl NodeLogic for NotifyUserNode {
         }
         notification = notification.with_icon(&icon);
 
-        // Send notification via InterCom stream (local display / SSE forwarding)
+        // Send notification via InterCom stream for local display / event history.
+        // Remote persistence happens below through the dedicated notification API.
         context
             .stream_response("flow_notification", notification)
             .await?;

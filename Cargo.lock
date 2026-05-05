@@ -1555,6 +1555,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a054912289d18629dc78375ba2c3726a3afe3ff71b4edba9dedfca0e3446d1fc"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -7702,7 +7703,9 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
+ "google-cloud-auth",
  "hayro",
+ "http 1.4.0",
  "lopdf 0.39.0",
  "nalgebra 0.34.2",
  "pulldown-cmark 0.13.3",
@@ -8019,11 +8022,13 @@ dependencies = [
  "fastembed",
  "flow-like-types",
  "futures 0.3.32",
+ "google-cloud-auth",
  "http 1.4.0",
  "ndarray",
  "ort",
  "reqwest 0.12.28",
  "rig-core",
+ "rig-vertexai",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -9275,12 +9280,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "google-cloud-aiplatform-v1"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af392dd3f316edca5dd8ca54d8004c76553e4287c8787f8d23564d22a776db58"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "google-cloud-api",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-iam-v1",
+ "google-cloud-location",
+ "google-cloud-longrunning",
+ "google-cloud-lro",
+ "google-cloud-rpc",
+ "google-cloud-type",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with 3.18.0",
+ "tracing",
+]
+
+[[package]]
+name = "google-cloud-api"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f5db8944d332e7e3b73277606abea11fc0b020109aa2ddeb7b7fc6d656492d2"
+dependencies = [
+ "bytes",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with 3.18.0",
+]
+
+[[package]]
 name = "google-cloud-auth"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27e658fc9f8b6bdf9a5c816ebca6dd6bcd32f8550e5c6580652b2c0eac1980f6"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "base64 0.22.1",
  "bytes",
  "chrono",
@@ -9288,6 +9331,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "http 1.4.0",
+ "jsonwebtoken 10.3.0",
  "reqwest 0.13.2",
  "rustc_version",
  "rustls 0.23.38",
@@ -9385,6 +9429,38 @@ dependencies = [
  "serde_json",
  "serde_with 3.18.0",
  "tracing",
+]
+
+[[package]]
+name = "google-cloud-longrunning"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebab215997c51f786852840fec8c76174b8a4af96d08e5fc1569742805baab09"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-rpc",
+ "google-cloud-wkt",
+ "serde",
+ "serde_json",
+ "serde_with 3.18.0",
+ "tracing",
+]
+
+[[package]]
+name = "google-cloud-lro"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82a4f93a1ec8e6e5448899877ea6021e0f5d06e6b08ccd9b0bd99bc837ca357b"
+dependencies = [
+ "google-cloud-gax",
+ "google-cloud-longrunning",
+ "google-cloud-rpc",
+ "google-cloud-wkt",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -11405,6 +11481,7 @@ version = "10.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "ed25519-dalek",
  "getrandom 0.2.17",
@@ -18600,6 +18677,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rig-vertexai"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03c7a9a3f171d85210a4a0ecd6cb3a45015b90c69f371949659b7b6275d69cff"
+dependencies = [
+ "google-cloud-aiplatform-v1",
+ "google-cloud-auth",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18609,7 +18701,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.17",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -19111,7 +19203,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
 dependencies = [
  "ring",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -19122,7 +19214,7 @@ checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
 dependencies = [
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -19134,7 +19226,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -19365,7 +19457,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -24087,6 +24179,12 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
+name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "untrusted"

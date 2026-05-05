@@ -22,6 +22,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+const NOTIFICATION_DEDUPE_WINDOW_SECONDS: i64 = 10;
+
 #[cfg(feature = "azure")]
 use base64::Engine;
 #[cfg(feature = "azure")]
@@ -119,6 +121,56 @@ pub async fn dispatch_notification(
     state: &AppState,
     input: DispatchNotificationInput,
 ) -> Result<String, sea_orm::DbErr> {
+    if input.source_run_id.is_some() || input.source_node_id.is_some() {
+        let cutoff = chrono::Utc::now().naive_utc()
+            - chrono::Duration::seconds(NOTIFICATION_DEDUPE_WINDOW_SECONDS);
+        let mut existing = notification::Entity::find()
+            .filter(notification::Column::UserId.eq(input.user_id.clone()))
+            .filter(notification::Column::Title.eq(input.title.clone()))
+            .filter(notification::Column::Type.eq(input.notification_type.clone()))
+            .filter(notification::Column::CreatedAt.gte(cutoff));
+
+        existing = match &input.app_id {
+            Some(value) => existing.filter(notification::Column::AppId.eq(value.clone())),
+            None => existing.filter(notification::Column::AppId.is_null()),
+        };
+        existing = match &input.description {
+            Some(value) => existing.filter(notification::Column::Description.eq(value.clone())),
+            None => existing.filter(notification::Column::Description.is_null()),
+        };
+        existing = match &input.icon {
+            Some(value) => existing.filter(notification::Column::Icon.eq(value.clone())),
+            None => existing.filter(notification::Column::Icon.is_null()),
+        };
+        existing = match &input.link {
+            Some(value) => existing.filter(notification::Column::Link.eq(value.clone())),
+            None => existing.filter(notification::Column::Link.is_null()),
+        };
+        existing = match &input.source_run_id {
+            Some(value) => existing.filter(notification::Column::SourceRunId.eq(value.clone())),
+            None => existing.filter(notification::Column::SourceRunId.is_null()),
+        };
+        existing = match &input.source_node_id {
+            Some(value) => existing.filter(notification::Column::SourceNodeId.eq(value.clone())),
+            None => existing.filter(notification::Column::SourceNodeId.is_null()),
+        };
+
+        if let Some(notification) = existing
+            .order_by_desc(notification::Column::CreatedAt)
+            .one(&state.db)
+            .await?
+        {
+            tracing::info!(
+                notification_id = %notification.id,
+                user_id = %input.user_id,
+                source_run_id = ?input.source_run_id,
+                source_node_id = ?input.source_node_id,
+                "Reusing recently-created matching notification"
+            );
+            return Ok(notification.id);
+        }
+    }
+
     let notification_id = create_id();
     let notification = notification::ActiveModel {
         id: Set(notification_id.clone()),

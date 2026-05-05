@@ -134,6 +134,8 @@ ndarray = "0.16.1"
 dirs-next = "2.0.0"
 regex = "1.11.3"
 rig-core = {version="0.34.0", default-features = false, features = ["rmcp", "rustls"]}
+rig-vertexai = { version = "=0.3.3" }
+google-cloud-auth = "1.0"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 rumqttc = "0.24"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
