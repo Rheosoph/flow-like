@@ -5,6 +5,8 @@ export * from "./persister";
 export * from "./idb-storage";
 export * from "./messages";
 export * from "./flow-board-utils";
+export * from "./learn/board-bridge";
+export * from "./learn/types";
 export * from "./date";
 export * from "./app-category";
 export * from "./llm/history";

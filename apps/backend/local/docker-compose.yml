@@ -21,6 +21,21 @@ services:
       - flowlike-local
 
   # =============================================================================
+  # Database Admin UI
+  # =============================================================================
+  adminer:
+    image: adminer:4-standalone
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8082:8080"
+    networks:
+      - flowlike-local
+
+  # =============================================================================
   # Redis (Execution State + Job Queue)
   # =============================================================================
   redis:

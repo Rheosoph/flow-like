@@ -4,30 +4,28 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
-#[sea_orm(schema_name = "public", table_name = "CourseConnection")]
+#[sea_orm(schema_name = "public", table_name = "UserCourseEnrollment")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
+    #[sea_orm(column_name = "userId", column_type = "Text")]
+    pub user_id: String,
     #[sea_orm(column_name = "courseId", column_type = "Text")]
     pub course_id: String,
-    #[sea_orm(column_name = "appId", column_type = "Text")]
-    pub app_id: String,
-    #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
-    #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    #[sea_orm(column_name = "linkedAppIds", column_type = "JsonBinary")]
+    pub linked_app_ids: Json,
+    #[sea_orm(column_name = "idMaps", column_type = "JsonBinary")]
+    pub id_maps: Json,
+    #[sea_orm(column_name = "startedAt")]
+    pub started_at: DateTime,
+    #[sea_orm(column_name = "lastSeenAt")]
+    pub last_seen_at: DateTime,
+    #[sea_orm(column_name = "completedAt")]
+    pub completed_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::app::Entity",
-        from = "Column::AppId",
-        to = "super::app::Column::Id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    App,
     #[sea_orm(
         belongs_to = "super::course::Entity",
         from = "Column::CourseId",
@@ -36,12 +34,6 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Course,
-}
-
-impl Related<super::app::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::App.def()
-    }
 }
 
 impl Related<super::course::Entity> for Entity {

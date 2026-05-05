@@ -759,6 +759,7 @@ export function getModelModality(bit: IBit): string {
 interface IRemoteExecutionConfig {
 	endpoint?: string | null;
 	implementation?: string | null;
+	model_id?: string | null;
 }
 
 interface IEmbeddingProviderParamsWithRemote {
@@ -787,9 +788,18 @@ export function supportsRemoteEmbeddingExecution(bit: IBit): boolean {
 		| IEmbeddingModelParametersWithRemote
 		| undefined;
 	const remote = params?.remote ?? params?.provider?.params?.remote;
-	if (remote?.endpoint && remote?.implementation) return true;
+	const remoteModelId = remote?.model_id ?? params?.provider?.model_id;
+	if (remote?.implementation && remoteModelId) return true;
 
-	if (params?.provider?.provider_name?.toLowerCase() === "premium") return true;
+	const providerName = params?.provider?.provider_name?.toLowerCase();
+	if (
+		providerName === "premium" ||
+		providerName === "internal" ||
+		providerName === "hosted" ||
+		providerName?.startsWith("hosted:")
+	) {
+		return Boolean(params?.provider?.model_id);
+	}
 
 	return false;
 }

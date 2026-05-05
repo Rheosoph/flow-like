@@ -8,7 +8,7 @@
 
 use crate::{
     entity::{
-        event, event_sink, execution_run,
+        event, event_sink, execution_run, membership, pat,
         sea_orm_active_enums::{RunMode, RunStatus},
     },
     error::ApiError,
@@ -107,6 +107,96 @@ fn normalize_authorization_token(value: &str) -> &str {
         return token.trim();
     }
     trimmed
+}
+
+fn parse_pat_token(value: &str) -> Option<(&str, &str)> {
+    let pat_parts = value.trim().strip_prefix("pat_")?;
+    let (pat_id, secret) = pat_parts.split_once('.')?;
+    if pat_id.is_empty() || secret.is_empty() || secret.contains('.') {
+        return None;
+    }
+    Some((pat_id, secret))
+}
+
+async fn resolve_sink_pat_user_id(
+    state: &AppState,
+    sink: &event_sink::Model,
+    stored_pat: Option<&str>,
+) -> Result<Option<String>, ApiError> {
+    let Some(stored_pat) = stored_pat else {
+        return Ok(None);
+    };
+
+    let Some((pat_id, pat_secret)) = parse_pat_token(stored_pat) else {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            "Stored sink PAT has invalid format; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized("Stored sink PAT has invalid format"));
+    };
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(pat_secret.as_bytes());
+    let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
+
+    let db_pat = pat::Entity::find()
+        .filter(
+            pat::Column::Id
+                .eq(pat_id)
+                .and(pat::Column::Key.eq(secret_hash)),
+        )
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to validate sink PAT: {}", e)))?;
+
+    let Some(db_pat) = db_pat else {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            "Stored sink PAT no longer validates; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized(
+            "Stored sink PAT no longer validates",
+        ));
+    };
+
+    if let Some(valid_until) = db_pat.valid_until
+        && valid_until < chrono::Utc::now().naive_utc()
+    {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            user_id = %db_pat.user_id,
+            "Stored sink PAT is expired; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized("Stored sink PAT is expired"));
+    }
+
+    let user_id = db_pat.user_id;
+    let member = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(sink.app_id.clone()))
+        .filter(membership::Column::UserId.eq(user_id.clone()))
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            ApiError::internal_error(anyhow!("Failed to validate sink PAT membership: {}", e))
+        })?;
+
+    if member.is_none() {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            app_id = %sink.app_id,
+            user_id = %user_id,
+            "Stored sink PAT owner is not a project member; refusing sink execution"
+        );
+        return Err(ApiError::forbidden(
+            "Stored sink PAT owner is not a project member",
+        ));
+    }
+
+    Ok(Some(user_id))
 }
 
 fn is_multipart_content_type(content_type: Option<&str>) -> bool {
@@ -503,8 +593,6 @@ pub struct TriggerEventInput {
     pub event_id: String,
     /// Optional payload to pass to the event
     pub payload: Option<serde_json::Value>,
-    /// User ID for human-triggered attribution. Leave empty for sink/event-triggered runs.
-    pub user_id: Option<String>,
 }
 
 /// Response from trigger operations
@@ -528,7 +616,6 @@ pub struct TriggerResponse {
 /// let result = trigger_event(&state, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
-///     user_id: None,
 /// }).await?;
 /// ```
 pub async fn trigger_event(
@@ -556,7 +643,14 @@ pub async fn trigger_event(
     // Create run
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
-    let actor_user_id = input.user_id;
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let pat_actor_user_id = resolve_sink_pat_user_id(state, &sink, token.as_deref()).await?;
+    let actor_user_id = pat_actor_user_id;
     let executor_subject = actor_user_id
         .clone()
         .unwrap_or_else(|| format!("sink:{}", sink.id));
@@ -575,8 +669,15 @@ pub async fn trigger_event(
 
     let event_json = serde_json::to_string(&event)?;
 
-    // Get credentials
-    let credentials = state.master_credentials().await?;
+    // Get credentials scoped to the PAT owner when the sink was registered with
+    // a valid PAT. Without a valid PAT this falls back to the sink actor.
+    let credentials = state
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
+        .await?;
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials)?;
 
@@ -594,12 +695,6 @@ pub async fn trigger_event(
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
     })?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -809,7 +904,16 @@ pub async fn trigger_http(
     // Create the run id before parsing so multipart files can be staged under
     // a stable, per-run temporary object prefix.
     let run_id = create_id();
-    let executor_subject = format!("sink:{}", sink.id);
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
     let credentials = state
         .scoped_credentials(
             &executor_subject,
@@ -883,12 +987,6 @@ pub async fn trigger_http(
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
-
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .oauth_tokens_encrypted
@@ -945,7 +1043,7 @@ pub async fn trigger_http(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -953,15 +1051,21 @@ pub async fn trigger_http(
 
     tracing::info!(run_id = %run_id, "Dispatching HTTP sink");
 
-    // Insert run and dispatch
-    let db_clone = state.db.clone();
-    let run_id_clone = run_id.clone();
-    let db_insert_handle = tokio::spawn(async move {
-        run.insert(&db_clone).await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to create run record");
-            e
-        })
-    });
+    // Persist the run record BEFORE dispatch so infrastructure failures
+    // (executor crashes, network drops, timeouts) leave a visible Pending
+    // row that can be reconciled, rather than a silently lost workflow.
+    if let Err(e) = run.insert(&state.db).await {
+        tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
+        return Ok((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(TriggerResponse {
+                triggered: false,
+                run_id: Some(run_id),
+                message: format!("Failed to create run record: {}", e),
+            }),
+        )
+            .into_response());
+    }
 
     // Match the desktop HTTP sink: wait for the first `generic_result`
     // event and return it as a single JSON response. External callers of
@@ -976,10 +1080,6 @@ pub async fn trigger_http(
     match backend {
         ExecutionBackend::LambdaStream => {
             let dispatch_result = state.dispatcher.dispatch_streaming(request).await;
-
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             match dispatch_result {
                 Ok((_dispatch_response, byte_stream)) => {
@@ -1023,10 +1123,6 @@ pub async fn trigger_http(
         }
         _ => {
             let dispatch_result = state.dispatcher.dispatch_http_sse(request).await;
-
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             match dispatch_result {
                 Ok((_dispatch_response, executor_response)) => {
@@ -1242,9 +1338,23 @@ pub async fn trigger_telegram(
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Get credentials
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+
     let credentials = state
-        .master_credentials()
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
 
@@ -1254,7 +1364,6 @@ pub async fn trigger_telegram(
 
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let executor_subject = format!("sink:{}", sink.id);
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
@@ -1268,12 +1377,6 @@ pub async fn trigger_telegram(
         ttl_seconds: Some(24 * 60 * 60),
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -1331,7 +1434,7 @@ pub async fn trigger_telegram(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1561,9 +1664,23 @@ pub async fn trigger_discord(
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Get credentials
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+
     let credentials = state
-        .master_credentials()
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
 
@@ -1573,7 +1690,6 @@ pub async fn trigger_discord(
 
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let executor_subject = format!("sink:{}", sink.id);
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
@@ -1587,12 +1703,6 @@ pub async fn trigger_discord(
         ttl_seconds: Some(24 * 60 * 60),
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -1650,7 +1760,7 @@ pub async fn trigger_discord(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1946,7 +2056,6 @@ pub async fn trigger_service(
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload,
-            user_id: None,
         },
     )
     .await

@@ -19,6 +19,9 @@ pub struct SubscribeResponse {
     pub session_id: String,
 }
 
+const ENTERPRISE_TIER: &str = "ENTERPRISE";
+const ENTERPRISE_CONTACT_EMAIL: &str = "enterprise@flow-like.com";
+
 #[utoipa::path(
     post,
     path = "/user/subscribe",
@@ -39,6 +42,13 @@ pub async fn create_subscription_checkout(
     Extension(user): Extension<AppUser>,
     Json(request): Json<SubscribeRequest>,
 ) -> Result<Json<SubscribeResponse>, ApiError> {
+    if request.tier.eq_ignore_ascii_case(ENTERPRISE_TIER) {
+        return Err(ApiError::bad_request(format!(
+            "Enterprise plans require a custom agreement. Contact {}.",
+            ENTERPRISE_CONTACT_EMAIL
+        )));
+    }
+
     let stripe_client = state
         .stripe_client
         .as_ref()

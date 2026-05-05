@@ -76,6 +76,13 @@ function transformApiProfile(apiProfile: ApiProfile): IProfile {
 export class WebUserState implements IUserState {
 	constructor(private readonly backend: WebBackendRef) {}
 
+	private hasRemoteAccessToken(): boolean {
+		return Boolean(
+			this.backend.auth?.isAuthenticated &&
+				this.backend.auth.user?.access_token,
+		);
+	}
+
 	async lookupUser(userId: string): Promise<IUserLookup> {
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
@@ -92,6 +99,10 @@ export class WebUserState implements IUserState {
 	}
 
 	async getNotifications(): Promise<INotificationsOverview> {
+		if (!this.hasRemoteAccessToken()) {
+			return { unread_count: 0, invites_count: 0, notifications_count: 0 };
+		}
+
 		try {
 			return await apiGet<INotificationsOverview>(
 				"user/notifications",
@@ -111,6 +122,10 @@ export class WebUserState implements IUserState {
 		if (unreadOnly !== undefined) params.set("unread_only", String(unreadOnly));
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
+
+		if (!this.hasRemoteAccessToken()) {
+			return [];
+		}
 
 		try {
 			return await apiGet<INotification[]>(

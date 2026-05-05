@@ -1101,6 +1101,16 @@ impl InternalRun {
         self.user_context = Some(user_context);
     }
 
+    /// Override the execution subject after the transport token has been
+    /// verified. This keeps PAT-backed runs tied to the executor JWT subject.
+    pub async fn set_execution_sub(&mut self, sub: String) {
+        {
+            let mut run = self.run.lock().await;
+            run.sub = sub.clone();
+        }
+        self.meta.sub = sub;
+    }
+
     /// Set the user execution context for offline/local execution
     pub fn set_offline_user_context(&mut self) {
         self.user_context = Some(UserExecutionContext::offline());

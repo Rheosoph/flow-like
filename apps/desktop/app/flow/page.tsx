@@ -5,6 +5,7 @@ import { Video } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
+import { FlowDeepLinkHandler } from "../../components/flow-deep-link-handler";
 import { RecordingDock } from "../../components/rpa";
 
 export default function FlowEditPage() {
@@ -25,7 +26,9 @@ export default function FlowEditPage() {
 	if (boardId === "") return <p>Board not found...</p>;
 
 	return (
-		<FlowWrapper
+		<>
+			<FlowDeepLinkHandler appId={appId} boardId={boardId} />
+			<FlowWrapper
 			boardId={boardId}
 			appId={appId}
 			nodeId={nodeId}
@@ -51,5 +54,6 @@ export default function FlowEditPage() {
 				) : null
 			}
 		/>
+		</>
 	);
 }

@@ -87,6 +87,7 @@ pub fn routes() -> Router<AppState> {
         .route("/billing", get(get_billing_session))
         .route("/pricing", get(get_pricing))
         .route("/subscribe", post(create_subscription_checkout))
+        .route("/lookup", post(lookup::user_batch_lookup))
         .route("/lookup/{sub}", get(lookup::user_lookup))
         .route("/search/{query}", get(lookup::user_search))
         .route("/invites", get(get_invites::get_invites))

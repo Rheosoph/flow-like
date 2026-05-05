@@ -335,15 +335,13 @@ pub async fn invoke_board(
     let backend = state.dispatcher.backend();
     tracing::info!(run_id = %run_id, ?backend, "Dispatching streaming execution");
 
-    // Create run record in DB (can happen in parallel with dispatch)
-    let db_clone = state.db.clone();
-    let run_id_clone = run_id.clone();
-    let db_insert_handle = tokio::spawn(async move {
-        run.insert(&db_clone).await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to create run record");
-            e
-        })
-    });
+    // Persist the run record BEFORE dispatch so infrastructure failures
+    // (executor crashes, network drops, timeouts) leave a visible Pending
+    // row that can be reconciled, rather than a silently lost workflow.
+    run.insert(&state.db).await.map_err(|e| {
+        tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
+        ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+    })?;
 
     // Dispatch based on the configured backend
     match backend {
@@ -357,11 +355,6 @@ pub async fn invoke_board(
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
                     ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
                 })?;
-
-            // Wait for DB insert to complete
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             tracing::info!(run_id = %run_id, "Got Lambda response, starting stream proxy");
 
@@ -382,11 +375,6 @@ pub async fn invoke_board(
                     tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
                     ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
                 })?;
-
-            // Wait for DB insert to complete
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             tracing::info!(run_id = %run_id, "Got executor response, starting stream proxy");
 

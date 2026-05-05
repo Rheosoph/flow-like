@@ -1136,6 +1136,79 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_lance_add_and_drop_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.upsert(
+            vec![to_value(&TestStruct2 {
+                id: 1,
+                name: "Alice".to_string(),
+            })?],
+            "id".to_string(),
+        )
+        .await?;
+
+        db.add_column("counter", "CAST(0 AS INT)").await?;
+        db.add_column("note", "CAST('' AS STRING)").await?;
+        db.add_column("flag", "CAST(NULL AS STRING)").await?;
+
+        let names: Vec<String> = db
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert!(names.contains(&"counter".to_string()));
+        assert!(names.contains(&"note".to_string()));
+        assert!(names.contains(&"flag".to_string()));
+
+        db.drop_columns(&["counter", "note"]).await?;
+
+        let names: Vec<String> = db
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert!(!names.contains(&"counter".to_string()));
+        assert!(!names.contains(&"note".to_string()));
+        assert!(names.contains(&"flag".to_string()));
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_add_column_bare_null_fails() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.upsert(
+            vec![to_value(&TestStruct2 {
+                id: 1,
+                name: "Alice".to_string(),
+            })?],
+            "id".to_string(),
+        )
+        .await?;
+
+        // LanceDB requires `CAST(NULL AS <type>)`; a bare `NULL` cannot be inferred.
+        let bare_null = db.add_column("flag", "NULL").await;
+        assert!(
+            bare_null.is_err(),
+            "bare NULL should fail; LanceDB requires CAST(NULL AS <type>)"
+        );
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+        Ok(())
+    }
 }
 
 // impl VectorStoreIndex for LanceDBVectorStore {

@@ -115,14 +115,28 @@ const ALL_PERMISSIONS: { label: string; perm: GlobalPermission }[] = [
 	{ label: "Read Solutions", perm: GlobalPermission.ReadSolutions },
 	{ label: "Write Solutions", perm: GlobalPermission.WriteSolutions },
 	{ label: "Manage Packages", perm: GlobalPermission.ManagePackages },
+	{ label: "Read Courses", perm: GlobalPermission.ReadCourses },
+	{ label: "Write Courses", perm: GlobalPermission.WriteCourses },
+	{ label: "Read Logs", perm: GlobalPermission.ReadLogs },
 ];
+
+const SKELETON_ROWS = [
+	"user-skeleton-1",
+	"user-skeleton-2",
+	"user-skeleton-3",
+	"user-skeleton-4",
+	"user-skeleton-5",
+	"user-skeleton-6",
+	"user-skeleton-7",
+	"user-skeleton-8",
+] as const;
 
 function formatBytes(bytes: number) {
 	if (bytes === 0) return "0 B";
 	const k = 1024;
 	const sizes = ["B", "KB", "MB", "GB"];
 	const i = Math.floor(Math.log(bytes) / Math.log(k));
-	return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+	return `${(bytes / k ** i).toFixed(1)} ${sizes[i]}`;
 }
 
 function formatCents(cents: number) {
@@ -524,8 +538,8 @@ export default function AdminUsersPage() {
 
 							{users.isLoading ? (
 								<div className="space-y-2">
-									{[...Array(8)].map((_, i) => (
-										<Skeleton key={i} className="h-12 w-full" />
+									{SKELETON_ROWS.map((key) => (
+										<Skeleton key={key} className="h-12 w-full" />
 									))}
 								</div>
 							) : (

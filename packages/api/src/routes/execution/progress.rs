@@ -7,7 +7,10 @@
 //! Events are stored with TTL and deleted after delivery.
 
 use crate::{
-    entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
+    entity::{
+        execution_usage_tracking,
+        sea_orm_active_enums::ExecutionStatus,
+    },
     error::ApiError,
     execution::{
         state::{
@@ -534,7 +537,8 @@ async fn track_execution_usage(
 }
 
 fn execution_claim_user_id(subject: &str) -> Option<&str> {
-    if subject.starts_with("sink:") {
+    let subject = subject.trim();
+    if subject.is_empty() || subject == "local" || subject.starts_with("sink:") {
         None
     } else {
         Some(subject)
@@ -555,7 +559,9 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 }
 
 /// Get or create the execution state store from app state
-async fn get_state_store(state: &AppState) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
+pub(crate) async fn get_state_store(
+    state: &AppState,
+) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
     // Build config with available AppState components
     let mut config =
         crate::execution::state::StateStoreConfig::default().with_db(Arc::new(state.db.clone()));

@@ -1,3 +1,4 @@
+export * from "./use-board-bridge";
 export * from "./use-invoke";
 export * from "./use-hub";
 export * from "./use-mobile";

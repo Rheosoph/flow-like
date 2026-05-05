@@ -4,6 +4,7 @@ export interface IEmbeddingModelParameters {
 	pooling: IPooling;
 	prefix: IPrefix;
 	provider: IModelProvider;
+	remote?: null | IRemoteExecutionConfig;
 	vector_length: number;
 	[property: string]: any;
 }
@@ -22,7 +23,20 @@ export interface IPrefix {
 
 export interface IModelProvider {
 	model_id?: null | string;
+	params?: { [key: string]: any } | null;
 	provider_name: string;
 	version?: null | string;
 	[property: string]: any;
+}
+
+export interface IRemoteExecutionConfig {
+	endpoint?: null | string;
+	implementation?: null | IRemoteEmbeddingProvider;
+	model_id?: null | string;
+	secret_name?: null | string;
+	[property: string]: any;
+}
+
+export enum IRemoteEmbeddingProvider {
+	Internal = "Internal",
 }

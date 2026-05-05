@@ -8,10 +8,12 @@ use models::{sync_models, upsert_model};
 use crate::state::AppState;
 
 pub mod bit;
+pub mod logs;
 pub mod models;
 pub mod packages;
 pub mod profiles;
 pub mod publication;
+pub mod runs;
 pub mod sinks;
 pub mod solutions;
 pub mod users;
@@ -83,4 +85,12 @@ pub fn routes() -> Router<AppState> {
         // User management routes
         .route("/users", get(users::list_users::list_users))
         .route("/users/{user_id}", patch(users::update_user::update_user))
+        // Run reconciliation
+        .route("/runs/sweep", post(runs::sweep_runs))
+        // Logs / observability
+        .route("/logs/errors", get(logs::list_errors::list_errors))
+        .route("/logs/errors/{error_id}", get(logs::get_error::get_error))
+        .route("/logs/stats", get(logs::stats::error_stats))
+        .route("/logs/timeseries", get(logs::timeseries::error_timeseries))
+        .route("/logs/chain-status", get(logs::chain_status::chain_status))
 }

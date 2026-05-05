@@ -8,13 +8,14 @@ function constructUrl(profile: IProfile, path: string): string {
 	if (!baseUrl.endsWith("/")) {
 		baseUrl += "/";
 	}
+	const cleanPath = path.replace(/^\/+/, "");
 
 	if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-		return `${baseUrl}api/v1/${path}`;
+		return `${baseUrl}api/v1/${cleanPath}`;
 	}
 
 	const protocol = profile.secure === false ? "http" : "https";
-	return `${protocol}://${baseUrl}api/v1/${path}`;
+	return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
 }
 
 export async function get<T>(

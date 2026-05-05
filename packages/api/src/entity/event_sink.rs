@@ -17,8 +17,6 @@ pub struct Model {
     pub active: bool,
     #[sea_orm(column_type = "Text", nullable)]
     pub path: Option<String>,
-    #[sea_orm(column_name = "method", column_type = "Text", nullable)]
-    pub method: Option<String>,
     #[sea_orm(column_name = "authToken", column_type = "Text", nullable)]
     pub auth_token: Option<String>,
     #[sea_orm(column_name = "webhookSecret", column_type = "Text", nullable)]
@@ -37,6 +35,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub method: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

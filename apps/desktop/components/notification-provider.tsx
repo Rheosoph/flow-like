@@ -1,6 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useBackend, useHub } from "@tm9657/flow-like-ui";
 import type {
@@ -9,6 +10,7 @@ import type {
 	IPushNotificationsConfig,
 } from "@tm9657/flow-like-ui";
 import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
@@ -115,7 +117,7 @@ async function savePersistentDeviceId(id: string): Promise<void> {
 			baseDir: BaseDirectory.AppData,
 		});
 	} catch {
-		// FS not available — fall through to localStorage only
+		// FS not available - fall through to localStorage only
 	}
 }
 
@@ -208,6 +210,69 @@ function dataString(
 		: undefined;
 }
 
+function normalizeColdStartPayload(
+	userInfo: Record<string, unknown>,
+): RemotePushPayload {
+	const data: Record<string, unknown> = {};
+	let title: string | undefined;
+	let body: string | undefined;
+	let badge: number | undefined;
+	let sound: string | undefined;
+	let category: string | undefined;
+
+	for (const [key, value] of Object.entries(userInfo)) {
+		if (key === "aps" && value && typeof value === "object") {
+			const aps = value as Record<string, unknown>;
+			const alert = aps.alert;
+			if (alert && typeof alert === "object") {
+				const alertObj = alert as Record<string, unknown>;
+				if (typeof alertObj.title === "string") title = alertObj.title;
+				if (typeof alertObj.body === "string") body = alertObj.body;
+			} else if (typeof alert === "string") {
+				body = alert;
+			}
+			if (typeof aps.badge === "number") badge = aps.badge;
+			if (typeof aps.sound === "string") sound = aps.sound;
+			if (typeof aps.category === "string") category = aps.category;
+			continue;
+		}
+		if (key === "from" || key === "collapse_key" || key === "message_type") {
+			continue;
+		}
+		if (key.startsWith("gcm.") || key.startsWith("google.")) continue;
+		data[key] = value;
+	}
+
+	return { title, body, data, badge, sound, category };
+}
+
+function appPathFromNotificationLink(link: string): string | null {
+	if (link.startsWith("/") && !link.startsWith("//")) {
+		return link;
+	}
+
+	try {
+		const url = new URL(link);
+		const currentHost =
+			typeof window !== "undefined" ? window.location.hostname : null;
+		const isKnownAppHost =
+			url.hostname === "app.flow-like.com" ||
+			url.hostname === "localhost" ||
+			url.hostname === "127.0.0.1" ||
+			url.hostname === currentHost;
+		if (
+			(url.protocol === "https:" || url.protocol === "http:") &&
+			isKnownAppHost
+		) {
+			return `${url.pathname}${url.search}${url.hash}`;
+		}
+	} catch {
+		return null;
+	}
+
+	return null;
+}
+
 interface NotificationProviderProps {
 	appId?: string;
 }
@@ -216,6 +281,7 @@ export default function NotificationProvider({
 	appId,
 }: NotificationProviderProps = {}) {
 	const auth = useAuth();
+	const router = useRouter();
 	const backend = useBackend();
 	const tauriBackend = backend as TauriBackend | undefined;
 	const authContext = tauriBackend?.auth ?? auth;
@@ -228,9 +294,13 @@ export default function NotificationProvider({
 	const permissionGranted = useRef<boolean>(false);
 	const remotePushApi = useRef<RemotePushApi | null>(null);
 	const remotePushListeners = useRef<RemotePushListener[]>([]);
+	const tapListener = useRef<RemotePushListener | null>(null);
 	const lastRegisteredToken = useRef<string | null>(null);
 	const deviceId = useRef<string | null>(null);
 	const pushConfig = hub.hub?.push_notifications;
+	const handleTapRef = useRef<(notification: RemotePushPayload) => void>(
+		() => {},
+	);
 
 	const storeNotification = async ({
 		title,
@@ -277,6 +347,44 @@ export default function NotificationProvider({
 				"[NotificationProvider] Failed to store local notification:",
 				error,
 			);
+		}
+	};
+
+	handleTapRef.current = (notification: RemotePushPayload) => {
+		void storeNotification({
+			title: notification.title ?? "Notification",
+			description: notification.body,
+			icon: dataString(notification.data, "icon"),
+			link: dataString(notification.data, "link"),
+			appIdOverride: dataString(notification.data, "app_id") ?? appId,
+			sourceRunId: dataString(notification.data, "source_run_id"),
+			sourceNodeId: dataString(notification.data, "source_node_id"),
+			notificationType:
+				(dataString(notification.data, "notification_type") as
+					| "WORKFLOW"
+					| "SYSTEM") ?? "SYSTEM",
+		});
+
+		const link = dataString(notification.data, "link");
+		console.log(
+			"[NotificationProvider] handleTap link=",
+			link,
+			"data=",
+			notification.data,
+		);
+		if (link && typeof window !== "undefined") {
+			const appPath = appPathFromNotificationLink(link);
+			if (appPath) {
+				router.push(appPath);
+				return;
+			}
+
+			if (link.startsWith("http://") || link.startsWith("https://")) {
+				window.open(link, "_blank", "noopener,noreferrer");
+				return;
+			}
+
+			window.location.assign(link);
 		}
 	};
 
@@ -374,9 +482,64 @@ export default function NotificationProvider({
 					error,
 				);
 			}
+
+			// Register the tap listener as early as possible - independent of
+			// auth state - so taps that arrive before authentication is
+			// hydrated (or before the auth-gated effect runs) still navigate.
+			if (remotePushApi.current && !tapListener.current) {
+				try {
+					tapListener.current =
+						await remotePushApi.current.onNotificationTapped((notification) => {
+							console.log(
+								"[NotificationProvider] live tap fired",
+								notification,
+							);
+							handleTapRef.current(notification);
+						});
+					console.log("[NotificationProvider] tap listener registered");
+				} catch (error) {
+					console.warn(
+						"[NotificationProvider] Failed to register tap listener:",
+						error,
+					);
+				}
+			}
+
+			// Drain any cold-start tap captured natively before the JS bundle
+			// loaded. On iOS, when the app is launched from a tap, the plugin
+			// flushes its `notification-tapped` event before any JS listener
+			// can register - so the event is lost. The native bridge persists
+			// the userInfo to UserDefaults; this call retrieves and clears it.
+			try {
+				const pending = await invoke<Record<string, unknown> | null>(
+					"get_pending_notification_tap",
+				);
+				console.log("[NotificationProvider] cold-start tap pending=", pending);
+				if (pending && typeof pending === "object") {
+					const payload = normalizeColdStartPayload(pending);
+					console.log(
+						"[NotificationProvider] cold-start normalized payload=",
+						payload,
+					);
+					handleTapRef.current(payload);
+				}
+			} catch (error) {
+				console.log(
+					"[NotificationProvider] get_pending_notification_tap failed:",
+					error,
+				);
+			}
 		};
 
 		initNotifications();
+
+		return () => {
+			const listener = tapListener.current;
+			tapListener.current = null;
+			if (listener) {
+				void Promise.resolve(listener.unregister());
+			}
+		};
 	}, []);
 
 	useEffect(() => {
@@ -459,31 +622,6 @@ export default function NotificationProvider({
 							toast.info(notification.title ?? "Notification", {
 								description: notification.body,
 							});
-						},
-					),
-				);
-
-				remotePushListeners.current.push(
-					await remotePushApi.current.onNotificationTapped(
-						async (notification) => {
-							await storeNotification({
-								title: notification.title ?? "Notification",
-								description: notification.body,
-								icon: dataString(notification.data, "icon"),
-								link: dataString(notification.data, "link"),
-								appIdOverride: dataString(notification.data, "app_id") ?? appId,
-								sourceRunId: dataString(notification.data, "source_run_id"),
-								sourceNodeId: dataString(notification.data, "source_node_id"),
-								notificationType:
-									(dataString(notification.data, "notification_type") as
-										| "WORKFLOW"
-										| "SYSTEM") ?? "SYSTEM",
-							});
-
-							const link = dataString(notification.data, "link");
-							if (link && typeof window !== "undefined") {
-								window.location.assign(link);
-							}
 						},
 					),
 				);

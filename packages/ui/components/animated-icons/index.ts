@@ -8,6 +8,7 @@ export * from "./animated-store";
 export * from "./animated-brain";
 export * from "./animated-library";
 export * from "./animated-sparkles";
+export * from "./animated-study-hat";
 export * from "./animated-key";
 export * from "./animated-users";
 export * from "./animated-dashboard";

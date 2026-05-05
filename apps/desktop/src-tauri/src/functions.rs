@@ -11,6 +11,7 @@ pub mod feedback;
 pub mod file;
 pub mod flow;
 pub mod interaction;
+pub mod notifications;
 pub mod permissions;
 pub mod recording;
 pub mod registry;

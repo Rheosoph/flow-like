@@ -19,23 +19,24 @@ pub struct ModelProvider {
 /// Remote embedding provider implementation
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 pub enum RemoteEmbeddingProvider {
-    /// Huggingface Inference Endpoints
+    /// Internal OpenAI-compatible embedding gateway.
+    ///
+    /// Older bit configs serialized as `HuggingfaceEndpoint` or
+    /// `CloudflareWorkersAI` are accepted as aliases so existing records can be
+    /// migrated by config alone.
     #[default]
-    HuggingfaceEndpoint,
-    /// Cloudflare Workers AI
-    CloudflareWorkersAI,
-    /// Internal embedding gateway
+    #[serde(alias = "HuggingfaceEndpoint", alias = "CloudflareWorkersAI")]
     Internal,
 }
 
 /// Configuration for remote execution via API proxy
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 pub struct RemoteExecutionConfig {
-    /// Upstream endpoint URL (e.g., HF inference endpoint URL)
-    /// Can contain placeholders like {ACCOUNT_ID} for Cloudflare
+    /// Deprecated per-bit endpoint URL. Remote embeddings now use the shared
+    /// INTERNAL_EMBEDDING_ENDPOINT secret resolved by the API.
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// Name of secret in API's environment (never exposed to executors)
+    /// Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET.
     #[serde(default)]
     pub secret_name: Option<String>,
     /// Which remote provider implementation to use
@@ -62,9 +63,21 @@ pub struct EmbeddingModelProvider {
 impl EmbeddingModelProvider {
     /// Check if this provider supports remote execution via API proxy
     pub fn supports_remote(&self) -> bool {
+        let has_model_id = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.model_id.as_deref())
+            .or(self.provider.model_id.as_deref())
+            .is_some_and(|model_id| !model_id.trim().is_empty());
+
+        if !has_model_id {
+            return false;
+        }
+
         self.remote
             .as_ref()
-            .is_some_and(|r| r.endpoint.is_some() && r.implementation.is_some())
+            .is_some_and(|r| r.implementation.is_some())
+            || is_internal_hosted_provider_name(&self.provider.provider_name)
     }
 }
 
@@ -82,10 +95,30 @@ pub struct ImageEmbeddingModelProvider {
 impl ImageEmbeddingModelProvider {
     /// Check if this provider supports remote execution via API proxy
     pub fn supports_remote(&self) -> bool {
+        let has_model_id = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.model_id.as_deref())
+            .or(self.provider.model_id.as_deref())
+            .is_some_and(|model_id| !model_id.trim().is_empty());
+
+        if !has_model_id {
+            return false;
+        }
+
         self.remote
             .as_ref()
-            .is_some_and(|r| r.endpoint.is_some() && r.implementation.is_some())
+            .is_some_and(|r| r.implementation.is_some())
+            || is_internal_hosted_provider_name(&self.provider.provider_name)
     }
+}
+
+fn is_internal_hosted_provider_name(provider_name: &str) -> bool {
+    let normalized = provider_name.trim().to_ascii_lowercase();
+    normalized == "premium"
+        || normalized == "hosted"
+        || normalized == "internal"
+        || normalized.starts_with("hosted:")
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]

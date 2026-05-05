@@ -66,8 +66,8 @@ pub enum Relation {
     BoardSync,
     #[sea_orm(has_many = "super::comment::Entity")]
     Comment,
-    #[sea_orm(has_many = "super::course_connection::Entity")]
-    CourseConnection,
+    #[sea_orm(has_many = "super::course_app_link::Entity")]
+    CourseAppLink,
     #[sea_orm(has_many = "super::embedding_usage_tracking::Entity")]
     EmbeddingUsageTracking,
     #[sea_orm(has_many = "super::event::Entity")]
@@ -166,9 +166,9 @@ impl Related<super::comment::Entity> for Entity {
     }
 }
 
-impl Related<super::course_connection::Entity> for Entity {
+impl Related<super::course_app_link::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::CourseConnection.def()
+        Relation::CourseAppLink.def()
     }
 }
 

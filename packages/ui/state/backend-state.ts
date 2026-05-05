@@ -130,6 +130,7 @@ export type {
 	IOAuthRequirement,
 	IPrerunBoardResponse,
 	IPrerunEventResponse,
+	IUserLookup,
 } from "./backend-state/types";
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";

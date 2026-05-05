@@ -7445,6 +7445,7 @@ dependencies = [
  "p256 0.13.2",
  "parking_lot",
  "pin-project-lite",
+ "rand 0.9.3",
  "redis",
  "reqwest 0.12.28",
  "rsa",

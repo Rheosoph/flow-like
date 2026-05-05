@@ -32,12 +32,6 @@ pub struct Model {
     pub is_default: bool,
     #[sea_orm(column_name = "eventVersion", column_type = "Text")]
     pub event_version: String,
-    #[sea_orm(
-        column_name = "executionMode",
-        column_type = "Text",
-        default_value = "Local"
-    )]
-    pub execution_mode: String,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub variables: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
@@ -52,6 +46,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "executionMode", column_type = "Text")]
+    pub execution_mode: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

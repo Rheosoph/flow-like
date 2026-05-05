@@ -25,7 +25,7 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
         let mut node = Node::new(
             "add_column_local_db",
             "Add Column",
-            "Adds a column using a SQL expression (for example: NULL, 0, '', CAST(NULL AS VARCHAR)).",
+            "Adds a column using a typed SQL expression (e.g. 0, '', CAST(NULL AS STRING)). LanceDB rejects bare NULL — wrap it in CAST(... AS <type>). Supported types: int, bigint, float, double, string, binary, boolean, date, timestamp.",
             "Data/Database/Schema",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -51,10 +51,10 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
         node.add_input_pin(
             "sql_expression",
             "SQL Expression",
-            "Expression used to populate existing rows for the new column",
+            "Typed SQL expression used to populate existing rows. Examples: 0, '', CAST(NULL AS STRING). Bare NULL is rejected; LanceDB supports int, bigint, float, double, string, binary, boolean, date, timestamp.",
             VariableType::String,
         )
-        .set_default_value(Some(json!("NULL")));
+        .set_default_value(Some(json!("CAST(NULL AS STRING)")));
 
         node.add_output_pin(
             "exec_out",
@@ -69,6 +69,7 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
             VariableType::Struct,
         );
 
+        node.set_version(2);
         node
     }
 

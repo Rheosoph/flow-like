@@ -196,6 +196,7 @@ pub async fn register_push_target(
         active.device_name = Set(body.device_name.clone());
         active.metadata = Set(body.metadata.clone());
         active.push_enabled = Set(true);
+        active.failure_count = Set(0);
         active.invalidated_at = Set(None);
         active.invalidation_reason = Set(None);
         active.last_registered_at = Set(now);
@@ -217,6 +218,7 @@ pub async fn register_push_target(
             device_name: Set(body.device_name.clone()),
             metadata: Set(body.metadata.clone()),
             push_enabled: Set(true),
+            failure_count: Set(0),
             last_registered_at: Set(now),
             last_seen_at: Set(now),
             invalidated_at: Set(None),

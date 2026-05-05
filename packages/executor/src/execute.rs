@@ -281,6 +281,8 @@ pub async fn execute(
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
 
+    run.set_execution_sub(claims.sub.clone()).await;
+
     // Set user context if provided
     if let Some(user_context) = request.user_context.clone() {
         run.set_user_context(user_context);
@@ -373,10 +375,14 @@ pub async fn execute(
         }
     };
 
-    // Signal completion to callback batcher
+    // The batcher only exits when every clone of event_tx is dropped.
+    // run owns the InterComCallback chain and intercom_handler owns the
+    // BatchedCallback Arc — both transitively hold event_tx_clone, so
+    // they must be released before awaiting the batcher.
+    drop(run);
+    drop(intercom_handler);
     drop(event_tx);
 
-    // Wait for callback batcher to finish
     let _ = callback_handle.await;
 
     // Send final progress update

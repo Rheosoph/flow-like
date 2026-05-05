@@ -77,7 +77,7 @@ export function A2UILink({
 
 		if (action) {
 			e.preventDefault();
-			executeAction(action);
+			executeAction(action, componentId);
 			return;
 		}
 		if (onAction) {

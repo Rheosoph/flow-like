@@ -258,6 +258,22 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;
 
+				if (updateType === "createComponent") {
+					const replacement: SurfaceComponent = {
+						id: componentId,
+						component: updateValue.component as SurfaceComponent["component"],
+						style:
+							(updateValue.style as SurfaceComponent["style"]) ?? component.style,
+					};
+					return {
+						...prevSurface,
+						components: {
+							...prevSurface.components,
+							[componentId]: replacement,
+						},
+					};
+				}
+
 				let updatedComponent: SurfaceComponent = { ...component };
 
 				switch (updateType) {

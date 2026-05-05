@@ -8,6 +8,8 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	DashboardChainWidget,
+	DashboardErrorWidget,
 	GlobalPermission,
 	type IProfile,
 	Skeleton,
@@ -17,12 +19,14 @@ import {
 } from "@tm9657/flow-like-ui";
 import type { ISolutionListResponse } from "@tm9657/flow-like-ui";
 import {
+	Activity,
 	BookOpen,
 	Box,
 	CheckCircle,
 	Clock,
 	Cpu,
 	Download,
+	GraduationCap,
 	Key,
 	Lightbulb,
 	Lock,
@@ -77,6 +81,7 @@ interface AdminSection {
 	icon: LucideIcon;
 	href: string;
 	permission: GlobalPermission;
+	alternatePermissions?: GlobalPermission[];
 	actionLabel: string;
 	color: string;
 	links?: { label: string; href: string }[];
@@ -121,6 +126,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		],
 	},
 	{
+		title: "University",
+		description: "Review drafts, create courses, and manage learning content.",
+		icon: GraduationCap,
+		href: "/learn/admin",
+		permission: GlobalPermission.ReadCourses,
+		alternatePermissions: [GlobalPermission.WriteCourses],
+		actionLabel: "Open Courses",
+		color: "text-sky-500",
+		links: [
+			{ label: "Catalog", href: "/learn" },
+			{ label: "Authoring", href: "/learn/admin" },
+		],
+	},
+	{
 		title: "Profile Templates",
 		description: "Create and manage reusable profile templates for users.",
 		icon: Users,
@@ -160,6 +179,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Manage Tokens",
 		color: "text-rose-500",
+	},
+	{
+		title: "Logs & Observability",
+		description:
+			"Inspect API errors, drill into references, and verify cryptographic audit chains.",
+		icon: Activity,
+		href: "/admin/logs",
+		permission: GlobalPermission.ReadLogs,
+		actionLabel: "Open Control Tower",
+		color: "text-red-500",
+		links: [
+			{ label: "Errors", href: "/admin/logs" },
+			{ label: "Audit chain", href: "/admin/logs?tab=audit" },
+		],
 	},
 ];
 
@@ -286,7 +319,7 @@ export default function AdminDashboardPage() {
 					<div>
 						<h1 className="text-3xl font-bold">Admin Dashboard</h1>
 						<p className="text-muted-foreground">
-							Central hub for registry management.
+							Central hub for registry, publishing, and learning content.
 						</p>
 					</div>
 
@@ -387,6 +420,14 @@ export default function AdminDashboardPage() {
 						/>
 					</div>
 
+					{/* Logs & cryptographic audit observability */}
+					{perms.hasPermission(GlobalPermission.ReadLogs) && (
+						<div className="grid gap-4 lg:grid-cols-2">
+							<DashboardErrorWidget profile={profile.data} />
+							<DashboardChainWidget profile={profile.data} />
+						</div>
+					)}
+
 					{/* Admin sections */}
 					<div>
 						<h2 className="mb-3 text-lg font-semibold">Manage</h2>
@@ -395,7 +436,14 @@ export default function AdminDashboardPage() {
 								<SectionCard
 									key={section.title}
 									section={section}
-									hasAccess={perms.hasPermission(section.permission)}
+									hasAccess={
+										perms.hasPermission(section.permission) ||
+										Boolean(
+											section.alternatePermissions?.some((permission) =>
+												perms.hasPermission(permission),
+											),
+										)
+									}
 								/>
 							))}
 						</div>

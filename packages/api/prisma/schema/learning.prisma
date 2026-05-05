@@ -1,28 +1,301 @@
-model CourseConnection {
-  id String @id
-
-  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  courseId String
-
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
-  appId String
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([appId])
-}
-
 model Course {
   id String @id
 
-  language String
-  meta     Meta[]
+  language       String
+  slug           String?
+  difficulty     CourseDifficulty @default(BEGINNER)
+  category       CourseCategory   @default(GENERAL)
+  estimatedMinutes Int            @default(0)
+  isPublished    Boolean          @default(false)
+  authorId       String?
+  iconUrl        String?
+  bannerUrl      String?
+  tags           String[]
 
-  connections CourseConnection[]
+  meta        Meta[]
+  modules     CourseModule[]
+  appLinks    CourseAppLink[]
+  enrollments UserCourseEnrollment[]
+  certificates Certificate[]
+  pathSteps   LearningPathCourse[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([language])
+  @@index([category])
+  @@index([isPublished])
+  @@index([slug])
+}
+
+model LearningPath {
+  id          String  @id
+  slug        String?
+  title       String
+  description String?
+  position    Int     @default(0)
+  isPublished Boolean @default(false)
+
+  steps LearningPathCourse[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isPublished])
+  @@index([slug])
+  @@index([position])
+}
+
+model LearningPathCourse {
+  pathId   String
+  path     LearningPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  courseId String
+  course   Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  position Int          @default(0)
+
+  @@id([pathId, courseId])
+  @@index([pathId])
+  @@index([courseId])
+  @@index([pathId, position])
+}
+
+model CourseModule {
+  id       String @id
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  position    Int     @default(0)
+
+  lessons Lesson[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId])
+  @@index([courseId, position])
+}
+
+model Lesson {
+  id       String @id
+  moduleId String
+  module   CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  title       String
+  position    Int    @default(0)
+  language    String @default("en")
+  content     String
+  videoUrl    String?
+  estimatedMinutes Int @default(5)
+  isOptional  Boolean @default(false)
+
+  challenges Challenge[]
+  appRefs    LessonAppRef[]
+  progress   UserLessonProgress[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([moduleId])
+  @@index([moduleId, position])
+}
+
+model Challenge {
+  id       String @id
+  lessonId String
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  position    Int           @default(0)
+  kind        ChallengeKind
+  prompt      String
+  explanation String?
+  payload     Json
+  points      Int           @default(10)
+
+  attempts UserChallengeAttempt[]
+  weeklyChallenges WeeklyChallenge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lessonId])
+}
+
+model CourseAppLink {
+  id       String @id
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  appId   String
+  app     App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  purpose CourseAppPurpose @default(SHARED_TEMPLATE)
+  alias   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, appId])
+  @@index([appId])
+  @@index([courseId])
+}
+
+model LessonAppRef {
+  id       String @id
+  lessonId String
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  appAlias String?
+  appId    String?
+
+  kind   LessonAppRefKind
+  target Json
+
+  label String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lessonId])
+}
+
+model UserCourseEnrollment {
+  id       String @id
+  userId   String
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  // alias -> forked appId. Backward compatible: keys are app aliases from
+  // CourseAppLink, values are the user-owned app IDs after forking.
+  linkedAppIds Json @default("{}")
+
+  // alias -> { boards: { src->dst }, nodes: { src->dst }, pins: { src->dst },
+  //            events: { src->dst }, pages: { src->dst } }
+  // Used by the server to translate original IDs (referenced by lesson
+  // payloads/refs) into the user-specific ones at validation/navigation time.
+  idMaps Json @default("{}")
+
+  startedAt    DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  completedAt  DateTime?
+
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+}
+
+model UserLessonProgress {
+  id       String @id
+  userId   String
+  lessonId String
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  status      LessonStatus @default(IN_PROGRESS)
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+}
+
+model UserChallengeAttempt {
+  id          String @id
+  userId      String
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  submission Json
+  isCorrect  Boolean
+  pointsAwarded Int @default(0)
+  attemptedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([challengeId])
+  @@index([userId, challengeId])
+}
+
+model Certificate {
+  id       String @id
+  userId   String
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  issuedAt DateTime @default(now())
+  hash     String
+  pdfUrl   String?
+
+  @@unique([userId, courseId])
+  @@index([userId])
+}
+
+model LeaderboardOptIn {
+  userId      String   @id
+  displayName String
+  isOptedIn   Boolean  @default(true)
+  totalPoints Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+model WeeklyChallenge {
+  id          String   @id
+  weekIso     String
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([weekIso])
+  @@index([expiresAt])
+  @@index([challengeId])
+}
+
+enum CourseDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum CourseCategory {
+  GENERAL
+  GETTING_STARTED
+  FLOWS
+  PAGES
+  EVENTS
+  DATA
+  AI
+  INTEGRATIONS
+  DEPLOYMENT
+  ADVANCED
+  EXPERT
+}
+
+enum CourseAppPurpose {
+  SHARED_TEMPLATE
+  REFERENCE
+  PLAYGROUND
+}
+
+enum LessonAppRefKind {
+  NAVIGATE
+  FOCUS_NODE
+  ADD_NODE
+  CREATE_EVENT
+  OPEN_OR_CLONE_APP
+}
+
+enum ChallengeKind {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  BOARD_RIDDLE
+  EXECUTE_NODE
+}
+
+enum LessonStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
 }

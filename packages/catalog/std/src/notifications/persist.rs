@@ -67,12 +67,41 @@ fn notification_api_origin(hub: &str, secure: bool) -> Option<String> {
     Some(format!("{protocol}://{trimmed}"))
 }
 
+/// Reserved by the `/use` route shell. User-supplied query params with these
+/// names are prefixed with `_` so they don't collide with framework values;
+/// `Get Query Params` reverses the prefix transparently.
+pub const RESERVED_QUERY_KEYS: &[&str] = &["id", "route", "eventId"];
+
+fn prefix_reserved_user_query(query: &str) -> String {
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if RESERVED_QUERY_KEYS.contains(&key) {
+                if pair.contains('=') {
+                    format!("_{key}={value}")
+                } else {
+                    format!("_{key}")
+                }
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 /// Build a notification link from an app_id and a user-provided path.
 ///
 /// If `user_link` is already a non-empty relative path (e.g. `/dashboard`
 /// or `/store?item=abc`), it is turned into `/use?id={app_id}&route={path}&extra=params`.
 /// If `user_link` is empty or missing, defaults to `/use?id={app_id}&route=/`.
 /// Absolute URLs are rejected (security: avoids phishing via push notifications).
+///
+/// Query keys reserved by the `/use` shell (`id`, `route`, `eventId`) are
+/// `_`-prefixed when forwarded so user values never overwrite framework
+/// values in `_query_params`.
 pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String {
     let raw = user_link.unwrap_or("").trim();
 
@@ -97,10 +126,14 @@ pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String 
         urlencoding::encode(&format!("/{path_part}")),
     );
 
-    // Append any extra query params from the user-provided link
+    // Append any extra query params from the user-provided link, prefixing
+    // reserved keys so they don't collide with the `/use` framework keys.
     if !query_part.is_empty() {
-        link.push('&');
-        link.push_str(query_part);
+        let safe = prefix_reserved_user_query(query_part);
+        if !safe.is_empty() {
+            link.push('&');
+            link.push_str(&safe);
+        }
     }
 
     link
@@ -236,7 +269,27 @@ pub async fn persist_notification(
 
 #[cfg(test)]
 mod tests {
-    use super::notification_api_origin;
+    use super::{build_notification_link, notification_api_origin};
+
+    #[test]
+    fn prefixes_reserved_user_query_keys() {
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?id=xyz")),
+            "/use?id=app1&route=%2Fmail&_id=xyz"
+        );
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?route=foo&eventId=bar&mailid=42")),
+            "/use?id=app1&route=%2Fmail&_route=foo&_eventId=bar&mailid=42"
+        );
+    }
+
+    #[test]
+    fn passes_through_non_reserved_query_keys() {
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?mailid=xyz&from=abc")),
+            "/use?id=app1&route=%2Fmail&mailid=xyz&from=abc"
+        );
+    }
 
     #[test]
     fn normalizes_bare_hub_domains() {

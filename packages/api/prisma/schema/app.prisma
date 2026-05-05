@@ -58,7 +58,7 @@ model App {
   comments  Comment[]
   changelog String?
 
-  courses       CourseConnection[]
+  courseLinks   CourseAppLink[]
   inviteLinks   InviteLink[]
   invitations   Invitation[]
   notifications Notification[]
