@@ -196,58 +196,87 @@ function TableView({
 	}, [schema, count, list]);
 
 	const handleOptimize = useCallback(async () => {
-		await backend.dbState.optimize(appId, table, undefined, userScoped);
-		handleRefresh();
+		try {
+			await backend.dbState.optimize(appId, table, undefined, userScoped);
+			toast.success("Optimized table");
+			handleRefresh();
+		} catch (err) {
+			toast.error(`Optimize failed: ${extractErrorMessage(err)}`);
+			throw err;
+		}
 	}, [backend.dbState, appId, table, userScoped, handleRefresh]);
 
 	const handleUpdateItem = useCallback(
 		async (filter: string, updates: Record<string, unknown>) => {
-			await backend.dbState.updateItem(
-				appId,
-				table,
-				filter,
-				updates,
-				userScoped,
-			);
-			handleRefresh();
+			try {
+				await backend.dbState.updateItem(
+					appId,
+					table,
+					filter,
+					updates,
+					userScoped,
+				);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Update failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleDropColumns = useCallback(
 		async (columns: string[]) => {
-			await backend.dbState.dropColumns(appId, table, columns, userScoped);
-			handleRefresh();
+			try {
+				await backend.dbState.dropColumns(appId, table, columns, userScoped);
+				toast.success(`Dropped column${columns.length > 1 ? "s" : ""}`);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Drop column failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleAddColumn = useCallback(
 		async (name: string, sqlExpression: string) => {
-			await backend.dbState.addColumn(
-				appId,
-				table,
-				{
-					name,
-					sql_expression: sqlExpression,
-				},
-				userScoped,
-			);
-			handleRefresh();
+			try {
+				await backend.dbState.addColumn(
+					appId,
+					table,
+					{
+						name,
+						sql_expression: sqlExpression,
+					},
+					userScoped,
+				);
+				toast.success(`Added column "${name}"`);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Add column failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
 
 	const handleAlterColumn = useCallback(
 		async (column: string, nullable: boolean) => {
-			await backend.dbState.alterColumn(
-				appId,
-				table,
-				column,
-				nullable,
-				userScoped,
-			);
-			handleRefresh();
+			try {
+				await backend.dbState.alterColumn(
+					appId,
+					table,
+					column,
+					nullable,
+					userScoped,
+				);
+				toast.success(`Altered column "${column}"`);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Alter column failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
@@ -258,8 +287,14 @@ function TableView({
 
 	const handleDropIndex = useCallback(
 		async (indexName: string) => {
-			await backend.dbState.dropIndex(appId, table, indexName, userScoped);
-			handleRefresh();
+			try {
+				await backend.dbState.dropIndex(appId, table, indexName, userScoped);
+				toast.success(`Dropped index "${indexName}"`);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Drop index failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);
@@ -274,15 +309,21 @@ function TableView({
 				auto: IIndexType.Auto,
 			};
 			const enumType = typeMap[indexType.toLowerCase()] ?? IIndexType.Auto;
-			await backend.dbState.buildIndex(
-				appId,
-				table,
-				column,
-				enumType,
-				undefined,
-				userScoped,
-			);
-			handleRefresh();
+			try {
+				await backend.dbState.buildIndex(
+					appId,
+					table,
+					column,
+					enumType,
+					undefined,
+					userScoped,
+				);
+				toast.success(`Built index on "${column}"`);
+				handleRefresh();
+			} catch (err) {
+				toast.error(`Build index failed: ${extractErrorMessage(err)}`);
+				throw err;
+			}
 		},
 		[backend.dbState, appId, table, userScoped, handleRefresh],
 	);

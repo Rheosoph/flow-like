@@ -117,6 +117,7 @@ const ALL_PERMISSIONS: { label: string; perm: GlobalPermission }[] = [
 	{ label: "Manage Packages", perm: GlobalPermission.ManagePackages },
 	{ label: "Read Courses", perm: GlobalPermission.ReadCourses },
 	{ label: "Write Courses", perm: GlobalPermission.WriteCourses },
+	{ label: "Read Logs", perm: GlobalPermission.ReadLogs },
 ];
 
 const SKELETON_ROWS = [

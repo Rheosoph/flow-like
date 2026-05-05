@@ -1076,6 +1076,7 @@ pub fn run() {
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
             functions::interaction::respond_to_interaction,
+            functions::notifications::get_pending_notification_tap,
             functions::feedback::upsert_offline_feedback,
             functions::feedback::get_offline_feedback,
             functions::feedback::get_offline_feedback_stats,

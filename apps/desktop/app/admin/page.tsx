@@ -8,6 +8,8 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	DashboardChainWidget,
+	DashboardErrorWidget,
 	GlobalPermission,
 	type IProfile,
 	Skeleton,
@@ -17,6 +19,7 @@ import {
 } from "@tm9657/flow-like-ui";
 import type { ISolutionListResponse } from "@tm9657/flow-like-ui";
 import {
+	Activity,
 	BookOpen,
 	Box,
 	CheckCircle,
@@ -177,6 +180,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Manage Tokens",
 		color: "text-rose-500",
+	},
+	{
+		title: "Logs & Observability",
+		description:
+			"Inspect API errors, drill into references, and verify cryptographic audit chains.",
+		icon: Activity,
+		href: "/admin/logs",
+		permission: GlobalPermission.ReadLogs,
+		actionLabel: "Open Control Tower",
+		color: "text-red-500",
+		links: [
+			{ label: "Errors", href: "/admin/logs" },
+			{ label: "Audit chain", href: "/admin/logs?tab=audit" },
+		],
 	},
 ];
 
@@ -410,6 +427,14 @@ export default function AdminDashboardPage() {
 							loading={statsLoading}
 						/>
 					</div>
+
+					{/* Logs & cryptographic audit observability */}
+					{perms.hasPermission(GlobalPermission.ReadLogs) && (
+						<div className="grid gap-4 lg:grid-cols-2">
+							<DashboardErrorWidget profile={profile.data} />
+							<DashboardChainWidget profile={profile.data} />
+						</div>
+					)}
 
 					{/* Admin sections */}
 					<div>
