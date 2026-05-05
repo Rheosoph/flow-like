@@ -8,8 +8,8 @@
 
 use crate::{
     entity::{
-        execution_usage_tracking, membership,
-        sea_orm_active_enums::{ExecutionStatus, NotificationType},
+        execution_usage_tracking,
+        sea_orm_active_enums::ExecutionStatus,
     },
     error::ApiError,
     execution::{
@@ -19,7 +19,6 @@ use crate::{
         },
         verify_execution_jwt, verify_user_jwt,
     },
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
 use axum::{
@@ -27,9 +26,8 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
-use flow_like::state::NotificationEvent;
 use flow_like_types::{anyhow, create_id, tokio};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -287,76 +285,6 @@ pub async fn push_events(
         .push_events(events)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to push events: {}", e)))?;
-
-    for event in &body.events {
-        if event.event_type != "flow_notification" {
-            continue;
-        }
-
-        let Ok(notification) = serde_json::from_value::<NotificationEvent>(event.payload.clone())
-        else {
-            tracing::warn!(run_id = %claims.run_id, "Ignoring malformed flow_notification payload");
-            continue;
-        };
-
-        let explicit_target = notification
-            .target_user_sub
-            .as_deref()
-            .map(str::trim)
-            .filter(|target| !target.is_empty() && *target != "local")
-            .map(ToOwned::to_owned);
-
-        let Some(target_user_id) =
-            explicit_target.or_else(|| execution_claim_user_id(&claims.sub).map(ToOwned::to_owned))
-        else {
-            tracing::warn!(
-                run_id = %claims.run_id,
-                executor_subject = %claims.sub,
-                "Skipping flow_notification without a user target for non-user execution actor"
-            );
-            continue;
-        };
-
-        if target_user_id != claims.sub {
-            let membership = membership::Entity::find()
-                .filter(membership::Column::AppId.eq(claims.app_id.clone()))
-                .filter(membership::Column::UserId.eq(target_user_id.clone()))
-                .one(&state.db)
-                .await?;
-
-            if membership.is_none() {
-                tracing::warn!(
-                    run_id = %claims.run_id,
-                    target_user_id = %target_user_id,
-                    app_id = %claims.app_id,
-                    "Skipping flow_notification for non-member target"
-                );
-                continue;
-            }
-        }
-
-        if let Err(error) = dispatch_notification(
-            &state,
-            DispatchNotificationInput {
-                user_id: target_user_id,
-                app_id: Some(claims.app_id.clone()),
-                title: notification.title,
-                description: notification.description,
-                icon: notification.icon,
-                link: notification.link,
-                image: None,
-                notification_type: NotificationType::Workflow,
-                source_run_id: notification
-                    .source_run_id
-                    .or_else(|| Some(claims.run_id.clone())),
-                source_node_id: notification.source_node_id,
-            },
-        )
-        .await
-        {
-            tracing::warn!(error = %error, run_id = %claims.run_id, "Failed to persist flow_notification from execution events");
-        }
-    }
 
     Ok(Json(PushEventsResponse {
         accepted,
