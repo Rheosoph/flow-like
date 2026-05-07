@@ -193,12 +193,8 @@ impl AwsRuntimeCredentials {
         let policy = match mode {
             CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
             CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
-            CredentialsAccess::ReadAppContent => {
-                read_app_content_policy(self, &apps_prefix)
-            }
-            CredentialsAccess::EditAppContent => {
-                edit_app_content_policy(self, &apps_prefix)
-            }
+            CredentialsAccess::ReadAppContent => read_app_content_policy(self, &apps_prefix),
+            CredentialsAccess::EditAppContent => edit_app_content_policy(self, &apps_prefix),
             CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
             CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
             CredentialsAccess::InvokeNone => invoke_none_policy(

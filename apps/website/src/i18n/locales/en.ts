@@ -195,13 +195,6 @@ export const en = {
 	"design.feature3.desc":
 		"Snapshots of inputs and outputs make finding mismatches straightforward.",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "New",
-	"banner24.headline": "24 Hour",
-	"banner24.headline.highlight": "Solution",
-	"banner24.description":
-		"We build your automation in 24 hours. €2,400. Production-ready.",
-	"banner24.learnmore": "Learn more",
 
 	// Portability
 	"portability.tagline": "Lifecycle with context",
@@ -616,11 +609,6 @@ export const en = {
 	"v2.who.community.desc":
 		"Small, growing, and genuinely helpful. Come say hi.",
 	"v2.who.community.join": "→ Join the discussions on GitHub",
-	"v2.who.cta.heading": "Don't know where to start?",
-	"v2.who.cta.desc":
-		"We'll build your first automation for you. In 24 hours. You watch how it's done, we hand you everything — code, documentation, running infrastructure.",
-	"v2.who.cta.from": "Starting at",
-	"v2.who.cta.label": "24-Hour Solution",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Start",
@@ -636,7 +624,6 @@ export const en = {
 	"v2.start.teams.selfhost": "Self-hosting guide",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "We'll meet you where you are.",
-	"v2.start.enterprise.solution": "24-Hour Solution",
 	"v2.start.enterprise.contact": "Talk to us",
 	"v2.start.dev.title": "Developers",
 	"v2.start.dev.desc": "It's all on GitHub. Fork, extend, contribute.",
@@ -1156,9 +1143,4 @@ export const en = {
 	"v3.cta.developer": "Developer",
 	"v3.cta.developer.desc": "Full source code. Full SDK. Full API docs.",
 	"v3.cta.developer.action": "View on GitHub",
-	"v3.cta.24h.headline": "The 24-Hour Solution",
-	"v3.cta.24h.desc":
-		"Don't know where to start? We engineer your first automation solution for you — in 24 hours. You watch, we hand you everything: code, docs, running infrastructure.",
-	"v3.cta.24h.action": "Book Your 24-Hour Sprint →",
-	"v3.cta.24h.price": "Starting at €1,999",
 } as const;

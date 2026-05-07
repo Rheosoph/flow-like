@@ -8006,6 +8006,7 @@ dependencies = [
  "flow-like-wasm",
  "futures-util",
  "jsonwebtoken 10.3.0",
+ "moka",
  "p256 0.13.2",
  "reqwest 0.12.28",
  "serde",

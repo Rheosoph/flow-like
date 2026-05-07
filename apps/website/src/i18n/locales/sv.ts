@@ -121,11 +121,6 @@ export const sv = {
 	"design.feature3.desc":
 		"Samma flöde körs lokalt, staging, produktion — inga omskrivningar.",
 
-	// 24 Hour Banner
-	"banner24.headline": "Ditt första workflow på 24 timmar",
-	"banner24.description":
-		"Från nedladdning till fungerande automatisering — på en dag.",
-	"banner24.cta": "Ladda ner",
 
 	// Portability
 	"portability.tagline": "Automatisering överallt",
@@ -532,11 +527,6 @@ export const sv = {
 	"v2.who.community.title": "Community",
 	"v2.who.community.desc": "Litet, växande och genuint hjälpsamt. Kom förbi.",
 	"v2.who.community.join": "→ Gå med i diskussionerna på GitHub",
-	"v2.who.cta.heading": "Vet du inte var du ska börja?",
-	"v2.who.cta.desc":
-		"Vi bygger din första automatisering åt dig. Inom 24 timmar. Du tittar på hur det görs, vi lämnar över allt — kod, dokumentation, körande infrastruktur.",
-	"v2.who.cta.from": "Från",
-	"v2.who.cta.label": "24-timmarslösning",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Börja",
@@ -552,7 +542,6 @@ export const sv = {
 	"v2.start.teams.selfhost": "Självhostingsguide",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Vi möter dig där du är.",
-	"v2.start.enterprise.solution": "24-timmarslösning",
 	"v2.start.enterprise.contact": "Prata med oss",
 	"v2.start.dev.title": "Utvecklare",
 	"v2.start.dev.desc": "Allt på GitHub. Forka, utöka, bidra.",
@@ -698,9 +687,6 @@ export const sv = {
 
 	"design.headline.highlight": "visuellt",
 
-	"banner24.tagline": "Nytt",
-	"banner24.headline.highlight": "Lösning",
-	"banner24.learnmore": "Läs mer",
 
 	"portability.headline.start": "Börja",
 	"portability.headline.offline": "offline",
@@ -1166,9 +1152,4 @@ export const sv = {
 	"v3.cta.developer.desc":
 		"Fullständig källkod. Fullständigt SDK. Fullständig API-dokumentation.",
 	"v3.cta.developer.action": "Visa på GitHub",
-	"v3.cta.24h.headline": "24-Timmarslösningen",
-	"v3.cta.24h.desc":
-		"Vet du inte var du ska börja? Vi bygger din första automatiseringslösning åt dig — på 24 timmar. Du tittar på, vi lämnar över allt: kod, dokumentation, körande infrastruktur.",
-	"v3.cta.24h.action": "Boka Din 24-Timmarssprint →",
-	"v3.cta.24h.price": "Från €1 999",
 } as const;

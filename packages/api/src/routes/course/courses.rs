@@ -35,6 +35,7 @@ pub struct CourseListItem {
     pub icon_url: Option<String>,
     pub banner_url: Option<String>,
     pub tags: Vec<String>,
+    pub position: Option<i32>,
     pub name: Option<String>,
     pub description: Option<String>,
 }
@@ -52,6 +53,8 @@ pub struct CourseUpsertBody {
     #[serde(default)]
     pub banner_url: Option<String>,
     pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub position: Option<i32>,
     pub name: String,
     pub description: Option<String>,
     pub long_description: Option<String>,
@@ -224,7 +227,9 @@ pub async fn list_courses(
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
     let limit = q.limit.unwrap_or(100).min(100);
 
-    let mut query = course::Entity::find().order_by_desc(course::Column::UpdatedAt);
+    let mut query = course::Entity::find()
+        .order_by_asc(course::Column::Position)
+        .order_by_desc(course::Column::UpdatedAt);
 
     let include_unpublished = q.include_unpublished.unwrap_or(false);
     if include_unpublished {
@@ -284,10 +289,27 @@ pub async fn list_courses(
             icon_url,
             banner_url,
             tags: c.tags.unwrap_or_default(),
+            position: c.position,
             name: chosen.map(|m| m.name.clone()),
             description: chosen.and_then(|m| m.description.clone()),
         });
     }
+
+    items.sort_by(|a, b| {
+        match (a.position, b.position) {
+            (Some(ap), Some(bp)) => ap.cmp(&bp),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| {
+            a.name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .cmp(&b.name.as_deref().unwrap_or("").to_lowercase())
+        })
+    });
 
     Ok(Json(items))
 }
@@ -304,6 +326,7 @@ pub struct CourseDetail {
     pub icon_url: Option<String>,
     pub banner_url: Option<String>,
     pub tags: Vec<String>,
+    pub position: Option<i32>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub long_description: Option<String>,
@@ -378,6 +401,7 @@ pub async fn get_course(
         icon_url,
         banner_url,
         tags: c.tags.unwrap_or_default(),
+        position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
         long_description: chosen.and_then(|m| m.long_description.clone()),
@@ -431,6 +455,7 @@ pub async fn upsert_course(
         active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
         active.is_published = Set(body.is_published.unwrap_or(false));
         active.tags = Set(body.tags.clone());
+        active.position = Set(body.position);
         active.updated_at = Set(now);
         active.update(&state.db).await?
     } else {
@@ -446,6 +471,7 @@ pub async fn upsert_course(
             icon_url: Set(None),
             banner_url: Set(None),
             tags: Set(body.tags.clone()),
+            position: Set(body.position),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -511,6 +537,7 @@ pub async fn upsert_course(
         icon_url,
         banner_url,
         tags: saved.tags.unwrap_or_default(),
+        position: saved.position,
         name: Some(body.name),
         description: body.description,
         long_description: body.long_description,
@@ -613,6 +640,7 @@ pub async fn get_course_structure(
         icon_url,
         banner_url,
         tags: c.tags.clone().unwrap_or_default(),
+        position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
         long_description: chosen.and_then(|m| m.long_description.clone()),

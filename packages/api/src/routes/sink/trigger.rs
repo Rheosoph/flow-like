@@ -709,7 +709,7 @@ pub async fn trigger_event(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -1000,7 +1000,7 @@ pub async fn trigger_http(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -1391,7 +1391,7 @@ pub async fn trigger_telegram(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1717,7 +1717,7 @@ pub async fn trigger_discord(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {

@@ -17,12 +17,13 @@ use sea_orm::{ActiveModelTrait, TransactionTrait};
     put,
     path = "/apps/{app_id}/meta",
     tag = "meta",
-    description = "Create or update metadata for an app, template, or course.",
+    description = "Create or update metadata for an app, template, course, or widget.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("language" = Option<String>, Query, description = "Language code (default en)"),
         ("template_id" = Option<String>, Query, description = "Template ID"),
-        ("course_id" = Option<String>, Query, description = "Course ID")
+        ("course_id" = Option<String>, Query, description = "Course ID"),
+        ("widget_id" = Option<String>, Query, description = "Widget ID")
     ),
     request_body = String,
     responses(
@@ -57,6 +58,7 @@ pub async fn upsert_meta(
     model.bit_id = None;
     model.app_id = None;
     model.course_id = None;
+    model.widget_id = None;
 
     match &mode {
         MetaMode::Template(id) => {
@@ -67,6 +69,9 @@ pub async fn upsert_meta(
         }
         MetaMode::Course(id) => {
             model.course_id = Some(id.clone());
+        }
+        MetaMode::Widget(id) => {
+            model.widget_id = Some(id.clone());
         }
     }
 

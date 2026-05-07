@@ -11,6 +11,7 @@ model Course {
   iconUrl        String?
   bannerUrl      String?
   tags           String[]
+  position       Int?
 
   meta        Meta[]
   modules     CourseModule[]
@@ -27,6 +28,7 @@ model Course {
   @@index([category])
   @@index([isPublished])
   @@index([slug])
+  @@index([position])
 }
 
 model LearningPath {

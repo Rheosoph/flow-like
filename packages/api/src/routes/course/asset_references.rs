@@ -11,8 +11,7 @@ const SIGNED_URL_TTL_SECS: u64 = 60 * 60 * 12;
 fn reference_pattern() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        regex::Regex::new(r"(^|[^\w\\])@([A-Za-z_][A-Za-z0-9_-]{0,63})")
-            .expect("valid regex")
+        regex::Regex::new(r"(^|[^\w\\])@([A-Za-z_][A-Za-z0-9_-]{0,63})").expect("valid regex")
     })
 }
 
@@ -33,17 +32,15 @@ fn escape_label(label: &str) -> String {
 }
 
 fn escape_url(url: &str) -> String {
-    url.replace(' ', "%20").replace(')', "%29").replace('(', "%28")
+    url.replace(' ', "%20")
+        .replace(')', "%29")
+        .replace('(', "%28")
 }
 
 /// Replaces `@AssetName` references in markdown content with rendered markdown
 /// pointing at presigned URLs for the matching course asset. Unknown references
 /// are left untouched. Code-fenced blocks are skipped.
-pub async fn resolve_asset_references(
-    state: &AppState,
-    course_id: &str,
-    content: &str,
-) -> String {
+pub async fn resolve_asset_references(state: &AppState, course_id: &str, content: &str) -> String {
     if !content.contains('@') {
         return content.to_string();
     }

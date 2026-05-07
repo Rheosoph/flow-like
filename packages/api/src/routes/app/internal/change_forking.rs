@@ -37,7 +37,10 @@ pub struct UpdateForkingBody {
         (status = 404, description = "Application not found")
     )
 )]
-#[tracing::instrument(name = "PATCH /apps/{app_id}/settings/forking", skip(state, user, body))]
+#[tracing::instrument(
+    name = "PATCH /apps/{app_id}/settings/forking",
+    skip(state, user, body)
+)]
 pub async fn change_forking(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -31,6 +31,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub slug: Option<String>,
     pub tags: Option<Vec<String>>,
+    pub position: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

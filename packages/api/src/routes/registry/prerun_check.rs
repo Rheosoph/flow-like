@@ -68,7 +68,7 @@ async fn check_user_access(
 }
 
 fn resolve_compilation(
-    version_record: &Option<wasm_package_version::Model>,
+    version_record: Option<&wasm_package_version::Model>,
     platform_key: &str,
 ) -> (Option<String>, bool) {
     match version_record {
@@ -92,11 +92,10 @@ fn resolve_compilation(
 }
 
 fn resolve_status(
-    version_record: &Option<wasm_package_version::Model>,
+    version_record: Option<&wasm_package_version::Model>,
     has_user_access: bool,
 ) -> PackageAccessStatus {
-    let is_unavailable =
-        version_record.is_none() || version_record.as_ref().is_some_and(|v| v.yanked);
+    let is_unavailable = version_record.is_none() || version_record.is_some_and(|v| v.yanked);
     if is_unavailable {
         PackageAccessStatus::Unavailable
     } else if has_user_access {
@@ -127,11 +126,65 @@ pub async fn prerun_check(
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
     let platform_key = super::server::host_platform_key();
-    let mut results = Vec::with_capacity(request.packages.len());
 
+    if request.packages.is_empty() {
+        return Ok(Json(PrerunCheckResponse {
+            packages: Vec::new(),
+            all_accessible: true,
+            has_remote_only: false,
+            has_unavailable: false,
+        }));
+    }
+
+    let package_ids: Vec<String> = request.packages.keys().cloned().collect();
+
+    // One round-trip for all packages instead of N.
+    let pkg_rows = wasm_package::Entity::find()
+        .filter(wasm_package::Column::Id.is_in(package_ids.clone()))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
+    let pkg_by_id: HashMap<String, wasm_package::Model> =
+        pkg_rows.into_iter().map(|p| (p.id.clone(), p)).collect();
+
+    // One round-trip for all versions. SeaORM doesn't support tuple IN
+    // portably, so we over-fetch by package_id and pair locally — still
+    // O(1) DB calls instead of N.
+    let version_rows = wasm_package_version::Entity::find()
+        .filter(wasm_package_version::Column::PackageId.is_in(package_ids))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
+    let mut version_by_pair: HashMap<(String, String), wasm_package_version::Model> =
+        HashMap::with_capacity(version_rows.len());
+    for v in version_rows {
+        version_by_pair.insert((v.package_id.clone(), v.version.clone()), v);
+    }
+
+    let mut results = Vec::with_capacity(request.packages.len());
     for (package_id, version) in &request.packages {
-        let info = check_single_package(&state, package_id, version, &sub, &platform_key).await?;
-        results.push(info);
+        let Some(pkg) = pkg_by_id.get(package_id) else {
+            results.push(unavailable_info(package_id));
+            continue;
+        };
+
+        let is_public = pkg.visibility == WasmPackageVisibility::Public;
+        let has_user_access = check_user_access(&state, package_id, &sub, is_public).await?;
+
+        let version_record = version_by_pair.get(&(package_id.clone(), version.clone()));
+        let (compilation_status, server_compiled) =
+            resolve_compilation(version_record, &platform_key);
+        let status = resolve_status(version_record, has_user_access);
+
+        results.push(PackageAccessInfo {
+            package_id: package_id.clone(),
+            package_name: Some(pkg.name.clone()),
+            status,
+            has_user_access,
+            is_public,
+            compilation_status,
+            server_compiled,
+        });
     }
 
     let all_accessible = results
@@ -150,44 +203,4 @@ pub async fn prerun_check(
         has_remote_only,
         has_unavailable,
     }))
-}
-
-async fn check_single_package(
-    state: &AppState,
-    package_id: &str,
-    version: &str,
-    user_id: &str,
-    platform_key: &str,
-) -> Result<PackageAccessInfo, ApiError> {
-    let pkg = wasm_package::Entity::find_by_id(package_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
-
-    let Some(pkg) = pkg else {
-        return Ok(unavailable_info(package_id));
-    };
-
-    let is_public = pkg.visibility == WasmPackageVisibility::Public;
-    let has_user_access = check_user_access(state, package_id, user_id, is_public).await?;
-
-    let version_record = wasm_package_version::Entity::find()
-        .filter(wasm_package_version::Column::PackageId.eq(package_id))
-        .filter(wasm_package_version::Column::Version.eq(version))
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
-
-    let (compilation_status, server_compiled) = resolve_compilation(&version_record, platform_key);
-    let status = resolve_status(&version_record, has_user_access);
-
-    Ok(PackageAccessInfo {
-        package_id: package_id.to_string(),
-        package_name: Some(pkg.name),
-        status,
-        has_user_access,
-        is_public,
-        compilation_status,
-        server_compiled,
-    })
 }

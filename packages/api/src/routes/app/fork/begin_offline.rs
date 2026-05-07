@@ -6,9 +6,7 @@ use crate::{
     state::AppState,
     utils::fork::{
         ForkReport, MetaBlob, compute_offline_fork_bundle, detect_meta_in_content_store,
-        preview::{
-            RemoteTokenSite, compute_app_size_and_count, detect_remote_token_sites,
-        },
+        preview::{RemoteTokenSite, compute_app_size_and_count, detect_remote_token_sites},
     },
 };
 use axum::{
@@ -110,7 +108,10 @@ pub struct BeginOfflineForkResponse {
         (status = 503, description = "Forking is disabled by the deployment configuration")
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/fork/offline/begin", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/fork/offline/begin",
+    skip(state, user, body)
+)]
 pub async fn begin_offline_fork(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -172,18 +173,23 @@ pub async fn begin_offline_fork(
     // ship in `meta_blobs`. `ReadAppContent` deliberately omits the
     // meta bucket from the policy so a misbehaving client can't
     // bypass the API by GETting raw `*.board` / `*.event` files.
-    let scoped =
-        RuntimeCredentials::scoped(&user_sub, &app_id, &state, CredentialsAccess::ReadAppContent)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to generate scoped read credentials for fork: {}", e);
-                ApiError::internal("Failed to generate fork content credentials")
-            })?;
-    let expires_at = credentials_expiration(&scoped);
-    let shared_credentials = serde_json::to_value(scoped.into_shared_credentials()).map_err(|e| {
-        tracing::error!("Failed to serialize shared credentials for fork: {}", e);
-        ApiError::internal("Failed to serialize fork content credentials")
+    let scoped = RuntimeCredentials::scoped(
+        &user_sub,
+        &app_id,
+        &state,
+        CredentialsAccess::ReadAppContent,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to generate scoped read credentials for fork: {}", e);
+        ApiError::internal("Failed to generate fork content credentials")
     })?;
+    let expires_at = credentials_expiration(&scoped);
+    let shared_credentials =
+        serde_json::to_value(scoped.into_shared_credentials()).map_err(|e| {
+            tracing::error!("Failed to serialize shared credentials for fork: {}", e);
+            ApiError::internal("Failed to serialize fork content credentials")
+        })?;
 
     let session_id = flow_like_types::create_id();
     let source_content_prefix = format!("apps/{}", app_id);

@@ -422,13 +422,6 @@ function MobileMenu({
 							Solutions
 						</p>
 						<div className="space-y-1">
-							<MobileNavItem
-								href="/24-hour-solution"
-								icon={LuZap}
-								label={t("header.24h")}
-								highlight
-								onClick={onClose}
-							/>
 							<p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pt-3 pb-1">
 								By Role
 							</p>
@@ -878,13 +871,6 @@ export function Header() {
 								<BsDiscord className="w-4 h-4" />
 							</a>
 						</div>
-						<a
-							href="/24-hour-solution"
-							className="ml-1 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors duration-300"
-						>
-							<LuZap className="w-3.5 h-3.5" />
-							{t("header.24h")}
-						</a>
 					</nav>
 
 					{/* Desktop Actions */}

@@ -1,5 +1,7 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{board::secrets::filter_board_secrets, template::get_template::VersionQuery},
     state::AppState,

@@ -119,10 +119,6 @@ export const ko = {
 	"design.feature3.desc":
 		"동일한 플로우가 로컬, 스테이징, 프로덕션에서 실행 — 재작성 필요 없음.",
 
-	// 24 Hour Banner
-	"banner24.headline": "24시간 내 첫 번째 워크플로우",
-	"banner24.description": "다운로드에서 작동하는 자동화까지 — 하루 만에.",
-	"banner24.cta": "다운로드",
 
 	// Portability
 	"portability.tagline": "어디서나 자동화",
@@ -526,11 +522,6 @@ export const ko = {
 	"v2.who.community.desc":
 		"작지만 성장 중이고 진심으로 도움이 됩니다. 들러 보세요.",
 	"v2.who.community.join": "→ GitHub 토론 참여",
-	"v2.who.cta.heading": "어디서 시작해야 할지 모르겠나요?",
-	"v2.who.cta.desc":
-		"첫 자동화를 대신 구축해 드립니다. 24시간 이내. 과정을 지켜보시고, 모든 것을 인계합니다 — 코드, 문서, 가동 중인 인프라.",
-	"v2.who.cta.from": "부터",
-	"v2.who.cta.label": "24시간 솔루션",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "시작",
@@ -545,7 +536,6 @@ export const ko = {
 	"v2.start.teams.selfhost": "셀프호스팅 가이드",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "귀하가 있는 곳으로 찾아갑니다.",
-	"v2.start.enterprise.solution": "24시간 솔루션",
 	"v2.start.enterprise.contact": "문의하기",
 	"v2.start.dev.title": "개발자",
 	"v2.start.dev.desc": "모든 것이 GitHub에. Fork, 확장, 기여.",
@@ -684,9 +674,6 @@ export const ko = {
 
 	"design.headline.highlight": "시각적으로",
 
-	"banner24.tagline": "신규",
-	"banner24.headline.highlight": "솔루션",
-	"banner24.learnmore": "자세히 알아보기",
 
 	"portability.headline.start": "시작은",
 	"portability.headline.offline": "오프라인",
@@ -1143,9 +1130,4 @@ export const ko = {
 	"v3.cta.developer": "개발자",
 	"v3.cta.developer.desc": "전체 소스 코드. 전체 SDK. 전체 API 문서.",
 	"v3.cta.developer.action": "GitHub에서 보기",
-	"v3.cta.24h.headline": "24시간 솔루션",
-	"v3.cta.24h.desc":
-		"어디서 시작해야 할지 모르시겠나요? 첫 번째 자동화 솔루션을 24시간 내에 엔지니어링해 드립니다. 지켜보시면 모든 것을 넘겨드립니다: 코드, 문서, 실행 중인 인프라.",
-	"v3.cta.24h.action": "24시간 스프린트 예약 →",
-	"v3.cta.24h.price": "€1,999부터",
 } as const;

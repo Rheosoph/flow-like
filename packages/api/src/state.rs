@@ -98,6 +98,14 @@ pub struct State {
     /// invocation-unique key to collapse automatic retries into a single run.
     pub trigger_idempotency:
         moka::sync::Cache<String, crate::routes::sink::trigger::ServiceTriggerResponse>,
+    /// Cached WASM package resolution — bundle of presigned URLs that the
+    /// executor uses to download `.cwasm` artifacts. Keyed by `app_id`.
+    /// Invalidated when an app's package list changes; the TTL is set well
+    /// below the URL signing duration so signatures are always fresh.
+    pub wasm_resolve_cache: moka::sync::Cache<
+        String,
+        Arc<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
+    >,
 }
 
 impl State {
@@ -405,7 +413,20 @@ impl State {
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(15 * 60))
                 .build(),
+            wasm_resolve_cache: moka::sync::Cache::builder()
+                .max_capacity(1_000)
+                // Presigned URLs are signed for 1h. Cap our cache at half of
+                // that so callers always receive a URL with ≥30 min remaining.
+                .time_to_live(Duration::from_secs(30 * 60))
+                .time_to_idle(Duration::from_secs(10 * 60))
+                .build(),
         }
+    }
+
+    /// Invalidate the cached WASM package resolution for an app. Call this
+    /// when the app's package list changes (add/update/delete).
+    pub fn invalidate_wasm_resolve(&self, app_id: &str) {
+        self.wasm_resolve_cache.invalidate(app_id);
     }
 
     pub fn validate_token(&self, token: &str) -> Result<HashMap<String, Value>> {

@@ -19,9 +19,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     state::AppState,
-    utils::fork::cleanup::{
-        OrphanPrefix, delete_orphan_app_prefix, find_orphan_app_prefixes,
-    },
+    utils::fork::cleanup::{OrphanPrefix, delete_orphan_app_prefix, find_orphan_app_prefixes},
 };
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -118,7 +116,10 @@ pub struct DeleteOrphanForkResponse {
         (status = 404, description = "No matching orphan prefix")
     )
 )]
-#[tracing::instrument(name = "POST /admin/forks/orphans/{app_id}/delete", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /admin/forks/orphans/{app_id}/delete",
+    skip(state, user, body)
+)]
 pub async fn delete_orphan_fork(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

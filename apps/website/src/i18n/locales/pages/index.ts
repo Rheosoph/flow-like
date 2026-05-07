@@ -1,11 +1,3 @@
-// 24-Hour Solution Page
-export { en24h } from "./24h-en";
-export { de24h } from "./24h-de";
-export { fr24h } from "./24h-fr";
-export { es24h } from "./24h-es";
-export { zh24h } from "./24h-zh";
-export { ja24h } from "./24h-ja";
-
 // Download Page
 export { enDownload } from "./download-en";
 export { deDownload } from "./download-de";

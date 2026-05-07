@@ -183,12 +183,6 @@ export const ja = {
 	"design.feature3.title": "比較＆デバッグ",
 	"design.feature3.desc": "入出力のスナップショットで不一致の発見が簡単。",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "新着",
-	"banner24.headline": "24時間",
-	"banner24.headline.highlight": "ソリューション",
-	"banner24.description": "24時間であなたの自動化を構築。€2,400。本番対応。",
-	"banner24.learnmore": "詳細を見る",
 
 	// Portability
 	"portability.tagline": "コンテキスト付きライフサイクル",
@@ -605,11 +599,6 @@ export const ja = {
 	"v2.who.community.desc":
 		"小さく、成長中で、本当に助けてくれる。ぜひ来てください。",
 	"v2.who.community.join": "→ GitHubのディスカッションに参加",
-	"v2.who.cta.heading": "どこから始めればいいかわからない？",
-	"v2.who.cta.desc":
-		"最初の自動化を私たちが構築します。24時間以内に。作り方を見学し、すべてをお渡しします — コード、ドキュメント、稼働中のインフラ。",
-	"v2.who.cta.from": "から",
-	"v2.who.cta.label": "24時間ソリューション",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "さあ、",
@@ -624,7 +613,6 @@ export const ja = {
 	"v2.start.teams.selfhost": "セルフホスティングガイド",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "お客様のもとに伺います。",
-	"v2.start.enterprise.solution": "24時間ソリューション",
 	"v2.start.enterprise.contact": "お問い合わせ",
 	"v2.start.dev.title": "開発者",
 	"v2.start.dev.desc": "すべてGitHubに。Fork、拡張、貢献。",
@@ -1084,9 +1072,4 @@ export const ja = {
 	"v3.cta.developer.desc":
 		"フルソースコード。フル SDK。フル API ドキュメント。",
 	"v3.cta.developer.action": "GitHub で見る",
-	"v3.cta.24h.headline": "24 時間ソリューション",
-	"v3.cta.24h.desc":
-		"何から始めればいいかわからない？あなたの最初の自動化ソリューションを 24 時間でエンジニアリングします。あなたが見守る中、すべてをお渡しします：コード、ドキュメント、稼働中のインフラ。",
-	"v3.cta.24h.action": "24 時間スプリントを予約 →",
-	"v3.cta.24h.price": "€1,999 から",
 } as const;

@@ -187,13 +187,6 @@ export const es = {
 	"design.feature3.desc":
 		"Snapshots de input/output hacen trivial encontrar diferencias.",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "Nuevo",
-	"banner24.headline": "Solución",
-	"banner24.headline.highlight": "24h",
-	"banner24.description":
-		"Construimos tu automation en 24 horas. 2.400 €. Production-ready.",
-	"banner24.learnmore": "Saber más",
 
 	// Portability
 	"portability.tagline": "Full Lifecycle",
@@ -612,11 +605,6 @@ export const es = {
 	"v2.who.community.title": "Comunidad",
 	"v2.who.community.desc": "Pequeña, creciente y realmente útil. Pásate.",
 	"v2.who.community.join": "→ Unirse a las discusiones en GitHub",
-	"v2.who.cta.heading": "¿No sabes por dónde empezar?",
-	"v2.who.cta.desc":
-		"Construimos tu primera automatización por ti. En 24 horas. Miras cómo se hace, te entregamos todo — código, documentación, infraestructura en marcha.",
-	"v2.who.cta.from": "Desde",
-	"v2.who.cta.label": "Solución en 24 horas",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Empieza",
@@ -633,7 +621,6 @@ export const es = {
 	"v2.start.teams.selfhost": "Guía Self-Hosting",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Te encontramos donde estés.",
-	"v2.start.enterprise.solution": "Solución en 24 horas",
 	"v2.start.enterprise.contact": "Habla con nosotros",
 	"v2.start.dev.title": "Desarrolladores",
 	"v2.start.dev.desc": "Todo en GitHub. Forkea, extiéndelo, contribuye.",
@@ -1129,9 +1116,4 @@ export const es = {
 	"v3.cta.developer.desc":
 		"Código fuente completo. SDK completo. Documentación API completa.",
 	"v3.cta.developer.action": "Ver en GitHub",
-	"v3.cta.24h.headline": "La solución en 24 horas",
-	"v3.cta.24h.desc":
-		"¿No sabes por dónde empezar? Construimos tu primera solución de automatización por ti — en 24 horas. Tú miras, te entregamos todo: código, documentación, infraestructura funcionando.",
-	"v3.cta.24h.action": "Reserva tu Sprint de 24 horas →",
-	"v3.cta.24h.price": "Desde 1.999 €",
 } as const;

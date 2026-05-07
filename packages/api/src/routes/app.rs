@@ -28,6 +28,7 @@ pub mod meta;
 pub mod notifications;
 pub mod packages;
 pub mod page;
+pub mod prerun_shared;
 pub mod publication;
 pub mod roles;
 pub mod route;
@@ -57,10 +58,7 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/settings/forking",
             patch(internal::change_forking::change_forking),
         )
-        .route(
-            "/{app_id}/fork",
-            post(fork::online_fork::online_fork),
-        )
+        .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(
             "/{app_id}/notifications/create",
             post(notifications::create_notification),
@@ -418,12 +416,10 @@ impl From<flow_like::app::App> for app::Model {
             allow_forking: app.allow_forking,
             forked_from: app.forked_from,
             forked_at: app.forked_at.and_then(|t| {
-                t.duration_since(SystemTime::UNIX_EPOCH)
-                    .ok()
-                    .and_then(|d| {
-                        chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0)
-                            .map(|dt| dt.naive_utc())
-                    })
+                t.duration_since(SystemTime::UNIX_EPOCH).ok().and_then(|d| {
+                    chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0)
+                        .map(|dt| dt.naive_utc())
+                })
             }),
         }
     }

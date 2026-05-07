@@ -392,9 +392,7 @@ pub async fn optimize_course_asset(
         ));
     }
     if asset.mime_type.eq_ignore_ascii_case("image/webp") {
-        return Err(ApiError::bad_request(
-            "Asset is already in WebP format",
-        ));
+        return Err(ApiError::bad_request("Asset is already in WebP format"));
     }
 
     let previous_size = asset.size;
@@ -409,9 +407,7 @@ pub async fn optimize_course_asset(
         .as_generic()
         .get(&old_path)
         .await
-        .map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to fetch original asset: {e}"))
-        })?
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to fetch original asset: {e}")))?
         .bytes()
         .await
         .map_err(|e| {
@@ -434,9 +430,7 @@ pub async fn optimize_course_asset(
     store
         .put(&new_path, bytes::Bytes::from(webp_bytes))
         .await
-        .map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to upload optimized asset: {e}"))
-        })?;
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to upload optimized asset: {e}")))?;
 
     let new_filename = match asset.filename.rsplit_once('.') {
         Some((stem, _ext)) if !stem.is_empty() => format!("{stem}.webp"),
@@ -507,7 +501,10 @@ fn encode_to_webp(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
         (status = 404, description = "Asset or course not found")
     )
 )]
-#[tracing::instrument(name = "DELETE /courses/{course_id}/assets/{asset_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /courses/{course_id}/assets/{asset_id}",
+    skip(state, user)
+)]
 pub async fn delete_course_asset(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -534,11 +531,7 @@ pub async fn delete_course_asset(
     {
         let path = course_asset_storage_path(&course_id, &storage_key);
         if let Err(err) = store.as_generic().delete(&path).await {
-            tracing::warn!(
-                "Failed to delete course asset file at {}: {:?}",
-                path,
-                err
-            );
+            tracing::warn!("Failed to delete course asset file at {}: {:?}", path, err);
         }
     }
 

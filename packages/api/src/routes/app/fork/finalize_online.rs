@@ -97,7 +97,10 @@ pub struct FinalizeOnlineForkResponse {
         (status = 404, description = "Destination app not found")
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/fork/online/finalize", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/fork/online/finalize",
+    skip(state, user, body)
+)]
 pub async fn finalize_online_fork(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

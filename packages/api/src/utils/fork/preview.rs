@@ -94,7 +94,11 @@ pub async fn compute_app_content_size_and_count(
         .map_err(ApiError::internal_error)?
         .as_generic();
 
-    sum_prefix(&content_store, &Path::from("apps").child(app_id.to_string())).await
+    sum_prefix(
+        &content_store,
+        &Path::from("apps").child(app_id.to_string()),
+    )
+    .await
 }
 
 async fn sum_prefix(
@@ -174,9 +178,7 @@ fn event_config_has_auth_token(config: Option<&serde_json::Value>) -> bool {
         serde_json::Value::Object(obj) => {
             if let Some(b64) = obj.get("base64").and_then(|v| v.as_str()) {
                 use base64::Engine;
-                let Ok(bytes) =
-                    base64::engine::general_purpose::STANDARD.decode(b64)
-                else {
+                let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) else {
                     return false;
                 };
                 let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&bytes) else {

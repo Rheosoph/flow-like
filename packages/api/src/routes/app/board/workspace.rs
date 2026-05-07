@@ -1,6 +1,10 @@
 use crate::{
-    ensure_permission, entity::app_package, entity::wasm_package_version, error::ApiError,
-    middleware::jwt::AppUser, permission::role_permission::RolePermissions,
+    ensure_permission,
+    entity::app_package,
+    entity::wasm_package_version,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
     routes::app::{board::secrets::filter_board_secrets, template::get_template::VersionQuery},
     state::AppState,
 };

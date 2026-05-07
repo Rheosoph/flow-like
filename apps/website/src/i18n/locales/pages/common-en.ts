@@ -1,6 +1,5 @@
 export const enCommon = {
 	// Header
-	"header.24h": "24h Solution",
 	"header.compare": "Compare",
 	"header.blog": "Blog",
 	"header.docs": "Docs",
@@ -26,7 +25,6 @@ export const enCommon = {
 	"footer.link.download": "Download",
 	"footer.link.compare": "Compare",
 	"footer.link.modernBi": "Modern BI",
-	"footer.link.24h": "24h Solution",
 	"footer.link.gettingStarted": "Getting Started",
 	"footer.link.whatIs": "What is Flow-Like?",
 	"footer.link.selfHosting": "Self-Hosting",
@@ -213,7 +211,6 @@ export const enCommon = {
 	"pricing.ctaSection.title": "Need a custom solution?",
 	"pricing.ctaSection.description":
 		"Get a fully custom automation solution built for your business in just 24 hours. We'll design, build, and deploy a production-ready workflow tailored to your exact needs.",
-	"pricing.ctaSection.24h": "24-Hour Solution",
 	"pricing.ctaSection.enterprise": "Contact Enterprise Sales",
 	"pricing.ctaSection.startingAt":
 		"Starting at €1,999 · Full source code ownership · Deploy anywhere",

@@ -124,8 +124,7 @@ pub async fn get_fork_preview(
 
     let max_size_bytes = state.platform_config.forking.max_size_bytes;
     let max_file_count = state.platform_config.forking.max_file_count;
-    let within_limits =
-        total_size_bytes <= max_size_bytes && total_object_count <= max_file_count;
+    let within_limits = total_size_bytes <= max_size_bytes && total_object_count <= max_file_count;
 
     Ok(Json(ForkPreviewResponse {
         source_app_id: app_id,

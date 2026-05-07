@@ -8,7 +8,7 @@ use crate::{
     a2ui::widget::Page,
     app::App,
     state::FlowLikeState,
-    utils::compression::{compress_to_file, from_compressed},
+    utils::compression::{compress_to_file, from_compressed, from_compressed_with_meta},
 };
 use commands::GenericCommand;
 use flow_like_storage::object_store::{ObjectStore, path::Path};
@@ -691,6 +691,72 @@ impl Board {
         Ok(version_list)
     }
 
+    /// Resolve the on-disk storage path for a board's compressed proto.
+    /// `board_dir` is the per-app root (e.g. `apps/{app_id}`). When `version`
+    /// is `None` this returns the floating "latest" path; otherwise the
+    /// immutable per-version path.
+    pub fn proto_path(board_dir: &Path, id: &str, version: Option<(u32, u32, u32)>) -> Path {
+        match version {
+            Some((maj, min, pat)) => board_dir
+                .child("versions")
+                .child(id.to_string())
+                .child(format!("{}_{}_{}.board", maj, min, pat)),
+            None => board_dir.child(format!("{}.board", id)),
+        }
+    }
+
+    /// Fetch and decompress the board's proto representation. This step is
+    /// independent of any `FlowLikeState` and produces no per-request data,
+    /// so the result is safe to share across users (cf. executor's proto cache).
+    #[instrument(name = "Board::load_proto", skip(store), level = "debug")]
+    pub async fn load_proto(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<flow_like_types::proto::Board> {
+        let path = Self::proto_path(board_dir, id, version);
+        from_compressed(store, path).await
+    }
+
+    /// Like [`Self::load_proto`] but additionally returns the storage
+    /// [`ObjectMeta`] (e_tag / last_modified). Use this when caching the proto
+    /// — a subsequent HEAD against the same path lets you detect mutations
+    /// without re-downloading the body.
+    #[instrument(name = "Board::load_proto_with_meta", skip(store), level = "debug")]
+    pub async fn load_proto_with_meta(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<(
+        flow_like_types::proto::Board,
+        flow_like_storage::object_store::ObjectMeta,
+    )> {
+        let path = Self::proto_path(board_dir, id, version);
+        from_compressed_with_meta(store, path).await
+    }
+
+    /// Build a fully-initialised `Board` from a previously-loaded proto.
+    /// Runs `node_updates` so dynamic nodes/schema migrations apply against
+    /// the caller's registry — this is per-request and must not be cached
+    /// across users.
+    pub async fn from_loaded_proto(
+        proto: flow_like_types::proto::Board,
+        board_dir: Path,
+        app_state: Arc<FlowLikeState>,
+    ) -> Self {
+        let mut board = Board::from_proto(proto);
+        board.board_dir = board_dir;
+        board.app_state = Some(app_state.clone());
+        board.logic_nodes = HashMap::new();
+
+        board.node_updates(app_state).await;
+        board.cleanup();
+
+        board
+    }
+
     #[instrument(name = "Board::load", skip(app_state), level = "debug")]
     pub async fn load(
         path: Path,
@@ -711,26 +777,8 @@ impl Board {
             })?
             .as_generic();
 
-        let board_dir = path.clone();
-        let path = if let Some(version) = version {
-            path.child("versions")
-                .child(id)
-                .child(format!("{}_{}_{}.board", version.0, version.1, version.2))
-        } else {
-            path.child(format!("{}.board", id))
-        };
-
-        let board: flow_like_types::proto::Board = from_compressed(store, path).await?;
-        let mut board = Board::from_proto(board);
-        board.board_dir = board_dir;
-        board.app_state = Some(app_state.clone());
-        board.logic_nodes = HashMap::new();
-
-        // Sync node schemas on load to handle version migrations and OAuth metadata
-        board.node_updates(app_state).await;
-        board.cleanup();
-
-        Ok(board)
+        let proto = Self::load_proto(store, &path, id, version).await?;
+        Ok(Self::from_loaded_proto(proto, path, app_state).await)
     }
 
     pub async fn save(&self, store: Option<Arc<dyn ObjectStore>>) -> flow_like_types::Result<()> {

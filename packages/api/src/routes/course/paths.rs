@@ -108,6 +108,7 @@ async fn course_list_items_by_id(
                 icon_url: c.icon_url,
                 banner_url: c.banner_url,
                 tags: c.tags.unwrap_or_default(),
+                position: c.position,
                 name: chosen.map(|m| m.name.clone()),
                 description: chosen.and_then(|m| m.description.clone()),
             },

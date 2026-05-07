@@ -56,7 +56,9 @@ pub enum ForkPermissionError {
 impl From<ForkPermissionError> for ApiError {
     fn from(err: ForkPermissionError) -> Self {
         match err {
-            ForkPermissionError::Disabled => ApiError::forbidden("forking is not enabled on this app"),
+            ForkPermissionError::Disabled => {
+                ApiError::forbidden("forking is not enabled on this app")
+            }
             ForkPermissionError::GloballyDisabled => {
                 ApiError::forbidden("forking is disabled by the deployment configuration")
             }

@@ -74,9 +74,7 @@ impl FromProto<flow_like_types::proto::App> for App {
             packages: proto.packages,
             allow_forking: proto.allow_forking.unwrap_or(false),
             forked_from: proto.forked_from,
-            forked_at: proto
-                .forked_at
-                .and_then(|t| SystemTime::try_from(t).ok()),
+            forked_at: proto.forked_at.and_then(|t| SystemTime::try_from(t).ok()),
             app_state: None,
             frontend: None,
         }

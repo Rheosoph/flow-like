@@ -1,6 +1,5 @@
 export const koCommon = {
 	// Header
-	"header.24h": "24시간 솔루션",
 	"header.compare": "비교",
 	"header.blog": "블로그",
 	"header.docs": "문서",
@@ -25,7 +24,6 @@ export const koCommon = {
 	"footer.link.download": "다운로드",
 	"footer.link.compare": "비교",
 	"footer.link.modernBi": "모던 BI",
-	"footer.link.24h": "24시간 솔루션",
 	"footer.link.gettingStarted": "시작하기",
 	"footer.link.whatIs": "Flow-Like란?",
 	"footer.link.selfHosting": "셀프 호스팅",
@@ -204,7 +202,6 @@ export const koCommon = {
 	"pricing.ctaSection.title": "맞춤 솔루션이 필요하신가요?",
 	"pricing.ctaSection.description":
 		"24시간 이내에 비즈니스를 위한 완전히 맞춤화된 자동화 솔루션을 받으세요. 귀하의 정확한 요구에 맞게 프로덕션 레디 워크플로우를 설계, 구축, 배포합니다.",
-	"pricing.ctaSection.24h": "24시간 솔루션",
 	"pricing.ctaSection.enterprise": "엔터프라이즈 영업팀 문의",
 	"pricing.ctaSection.startingAt":
 		"€1,999부터 · 전체 소스코드 소유권 · 어디서나 배포",

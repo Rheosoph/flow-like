@@ -118,8 +118,5 @@ pub async fn online_fork(
     };
     let (new_app_id, report) = fork_with_options(&state, options).await?;
 
-    Ok(Json(OnlineForkResponse {
-        new_app_id,
-        report,
-    }))
+    Ok(Json(OnlineForkResponse { new_app_id, report }))
 }

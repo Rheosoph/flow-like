@@ -188,13 +188,6 @@ export const fr = {
 	"design.feature3.desc":
 		"Les snapshots input/output rendent trivial de trouver les différences.",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "Nouveau",
-	"banner24.headline": "Solution",
-	"banner24.headline.highlight": "24h",
-	"banner24.description":
-		"On construit ton automation en 24 heures. 2 400 €. Production-ready.",
-	"banner24.learnmore": "En savoir plus",
 
 	// Portability
 	"portability.tagline": "Full Lifecycle",
@@ -613,11 +606,6 @@ export const fr = {
 	"v2.who.community.desc":
 		"Petite, grandissante et sincèrement utile. Passez nous voir.",
 	"v2.who.community.join": "→ Rejoindre les discussions sur GitHub",
-	"v2.who.cta.heading": "Vous ne savez pas par où commencer ?",
-	"v2.who.cta.desc":
-		"Nous construisons votre première automatisation pour vous. En 24 heures. Vous regardez comment c'est fait, nous vous remettons tout — code, documentation, infrastructure opérationnelle.",
-	"v2.who.cta.from": "À partir de",
-	"v2.who.cta.label": "Solution en 24 heures",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Commencez",
@@ -634,7 +622,6 @@ export const fr = {
 	"v2.start.teams.selfhost": "Guide Self-Hosting",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Nous venons à votre rencontre.",
-	"v2.start.enterprise.solution": "Solution en 24 heures",
 	"v2.start.enterprise.contact": "Parlons-en",
 	"v2.start.dev.title": "Développeurs",
 	"v2.start.dev.desc": "Tout sur GitHub. Forkez, étendez, contribuez.",
@@ -1131,9 +1118,4 @@ export const fr = {
 	"v3.cta.developer.desc":
 		"Code source complet. SDK complet. Documentation API complète.",
 	"v3.cta.developer.action": "Voir sur GitHub",
-	"v3.cta.24h.headline": "La solution en 24 heures",
-	"v3.cta.24h.desc":
-		"Vous ne savez pas par où commencer ? Nous concevons votre première solution d'automatisation pour vous — en 24 heures. Vous regardez, nous vous remettons tout : code, documentation, infrastructure opérationnelle.",
-	"v3.cta.24h.action": "Réservez votre Sprint de 24 heures →",
-	"v3.cta.24h.price": "À partir de 1 999 €",
 } as const;

@@ -19,12 +19,13 @@ use sea_orm::TransactionTrait;
     get,
     path = "/apps/{app_id}/meta",
     tag = "meta",
-    description = "Get metadata for an app, template, or course. Public apps are readable without membership.",
+    description = "Get metadata for an app, template, course, or widget. Public apps are readable without membership.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("language" = Option<String>, Query, description = "Language code (default en)"),
         ("template_id" = Option<String>, Query, description = "Template ID"),
-        ("course_id" = Option<String>, Query, description = "Course ID")
+        ("course_id" = Option<String>, Query, description = "Course ID"),
+        ("widget_id" = Option<String>, Query, description = "Widget ID")
     ),
     responses(
         (status = 200, description = "Metadata", body = String, content_type = "application/json"),

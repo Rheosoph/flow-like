@@ -31,6 +31,7 @@ pub struct PushMediaResponse {
         ("language" = Option<String>, Query, description = "Language code (default en)"),
         ("template_id" = Option<String>, Query, description = "Template ID"),
         ("course_id" = Option<String>, Query, description = "Course ID"),
+        ("widget_id" = Option<String>, Query, description = "Widget ID"),
         ("item" = String, Query, description = "Media item: icon, thumbnail, preview"),
         ("extension" = String, Query, description = "File extension (e.g. png, webp)")
     ),

@@ -190,13 +190,6 @@ export const de = {
 	"design.feature3.desc":
 		"Input/Output Snapshots machen Abweichungen trivial zu finden.",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "Neu",
-	"banner24.headline": "24h",
-	"banner24.headline.highlight": "Solution",
-	"banner24.description":
-		"Wir bauen eure Automation in 24 Stunden. 2.400 €. Production-ready.",
-	"banner24.learnmore": "Mehr erfahren",
 
 	// Portability
 	"portability.tagline": "Full Lifecycle",
@@ -617,11 +610,6 @@ export const de = {
 	"v2.who.community.desc":
 		"Klein, wachsend und ehrlich hilfsbereit. Komm vorbei.",
 	"v2.who.community.join": "→ Diskussionen auf GitHub beitreten",
-	"v2.who.cta.heading": "Weißt du nicht, wo du anfangen sollst?",
-	"v2.who.cta.desc":
-		"Wir bauen deine erste Automatisierung für dich. In 24 Stunden. Du schaust zu, wie es gemacht wird, wir übergeben alles – Code, Dokumentation, laufende Infrastruktur.",
-	"v2.who.cta.from": "Ab",
-	"v2.who.cta.label": "24-Stunden-Lösung",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Los",
@@ -637,7 +625,6 @@ export const de = {
 	"v2.start.teams.selfhost": "Self-Hosting-Anleitung",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Wir holen dich ab, wo du stehst.",
-	"v2.start.enterprise.solution": "24-Stunden-Lösung",
 	"v2.start.enterprise.contact": "Sprich mit uns",
 	"v2.start.dev.title": "Entwickler",
 	"v2.start.dev.desc": "Alles auf GitHub. Forken, erweitern, beitragen.",
@@ -1131,9 +1118,4 @@ export const de = {
 	"v3.cta.developer.desc":
 		"Vollständiger Quellcode. Volles SDK. Volle API-Doku.",
 	"v3.cta.developer.action": "Auf GitHub ansehen",
-	"v3.cta.24h.headline": "Die 24-Stunden-Lösung",
-	"v3.cta.24h.desc":
-		"Weißt nicht, wo du anfangen sollst? Wir entwickeln deine erste Automatisierungslösung für dich — in 24 Stunden. Du schaust zu, wir übergeben dir alles: Code, Doku, laufende Infrastruktur.",
-	"v3.cta.24h.action": "Deinen 24-Stunden-Sprint buchen →",
-	"v3.cta.24h.price": "Ab 1.999 €",
 } as const;

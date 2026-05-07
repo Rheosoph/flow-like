@@ -533,9 +533,7 @@ impl AzureRuntimeCredentials {
             CredentialsAccess::EditApp
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
-            | CredentialsAccess::EditAppContent => {
-                (Some(format!("apps/{}", app_id)), None)
-            }
+            | CredentialsAccess::EditAppContent => (Some(format!("apps/{}", app_id)), None),
             CredentialsAccess::EditUser | CredentialsAccess::ReadUser => {
                 (None, Some(format!("users/{}/apps/{}", sub, app_id)))
             }
