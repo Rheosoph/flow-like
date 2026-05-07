@@ -7436,6 +7436,7 @@ dependencies = [
  "hmac 0.12.1",
  "hyper 1.9.0",
  "hyper-util",
+ "image",
  "ipnetwork",
  "jsonwebtoken 10.3.0",
  "k8s-openapi",
@@ -7447,6 +7448,7 @@ dependencies = [
  "pin-project-lite",
  "rand 0.9.3",
  "redis",
+ "regex",
  "reqwest 0.12.28",
  "rsa",
  "sea-orm",
@@ -7465,6 +7467,7 @@ dependencies = [
  "utoipa-axum",
  "utoipa-swagger-ui",
  "uuid 1.23.0",
+ "webp",
 ]
 
 [[package]]
@@ -7946,6 +7949,7 @@ dependencies = [
  "rayon",
  "rdev",
  "rusqlite",
+ "security-framework 3.7.0",
  "sentry",
  "sentry-tracing",
  "serde",

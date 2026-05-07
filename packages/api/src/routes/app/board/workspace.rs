@@ -1,7 +1,8 @@
 use crate::{
     ensure_permission, entity::app_package, entity::wasm_package_version, error::ApiError,
     middleware::jwt::AppUser, permission::role_permission::RolePermissions,
-    routes::app::template::get_template::VersionQuery, state::AppState,
+    routes::app::{board::secrets::filter_board_secrets, template::get_template::VersionQuery},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -82,11 +83,7 @@ pub async fn workspace(
         .master_board(&sub, &app_id, &board_id, &state, version_opt)
         .await?;
 
-    board.variables.iter_mut().for_each(|(_id, var)| {
-        if var.secret {
-            var.default_value = None;
-        }
-    });
+    filter_board_secrets(&mut board);
 
     // 2. Load catalog (builtin + app WASM nodes)
     let packages = app_package::Entity::find()

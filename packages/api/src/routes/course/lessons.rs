@@ -9,6 +9,7 @@ use crate::{
             has_course_read_grant,
         },
         app_refs::AppRefView,
+        asset_references::resolve_asset_references,
         attempts::ChallengeAttemptView,
         challenges::ChallengeView,
     },
@@ -80,13 +81,14 @@ pub async fn get_lesson(
     ensure_course_readable(&state, &user, &course_id).await?;
     let include_solution_payload = has_course_read_grant(&state, &user).await;
 
-    let lesson = lesson::Entity::find_by_id(&lesson_id)
+    let mut lesson = lesson::Entity::find_by_id(&lesson_id)
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     if lesson.module_id != module_id {
         return Err(ApiError::NOT_FOUND);
     }
+    lesson.content = resolve_asset_references(&state, &course_id, &lesson.content).await;
 
     let challenges = challenge::Entity::find()
         .filter(challenge::Column::LessonId.eq(&lesson_id))

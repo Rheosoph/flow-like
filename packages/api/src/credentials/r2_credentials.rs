@@ -169,8 +169,15 @@ impl R2RuntimeCredentials {
         let temporary_global_prefix = format!("tmp/global/apps/{}/", app_id);
 
         let (permission, prefixes) = match mode {
-            CredentialsAccess::EditApp => ("object-read-write", vec![apps_prefix]),
-            CredentialsAccess::ReadApp => ("object-read-only", vec![apps_prefix]),
+            CredentialsAccess::EditApp => ("object-read-write", vec![apps_prefix.clone()]),
+            CredentialsAccess::ReadApp => ("object-read-only", vec![apps_prefix.clone()]),
+            // R2 doesn't expose per-bucket policies the way AWS does;
+            // the prefix-based scope is the same for ReadApp and
+            // ReadAppContent (likewise EditApp / EditAppContent).
+            // The content-only restriction is enforced server-side by
+            // only ever pointing the client at the content store.
+            CredentialsAccess::ReadAppContent => ("object-read-only", vec![apps_prefix.clone()]),
+            CredentialsAccess::EditAppContent => ("object-read-write", vec![apps_prefix]),
             CredentialsAccess::EditUser => ("object-read-write", vec![user_prefix]),
             CredentialsAccess::ReadUser => ("object-read-only", vec![user_prefix]),
             CredentialsAccess::InvokeNone => (

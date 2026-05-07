@@ -24,6 +24,12 @@
 		"premium": false,
 		"wasm_registry": true
 	},
+	"forking": {
+		"enabled": true,
+		"max_size_bytes": 1073741824,
+		"max_file_count": 10000,
+		"allow_unauthenticated_to_offline": false
+	},
 	"supported_sinks": {
 		"http": true,
 		"webhook": true,

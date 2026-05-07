@@ -1,6 +1,7 @@
 use crate::{
     ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions,
+    routes::app::board::secrets::filter_board_secrets, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -36,11 +37,7 @@ pub async fn get_boards(
         let board = app.open_board(board_id.clone(), Some(false), None).await;
         if let Ok(board) = board {
             let mut board = board.lock().await.clone();
-            board.variables.iter_mut().for_each(|(_id, var)| {
-                if var.secret {
-                    var.default_value = None;
-                }
-            });
+            filter_board_secrets(&mut board);
             boards.push(board);
         }
     }

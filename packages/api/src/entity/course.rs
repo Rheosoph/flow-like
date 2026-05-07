@@ -39,6 +39,8 @@ pub enum Relation {
     Certificate,
     #[sea_orm(has_many = "super::course_app_link::Entity")]
     CourseAppLink,
+    #[sea_orm(has_many = "super::course_asset::Entity")]
+    CourseAsset,
     #[sea_orm(has_many = "super::course_module::Entity")]
     CourseModule,
     #[sea_orm(has_many = "super::learning_path_course::Entity")]
@@ -58,6 +60,12 @@ impl Related<super::certificate::Entity> for Entity {
 impl Related<super::course_app_link::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::CourseAppLink.def()
+    }
+}
+
+impl Related<super::course_asset::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::CourseAsset.def()
     }
 }
 

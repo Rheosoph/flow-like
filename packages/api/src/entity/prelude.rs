@@ -16,6 +16,7 @@ pub use super::challenge::Entity as Challenge;
 pub use super::comment::Entity as Comment;
 pub use super::course::Entity as Course;
 pub use super::course_app_link::Entity as CourseAppLink;
+pub use super::course_asset::Entity as CourseAsset;
 pub use super::course_module::Entity as CourseModule;
 pub use super::embedding_usage_tracking::Entity as EmbeddingUsageTracking;
 pub use super::error_report::Entity as ErrorReport;

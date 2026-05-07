@@ -193,6 +193,12 @@ impl AwsRuntimeCredentials {
         let policy = match mode {
             CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
             CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
+            CredentialsAccess::ReadAppContent => {
+                read_app_content_policy(self, &apps_prefix)
+            }
+            CredentialsAccess::EditAppContent => {
+                edit_app_content_policy(self, &apps_prefix)
+            }
             CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
             CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
             CredentialsAccess::InvokeNone => invoke_none_policy(
@@ -663,6 +669,103 @@ fn edit_app_policy(
             "Resource": [
                 "*"
             ]
+          }
+        ],
+    });
+
+    policy
+}
+
+/// Write scope restricted to the **content bucket** only — used
+/// wherever scoped credentials cross the trust boundary to a client
+/// (presign-data-access uploads, fork-online-begin bundle uploads).
+/// Boards / events / widgets / templates / pages on the meta bucket
+/// must always be written through the API so that role-permission
+/// gates (`WriteBoards`, `WriteEvents`, `WriteTemplates`, …) and
+/// per-resource validation (event-schedule checks, page-event
+/// coupling, sink registration, secret stripping on write) run on
+/// every change. The full-fat `EditApp` policy includes meta-bucket
+/// `s3:Put/Get/Delete`, which would let a misbehaving client drop
+/// arbitrary `.board` / `.event` files server-side and bypass those
+/// guards.
+fn edit_app_content_policy(
+    credentials: &AwsRuntimeCredentials,
+    apps_prefix: &str,
+) -> flow_like_types::Value {
+    let policy = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.content_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", apps_prefix),
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
+            ],
+          }
+        ],
+    });
+
+    policy
+}
+
+/// Read scope restricted to the **content bucket** only — used by the
+/// fork-an-app flow. Boards / events / widgets / templates / pages
+/// live in the meta bucket and may contain secrets that the server
+/// strips before they leave through the API; granting the holder of
+/// these credentials read access to the meta bucket would let them
+/// bypass that sanitization. Hence: list + get on the content bucket
+/// only, no meta-bucket statements at all.
+fn read_app_content_policy(
+    credentials: &AwsRuntimeCredentials,
+    apps_prefix: &str,
+) -> flow_like_types::Value {
+    let policy = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.content_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", apps_prefix),
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
+            ],
           }
         ],
     });

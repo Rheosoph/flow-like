@@ -44,6 +44,12 @@ pub struct Model {
     #[sea_orm(column_name = "executionMode")]
     pub execution_mode: ExecutionMode,
     pub bits: Option<Vec<String>>,
+    #[sea_orm(column_name = "allowForking", default_value = "false")]
+    pub allow_forking: bool,
+    #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]
+    pub forked_from: Option<String>,
+    #[sea_orm(column_name = "forkedAt", nullable)]
+    pub forked_at: Option<DateTime>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]

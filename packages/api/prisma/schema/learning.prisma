@@ -15,6 +15,7 @@ model Course {
   meta        Meta[]
   modules     CourseModule[]
   appLinks    CourseAppLink[]
+  assets      CourseAsset[]
   enrollments UserCourseEnrollment[]
   certificates Certificate[]
   pathSteps   LearningPathCourse[]
@@ -137,6 +138,25 @@ model CourseAppLink {
 
   @@unique([courseId, appId])
   @@index([appId])
+  @@index([courseId])
+}
+
+model CourseAsset {
+  id       String @id
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  name        String
+  storageKey  String
+  filename    String
+  mimeType    String
+  size        Int
+  kind        AssetKind @default(DOCUMENT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, name])
   @@index([courseId])
 }
 
@@ -298,4 +318,11 @@ enum LessonStatus {
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
+}
+
+enum AssetKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
 }

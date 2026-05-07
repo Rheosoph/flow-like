@@ -152,6 +152,20 @@ pub struct App {
     #[serde(default)]
     pub packages: HashMap<String, String>,
 
+    /// Project-level opt-in for the Fork-an-app feature. Apps default to
+    /// `false`; the owner must explicitly allow forking before any other
+    /// permission check applies.
+    #[serde(default)]
+    pub allow_forking: bool,
+
+    /// For forked apps: the source app's id (for lineage / attribution).
+    #[serde(default)]
+    pub forked_from: Option<String>,
+
+    /// For forked apps: when the fork was created.
+    #[serde(default)]
+    pub forked_at: Option<SystemTime>,
+
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
 }
@@ -186,6 +200,9 @@ impl Clone for App {
             widget_ids: self.widget_ids.clone(),
             page_ids: self.page_ids.clone(),
             packages: self.packages.clone(),
+            allow_forking: self.allow_forking,
+            forked_from: self.forked_from.clone(),
+            forked_at: self.forked_at,
         }
     }
 }
@@ -231,6 +248,9 @@ impl App {
             widget_ids: vec![],
             page_ids: vec![],
             packages: HashMap::new(),
+            allow_forking: false,
+            forked_from: None,
+            forked_at: None,
             app_state: Some(app_state.clone()),
         };
 
@@ -1247,6 +1267,9 @@ mod tests {
             widget_ids: vec![],
             page_ids: vec![],
             packages: std::collections::HashMap::new(),
+            allow_forking: false,
+            forked_from: None,
+            forked_at: None,
         };
 
         let mut buf = Vec::new();

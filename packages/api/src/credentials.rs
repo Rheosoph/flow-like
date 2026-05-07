@@ -69,6 +69,28 @@ pub trait RuntimeCredentialsTrait {
 pub enum CredentialsAccess {
     EditApp,
     ReadApp,
+    /// Read-only access scoped to the **content** bucket of an app
+    /// only (`apps/{app_id}/...` on the content store). Used by the
+    /// fork-an-app flow: the desktop pulls user content (metadata/,
+    /// upload/, storage/) directly via these credentials, while
+    /// boards/events/widgets/templates/pages on the meta bucket
+    /// always come back via API responses (after server-side
+    /// secret-stripping). Granting `ReadApp` instead would let a
+    /// misbehaving client GET raw `*.board` / `*.event` files
+    /// containing source-app secrets.
+    ReadAppContent,
+    /// Read+write access scoped to the **content** bucket of an app
+    /// only. Used wherever scoped credentials cross the trust
+    /// boundary into a client (presign-data-access for uploads,
+    /// fork-online-begin for desktop bundle uploads). Boards /
+    /// events / widgets / templates / pages live in the meta bucket
+    /// and *must* be written via the API so that authorization
+    /// (RolePermissions::Write*) and validation (event schedule
+    /// checks, page-event coupling, sink registration, etc.) run on
+    /// every change. Granting `EditApp` to the client would let it
+    /// drop arbitrary `.board` / `.event` files server-side,
+    /// bypassing every guard.
+    EditAppContent,
     EditUser,
     ReadUser,
     InvokeNone,
@@ -82,6 +104,8 @@ impl Display for CredentialsAccess {
         match self {
             CredentialsAccess::EditApp => write!(f, "edit_app"),
             CredentialsAccess::ReadApp => write!(f, "read_app"),
+            CredentialsAccess::ReadAppContent => write!(f, "read_app_content"),
+            CredentialsAccess::EditAppContent => write!(f, "edit_app_content"),
             CredentialsAccess::EditUser => write!(f, "edit_user"),
             CredentialsAccess::ReadUser => write!(f, "read_user"),
             CredentialsAccess::InvokeNone => write!(f, "invoke_none"),

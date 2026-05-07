@@ -218,6 +218,17 @@ impl ApiError {
         )
     }
 
+    pub fn not_implemented(msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::warn!("Not implemented: {}", msg);
+        Self::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "NOT_IMPLEMENTED",
+            Some(msg),
+            ReportPolicy::Ignore,
+        )
+    }
+
     // Legacy constructor removed; use `bad_request`/`internal_error`.
 }
 

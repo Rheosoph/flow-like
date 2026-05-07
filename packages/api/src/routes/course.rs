@@ -7,12 +7,13 @@ use axum::{
 pub mod access;
 pub mod app_links;
 pub mod app_refs;
+pub mod asset_references;
+pub mod assets;
 pub mod attempts;
 pub mod certificates;
 pub mod challenges;
 pub mod courses;
 pub mod enrollment;
-pub mod fork_app;
 pub mod leaderboard;
 pub mod lessons;
 pub mod modules;
@@ -34,6 +35,19 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/{course_id}/structure", get(courses::get_course_structure))
         .route("/{course_id}/meta/media", put(courses::push_course_media))
+        // Course assets (referenced via @AssetName in lesson content)
+        .route(
+            "/{course_id}/assets",
+            get(assets::list_course_assets).post(assets::create_course_asset),
+        )
+        .route(
+            "/{course_id}/assets/{asset_id}",
+            put(assets::update_course_asset).delete(assets::delete_course_asset),
+        )
+        .route(
+            "/{course_id}/assets/{asset_id}/optimize",
+            post(assets::optimize_course_asset),
+        )
         // Modules
         .route(
             "/{course_id}/modules/{module_id}",
