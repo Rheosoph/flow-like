@@ -2235,20 +2235,84 @@ async fn read_source_page(
     None
 }
 
-/// Apply the fork's id translations to a page in-place.
+/// Apply the fork's id translations to a page in-place. Covers
+/// every cross-app reference that lives anywhere inside the page
+/// payload:
+///
+/// * `id`, `board_id` — top-level page metadata.
+/// * `on_load_event_id` / `on_unload_event_id` / `on_interval_event_id`
+///   — despite the name, these are **node** ids (a node id from an
+///   `events_simple` node, per the `.proto` comment), not event row
+///   ids. They translate via `maps.translate_node`.
+/// * `content[].WidgetInstance` — the `widget_id` reference points
+///   at a widget that just got reforked; the `action_bindings` map
+///   carries `workflow_event_id` (node id) and `page_id` references
+///   that must follow the new id space.
+/// * `widget_refs` (per-page snapshot of widget definitions) — the
+///   embedded `Widget.id` is rewritten so the page resolves against
+///   the destination's widget id space.
+///
+/// Without these passes, a forked app's pages still load but every
+/// "on click run this workflow / navigate to this page / show this
+/// widget" hook silently points at the source app's ids.
 fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) {
     page.id = new_page_id.to_string();
     if let Some(b) = page.board_id.as_ref() {
         page.board_id = Some(maps.translate_board(b));
     }
     if let Some(n) = page.on_load_event_id.as_ref() {
-        page.on_load_event_id = Some(maps.translate_event(n));
+        page.on_load_event_id = Some(maps.translate_node(n));
     }
     if let Some(n) = page.on_unload_event_id.as_ref() {
-        page.on_unload_event_id = Some(maps.translate_event(n));
+        page.on_unload_event_id = Some(maps.translate_node(n));
     }
     if let Some(n) = page.on_interval_event_id.as_ref() {
-        page.on_interval_event_id = Some(maps.translate_event(n));
+        page.on_interval_event_id = Some(maps.translate_node(n));
+    }
+
+    for content in page.content.iter_mut() {
+        if let Some(proto::page_content::ContentType::Widget(instance)) =
+            content.content_type.as_mut()
+        {
+            remap_widget_instance(instance, maps);
+        }
+    }
+
+    for widget_def in page.widget_refs.values_mut() {
+        if let Some(new_id) = maps.widgets.get(&widget_def.id) {
+            widget_def.id = new_id.clone();
+        }
+    }
+}
+
+/// Translate every cross-app reference on a `WidgetInstance`. The
+/// instance's `widget_id` lookup follows the widget id map, and each
+/// `ActionBinding` rewrites the `workflow_event_id` (node id) and
+/// `page_id` arms so the destination's runtime fires the right
+/// node / navigates to the right page. URL and custom-action arms
+/// are pure data and are left as-is.
+fn remap_widget_instance(instance: &mut proto::WidgetInstance, maps: &ForkIdMap) {
+    if let Some(new_id) = maps.widgets.get(&instance.widget_id) {
+        instance.widget_id = new_id.clone();
+    }
+    if let Some(widget_ref) = instance.widget_ref.as_mut() {
+        if let Some(new_id) = maps.widgets.get(&widget_ref.widget_id) {
+            widget_ref.widget_id = new_id.clone();
+        }
+    }
+    for binding in instance.action_bindings.values_mut() {
+        if let Some(binding_type) = binding.binding_type.as_mut() {
+            match binding_type {
+                proto::action_binding::BindingType::WorkflowEventId(id) => {
+                    *id = maps.translate_node(id);
+                }
+                proto::action_binding::BindingType::PageId(id) => {
+                    *id = maps.translate_page(id);
+                }
+                proto::action_binding::BindingType::ExternalUrl(_) => {}
+                proto::action_binding::BindingType::CustomAction(_) => {}
+            }
+        }
     }
 }
 
