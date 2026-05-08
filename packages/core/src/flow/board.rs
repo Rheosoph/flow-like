@@ -907,22 +907,41 @@ impl Board {
 
     /// Load a page from the canonical board-scoped binary-proto path,
     /// falling back to the legacy app-level JSON path written by the
-    /// removed `App::save_page`. The fallback exists to keep pages
-    /// authored before the storage unification readable; new writes
-    /// only ever land at the board path, so over time the legacy path
-    /// drains.
+    /// removed `App::save_page`. On a successful fallback the page is
+    /// migrated in-place: the proto is written to the canonical path
+    /// and the legacy file is removed, so subsequent reads short-circuit
+    /// to the canonical lookup. Migration writes are best-effort —
+    /// failures are logged and the loaded page is still returned, so a
+    /// transient storage hiccup never turns a successful read into a
+    /// hard error.
     async fn load_page_with_legacy_fallback(
         &self,
         store: &Arc<dyn ObjectStore>,
         page_id: &str,
     ) -> flow_like_types::Result<Page> {
         let canonical = self.page_path(page_id);
-        match from_compressed::<proto::Page>(store.clone(), canonical).await {
+        match from_compressed::<proto::Page>(store.clone(), canonical.clone()).await {
             Ok(p) => Ok(p.into()),
             Err(canonical_err) => {
                 let legacy = self.board_dir.child(format!("{}.page", page_id));
-                match from_compressed_json::<Page>(store.clone(), legacy).await {
-                    Ok(p) => Ok(p),
+                match from_compressed_json::<Page>(store.clone(), legacy.clone()).await {
+                    Ok(page) => {
+                        let proto: proto::Page = page.clone().into();
+                        if let Err(e) =
+                            compress_to_file(store.clone(), canonical, &proto).await
+                        {
+                            tracing::warn!(
+                                "page {} legacy→canonical migration write failed: {e}",
+                                page_id
+                            );
+                        } else if let Err(e) = store.delete(&legacy).await {
+                            tracing::warn!(
+                                "page {} legacy→canonical migration: canonical written but legacy delete failed: {e}",
+                                page_id
+                            );
+                        }
+                        Ok(page)
+                    }
                     Err(legacy_err) => Err(flow_like_types::anyhow!(
                         "page {} not found at canonical path ({}) or legacy app-level path ({})",
                         page_id,
