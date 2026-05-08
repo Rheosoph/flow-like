@@ -961,154 +961,17 @@ impl App {
     }
 
     // PAGES
-
-    /// Get all pages for this app
-    pub async fn get_pages(&self) -> flow_like_types::Result<Vec<crate::a2ui::widget::Page>> {
-        let mut pages = Vec::with_capacity(self.page_ids.len());
-        for page_id in &self.page_ids {
-            if let Ok(page) = self.open_page(page_id.clone(), None).await {
-                pages.push(page);
-            }
-        }
-        Ok(pages)
-    }
-
-    /// Open/load a page by ID with optional version
-    pub async fn open_page(
-        &self,
-        page_id: String,
-        version: Option<(u32, u32, u32)>,
-    ) -> flow_like_types::Result<crate::a2ui::widget::Page> {
-        let state = self
-            .app_state
-            .clone()
-            .ok_or(flow_like_types::anyhow!("App state not found"))?;
-        let store = FlowLikeState::project_meta_store(&state)
-            .await?
-            .as_generic();
-
-        let page_path = if let Some(v) = version {
-            Path::from("apps")
-                .child(self.id.clone())
-                .child("pages")
-                .child("versions")
-                .child(page_id.as_str())
-                .child(format!("{}-{}-{}.page", v.0, v.1, v.2))
-        } else {
-            Path::from("apps")
-                .child(self.id.clone())
-                .child(format!("{}.page", page_id))
-        };
-
-        let page: crate::a2ui::widget::Page = from_compressed_json(store, page_path).await?;
-        Ok(page)
-    }
-
-    /// Save/create a page
-    pub async fn save_page(
-        &mut self,
-        page: &crate::a2ui::widget::Page,
-    ) -> flow_like_types::Result<()> {
-        let state = self
-            .app_state
-            .clone()
-            .ok_or(flow_like_types::anyhow!("App state not found"))?;
-        let store = FlowLikeState::project_meta_store(&state)
-            .await?
-            .as_generic();
-
-        let page_path = Path::from("apps")
-            .child(self.id.clone())
-            .child(format!("{}.page", page.id));
-
-        compress_to_file_json(store, page_path, page).await?;
-
-        // Add page ID to the list if not already present
-        if !self.page_ids.contains(&page.id) {
-            self.page_ids.push(page.id.clone());
-            self.save().await?;
-        }
-
-        Ok(())
-    }
-
-    /// Delete a page
-    pub async fn delete_page(&mut self, page_id: &str) -> flow_like_types::Result<()> {
-        let state = self
-            .app_state
-            .clone()
-            .ok_or(flow_like_types::anyhow!("App state not found"))?;
-        let store = FlowLikeState::project_meta_store(&state)
-            .await?
-            .as_generic();
-
-        let page_path = Path::from("apps")
-            .child(self.id.clone())
-            .child(format!("{}.page", page_id));
-        store.delete(&page_path).await?;
-
-        // Delete all versions
-        let versions_path = Path::from("apps")
-            .child(self.id.clone())
-            .child("pages")
-            .child("versions")
-            .child(page_id);
-        let locations = store
-            .list(Some(&versions_path))
-            .map_ok(|m| m.location)
-            .boxed();
-        store
-            .delete_stream(locations)
-            .try_collect::<Vec<Path>>()
-            .await?;
-
-        // Remove page ID from the list
-        self.page_ids.retain(|id| id != page_id);
-        self.save().await?;
-
-        Ok(())
-    }
-
-    /// Get all versions of a page
-    pub async fn get_page_versions(
-        &self,
-        page_id: &str,
-    ) -> flow_like_types::Result<Vec<(u32, u32, u32)>> {
-        let state = self
-            .app_state
-            .clone()
-            .ok_or(flow_like_types::anyhow!("App state not found"))?;
-        let store = FlowLikeState::project_meta_store(&state)
-            .await?
-            .as_generic();
-
-        let versions_path = Path::from("apps")
-            .child(self.id.clone())
-            .child("pages")
-            .child("versions")
-            .child(page_id);
-
-        let mut versions = Vec::new();
-        let mut stream = store.list(Some(&versions_path));
-        while let Some(entry) = stream.next().await {
-            if let std::result::Result::Ok(entry) = entry {
-                let filename = entry.location.filename().unwrap_or_default();
-                if let Some(version_str) = filename.strip_suffix(".page") {
-                    let parts: Vec<&str> = version_str.split('-').collect();
-                    if parts.len() == 3
-                        && let (
-                            std::result::Result::Ok(major),
-                            std::result::Result::Ok(minor),
-                            std::result::Result::Ok(patch),
-                        ) = (parts[0].parse(), parts[1].parse(), parts[2].parse())
-                    {
-                        versions.push((major, minor, patch));
-                    }
-                }
-            }
-        }
-        Ok(versions)
-    }
+    //
+    // Page content lives on `Board` (`apps/{app}/_{board_id}/{page_id}.page`,
+    // compressed binary `proto::Page`). The previous app-level helpers
+    // (`save_page` / `open_page` / `get_pages` / `delete_page` /
+    // `get_page_versions`) wrote a parallel JSON layout at
+    // `apps/{app}/{page_id}.page` and were the source of the online-fork
+    // 404s. They've been removed; route page operations through the
+    // owning `Board` (`Board::save_page` / `load_page` / `delete_page` /
+    // `load_versioned_page`). `Board::load_page` falls back to the
+    // legacy app-level path so pages saved before this change stay
+    // readable.
 
     /// Push page metadata for a specific language
     pub async fn push_page_meta(

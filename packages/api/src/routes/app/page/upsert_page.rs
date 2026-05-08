@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::a2ui::widget::Page;
+use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -28,6 +29,7 @@ pub struct PageUpsert {
     request_body = PageUpsert,
     responses(
         (status = 200, description = "Page created or updated", body = Object),
+        (status = 400, description = "Page payload is missing board_id"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     )
@@ -48,7 +50,7 @@ pub async fn upsert_page(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let mut app = state
+    let app = state
         .scoped_app(
             &user.sub()?,
             &app_id,
@@ -60,7 +62,23 @@ pub async fn upsert_page(
     let mut page = page_data.page;
     page.id = page_id.clone();
 
-    app.save_page(&page).await?;
+    // Pages are owned by a board on disk; the path is
+    // `apps/{app}/_{board_id}/{page_id}.page`. Without a board id we
+    // can't materialize a write target.
+    let board_id = page
+        .board_id
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
+
+    let board = app
+        .open_board(board_id.clone(), None, None)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("open board {}: {e}", board_id)))?;
+    {
+        let mut board_guard = board.lock().await;
+        board_guard.save_page(&page, None).await?;
+        board_guard.save(None).await?;
+    }
 
     let existing = page::Entity::find_by_id(&page_id)
         .filter(page::Column::AppId.eq(&app_id))
@@ -73,7 +91,7 @@ pub async fn upsert_page(
             name: Set(page.name.clone()),
             description: Set(page.title.clone()),
             app_id: Set(app_id.to_string()),
-            board_id: Set(page.board_id.clone()),
+            board_id: Set(Some(board_id.clone())),
             version: Set(page.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
             created_at: Set(chrono::Utc::now().naive_utc()),
             updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -82,18 +100,13 @@ pub async fn upsert_page(
         page::Entity::insert(new_page)
             .exec_with_returning(&state.db)
             .await?;
-
-        if !app.page_ids.contains(&page_id) {
-            app.page_ids.push(page_id.clone());
-            app.save().await?;
-        }
     } else {
         let update_page = page::ActiveModel {
             id: Set(page_id.clone()),
             name: Set(page.name.clone()),
             description: Set(page.title.clone()),
             app_id: Set(app_id.to_string()),
-            board_id: Set(page.board_id.clone()),
+            board_id: Set(Some(board_id.clone())),
             version: Set(page.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
             updated_at: Set(chrono::Utc::now().naive_utc()),
             ..Default::default()

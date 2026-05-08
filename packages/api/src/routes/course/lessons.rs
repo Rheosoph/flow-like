@@ -1,5 +1,7 @@
 use crate::{
-    entity::{challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt},
+    entity::{
+        challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt,
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
@@ -19,11 +21,11 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_types::tokio::try_join;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder,
 };
-use flow_like_types::tokio::try_join;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use utoipa::ToSchema;

@@ -8,7 +8,9 @@ use crate::{
     a2ui::widget::Page,
     app::App,
     state::FlowLikeState,
-    utils::compression::{compress_to_file, from_compressed, from_compressed_with_meta},
+    utils::compression::{
+        compress_to_file, from_compressed, from_compressed_json, from_compressed_with_meta,
+    },
 };
 use commands::GenericCommand;
 use flow_like_storage::object_store::{ObjectStore, path::Path};
@@ -888,9 +890,7 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Page> {
         let store = self.get_store(store).await?;
-        let path = self.page_path(page_id);
-        let page_proto: proto::Page = from_compressed(store, path).await?;
-        Ok(page_proto.into())
+        self.load_page_with_legacy_fallback(&store, page_id).await
     }
 
     pub async fn load_all_pages(
@@ -900,11 +900,38 @@ impl Board {
         let store = self.get_store(store).await?;
         let mut pages = Vec::with_capacity(self.page_ids.len());
         for page_id in &self.page_ids {
-            let path = self.page_path(page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), path).await?;
-            pages.push(page_proto.into());
+            pages.push(self.load_page_with_legacy_fallback(&store, page_id).await?);
         }
         Ok(pages)
+    }
+
+    /// Load a page from the canonical board-scoped binary-proto path,
+    /// falling back to the legacy app-level JSON path written by the
+    /// removed `App::save_page`. The fallback exists to keep pages
+    /// authored before the storage unification readable; new writes
+    /// only ever land at the board path, so over time the legacy path
+    /// drains.
+    async fn load_page_with_legacy_fallback(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        page_id: &str,
+    ) -> flow_like_types::Result<Page> {
+        let canonical = self.page_path(page_id);
+        match from_compressed::<proto::Page>(store.clone(), canonical).await {
+            Ok(p) => Ok(p.into()),
+            Err(canonical_err) => {
+                let legacy = self.board_dir.child(format!("{}.page", page_id));
+                match from_compressed_json::<Page>(store.clone(), legacy).await {
+                    Ok(p) => Ok(p),
+                    Err(legacy_err) => Err(flow_like_types::anyhow!(
+                        "page {} not found at canonical path ({}) or legacy app-level path ({})",
+                        page_id,
+                        canonical_err,
+                        legacy_err
+                    )),
+                }
+            }
+        }
     }
 
     pub async fn load_versioned_page(
@@ -942,8 +969,14 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
-        let path = self.page_path(page_id);
-        store.delete(&path).await?;
+        // Best-effort delete on the canonical path; missing files
+        // (e.g. data only ever written via the legacy `App::save_page`)
+        // shouldn't fail the call.
+        let _ = store.delete(&self.page_path(page_id)).await;
+        // Also evict any legacy app-level copy so a subsequent load
+        // can't resurrect the page through the fallback reader.
+        let legacy = self.board_dir.child(format!("{}.page", page_id));
+        let _ = store.delete(&legacy).await;
         self.page_ids.retain(|id| id != page_id);
         self.updated_at = SystemTime::now();
         Ok(())

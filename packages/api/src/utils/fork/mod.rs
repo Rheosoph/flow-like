@@ -292,13 +292,11 @@ pub async fn compute_offline_fork_bundle(
         .into_iter()
         .map(|r| r.id)
         .collect();
-    let page_id_set: Vec<String> = page::Entity::find()
+    let page_rows: Vec<page::Model> = page::Entity::find()
         .filter(page::Column::AppId.eq(src_app_id))
         .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
+        .await?;
+    let page_id_set: Vec<String> = page_rows.iter().map(|r| r.id.clone()).collect();
     let widget_id_set: Vec<String> = widget::Entity::find()
         .filter(widget::Column::AppId.eq(src_app_id))
         .all(&state.db)
@@ -372,54 +370,53 @@ pub async fn compute_offline_fork_bundle(
             relative_path: format!("{}.board", dst_board_id),
             data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
+    }
 
-        // Pages live under apps/{app}/_{board_id}/{page_id}.page.
-        let src_pages_dir = src_prefix.child(format!("_{}", src_board_id));
-        let dst_pages_dir_segment = format!("_{}", dst_board_id);
-        let mut pages_listing = src_meta_store.list(Some(&src_pages_dir));
-        while let Some(item) = pages_listing
-            .try_next()
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("list pages dir: {e}")))?
+    // ---- 2b. Pages: DB-driven, board-scoped binary --------------
+    // Pages live at the canonical `_{board_id}/{page_id}.page`
+    // (compressed binary `proto::Page`). Source data may still be
+    // sitting at the legacy app-level JSON path written by the
+    // (now-removed) `App::save_page`, so the read tries both —
+    // every page lands in the bundle at the canonical location only.
+    for row in &page_rows {
+        let src_page_id = row.id.clone();
+        let new_page_id = maps.translate_page(&src_page_id);
+        let new_board_id = row.board_id.as_ref().map(|b| maps.translate_board(b));
+
+        let Some(dst_board_id) = new_board_id else {
+            tracing::warn!(
+                "skip page {} in offline bundle: row has no board_id",
+                src_page_id
+            );
+            continue;
+        };
+
+        let mut page_proto = match read_source_page(
+            &src_meta_store,
+            &src_prefix,
+            row.board_id.as_deref(),
+            &src_page_id,
+        )
+        .await
         {
-            let path_str = item.location.as_ref().to_string();
-            let suffix = match path_str.strip_prefix(src_pages_dir.as_ref()) {
-                Some(s) => s.trim_start_matches('/'),
-                None => continue,
-            };
-            let Some(file_name) = suffix.strip_suffix(".page") else {
+            Some(p) => p,
+            None => {
+                tracing::warn!(
+                    "skip page {} in offline bundle: no readable source file",
+                    src_page_id
+                );
                 continue;
-            };
-            let src_page_id = file_name.to_string();
-            let new_page_id = maps.translate_page(&src_page_id);
-            let mut page_proto: proto::Page =
-                match from_compressed(src_meta_store.clone(), item.location.clone()).await {
-                    Ok(p) => p,
-                    Err(err) => {
-                        tracing::warn!("skip page {}: {}", src_page_id, err);
-                        continue;
-                    }
-                };
-            page_proto.id = new_page_id.clone();
-            if let Some(b) = page_proto.board_id.as_ref() {
-                page_proto.board_id = Some(maps.translate_board(b));
             }
-            if let Some(n) = page_proto.on_load_event_id.as_ref() {
-                page_proto.on_load_event_id = Some(maps.translate_event(n));
-            }
-            if let Some(n) = page_proto.on_unload_event_id.as_ref() {
-                page_proto.on_unload_event_id = Some(maps.translate_event(n));
-            }
-            if let Some(n) = page_proto.on_interval_event_id.as_ref() {
-                page_proto.on_interval_event_id = Some(maps.translate_event(n));
-            }
-            let bytes = encode_proto(&page_proto).await?;
-            blobs.push(MetaBlob {
-                relative_path: format!("{}/{}.page", dst_pages_dir_segment, new_page_id),
-                data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            });
-            shipped_pages.insert(src_page_id);
-        }
+        };
+
+        remap_page(&mut page_proto, &new_page_id, &maps);
+
+        let bytes = encode_proto(&page_proto).await?;
+        blobs.push(MetaBlob {
+            relative_path: format!("_{}/{}.page", dst_board_id, new_page_id),
+            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
+        shipped_pages.insert(src_page_id);
     }
 
     // ---- 3. Events: DB-driven, drop Remote, remap, strip ----------
@@ -1120,20 +1117,23 @@ pub async fn fork_app_with_visibility(
         compress_to_file(dst_meta_store.clone(), board_path, board)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("write board: {e}")))?;
-
-        // Pages live under apps/{app}/_{board_id}/{page_id}.page — copy and
-        // remap each one. Both src and dst are meta-store paths.
-        let src_pages_dir = src_prefix.child(format!("_{}", src_board_id));
-        let dst_pages_dir = dst_prefix.child(format!("_{}", new_board_id));
-        copy_and_remap_pages(
-            &src_meta_store,
-            &dst_meta_store,
-            &src_pages_dir,
-            &dst_pages_dir,
-            &maps,
-        )
-        .await?;
     }
+
+    // Pages: DB-driven so we never miss a row whose `.page` file lives at
+    // an unexpected location. Source data may sit at the legacy
+    // app-level JSON path (`apps/{app}/{page_id}.page`) written by the
+    // removed `App::save_page`, so the read tries both. Writes go only
+    // to the canonical board-scoped binary path
+    // (`apps/{app}/_{board_id}/{page_id}.page`).
+    fork_pages_db_driven(
+        &src_meta_store,
+        &dst_meta_store,
+        &src_prefix,
+        &dst_prefix,
+        &src_page_rows,
+        &maps,
+    )
+    .await?;
 
     // ---- 4. Events: DB-driven, remap, rewrite, write ------------------
     // Source events come from the DB rather than from `apps/{src}/events/`
@@ -1835,9 +1835,7 @@ fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
             .entry(layer.id.clone())
             .or_insert_with(create_id);
         if let Some(parent) = layer.parent_id.as_ref() {
-            maps.layers
-                .entry(parent.clone())
-                .or_insert_with(create_id);
+            maps.layers.entry(parent.clone()).or_insert_with(create_id);
         }
         register_node_pin_ids(&layer.nodes, maps);
         register_pin_ids(&layer.pins, maps);
@@ -2204,56 +2202,120 @@ async fn copy_object_prefix(
     Ok(())
 }
 
-async fn copy_and_remap_pages(
+/// Read a page's content. Tries the canonical board-scoped binary
+/// path first (`apps/{src}/_{board_id}/{page_id}.page`), then falls
+/// back to the legacy app-level JSON path (`apps/{src}/{page_id}.page`)
+/// written by the removed `App::save_page`. Source apps that pre-date
+/// the storage unification still have data at the legacy location;
+/// keeping the fallback here guarantees the fork sees their content
+/// even before any backfill has run. Returns `None` if neither
+/// location has a readable file; the caller logs and continues.
+async fn read_source_page(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_prefix: &Path,
+    src_board_id: Option<&str>,
+    src_page_id: &str,
+) -> Option<proto::Page> {
+    let app_level = src_prefix.child(format!("{}.page", src_page_id));
+    if let Ok(page) =
+        from_compressed_json::<flow_like::a2ui::widget::Page>(src_store.clone(), app_level).await
+    {
+        return Some(page.into());
+    }
+
+    if let Some(board_id) = src_board_id {
+        let board_level = src_prefix
+            .child(format!("_{}", board_id))
+            .child(format!("{}.page", src_page_id));
+        if let Ok(page) = from_compressed::<proto::Page>(src_store.clone(), board_level).await {
+            return Some(page);
+        }
+    }
+
+    None
+}
+
+/// Apply the fork's id translations to a page in-place.
+fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) {
+    page.id = new_page_id.to_string();
+    if let Some(b) = page.board_id.as_ref() {
+        page.board_id = Some(maps.translate_board(b));
+    }
+    if let Some(n) = page.on_load_event_id.as_ref() {
+        page.on_load_event_id = Some(maps.translate_event(n));
+    }
+    if let Some(n) = page.on_unload_event_id.as_ref() {
+        page.on_unload_event_id = Some(maps.translate_event(n));
+    }
+    if let Some(n) = page.on_interval_event_id.as_ref() {
+        page.on_interval_event_id = Some(maps.translate_event(n));
+    }
+}
+
+/// Write a remapped page to the canonical board-scoped layout
+/// (`_{board_id}/{page_id}.page`, compressed binary `proto::Page`) —
+/// the unified storage location now used by both API and desktop.
+/// Pages without a board id can't be persisted (they have no place
+/// on disk under the unified scheme), so we skip them with a warning.
+async fn write_destination_page(
+    dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    dst_prefix: &Path,
+    dst_board_id: Option<&str>,
+    page_proto: &proto::Page,
+) -> Result<(), ApiError> {
+    let Some(board_id) = dst_board_id else {
+        tracing::warn!(
+            "skip writing page {} on destination: no board_id (unreachable under unified storage)",
+            page_proto.id
+        );
+        return Ok(());
+    };
+    let board_level = dst_prefix
+        .child(format!("_{}", board_id))
+        .child(format!("{}.page", page_proto.id));
+    compress_to_file(dst_store.clone(), board_level, page_proto)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("write page: {e}")))?;
+    Ok(())
+}
+
+/// DB-driven page mirroring used by the online fork. Iterates the
+/// authoritative `Page` rows for the source app, reads each page from
+/// whichever storage convention has it, remaps ids, and writes to
+/// both destination conventions.
+async fn fork_pages_db_driven(
     src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
-    src_pages_dir: &Path,
-    dst_pages_dir: &Path,
+    src_prefix: &Path,
+    dst_prefix: &Path,
+    src_page_rows: &[page::Model],
     maps: &ForkIdMap,
 ) -> Result<(), ApiError> {
-    let mut listing = src_store.list(Some(src_pages_dir));
-    while let Some(item) = listing
-        .try_next()
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list pages dir: {e}")))?
-    {
-        let path_str = item.location.as_ref().to_string();
-        let suffix = match path_str.strip_prefix(src_pages_dir.as_ref()) {
-            Some(s) => s.trim_start_matches('/'),
-            None => continue,
-        };
-        let Some(file_name) = suffix.strip_suffix(".page") else {
-            continue;
-        };
-        let src_page_id = file_name.to_string();
+    for row in src_page_rows {
+        let src_page_id = row.id.clone();
         let new_page_id = maps.translate_page(&src_page_id);
+        let new_board_id = row.board_id.as_ref().map(|b| maps.translate_board(b));
 
-        let mut page_proto: proto::Page =
-            match from_compressed(src_store.clone(), item.location.clone()).await {
-                Ok(p) => p,
-                Err(err) => {
-                    tracing::warn!("skip page {}: {}", src_page_id, err);
-                    continue;
-                }
-            };
-        page_proto.id = new_page_id.clone();
-        if let Some(b) = page_proto.board_id.as_ref() {
-            page_proto.board_id = Some(maps.translate_board(b));
-        }
-        if let Some(n) = page_proto.on_load_event_id.as_ref() {
-            page_proto.on_load_event_id = Some(maps.translate_event(n));
-        }
-        if let Some(n) = page_proto.on_unload_event_id.as_ref() {
-            page_proto.on_unload_event_id = Some(maps.translate_event(n));
-        }
-        if let Some(n) = page_proto.on_interval_event_id.as_ref() {
-            page_proto.on_interval_event_id = Some(maps.translate_event(n));
-        }
+        let mut page_proto = match read_source_page(
+            src_store,
+            src_prefix,
+            row.board_id.as_deref(),
+            &src_page_id,
+        )
+        .await
+        {
+            Some(p) => p,
+            None => {
+                tracing::warn!(
+                    "skip page {} during fork: no readable source file at app-level or board-scoped path",
+                    src_page_id
+                );
+                continue;
+            }
+        };
 
-        let dst_path = dst_pages_dir.child(format!("{}.page", new_page_id));
-        compress_to_file(dst_store.clone(), dst_path, &page_proto)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("write page: {e}")))?;
+        remap_page(&mut page_proto, &new_page_id, maps);
+        write_destination_page(dst_store, dst_prefix, new_board_id.as_deref(), &page_proto).await?;
     }
     Ok(())
 }
