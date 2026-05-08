@@ -2271,17 +2271,191 @@ fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) {
     }
 
     for content in page.content.iter_mut() {
-        if let Some(proto::page_content::ContentType::Widget(instance)) =
-            content.content_type.as_mut()
-        {
-            remap_widget_instance(instance, maps);
+        match content.content_type.as_mut() {
+            Some(proto::page_content::ContentType::Widget(instance)) => {
+                remap_widget_instance(instance, maps);
+            }
+            Some(proto::page_content::ContentType::Component(comp)) => {
+                remap_component_blob(comp, maps);
+            }
+            _ => {}
         }
+    }
+
+    for comp in page.components.iter_mut() {
+        remap_component_blob(comp, maps);
     }
 
     for widget_def in page.widget_refs.values_mut() {
         if let Some(new_id) = maps.widgets.get(&widget_def.id) {
             widget_def.id = new_id.clone();
         }
+        for comp in widget_def.components.iter_mut() {
+            remap_component_blob(comp, maps);
+        }
+    }
+}
+
+/// Most component data lives as opaque JSON bytes inside
+/// `proto::Component.component_json` — see `From<SurfaceComponent>` in
+/// `protobuf/a2ui.rs`, which serializes `SurfaceComponent.component`
+/// (a `serde_json::Value`) into those bytes and leaves the typed
+/// `component` oneof unset. That's where buttons store their
+/// `on_click` Action with `name = "workflow_event"` and a context map
+/// holding `nodeId` / `boardId` / `appId` BoundValues, and where
+/// `actionBindings` entries land in the runtime's
+/// `{ workflow: { flowId } }` form. Without a JSON-level rewrite, a
+/// fork's buttons keep firing the source app's nodes.
+///
+/// The walker is deliberately defensive: it only swaps a string when
+/// the source value is present in the corresponding id map, so
+/// non-id fields that happen to share a key name (e.g. a custom
+/// `nodeId` inside a piece of user-authored JSON unrelated to a
+/// workflow Action) are left alone unless they actually match a
+/// known id.
+fn remap_component_blob(comp: &mut proto::Component, maps: &ForkIdMap) {
+    let Some(bytes) = comp.component_json.as_mut() else {
+        return;
+    };
+    let mut value: flow_like_types::Value = match flow_like_types::json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(
+                "skip component_json remap for component {}: parse failed: {err}",
+                comp.id
+            );
+            return;
+        }
+    };
+    walk_remap_action_refs(&mut value, maps);
+    match flow_like_types::json::to_vec(&value) {
+        Ok(new_bytes) => *bytes = new_bytes,
+        Err(err) => {
+            tracing::warn!(
+                "skip component_json remap for component {}: re-encode failed: {err}",
+                comp.id
+            );
+        }
+    }
+}
+
+/// Walk a JSON tree and remap every cross-app reference we recognize
+/// by **field name**. Components embed cross-app ids in lots of
+/// places besides the canonical `workflow_event` action — image
+/// hotspots, dialogue choices, modal/drawer triggers, link routes,
+/// custom user-authored `actions[].context` shapes, runtime
+/// `{ workflow: { flowId } }` bindings, etc. Pattern-matching every
+/// case explicitly was lossy. Instead, translate any value carried
+/// under a known id-bearing key, regardless of where in the tree it
+/// appears.
+///
+/// Field names recognized (both `camelCase` and `snake_case`):
+///
+/// * `nodeId` / `flowId` → `maps.nodes` (events_simple node ids)
+/// * `boardId` → `maps.boards`
+/// * `pageId` → `maps.pages`
+/// * `widgetId` → `maps.widgets`
+/// * `eventId` → `maps.events`
+/// * `appId` → source-app-id → destination-app-id
+///
+/// Each value is accepted as either a bare string or a
+/// `{ "literalString": "..." }` BoundValue wrapper. Translation only
+/// fires when the embedded source string is actually present in the
+/// corresponding map — so a user-authored field that happens to
+/// share a name (e.g. a `nodeId` in arbitrary game state) is left
+/// alone unless it actually matches a known source id, and a value
+/// already on the destination's id space (e.g. after a typed remap
+/// pass) is a no-op since it won't be in the map keys.
+fn walk_remap_action_refs(value: &mut flow_like_types::Value, maps: &ForkIdMap) {
+    match value {
+        flow_like_types::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                match key.as_str() {
+                    "nodeId" | "node_id" | "flowId" | "flow_id" => {
+                        translate_bound_string(Some(val), &maps.nodes);
+                    }
+                    "boardId" | "board_id" => {
+                        translate_bound_string(Some(val), &maps.boards);
+                    }
+                    "pageId" | "page_id" => {
+                        translate_bound_string(Some(val), &maps.pages);
+                    }
+                    "widgetId" | "widget_id" => {
+                        translate_bound_string(Some(val), &maps.widgets);
+                    }
+                    "eventId" | "event_id" => {
+                        translate_bound_string(Some(val), &maps.events);
+                    }
+                    "appId" | "app_id" => {
+                        translate_app_id(Some(val), maps);
+                    }
+                    _ => {}
+                }
+                walk_remap_action_refs(val, maps);
+            }
+        }
+        flow_like_types::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                walk_remap_action_refs(v, maps);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A `BoundValue` is either a bare string (rare in practice) or
+/// `{ "literalString": "<id>" }` / `{ "literalNumber": ... }` /
+/// `{ "literalBool": ... }` / `{ "path": "..." }`. Only the literal
+/// string form can hold an id reference, so that's the only one we
+/// rewrite. Path bindings resolve at runtime against the data model
+/// and are not cross-app refs.
+fn translate_bound_string(
+    target: Option<&mut flow_like_types::Value>,
+    mapping: &HashMap<String, String>,
+) {
+    let Some(target) = target else { return };
+    match target {
+        flow_like_types::Value::String(s) => {
+            if let Some(new_id) = mapping.get(s.as_str()) {
+                *s = new_id.clone();
+            }
+        }
+        flow_like_types::Value::Object(obj) => {
+            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString") {
+                if let Some(new_id) = mapping.get(s.as_str()) {
+                    *s = new_id.clone();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// AppId rewrite uses the fork's source→destination app id pair
+/// rather than a generic map. We translate only when the embedded
+/// value matches the known source app id, so unrelated `appId`
+/// strings the user might have authored elsewhere stay untouched.
+fn translate_app_id(target: Option<&mut flow_like_types::Value>, maps: &ForkIdMap) {
+    let Some(target) = target else { return };
+    let src = maps.source_app_id.as_str();
+    let dst = maps.app_id.clone();
+    if src.is_empty() || dst.is_empty() {
+        return;
+    }
+    match target {
+        flow_like_types::Value::String(s) => {
+            if s == src {
+                *s = dst;
+            }
+        }
+        flow_like_types::Value::Object(obj) => {
+            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString") {
+                if s == src {
+                    *s = dst;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2462,6 +2636,12 @@ async fn fork_widgets(
                 flow_like_types::Value::String(new_widget_id.clone()),
             );
         }
+        // Components inside the widget def carry the same `Action` /
+        // `actionBindings` shapes that pages do, so we run the same
+        // remap pass over the widget JSON. Without this, a button or
+        // similar element placed *inside* a widget keeps firing the
+        // source app's nodes after fork.
+        walk_remap_action_refs(&mut widget, maps);
         let dst_path = dst_prefix.child(format!("{}.widget", new_widget_id));
         compress_to_file_json(dst_store.clone(), dst_path, &widget)
             .await
