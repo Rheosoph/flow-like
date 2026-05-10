@@ -12,7 +12,7 @@ use crate::{
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use base64::Engine;
 use flow_like_types::create_id;
@@ -50,6 +50,11 @@ pub struct RegisterPushTargetResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UnregisterPushTargetResponse {
     pub success: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct UnregisterPushTargetQuery {
+    pub reason: Option<String>,
 }
 
 #[utoipa::path(
@@ -230,8 +235,11 @@ pub async fn unregister_push_target(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(device_id): Path<String>,
+    Query(query): Query<UnregisterPushTargetQuery>,
 ) -> Result<Json<UnregisterPushTargetResponse>, ApiError> {
     let sub = user.sub()?;
+    let now = chrono::Utc::now().naive_utc();
+    let reason = unregister_reason(query.reason.as_deref());
 
     push_notification_target::Entity::update_many()
         .col_expr(
@@ -239,15 +247,34 @@ pub async fn unregister_push_target(
             Expr::value(false),
         )
         .col_expr(
-            push_notification_target::Column::UpdatedAt,
-            Expr::value(chrono::Utc::now().naive_utc()),
+            push_notification_target::Column::InvalidatedAt,
+            Expr::value(Some(now)),
         )
+        .col_expr(
+            push_notification_target::Column::InvalidationReason,
+            Expr::value(Some(reason)),
+        )
+        .col_expr(push_notification_target::Column::UpdatedAt, Expr::value(now))
         .filter(push_notification_target::Column::UserId.eq(sub))
         .filter(push_notification_target::Column::DeviceId.eq(device_id))
+        .filter(push_notification_target::Column::PushEnabled.eq(true))
         .exec(&state.db)
         .await?;
 
     Ok(Json(UnregisterPushTargetResponse { success: true }))
+}
+
+fn unregister_reason(reason: Option<&str>) -> String {
+    match reason.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }) {
+        Some("permission_revoked") => "User revoked notification permission".to_string(),
+        Some("sign_out") => "User signed out on this device".to_string(),
+        Some("user_disabled") => "User disabled push notifications".to_string(),
+        Some(value) => format!("Client unregistered push target: {}", value),
+        None => "Client unregistered push target".to_string(),
+    }
 }
 
 fn map_platform(platform: &PushTargetPlatformDto) -> PushNotificationTargetPlatform {

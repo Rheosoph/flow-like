@@ -92,6 +92,7 @@ export type {
 
 export * from "./profile/profile";
 export * from "./app/app";
+export * from "./app/fork";
 export * from "./solution/solution";
 export * from "./sink";
 

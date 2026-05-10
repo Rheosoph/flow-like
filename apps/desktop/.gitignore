@@ -57,3 +57,5 @@ next-env.d.ts
 .env
 .VSCodeCounter
 google-services.json
+.env.production
+.env.development

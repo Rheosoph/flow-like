@@ -21,6 +21,7 @@ export function PHProvider({
 
 		posthog.init(apiKey, {
 			api_host: apiHost,
+			ui_host: 'https://eu.posthog.com',
 			person_profiles: "always",
 			capture_pageleave: true,
 			autocapture: true,

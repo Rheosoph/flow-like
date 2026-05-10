@@ -103,6 +103,8 @@ export function A2UIRenderer({
 				component,
 				componentId,
 				surfaceId: surface.id,
+				appId,
+				boardId,
 				style: style ?? component.style,
 				onAction: handleAction,
 				renderChild: (childId, childScope) =>
@@ -116,7 +118,7 @@ export function A2UIRenderer({
 				node
 			);
 		},
-		[components, surface.id, handleAction],
+		[components, surface.id, appId, boardId, handleAction],
 	);
 
 	const rootComponent = surface.rootComponentId

@@ -1513,6 +1513,9 @@ export type A2UIServerMessage =
 			elementIds: string[];
 	  }
 	| {
+			type: "showScreen";
+	  }
+	| {
 			type: "upsertElement";
 			element_id: string;
 			value: unknown;

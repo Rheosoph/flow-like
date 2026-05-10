@@ -1,4 +1,4 @@
-import { DndContext, MouseSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -35,7 +35,7 @@ export function FlowWrapper({
 	/** The authenticated user's sub (subject) from the auth token - used for realtime collaboration */
 	sub?: string;
 }>) {
-	const mouseSensor = useSensor(MouseSensor, {
+	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
 			distance: 10,
 		},
@@ -49,7 +49,7 @@ export function FlowWrapper({
 		  }
 	>();
 
-	const sensors = useSensors(mouseSensor);
+	const sensors = useSensors(pointerSensor);
 
 	const backend = useBackend();
 	const board = useInvoke(
@@ -86,15 +86,17 @@ export function FlowWrapper({
 
 				// Function layer dropped on the canvas -> place CallFunction node directly
 				if (data.type === "function-layer" && overId === "flow") {
-					const mouseEvent = event.activatorEvent as MouseEvent;
+					const pointerEvent = event.activatorEvent as
+						| MouseEvent
+						| PointerEvent;
 					document.dispatchEvent(
 						new CustomEvent("flow-drop", {
 							detail: {
 								type: "function-layer",
 								layerId: data.layerId,
 								screenPosition: {
-									x: mouseEvent.screenX + event.delta.x,
-									y: mouseEvent.screenY + event.delta.y,
+									x: pointerEvent.screenX + event.delta.x,
+									y: pointerEvent.screenY + event.delta.y,
 								},
 							},
 						}),
@@ -107,12 +109,14 @@ export function FlowWrapper({
 
 				// Dropped on the canvas -> ask user whether to Get/Set
 				if (overId === "flow") {
-					const mouseEvent: MouseEvent = event.activatorEvent as MouseEvent;
+					const pointerEvent = event.activatorEvent as
+						| MouseEvent
+						| PointerEvent;
 					setDetail({
 						variable,
 						screenPosition: {
-							x: mouseEvent.screenX + event.delta.x,
-							y: mouseEvent.screenY + event.delta.y,
+							x: pointerEvent.screenX + event.delta.x,
+							y: pointerEvent.screenY + event.delta.y,
 						},
 					});
 					return;

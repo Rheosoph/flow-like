@@ -660,11 +660,13 @@ function PageInterfaceInner({
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [isCacheLoading, setIsCacheLoading] = useState(false);
+	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [loadEventPhase, setLoadEventPhase] = useState<
 		"idle" | "preparing" | "running"
 	>("idle");
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
+	const localWidgetWarmupsRef = useRef<Map<string, Promise<void>>>(new Map());
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	const pageRoute = route || (config?.route as string);
@@ -901,6 +903,12 @@ function PageInterfaceInner({
 		(message: A2UIServerMessage) => {
 			console.log("[PageInterface] A2UI message:", message.type, message);
 
+			// Reveal the current screen while the workflow continues running.
+			if (message.type === "showScreen") {
+				setIsScreenRevealed(true);
+				return;
+			}
+
 			// Handle navigation
 			if (message.type === "navigateTo") {
 				const { route, replace, queryParams } = message as {
@@ -1025,6 +1033,44 @@ function PageInterfaceInner({
 		return elements;
 	}, []); // No dependencies - uses ref
 
+	const prepareLocalWidgetDefinitions = useCallback(async () => {
+		if (!appId || !backend.capabilities().canExecuteLocally) return;
+
+		const existingWarmup = localWidgetWarmupsRef.current.get(appId);
+		if (existingWarmup) {
+			await existingWarmup.catch(() => undefined);
+			return;
+		}
+
+		const warmup = (async () => {
+			const widgets = await backend.widgetState.getWidgets(appId);
+			const results = await Promise.allSettled(
+				widgets.map(([widgetAppId, widgetId]) =>
+					backend.widgetState.getWidget(widgetAppId, widgetId),
+				),
+			);
+			const failedCount = results.filter(
+				(result) => result.status === "rejected",
+			).length;
+			if (failedCount > 0) {
+				console.warn(
+					`[PageInterface] Failed to warm ${failedCount} widget definition(s) before local execution`,
+				);
+			}
+		})();
+
+		localWidgetWarmupsRef.current.set(appId, warmup);
+		try {
+			await warmup;
+		} catch (e) {
+			localWidgetWarmupsRef.current.delete(appId);
+			console.warn(
+				"[PageInterface] Failed to warm widget definitions before local execution:",
+				e,
+			);
+		}
+	}, [appId, backend]);
+
 	// Helper to execute a page lifecycle event
 	const executePageEvent = useCallback(
 		async (
@@ -1068,6 +1114,7 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
+				await prepareLocalWidgetDefinitions();
 				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
@@ -1091,6 +1138,7 @@ function PageInterfaceInner({
 			executionService,
 			handleA2UIMessage,
 			getElementsFromSurface,
+			prepareLocalWidgetDefinitions,
 		],
 	);
 
@@ -1107,6 +1155,7 @@ function PageInterfaceInner({
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
+			setIsScreenRevealed(false);
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
@@ -1178,7 +1227,7 @@ function PageInterfaceInner({
 	const shouldShowLoading =
 		(isLoading && !canRenderFromCache) ||
 		shouldHoldForCachedState ||
-		(isLoadEventRunning && !canRenderFromCache);
+		(isLoadEventRunning && !canRenderFromCache && !isScreenRevealed);
 	const loadingTitle = isLoadEventRunning
 		? loadEventPhase === "running"
 			? "Running workflow"

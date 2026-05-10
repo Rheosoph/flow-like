@@ -18,6 +18,10 @@ export {
 } from "./admin-package-detail-view";
 
 export { StoreHero } from "./store-hero";
+export {
+	StoreForkButton,
+	type StoreForkButtonProps,
+} from "./store-fork-button";
 export { AboutSection } from "./about-section";
 export {
 	AppReviewsSection,

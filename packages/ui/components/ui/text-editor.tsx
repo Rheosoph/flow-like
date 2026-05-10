@@ -18,11 +18,17 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { EditorKit } from "../editor/editor-kit";
+import {
+	type MentionItem,
+	MentionItemsProvider,
+} from "../editor/mention-items-context";
 import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import { Editor, EditorContainer } from "../editor/ui/editor";
+
+const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
 
 /**
  * A prefix to identify content that is serialized as Plate's native JSON.
@@ -459,6 +465,7 @@ type TextEditorProps = {
 	minimal?: boolean;
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
+	mentionItems?: ReadonlyArray<MentionItem>;
 };
 
 export const TextEditor = memo(function TextEditor({
@@ -469,26 +476,32 @@ export const TextEditor = memo(function TextEditor({
 	minimal = false,
 	onFocusNode,
 	onUserMention,
+	mentionItems,
 }: Readonly<TextEditorProps>) {
+	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
 	if (editable && onChange) {
 		return (
-			<TextEditorInner
-				initialContent={initialContent}
-				onChange={(content: string) => {
-					onChange(content);
-				}}
-				isMarkdown={isMarkdown}
-				onFocusNode={onFocusNode}
-			/>
+			<MentionItemsProvider value={items}>
+				<TextEditorInner
+					initialContent={initialContent}
+					onChange={(content: string) => {
+						onChange(content);
+					}}
+					isMarkdown={isMarkdown}
+					onFocusNode={onFocusNode}
+				/>
+			</MentionItemsProvider>
 		);
 	}
 	return (
-		<TextEditorStatic
-			initialContent={initialContent}
-			isMarkdown={isMarkdown}
-			minimal={minimal}
-			onFocusNode={onFocusNode}
-			onUserMention={onUserMention}
-		/>
+		<MentionItemsProvider value={items}>
+			<TextEditorStatic
+				initialContent={initialContent}
+				isMarkdown={isMarkdown}
+				minimal={minimal}
+				onFocusNode={onFocusNode}
+				onUserMention={onUserMention}
+			/>
+		</MentionItemsProvider>
 	);
 });

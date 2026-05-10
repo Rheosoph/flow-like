@@ -3,10 +3,14 @@ import type {
 	AttemptResult,
 	CertificateView,
 	Challenge,
+	CourseAsset,
+	CourseAssetKind,
 	CourseDetail,
 	CourseListItem,
 	CourseModule,
 	CourseStructure,
+	CreateCourseAssetBody,
+	CreateCourseAssetResponse,
 	CurrentWeekly,
 	LeaderboardEntry,
 	LeaderboardOptIn,
@@ -14,6 +18,7 @@ import type {
 	Lesson,
 	LessonAppRef,
 	LessonWithChildren,
+	OptimizeCourseAssetResponse,
 	UserCourseEnrollment,
 	UserLessonProgress,
 } from "@tm9657/flow-like-ui/lib/learn/types";
@@ -177,6 +182,107 @@ export const learnApi = {
 			{ method: "DELETE" },
 			auth,
 		);
+	},
+
+	async listCourseAssets(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		opts: { kind?: CourseAssetKind } = {},
+	): Promise<CourseAsset[]> {
+		return fetcher<CourseAsset[]>(
+			profile,
+			`/courses/${courseId}/assets${qs({ kind: opts.kind })}`,
+			undefined,
+			auth,
+		);
+	},
+
+	async createCourseAsset(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		body: CreateCourseAssetBody,
+	): Promise<CreateCourseAssetResponse> {
+		return fetcher<CreateCourseAssetResponse>(
+			profile,
+			`/courses/${courseId}/assets`,
+			{ method: "POST", body: JSON.stringify(body) },
+			auth,
+		);
+	},
+
+	async renameCourseAsset(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		assetId: string,
+		name: string,
+	): Promise<CourseAsset> {
+		return fetcher<CourseAsset>(
+			profile,
+			`/courses/${courseId}/assets/${assetId}`,
+			{ method: "PUT", body: JSON.stringify({ name }) },
+			auth,
+		);
+	},
+
+	async deleteCourseAsset(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		assetId: string,
+	): Promise<void> {
+		await fetcher<unknown>(
+			profile,
+			`/courses/${courseId}/assets/${assetId}`,
+			{ method: "DELETE" },
+			auth,
+		);
+	},
+
+	async optimizeCourseAsset(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		assetId: string,
+	): Promise<OptimizeCourseAssetResponse> {
+		return fetcher<OptimizeCourseAssetResponse>(
+			profile,
+			`/courses/${courseId}/assets/${assetId}/optimize`,
+			{ method: "POST" },
+			auth,
+		);
+	},
+
+	async uploadCourseAsset(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		body: CreateCourseAssetBody,
+		file: File,
+	): Promise<CourseAsset> {
+		const created = await learnApi.createCourseAsset(
+			profile,
+			auth,
+			courseId,
+			body,
+		);
+		const headers: HeadersInit = {
+			"Content-Type": file.type || body.mime_type || "application/octet-stream",
+		};
+		if (created.signed_url.includes(".blob.core.windows.net")) {
+			headers["x-ms-blob-type"] = "BlockBlob";
+		}
+		const response = await fetch(created.signed_url, {
+			method: "PUT",
+			body: file,
+			headers,
+		});
+		if (!response.ok) {
+			throw new Error(`Failed to upload asset: ${response.statusText}`);
+		}
+		return created.asset;
 	},
 
 	async upsertModule(

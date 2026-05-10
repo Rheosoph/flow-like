@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AppLinkPicker,
 	type AppOption,
+	AssetsEditor,
 	Badge,
 	Button,
 	Card,
@@ -94,6 +95,7 @@ function CourseAdminContent() {
 				estimated_minutes: value.estimated_minutes,
 				is_published: value.is_published,
 				tags: [...value.tags],
+				position: value.position,
 				name: value.name,
 				description: value.description,
 				long_description: value.long_description,
@@ -254,6 +256,13 @@ function CourseAdminContent() {
 							queryKey: ["learn", "admin", "links", courseId],
 						})
 					}
+				/>
+
+				<AssetsEditor
+					api={learnApi}
+					profile={profile}
+					auth={auth}
+					courseId={courseId}
 				/>
 			</div>
 		</div>
@@ -454,9 +463,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 											<Button
 												type="submit"
 												size="sm"
-												disabled={
-													renameModule.isPending || !editTitle.trim()
-												}
+												disabled={renameModule.isPending || !editTitle.trim()}
 											>
 												Save
 											</Button>

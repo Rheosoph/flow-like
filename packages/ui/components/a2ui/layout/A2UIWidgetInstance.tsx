@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
+import { useInvoke } from "../../../hooks/use-invoke";
+import { useBackend } from "../../../state/backend-state";
 import {
 	type ComponentProps,
 	getComponentRenderer,
@@ -51,15 +53,33 @@ export function A2UIWidgetInstance({
 	component,
 	componentId,
 	surfaceId,
+	appId: rendererAppId,
+	boardId,
 	onAction,
 }: ComponentProps) {
 	const props = component as unknown as WidgetInstanceComponentProps;
-	const { instanceId, widgetId, inlineWidgetDef, actionBindings } = props;
+	const { instanceId, widgetId, appId, inlineWidgetDef, actionBindings } =
+		props;
+	const effectiveAppId = appId ?? rendererAppId;
 	const widgetRefsContext = useWidgetRefs();
+	const backend = useBackend();
 
-	// Get widget definition from refs, fall back to inline definition
 	const fromRefs = widgetRefsContext?.getWidgetRef(instanceId);
-	const widgetDef = fromRefs ?? inlineWidgetDef;
+
+	const shouldFetch =
+		!fromRefs && !inlineWidgetDef && !!effectiveAppId && !!widgetId;
+	const fetched = useInvoke(
+		backend.widgetState.getWidget,
+		backend.widgetState,
+		[effectiveAppId ?? "", widgetId],
+		shouldFetch,
+	);
+
+	const widgetDef = useMemo(() => {
+		if (fromRefs) return fromRefs;
+		if (inlineWidgetDef) return inlineWidgetDef;
+		return fetched.data;
+	}, [fromRefs, inlineWidgetDef, fetched.data]);
 
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(
@@ -90,6 +110,8 @@ export function A2UIWidgetInstance({
 					component={childComponent.component as A2UIComponent}
 					componentId={childId}
 					surfaceId={surfaceId}
+					appId={effectiveAppId}
+					boardId={boardId}
 					style={
 						childComponent.style ??
 						(childComponent.component.style as Style | undefined)
@@ -101,13 +123,25 @@ export function A2UIWidgetInstance({
 				/>
 			);
 		},
-		[surfaceId, onAction],
+		[surfaceId, effectiveAppId, boardId, onAction],
 	);
 
 	if (!widgetDef) {
+		if (shouldFetch && (fetched.isLoading || fetched.isFetching)) {
+			return (
+				<div
+					className="p-4 text-sm text-muted-foreground"
+					data-widget-instance={instanceId}
+					data-widget-id={widgetId}
+				>
+					Loading widget…
+				</div>
+			);
+		}
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				Widget instance &quot;{instanceId}&quot; not found in refs
+				Widget instance &quot;{instanceId}&quot; could not be resolved
+				{fetched.error ? `: ${fetched.error.message}` : ""}
 			</div>
 		);
 	}
@@ -119,14 +153,6 @@ export function A2UIWidgetInstance({
 			</div>
 		);
 	}
-
-	console.log("[A2UI WidgetInstance] rendering:", {
-		instanceId,
-		widgetId,
-		actionBindings,
-		hasInlineDef: !!inlineWidgetDef,
-		rootComponentId: widgetDef?.rootComponentId,
-	});
 
 	return (
 		<WidgetInstanceContext.Provider

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AppLinkPicker,
 	type AppOption,
+	AssetsEditor,
 	Badge,
 	Button,
 	Card,
@@ -254,6 +255,13 @@ function CourseAdminContent() {
 							queryKey: ["learn", "admin", "links", courseId],
 						})
 					}
+				/>
+
+				<AssetsEditor
+					api={learnApi}
+					profile={profile}
+					auth={auth}
+					courseId={courseId}
 				/>
 			</div>
 		</div>

@@ -10,6 +10,7 @@ import {
 	CardTitle,
 	GlobalPermission,
 	Input,
+	LearningPathsAdmin,
 	Skeleton,
 	useBackend,
 	useInvoke,
@@ -343,6 +344,14 @@ export default function AdminCoursesPage() {
 						</CardHeader>
 					</Card>
 				)}
+
+				<LearningPathsAdmin
+					api={learnApi}
+					profile={profile}
+					auth={auth}
+					courses={filteredCourses}
+					canManage={canManageCourses}
+				/>
 
 				<div className="space-y-3">
 					<div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">

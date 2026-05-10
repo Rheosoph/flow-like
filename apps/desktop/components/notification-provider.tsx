@@ -9,7 +9,7 @@ import type {
 	INotificationEvent,
 	IPushNotificationsConfig,
 } from "@tm9657/flow-like-ui";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -57,6 +57,8 @@ type RemotePushApi = {
 		handler: (token: string) => void,
 	) => Promise<RemotePushListener>;
 };
+
+type RemotePushPluginState = "loading" | "available" | "unavailable";
 
 const LOCAL_EXECUTION_SUB = "local";
 
@@ -136,26 +138,44 @@ function getPushDeviceIdSync(): string {
 	return created;
 }
 
+async function loadNativeDeviceId(): Promise<string | null> {
+	try {
+		const id = await invoke<string | null>("get_stable_device_id");
+		return typeof id === "string" && id.trim().length > 0 ? id.trim() : null;
+	} catch {
+		return null;
+	}
+}
+
 async function getPushDeviceId(): Promise<string> {
 	if (typeof window === "undefined") {
 		return "server-device";
 	}
 
-	// Try persistent FS first (survives localStorage wipes on iOS)
+	// Native platform-stable id (iOS Keychain / Android ANDROID_ID). Survives
+	// uninstall/reinstall, so the backend reuses the existing PushNotificationTarget
+	// row instead of marking it superseded.
+	const native = await loadNativeDeviceId();
+	if (native) {
+		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, native);
+		await savePersistentDeviceId(native);
+		return native;
+	}
+
+	// Desktop fallback: persistent FS (AppData survives reinstall on
+	// macOS/Windows/Linux), then localStorage, then a fresh UUID.
 	const persisted = await loadPersistentDeviceId();
 	if (persisted) {
 		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, persisted);
 		return persisted;
 	}
 
-	// Fall back to localStorage
 	const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
 	if (existing) {
 		await savePersistentDeviceId(existing);
 		return existing;
 	}
 
-	// Generate new and persist everywhere
 	const created = crypto.randomUUID();
 	window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
 	await savePersistentDeviceId(created);
@@ -295,8 +315,11 @@ export default function NotificationProvider({
 	const remotePushApi = useRef<RemotePushApi | null>(null);
 	const remotePushListeners = useRef<RemotePushListener[]>([]);
 	const tapListener = useRef<RemotePushListener | null>(null);
-	const lastRegisteredToken = useRef<string | null>(null);
+	const lastRegistrationKey = useRef<string | null>(null);
 	const deviceId = useRef<string | null>(null);
+	const [pushDeviceId, setPushDeviceId] = useState<string | null>(null);
+	const [remotePushPluginState, setRemotePushPluginState] =
+		useState<RemotePushPluginState>("loading");
 	const pushConfig = hub.hub?.push_notifications;
 	const handleTapRef = useRef<(notification: RemotePushPayload) => void>(
 		() => {},
@@ -388,6 +411,21 @@ export default function NotificationProvider({
 		}
 	};
 
+	const pushTargetRegistrationKey = (
+		token: string,
+		platform: PushTargetPlatform,
+	): string => {
+		return JSON.stringify({
+			user: currentUser?.profile?.sub ?? "",
+			hub: backend?.profile?.hub ?? "",
+			deviceId: deviceId.current ?? pushDeviceId ?? "",
+			platform,
+			provider: pushConfig?.provider ?? "",
+			channelId: pushConfig?.channel_id ?? "",
+			token,
+		});
+	};
+
 	const registerPushTarget = async (token: string) => {
 		const platform = detectPushPlatform();
 		if (
@@ -426,37 +464,25 @@ export default function NotificationProvider({
 			authContext,
 		);
 
-		lastRegisteredToken.current = token;
-	};
-
-	const unregisterPushTarget = async () => {
-		if (!backend?.profile || !currentUser || !deviceId.current) {
-			return;
-		}
-
-		try {
-			await fetcher<{ success: boolean }>(
-				backend.profile,
-				`user/push-targets/${deviceId.current}`,
-				{
-					method: "DELETE",
-				},
-				authContext,
-			);
-		} catch (error) {
-			console.warn(
-				"[NotificationProvider] Failed to unregister push target:",
-				error,
-			);
-		}
+		lastRegistrationKey.current = pushTargetRegistrationKey(token, platform);
 	};
 
 	useEffect(() => {
+		let cancelled = false;
+
 		const initNotifications = async () => {
-			deviceId.current = await getPushDeviceId();
+			const nextDeviceId = await getPushDeviceId();
+			if (cancelled) {
+				return;
+			}
+			deviceId.current = nextDeviceId;
+			setPushDeviceId(nextDeviceId);
 
 			try {
 				const api = await loadNotificationPlugin();
+				if (cancelled) {
+					return;
+				}
 				if (api) {
 					notificationApi.current = api;
 					let granted = await api.isPermissionGranted();
@@ -475,8 +501,17 @@ export default function NotificationProvider({
 			}
 
 			try {
-				remotePushApi.current = await loadRemotePushPlugin();
+				const api = await loadRemotePushPlugin();
+				if (cancelled) {
+					return;
+				}
+				remotePushApi.current = api;
+				setRemotePushPluginState(api ? "available" : "unavailable");
 			} catch (error) {
+				if (cancelled) {
+					return;
+				}
+				setRemotePushPluginState("unavailable");
 				console.log(
 					"[NotificationProvider] Remote push plugin not available:",
 					error,
@@ -534,6 +569,7 @@ export default function NotificationProvider({
 		initNotifications();
 
 		return () => {
+			cancelled = true;
 			const listener = tapListener.current;
 			tapListener.current = null;
 			if (listener) {
@@ -544,19 +580,23 @@ export default function NotificationProvider({
 
 	useEffect(() => {
 		const platform = detectPushPlatform();
-		const canRegister =
-			isAuthenticated &&
-			backend?.profile &&
-			canUseRemotePushForPlatform(pushConfig, platform);
-		if (!canRegister) {
-			if (
-				isAuthenticated &&
-				backend?.profile &&
-				currentUser &&
-				deviceId.current
-			) {
-				void unregisterPushTarget();
-			}
+		if (
+			!isAuthenticated ||
+			!backend?.profile ||
+			!currentUser ||
+			!pushDeviceId ||
+			remotePushPluginState === "loading"
+		) {
+			return;
+		}
+
+		if (
+			remotePushPluginState !== "available" ||
+			!remotePushApi.current ||
+			!pushConfig ||
+			!platform ||
+			!canUseRemotePushForPlatform(pushConfig, platform)
+		) {
 			return;
 		}
 
@@ -570,7 +610,9 @@ export default function NotificationProvider({
 			try {
 				const permission = await remotePushApi.current.requestPermission();
 				if (!permission.granted) {
-					await unregisterPushTarget();
+					console.warn(
+						"[NotificationProvider] Remote push permission not granted; keeping existing server target untouched.",
+					);
 					return;
 				}
 
@@ -581,13 +623,22 @@ export default function NotificationProvider({
 					);
 					return;
 				}
-				if (!cancelled && token && token !== lastRegisteredToken.current) {
+				if (
+					!cancelled &&
+					token &&
+					pushTargetRegistrationKey(token, platform) !==
+						lastRegistrationKey.current
+				) {
 					await registerPushTarget(token);
 				}
 
 				remotePushListeners.current.push(
 					await remotePushApi.current.onTokenRefresh(async (nextToken) => {
-						if (!nextToken || nextToken === lastRegisteredToken.current) {
+						if (
+							!nextToken ||
+							pushTargetRegistrationKey(nextToken, platform) ===
+								lastRegistrationKey.current
+						) {
 							return;
 						}
 
@@ -642,7 +693,15 @@ export default function NotificationProvider({
 				listeners.map((listener) => Promise.resolve(listener.unregister())),
 			);
 		};
-	}, [isAuthenticated, currentUser, backend?.profile, pushConfig, appId]);
+	}, [
+		isAuthenticated,
+		currentUser,
+		backend?.profile,
+		pushConfig,
+		appId,
+		pushDeviceId,
+		remotePushPluginState,
+	]);
 
 	useEffect(() => {
 		const subscriptions: (Promise<UnlistenFn> | undefined)[] = [];

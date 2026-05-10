@@ -5,6 +5,7 @@ import {
 	AppReviewsSection,
 	HeroSkeleton,
 	StoreEmptyState,
+	StoreForkButton,
 	StoreHero,
 	StoreRecommendations,
 	TextEditor,
@@ -14,12 +15,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { EVENT_CONFIG } from "../../lib/event-config";
+import { useApplyForkBundle } from "../../lib/use-apply-fork-bundle";
 
 export default function Page() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const id = searchParams.get("id") ?? undefined;
 	const purchaseStatus = searchParams.get("purchase");
+	const applyForkBundle = useApplyForkBundle();
 	const {
 		appData,
 		metaData,
@@ -118,6 +121,16 @@ export default function Page() {
 				onSettings={onSettings}
 				onBuy={onBuy}
 				onJoinOrRequest={onJoinOrRequest}
+				actionsExtra={
+					appData.allow_forking ? (
+						<StoreForkButton
+							appId={id}
+							appName={appName}
+							target="offline"
+							onForkStarted={applyForkBundle}
+						/>
+					) : null
+				}
 			/>
 
 			<div className="max-w-5xl mx-auto w-full px-6 md:px-10 pt-8 pb-12 space-y-10">

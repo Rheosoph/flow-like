@@ -105,6 +105,7 @@ export default function PageBuilderPage() {
 
 	// Track last saved components for diff comparison
 	const lastSavedComponentsRef = useRef<string>("");
+	const lastSavedWidgetRefsRef = useRef<string>("{}");
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveMetadataTimeoutRef = useRef<ReturnType<
 		typeof setTimeout
@@ -178,6 +179,9 @@ export default function PageBuilderPage() {
 				lastSavedComponentsRef.current = JSON.stringify(
 					loadedPage.components ?? [],
 				);
+				lastSavedWidgetRefsRef.current = JSON.stringify(
+					loadedPage.widgetRefs ?? {},
+				);
 			} catch {
 				const newPage: IPage = {
 					id: pageId,
@@ -192,6 +196,7 @@ export default function PageBuilderPage() {
 				setPage(newPage);
 				pageRef.current = newPage;
 				lastSavedComponentsRef.current = "[]";
+				lastSavedWidgetRefsRef.current = "{}";
 			} finally {
 				setIsLoading(false);
 			}
@@ -253,9 +258,13 @@ export default function PageBuilderPage() {
 			if (!currentPage || !appId) return;
 
 			const componentsJson = JSON.stringify(components);
-			const widgetRefsJson = JSON.stringify(widgetRefs ?? {});
+			const nextWidgetRefs = widgetRefs ?? currentPage.widgetRefs ?? {};
+			const widgetRefsJson = JSON.stringify(nextWidgetRefs);
 			// Skip if no changes
-			if (componentsJson === lastSavedComponentsRef.current) {
+			if (
+				componentsJson === lastSavedComponentsRef.current &&
+				widgetRefsJson === lastSavedWidgetRefsRef.current
+			) {
 				return;
 			}
 
@@ -264,13 +273,14 @@ export default function PageBuilderPage() {
 				const updatedPage = {
 					...currentPage,
 					components,
-					widgetRefs: widgetRefs ?? currentPage.widgetRefs,
+					widgetRefs: nextWidgetRefs,
 					updatedAt: new Date().toISOString(),
 				};
 				await backend.pageState.updatePage(appId, updatedPage);
 				pageRef.current = updatedPage;
 				setPage(updatedPage);
 				lastSavedComponentsRef.current = componentsJson;
+				lastSavedWidgetRefsRef.current = widgetRefsJson;
 				setHasUnsavedChanges(false);
 				setLastSavedAt(new Date());
 			} catch (error) {
@@ -290,7 +300,11 @@ export default function PageBuilderPage() {
 		) => {
 			// Check if there are actual changes using ref (avoid state dependency)
 			const componentsJson = JSON.stringify(components);
-			if (componentsJson === lastSavedComponentsRef.current) {
+			const widgetRefsJson = JSON.stringify(widgetRefs ?? {});
+			if (
+				componentsJson === lastSavedComponentsRef.current &&
+				widgetRefsJson === lastSavedWidgetRefsRef.current
+			) {
 				return; // No changes, skip
 			}
 
