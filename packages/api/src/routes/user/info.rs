@@ -104,20 +104,13 @@ pub async fn user_info(
             updated_user = Some(tmp_updated_user);
         }
 
-        if user_info.stripe_id.is_none() && state.platform_config.features.premium {
-            let stripe_customer = generate_stripe_user(&state, &sub, email.clone()).await?;
-            let mut tmp_updated_user: user::ActiveModel =
-                updated_user.unwrap_or(user_info.clone().into());
-            tmp_updated_user.stripe_id =
-                sea_orm::ActiveValue::Set(Some(stripe_customer.id.to_string()));
-            updated_user = Some(tmp_updated_user);
-        }
-
         if let Some(mut updated_user) = updated_user {
             updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc());
             let new_user = updated_user.update(&state.db).await?;
             user_info = new_user;
         }
+
+        user_info = ensure_stripe_user(&state, user_info, email.clone()).await?;
 
         if let Some(avatar) = &user_info.avatar {
             let signed_avatar_url = sign_avatar(&user_info.id, avatar, &state).await?;
@@ -127,22 +120,11 @@ pub async fn user_info(
         return Ok(Json(user_info));
     }
 
-    let stripe_customer = if state.platform_config.features.premium {
-        Some(
-            generate_stripe_user(&state, &sub, email.clone())
-                .await?
-                .id
-                .to_string(),
-        )
-    } else {
-        None
-    };
-
     let user = user::ActiveModel {
         id: sea_orm::ActiveValue::Set(sub.clone()),
         tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
-        email: sea_orm::ActiveValue::Set(email),
-        stripe_id: sea_orm::ActiveValue::Set(stripe_customer),
+        email: sea_orm::ActiveValue::Set(email.clone()),
+        stripe_id: sea_orm::ActiveValue::Set(None),
         username: sea_orm::ActiveValue::Set(username),
         preferred_username: sea_orm::ActiveValue::Set(preferred_username),
         created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -150,7 +132,7 @@ pub async fn user_info(
         ..Default::default()
     };
 
-    let new_user = user::Entity::insert(user)
+    let mut new_user = user::Entity::insert(user)
         .exec_with_returning(&state.db)
         .await?;
 
@@ -164,7 +146,26 @@ pub async fn user_info(
         // Don't fail user creation if profile creation fails
     }
 
+    new_user = ensure_stripe_user(&state, new_user, email.clone()).await?;
+
     Ok(Json(new_user))
+}
+
+async fn ensure_stripe_user(
+    state: &AppState,
+    user_info: user::Model,
+    email: Option<String>,
+) -> Result<user::Model, ApiError> {
+    if user_info.stripe_id.is_some() || !state.platform_config.features.premium {
+        return Ok(user_info);
+    }
+
+    let stripe_customer = generate_stripe_user(state, &user_info.id, email).await?;
+    let mut updated_user: user::ActiveModel = user_info.into();
+    updated_user.stripe_id = sea_orm::ActiveValue::Set(Some(stripe_customer.id.to_string()));
+    updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc());
+
+    Ok(updated_user.update(&state.db).await?)
 }
 
 async fn generate_stripe_user(
@@ -176,8 +177,12 @@ async fn generate_stripe_user(
         .stripe_client
         .as_ref()
         .ok_or(anyhow!("Premium Feature disabled"))?;
+    let idempotency_key = format!("flowlike:user:{}", blake3::hash(sub.as_bytes()).to_hex());
+    let stripe_client = stripe_client
+        .clone()
+        .with_strategy(stripe::RequestStrategy::Idempotent(idempotency_key));
     let customer = stripe::Customer::create(
-        stripe_client,
+        &stripe_client,
         stripe::CreateCustomer {
             metadata: Some(HashMap::from([
                 ("sub".to_string(), sub.to_string()),
