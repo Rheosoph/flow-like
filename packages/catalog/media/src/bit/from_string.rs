@@ -28,7 +28,7 @@ impl NodeLogic for BitFromStringNode {
             "Bit",
         );
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(1);
+        node.set_version(3);
 
         node.add_input_pin(
             "exec_in",

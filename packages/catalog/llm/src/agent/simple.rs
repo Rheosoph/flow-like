@@ -123,7 +123,7 @@ impl NodeLogic for SimpleAgentNode {
         );
         node.add_icon("/flow/icons/for-each.svg");
         node.set_can_reference_fns(true);
-        node.set_version(3);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()

@@ -35,7 +35,7 @@ impl NodeLogic for BuildVertexNode {
             "AI/Generative/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

@@ -2190,7 +2190,7 @@ impl NodeLogic for GenerateImageNode {
             "AI/Generative/Image",
         );
         node.add_icon("/flow/icons/image.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
 
         node.add_input_pin(

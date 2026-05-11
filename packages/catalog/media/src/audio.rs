@@ -1,5 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::OnceLock};
 
+#[cfg(feature = "local-tts")]
+use flow_like::models::tts::{LocalTtsModel, LocalTtsSynthesisRequest};
 use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
     flow::{
@@ -430,6 +432,16 @@ fn provider_from_bit(bit: &Bit) -> flow_like_types::Result<ModelProvider> {
             bit_type
         ),
     }
+}
+
+fn transcription_provider_from_bit(bit: &Bit) -> flow_like_types::Result<ModelProvider> {
+    if let BitTypes::Stt = bit.bit_type {
+        return bit
+            .try_to_stt_provider()
+            .ok_or_else(|| anyhow!("Speech-to-text provider Bit has invalid provider parameters"));
+    }
+
+    provider_from_bit(bit)
 }
 
 fn audio_mime(format: &str) -> &'static str {
@@ -2408,7 +2420,7 @@ impl NodeLogic for TextToSpeechNode {
             "AI/Generative/Audio",
         );
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
 
         node.add_input_pin(
@@ -2521,6 +2533,191 @@ impl NodeLogic for TextToSpeechNode {
     async fn on_update(&self, _node: &mut Node, _board: &Board) {}
 }
 
+#[cfg(feature = "local-tts")]
+#[crate::register_node]
+#[derive(Default)]
+pub struct LocalTextToSpeechNode {}
+
+#[cfg(feature = "local-tts")]
+impl LocalTextToSpeechNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(feature = "local-tts")]
+#[async_trait]
+impl NodeLogic for LocalTextToSpeechNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_local_text_to_speech",
+            "Local Text to Speech",
+            "Generates WAV speech locally with an installed any-tts model bit.",
+            "AI/Generative/Audio",
+        );
+        node.add_icon("/flow/icons/audio.svg");
+        node.set_version(3);
+        node.set_scores(media_scores());
+        node.set_only_offline(true);
+        node.set_long_running(true);
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger local speech generation",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "bit",
+            "TTS Model",
+            "Installed TTS model Bit",
+            VariableType::Struct,
+        )
+        .set_schema::<Bit>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin("text", "Text", "Text to synthesize", VariableType::String)
+            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "output_path",
+            "Output Path",
+            "Destination FlowPath for generated WAV audio",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional language code or name. Use auto for model default.",
+            "auto",
+        );
+        add_text_input_pin(
+            &mut node,
+            "voice",
+            "Voice",
+            "Optional voice or speaker name. Use auto for model default.",
+            "auto",
+        );
+        add_text_input_pin(
+            &mut node,
+            "instruct",
+            "Instruction",
+            "Optional style instruction for models that support it",
+            "",
+        );
+        add_positive_integer_pin(
+            &mut node,
+            "max_tokens",
+            "Max Tokens",
+            "Optional generation token limit. Use 0 for model default.",
+        );
+        node.add_input_pin(
+            "temperature",
+            "Temperature",
+            "Optional sampling temperature. Use 0 for model default.",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(0.0)));
+        node.add_input_pin(
+            "cfg_scale",
+            "CFG Scale",
+            "Optional guidance scale. Use 0 for model default.",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(0.0)));
+        node.add_input_pin(
+            "reference_audio",
+            "Reference Audio",
+            "Optional FlowPath to WAV or MP3 reference audio for voice cloning",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_default_value(Some(Value::Null));
+
+        node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
+        node.add_output_pin("path", "Path", "Generated WAV path", VariableType::Struct)
+            .set_schema::<FlowPath>();
+        node.add_output_pin(
+            "metadata",
+            "Metadata",
+            "Local synthesis metadata",
+            VariableType::Struct,
+        );
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let bit: Bit = context.evaluate_pin("bit").await?;
+        if bit.bit_type != BitTypes::Tts {
+            bail!("Local Text to Speech requires a TTS model bit");
+        }
+
+        let text: String = context.evaluate_pin("text").await?;
+        if text.trim().is_empty() {
+            bail!("Local Text to Speech requires non-empty text");
+        }
+
+        let output_path: FlowPath = context.evaluate_pin("output_path").await?;
+        let reference_audio_path: Option<FlowPath> =
+            context.evaluate_pin("reference_audio").await?;
+        let reference_audio = match reference_audio_path {
+            Some(path) => Some(path.get(context, false).await?),
+            None => None,
+        };
+        let max_tokens_value: i64 = context.evaluate_pin("max_tokens").await.unwrap_or(0);
+        let temperature_value: f64 = context.evaluate_pin("temperature").await.unwrap_or(0.0);
+        let cfg_scale_value: f64 = context.evaluate_pin("cfg_scale").await.unwrap_or(0.0);
+
+        context.log_message(
+            &format!("Loading local TTS model {}", bit.id),
+            LogLevel::Info,
+        );
+        let cache_key = LocalTtsModel::load_into_cache(context, &bit).await?;
+        let model = LocalTtsModel::from_cache(context, &cache_key).await?;
+
+        context.log_message("Generating local speech", LogLevel::Info);
+        let output = model
+            .synthesize(LocalTtsSynthesisRequest {
+                text,
+                language: eval_optional_text_pin(context, "language").await,
+                voice: eval_optional_text_pin(context, "voice").await,
+                instruct: eval_optional_text_pin(context, "instruct").await,
+                max_tokens: (max_tokens_value > 0).then_some(max_tokens_value as usize),
+                temperature: (temperature_value > 0.0).then_some(temperature_value),
+                cfg_scale: (cfg_scale_value > 0.0).then_some(cfg_scale_value),
+                reference_audio,
+            })
+            .await?;
+
+        let path = output_path_for_audio(context, &output_path, "wav").await?;
+        path.put(context, output.wav, false).await?;
+
+        let metadata = json!({
+            "provider": "local:any-tts",
+            "bit": bit.id,
+            "model_type": bit.try_to_tts().map(|params| params.model_type),
+            "runtime": model.runtime,
+            "dtype": model.dtype,
+            "cache_key": model.cache_key,
+            "sample_rate": output.sample_rate,
+            "channels": output.channels,
+            "duration_secs": output.duration_secs,
+            "path": path.path,
+            "model_info": output.model_info,
+        });
+
+        context.set_pin_value("path", json!(path)).await?;
+        context.set_pin_value("metadata", metadata).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {}
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct SpeechToTextNode {}
@@ -2541,7 +2738,7 @@ impl NodeLogic for SpeechToTextNode {
             "AI/Generative/Audio",
         );
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
 
         node.add_input_pin(
@@ -2601,7 +2798,7 @@ impl NodeLogic for SpeechToTextNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let provider = provider_from_bit(&bit)?;
+        let provider = transcription_provider_from_bit(&bit)?;
 
         let audio_path: FlowPath = context.evaluate_pin("audio").await?;
         let audio_bytes = audio_path.get(context, false).await?;

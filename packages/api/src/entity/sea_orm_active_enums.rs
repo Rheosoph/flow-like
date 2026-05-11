@@ -38,6 +38,10 @@ pub enum BitType {
     Llm,
     #[sea_orm(string_value = "VLM")]
     Vlm,
+    #[sea_orm(string_value = "TTS")]
+    Tts,
+    #[sea_orm(string_value = "STT")]
+    Stt,
     #[sea_orm(string_value = "EMBEDDING")]
     Embedding,
     #[sea_orm(string_value = "IMAGE_EMBEDDING")]

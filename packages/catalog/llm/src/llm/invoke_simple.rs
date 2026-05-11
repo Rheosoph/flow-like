@@ -50,7 +50,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(4);
 
         // Generic cloud/local model invocation: balanced defaults with light perf bias.
         node.set_scores(

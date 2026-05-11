@@ -1993,7 +1993,7 @@ impl NodeLogic for BuildRunwayVideoProviderNode {
             "AI/Generative/Video/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2069,7 +2069,7 @@ impl NodeLogic for BuildFalVideoProviderNode {
             "AI/Generative/Video/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2129,7 +2129,7 @@ impl NodeLogic for BuildReplicateVideoProviderNode {
             "AI/Generative/Video/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2204,7 +2204,7 @@ impl NodeLogic for GenerateVideoNode {
             "AI/Generative/Video",
         );
         node.add_icon("/flow/icons/video.svg");
-        node.set_version(1);
+        node.set_version(3);
         node.set_scores(media_scores());
 
         node.add_input_pin(

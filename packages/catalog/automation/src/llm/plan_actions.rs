@@ -102,7 +102,7 @@ impl NodeLogic for LLMPlanActionsNode {
             "Automation/LLM/Planning",
         );
         node.add_icon("/flow/icons/bot-plan.svg");
-        node.set_version(1);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

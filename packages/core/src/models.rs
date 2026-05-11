@@ -5,6 +5,8 @@ pub mod embedding_factory;
 pub mod image_embedding;
 pub mod llm;
 pub mod local_utils;
+#[cfg(feature = "local-tts")]
+pub mod tts;
 
 pub trait ModelMeta: Send + Sync {
     fn get_bit(&self) -> Bit;

@@ -145,6 +145,10 @@ impl Default for Profile {
 impl Profile {
     /// Check if a bit is a local model (requires local hosting capabilities)
     fn is_local_model(bit: &Bit) -> bool {
+        if bit.bit_type == crate::bit::BitTypes::Tts {
+            return true;
+        }
+
         if let Ok(llm_params) =
             flow_like_types::json::from_value::<crate::bit::LLMParameters>(bit.parameters.clone())
         {

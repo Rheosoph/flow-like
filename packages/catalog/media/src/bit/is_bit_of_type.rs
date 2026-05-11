@@ -32,7 +32,7 @@ impl NodeLogic for IsBitOfTypeNode {
             "Bit",
         );
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(1);
+        node.set_version(4);
 
         // Input Pins
         node.add_input_pin(
@@ -54,6 +54,8 @@ impl NodeLogic for IsBitOfTypeNode {
                 .set_valid_values(vec![
                     "Llm".to_string(),
                     "Vlm".to_string(),
+                    "Tts".to_string(),
+                    "Stt".to_string(),
                     "Embedding".to_string(),
                     "ImageEmbedding".to_string(),
                     "File".to_string(),

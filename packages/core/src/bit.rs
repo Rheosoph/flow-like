@@ -130,6 +130,8 @@ impl Metadata {
 pub enum BitTypes {
     Llm,
     Vlm,
+    Tts,
+    Stt,
     Embedding,
     ImageEmbedding,
     File,
@@ -392,6 +394,83 @@ pub struct VLMParameters {
     pub model_classification: BitModelClassification,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsModelType {
+    #[default]
+    Kokoro,
+    OmniVoice,
+    Qwen3Tts,
+    VibeVoice,
+    VibeVoiceRealtime,
+    Voxtral,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsRuntimePreference {
+    #[default]
+    Auto,
+    Cpu,
+    Metal,
+    Cuda,
+    Accelerate,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsDTypePreference {
+    #[default]
+    Auto,
+    F32,
+    F16,
+    BF16,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct TtsAssetRef {
+    pub bit: String,
+    pub relative_path: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct TtsModelParameters {
+    pub model_type: TtsModelType,
+    pub provider: ModelProvider,
+    pub default_language: Option<String>,
+    pub languages: Vec<String>,
+    pub default_voice: Option<String>,
+    pub voices: Vec<String>,
+    pub runtime: Option<TtsRuntimePreference>,
+    pub dtype: Option<TtsDTypePreference>,
+    pub assets: Vec<TtsAssetRef>,
+}
+
+impl Default for TtsModelParameters {
+    fn default() -> Self {
+        Self {
+            model_type: TtsModelType::default(),
+            provider: ModelProvider {
+                provider_name: "local:any-tts".to_string(),
+                model_id: None,
+                version: None,
+                params: None,
+            },
+            default_language: None,
+            languages: Vec::new(),
+            default_voice: None,
+            voices: Vec::new(),
+            runtime: Some(TtsRuntimePreference::Auto),
+            dtype: Some(TtsDTypePreference::Auto),
+            assets: Vec::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BitPack {
     pub bits: Vec<Bit>,
@@ -591,6 +670,27 @@ impl Bit {
         None
     }
 
+    pub fn try_to_tts(&self) -> Option<TtsModelParameters> {
+        if self.bit_type == BitTypes::Tts {
+            let parameters =
+                flow_like_types::json::from_value::<TtsModelParameters>(self.parameters.clone());
+            if parameters.is_err() {
+                return None;
+            }
+            return Some(parameters.unwrap());
+        }
+        None
+    }
+
+    pub fn try_to_stt_provider(&self) -> Option<ModelProvider> {
+        if self.bit_type == BitTypes::Stt {
+            let parameters =
+                flow_like_types::json::from_value::<LLMParameters>(self.parameters.clone()).ok()?;
+            return Some(parameters.provider);
+        }
+        None
+    }
+
     pub fn score(&self, preference: &BitModelPreference) -> flow_like_types::Result<f32> {
         if let Some(parameters) = self.try_to_llm() {
             return Ok(parameters.model_classification.score(preference, self));
@@ -636,6 +736,10 @@ impl Bit {
 
         if let Some(parameters) = self.try_to_vlm() {
             return Some(parameters.provider);
+        }
+
+        if let Some(provider) = self.try_to_stt_provider() {
+            return Some(provider);
         }
 
         None
