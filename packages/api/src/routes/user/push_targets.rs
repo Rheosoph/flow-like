@@ -254,7 +254,10 @@ pub async fn unregister_push_target(
             push_notification_target::Column::InvalidationReason,
             Expr::value(Some(reason)),
         )
-        .col_expr(push_notification_target::Column::UpdatedAt, Expr::value(now))
+        .col_expr(
+            push_notification_target::Column::UpdatedAt,
+            Expr::value(now),
+        )
         .filter(push_notification_target::Column::UserId.eq(sub))
         .filter(push_notification_target::Column::DeviceId.eq(device_id))
         .filter(push_notification_target::Column::PushEnabled.eq(true))

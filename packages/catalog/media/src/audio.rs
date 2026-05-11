@@ -2533,19 +2533,16 @@ impl NodeLogic for TextToSpeechNode {
     async fn on_update(&self, _node: &mut Node, _board: &Board) {}
 }
 
-#[cfg(feature = "local-tts")]
 #[crate::register_node]
 #[derive(Default)]
 pub struct LocalTextToSpeechNode {}
 
-#[cfg(feature = "local-tts")]
 impl LocalTextToSpeechNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-#[cfg(feature = "local-tts")]
 #[async_trait]
 impl NodeLogic for LocalTextToSpeechNode {
     fn get_node(&self) -> Node {
@@ -2647,6 +2644,7 @@ impl NodeLogic for LocalTextToSpeechNode {
         node
     }
 
+    #[cfg(feature = "local-tts")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -2713,6 +2711,13 @@ impl NodeLogic for LocalTextToSpeechNode {
         context.set_pin_value("metadata", metadata).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "local-tts"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(anyhow!(
+            "Local Text to Speech requires the 'local-tts' feature"
+        ))
     }
 
     async fn on_update(&self, _node: &mut Node, _board: &Board) {}

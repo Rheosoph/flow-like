@@ -4,10 +4,12 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::NodeLogic;
     use crate::ml::{
         AccuracyMetrics, ConfusionMatrixResult, GridSearchEntry, GridSearchResult, KMeansCentroids,
-        LinearCoefficients, ParameterSpec, RegressionMetrics, make_new_field, values_to_array1_f64,
-        values_to_array1_target, values_to_array1_usize, values_to_array2_f64,
+        LinearCoefficients, ParameterSpec, RegressionMetrics, make_new_field,
+        prediction::MLPredictNode, values_to_array1_f64, values_to_array1_target,
+        values_to_array1_usize, values_to_array2_f64,
     };
     use flow_like_types::Value;
     use flow_like_types::json::{self, json};
@@ -377,6 +379,13 @@ mod tests {
         assert_eq!(parsed.name, "max_depth");
         assert_eq!(parsed.values.len(), 3);
     }
+
+    #[test]
+    fn test_ml_predict_node_is_versioned_for_schema_sync() {
+        let node = MLPredictNode::new().get_node();
+
+        assert_eq!(node.version, Some(1));
+    }
 }
 
 // ============================================================================
@@ -389,7 +398,8 @@ mod execute_tests {
     use flow_like_types::json::{self, json};
     use linfa::prelude::*;
     use linfa_clustering::KMeans;
-    use ndarray::Array2;
+    use linfa_svm::Svm;
+    use ndarray::{Array1, Array2};
     use std::collections::HashMap;
 
     // ============================================================================
@@ -574,6 +584,61 @@ mod execute_tests {
 
         // But different from first cluster
         assert_ne!(c0, c2);
+    }
+
+    #[test]
+    fn test_svm_predict_on_vector_confidence_uses_winning_probability() {
+        let data = Array2::from_shape_vec(
+            (9, 2),
+            vec![
+                0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 5.0, 5.0, 5.1, 5.0, 5.0, 5.1, 10.0, 0.0, 10.1, 0.0,
+                10.0, 0.1,
+            ],
+        )
+        .unwrap();
+        let targets = Array1::from(vec![0usize, 0, 0, 1, 1, 1, 2, 2, 2]);
+        let dataset = linfa::DatasetBase::from(data).with_targets(targets);
+        let params = Svm::<_, Pr>::params().gaussian_kernel(30.0);
+        let svm_models = dataset
+            .one_vs_all()
+            .unwrap()
+            .into_iter()
+            .map(|(label, dataset)| (label, params.fit(&dataset).unwrap()))
+            .collect::<Vec<_>>();
+
+        let mut classes = HashMap::new();
+        classes.insert(0, "a".to_string());
+        classes.insert(1, "b".to_string());
+        classes.insert(2, "c".to_string());
+
+        let ml_model = MLModel::SVMMultiClass(ModelWithMeta {
+            model: svm_models,
+            classes: Some(classes),
+        });
+        let input = vec![0.05, 0.05];
+        let prediction = ml_model.predict_on_vector(input.clone()).unwrap();
+
+        let expected_confidence = match &ml_model {
+            MLModel::SVMMultiClass(model) => {
+                let sample = Array1::from(input);
+                model
+                    .model
+                    .iter()
+                    .map(|(_, classifier)| f64::from(*classifier.predict(sample.view())))
+                    .fold(f64::NEG_INFINITY, f64::max)
+            }
+            _ => unreachable!(),
+        };
+
+        let confidence = prediction.confidence.unwrap();
+        assert!(
+            (confidence - expected_confidence).abs() < 1e-6,
+            "confidence {confidence} should match winning SVM probability {expected_confidence}"
+        );
+        assert!(
+            (confidence - (1.0 / 3.0)).abs() > 1e-6,
+            "confidence should not be the old class-count placeholder"
+        );
     }
 
     // ============================================================================

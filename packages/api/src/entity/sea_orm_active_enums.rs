@@ -38,10 +38,6 @@ pub enum BitType {
     Llm,
     #[sea_orm(string_value = "VLM")]
     Vlm,
-    #[sea_orm(string_value = "TTS")]
-    Tts,
-    #[sea_orm(string_value = "STT")]
-    Stt,
     #[sea_orm(string_value = "EMBEDDING")]
     Embedding,
     #[sea_orm(string_value = "IMAGE_EMBEDDING")]
@@ -76,6 +72,10 @@ pub enum BitType {
     ImageGeneration,
     #[sea_orm(string_value = "VIDEO_GENERATION")]
     VideoGeneration,
+    #[sea_orm(string_value = "TTS")]
+    Tts,
+    #[sea_orm(string_value = "STT")]
+    Stt,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Category")]

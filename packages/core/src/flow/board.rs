@@ -927,9 +927,7 @@ impl Board {
                 match from_compressed_json::<Page>(store.clone(), legacy.clone()).await {
                     Ok(page) => {
                         let proto: proto::Page = page.clone().into();
-                        if let Err(e) =
-                            compress_to_file(store.clone(), canonical, &proto).await
-                        {
+                        if let Err(e) = compress_to_file(store.clone(), canonical, &proto).await {
                             tracing::warn!(
                                 "page {} legacy→canonical migration write failed: {e}",
                                 page_id
