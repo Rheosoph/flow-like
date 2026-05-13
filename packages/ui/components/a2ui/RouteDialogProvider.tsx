@@ -21,6 +21,7 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { applyMediaSourceUpdate } from "./media-source";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
 interface DialogState {
@@ -345,6 +346,8 @@ function RouteDialogRenderer({
 						text,
 					} as unknown as SurfaceComponent["component"],
 				};
+			} else if (updateType === "setMediaSource") {
+				updatedComponent = applyMediaSourceUpdate(component, updateValue);
 			} else if (updateType === "setGeoMapViewport") {
 				const viewport = updateValue.viewport as
 					| { literalJson?: string }

@@ -15,6 +15,15 @@ export type {
 	IBitModelClassification,
 	IModelProvider,
 } from "./bit/bit/llm-parameters";
+export type {
+	ITtsAssetRef,
+	ITtsModelParameters,
+} from "./bit/bit/tts-parameters";
+export {
+	ITtsDTypePreference,
+	ITtsModelType,
+	ITtsRuntimePreference,
+} from "./bit/bit/tts-parameters";
 export type { IVlmParameters } from "./bit/bit/vlm-parameters";
 export type { IProvider } from "./bit/bit/provider";
 export * from "./storage/storage-item";

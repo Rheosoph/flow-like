@@ -2553,9 +2553,8 @@ impl NodeLogic for LocalTextToSpeechNode {
             "AI/Generative/Audio",
         );
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
-        node.set_only_offline(true);
         node.set_long_running(true);
 
         node.add_input_pin(

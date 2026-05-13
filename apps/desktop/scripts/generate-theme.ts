@@ -40,7 +40,7 @@ const parseVariables = (cssVars: string, colors: IThemeColors): void => {
 			const camelCaseKey = toCamelCase(cssVar);
 
 			if (isValidThemeProperty(camelCaseKey)) {
-				(colors as any)[camelCaseKey] = value.trim();
+				(colors as any)[camelCaseKey] = value.trim().replace(/\s+/g, " ");
 			}
 		}
 	}
@@ -90,6 +90,12 @@ const isValidThemeProperty = (key: string): boolean => {
 		"fontSerif",
 		"fontMono",
 		"radius",
+		"shadowX",
+		"shadowY",
+		"shadowBlur",
+		"shadowSpread",
+		"shadowOpacity",
+		"shadowColor",
 		"shadow",
 		"shadow2xs",
 		"shadowXs",
@@ -107,7 +113,10 @@ const isValidThemeProperty = (key: string): boolean => {
 
 const theme: ITheme = parseCSSVariables(css);
 
-fs.writeFileSync("./generated-theme.json", JSON.stringify(theme, null, 2));
+fs.writeFileSync(
+	"./generated-theme.json",
+	`${JSON.stringify(theme, null, "\t")}\n`,
+);
 
 console.log("Theme generated successfully!");
-console.log(JSON.stringify(theme, null, 2));
+console.log(JSON.stringify(theme, null, "\t"));

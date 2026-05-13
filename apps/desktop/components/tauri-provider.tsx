@@ -680,8 +680,11 @@ export function ProfileSyncer({
 						});
 
 						if (pullResponse.ok) {
-							const serverProfiles =
+							const allServerProfiles =
 								(await pullResponse.json()) as OnlineProfile[];
+							const serverProfiles = allServerProfiles.filter(
+								(p) => !p.deleted_at,
+							);
 
 							if (serverProfiles.length > 0) {
 								console.log(
@@ -892,6 +895,7 @@ export function ProfileSyncer({
 						response.statusText,
 						errorBody,
 					);
+					return;
 				} else {
 					result = (await response.json()) as SyncResult;
 					console.log(

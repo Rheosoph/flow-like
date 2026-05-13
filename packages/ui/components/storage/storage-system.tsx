@@ -383,8 +383,8 @@ export function StorageSystem({
 		[appId, prefix, preview.file, storageApi, files],
 	);
 
-	const isFileEditable = useCallback((fileUrl: string) => {
-		return isCode(fileUrl) || isText(fileUrl);
+	const isFileEditable = useCallback((fileUrl: string, fileName?: string) => {
+		return isCode(fileUrl, fileName) || isText(fileUrl, fileName);
 	}, []);
 
 	const downloadFile = useCallback(
@@ -828,7 +828,8 @@ export function StorageSystem({
 											<FilePreviewer
 												url={preview.url}
 												page={2}
-												editable={isFileEditable(preview.url)}
+												filename={preview.file.split("/").pop()}
+												editable={isFileEditable(preview.url, preview.file)}
 												onSave={saveFile}
 											/>
 										</div>
@@ -944,7 +945,8 @@ export function StorageSystem({
 												<FilePreviewer
 													url={preview.url}
 													page={2}
-													editable={isFileEditable(preview.url)}
+													filename={preview.file.split("/").pop()}
+													editable={isFileEditable(preview.url, preview.file)}
 													onSave={saveFile}
 												/>
 											</div>

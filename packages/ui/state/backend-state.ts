@@ -37,7 +37,11 @@ import {
 import { EmptyUsageState } from "./backend-state/empty-states";
 import type { IEventState } from "./backend-state/event-state";
 import type { IGraphState } from "./backend-state/graph-state";
-import type { IHelperState } from "./backend-state/helper-state";
+import type {
+	IHelperState,
+	ITemporaryFlowPath,
+	ITemporaryUploadedFile,
+} from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
 import type { IRegistryState } from "./backend-state/registry-state";
 import type { IRoleState } from "./backend-state/role-state";
@@ -89,6 +93,8 @@ export type {
 	IUsageState,
 	IAnalyticsState,
 	IGraphState,
+	ITemporaryFlowPath,
+	ITemporaryUploadedFile,
 };
 
 export type { SinkType } from "./backend-state/sink-state";

@@ -3,18 +3,20 @@ use super::{
     SubgraphResult, TraversalDirection,
 };
 use crate::arrow_utils::record_batch_to_value;
-use datafusion::{datasource::MemTable, prelude::SessionContext};
+use datafusion::prelude::SessionContext;
 use flow_like_types::{Result, Value, anyhow, async_trait};
 use futures::TryStreamExt;
 use lance_graph::{CypherQuery, GraphConfig};
 use lancedb::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::datafusion::BaseTableAdapter;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 const MAX_QUERY_DEPTH: usize = 5;
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_CONCURRENT_QUERIES: usize = 4;
+const MAX_QUERY_LIMIT: usize = 1_000_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OverlayRow {
@@ -82,7 +84,7 @@ impl Default for CypherSafetyConfig {
     fn default() -> Self {
         CypherSafetyConfig {
             max_depth: MAX_QUERY_DEPTH,
-            max_limit: 1_000_000,
+            max_limit: MAX_QUERY_LIMIT,
             timeout_ms: DEFAULT_TIMEOUT_MS,
             max_concurrent: MAX_CONCURRENT_QUERIES,
         }
@@ -125,65 +127,6 @@ impl LanceGraphStore {
         &self.connection
     }
 
-    async fn open_tables_as_batches(&self) -> Result<HashMap<String, arrow::array::RecordBatch>> {
-        let mut datasets = HashMap::new();
-        let mut seen_tables: HashMap<String, arrow::array::RecordBatch> = HashMap::new();
-
-        for node in &self.overlay.nodes {
-            let batch = self.read_table_batch(&node.table, &mut seen_tables).await?;
-            datasets.insert(node.label.clone(), batch);
-        }
-
-        for edge in &self.overlay.edges {
-            let batch = self.read_table_batch(&edge.table, &mut seen_tables).await?;
-            datasets.insert(edge.label.clone(), batch);
-        }
-
-        Ok(datasets)
-    }
-
-    async fn read_table_batch(
-        &self,
-        table_name: &str,
-        cache: &mut HashMap<String, arrow::array::RecordBatch>,
-    ) -> Result<arrow::array::RecordBatch> {
-        if let Some(batch) = cache.get(table_name) {
-            return Ok(batch.clone());
-        }
-
-        let table = self
-            .connection
-            .open_table(table_name)
-            .execute()
-            .await
-            .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
-
-        let result = table
-            .query()
-            .execute()
-            .await
-            .map_err(|e| anyhow!("Failed to query table '{}': {}", table_name, e))?;
-
-        let batches = result
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| anyhow!("Failed to collect batches from '{}': {}", table_name, e))?;
-
-        let batch = if batches.is_empty() {
-            let schema = table
-                .schema()
-                .await
-                .map_err(|e| anyhow!("Failed to get schema for '{}': {}", table_name, e))?;
-            arrow::array::RecordBatch::new_empty(schema)
-        } else {
-            arrow::compute::concat_batches(&batches[0].schema(), &batches)
-                .map_err(|e| anyhow!("Failed to concat batches from '{}': {}", table_name, e))?
-        };
-
-        cache.insert(table_name.to_string(), batch.clone());
-        Ok(batch)
-    }
-
     fn enforce_limit(&self, limit: Option<usize>) -> usize {
         let user_limit = limit.unwrap_or(self.overlay.default_limit);
         user_limit.min(self.safety.max_limit)
@@ -201,16 +144,17 @@ impl LanceGraphStore {
             .await
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
 
-        let cypher = CypherQuery::new(query)
+        let limited_query = append_limit_clause(query, limit);
+        let cypher = CypherQuery::new(&limited_query)
             .map_err(|e| anyhow!("Failed to parse Cypher query: {}", e))?
             .with_config(self.graph_config.clone())
             .with_parameters(params);
 
-        let datasets = self.open_tables_as_batches().await?;
+        let ctx = self.build_cypher_context().await?;
 
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(self.safety.timeout_ms),
-            cypher.execute(datasets, None),
+            cypher.execute_with_context(ctx),
         )
         .await
         .map_err(|_| anyhow!("Query timed out after {}ms", self.safety.timeout_ms))?
@@ -509,29 +453,12 @@ impl GraphStore for LanceGraphStore {
     }
 
     async fn sample(&self, label: &str, n: usize) -> Result<Vec<Value>> {
-        let node_def = self
-            .overlay
-            .nodes
-            .iter()
-            .find(|nd| nd.label == label)
-            .or_else(|| {
-                self.overlay
-                    .edges
-                    .iter()
-                    .find(|ed| ed.label == label)
-                    .map(|_| unreachable!())
-            });
-
-        let table_name = if let Some(nd) = node_def {
+        let table_name = if let Some(nd) = self.overlay.nodes.iter().find(|nd| nd.label == label) {
             &nd.table
-        } else {
-            let edge_def = self
-                .overlay
-                .edges
-                .iter()
-                .find(|ed| ed.label == label)
-                .ok_or_else(|| anyhow!("Label '{}' not found in overlay", label))?;
+        } else if let Some(edge_def) = self.overlay.edges.iter().find(|ed| ed.label == label) {
             &edge_def.table
+        } else {
+            return Err(anyhow!("Label '{}' not found in overlay", label));
         };
 
         let table = self
@@ -622,9 +549,74 @@ impl LanceGraphStore {
         Ok(columns)
     }
 
+    async fn table_adapter(
+        &self,
+        table_name: &str,
+        cache: &mut HashMap<String, Arc<BaseTableAdapter>>,
+    ) -> Result<Arc<BaseTableAdapter>> {
+        if let Some(adapter) = cache.get(table_name) {
+            return Ok(adapter.clone());
+        }
+
+        let table = self
+            .connection
+            .open_table(table_name)
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+
+        let adapter = BaseTableAdapter::try_new(table.base_table().clone())
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to create DataFusion adapter for '{}': {}",
+                    table_name,
+                    e
+                )
+            })?;
+        let adapter = Arc::new(adapter);
+        cache.insert(table_name.to_string(), adapter.clone());
+        Ok(adapter)
+    }
+
+    async fn build_cypher_context(&self) -> Result<SessionContext> {
+        let ctx = SessionContext::new();
+        let mut adapters: HashMap<String, Arc<BaseTableAdapter>> = HashMap::new();
+        let mut registered_labels = HashSet::new();
+
+        for node in &self.overlay.nodes {
+            let label = node.label.to_lowercase();
+            if !registered_labels.insert(label.clone()) {
+                continue;
+            }
+
+            let adapter = self.table_adapter(&node.table, &mut adapters).await?;
+            ctx.register_table(&label, adapter)
+                .map_err(|e| anyhow!("Failed to register node label '{}': {}", node.label, e))?;
+        }
+
+        for edge in &self.overlay.edges {
+            let label = edge.label.to_lowercase();
+            if !registered_labels.insert(label.clone()) {
+                continue;
+            }
+
+            let adapter = self.table_adapter(&edge.table, &mut adapters).await?;
+            ctx.register_table(&label, adapter).map_err(|e| {
+                anyhow!(
+                    "Failed to register relationship label '{}': {}",
+                    edge.label,
+                    e
+                )
+            })?;
+        }
+
+        Ok(ctx)
+    }
+
     async fn build_query_context(&self, include_edges: bool) -> Result<SessionContext> {
         let ctx = SessionContext::new();
-        let mut seen_batches: HashMap<String, arrow::array::RecordBatch> = HashMap::new();
+        let mut adapters: HashMap<String, Arc<BaseTableAdapter>> = HashMap::new();
         let mut registered_tables = HashSet::new();
 
         for table_name in self.overlay.nodes.iter().map(|node| &node.table) {
@@ -632,10 +624,8 @@ impl LanceGraphStore {
                 continue;
             }
 
-            let batch = self.read_table_batch(table_name, &mut seen_batches).await?;
-            let schema = batch.schema();
-            let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
-            ctx.register_table(table_name, mem_table)?;
+            let adapter = self.table_adapter(table_name, &mut adapters).await?;
+            ctx.register_table(table_name, adapter)?;
         }
 
         if include_edges {
@@ -644,10 +634,8 @@ impl LanceGraphStore {
                     continue;
                 }
 
-                let batch = self.read_table_batch(table_name, &mut seen_batches).await?;
-                let schema = batch.schema();
-                let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
-                ctx.register_table(table_name, mem_table)?;
+                let adapter = self.table_adapter(table_name, &mut adapters).await?;
+                ctx.register_table(table_name, adapter)?;
             }
         }
 
@@ -844,6 +832,22 @@ fn value_to_id_string(val: Option<&Value>) -> String {
         Some(v) if !v.is_null() => v.to_string().trim_matches('"').to_string(),
         _ => String::new(),
     }
+}
+
+fn append_limit_clause(query: &str, limit: usize) -> String {
+    let trimmed = query.trim();
+    if has_limit_clause(trimmed) {
+        return trimmed.to_string();
+    }
+
+    let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
+    format!("{trimmed} LIMIT {limit}")
+}
+
+fn has_limit_clause(query: &str) -> bool {
+    query
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|token| token.eq_ignore_ascii_case("limit"))
 }
 
 fn quote_identifier(identifier: &str) -> String {

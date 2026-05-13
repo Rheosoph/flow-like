@@ -32,6 +32,7 @@ import {
 	RouteDialogProvider,
 	useRouteDialog,
 } from "../a2ui";
+import { applyMediaSourceUpdate } from "../a2ui/media-source";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -500,7 +501,7 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						break;
 					}
 					case "setImageSrc": {
-						const url = updateValue.url as string;
+						const url = String(updateValue.src ?? updateValue.url ?? "");
 						const alt = updateValue.alt as string | undefined;
 						const componentData = component.component as unknown as Record<
 							string,
@@ -511,10 +512,14 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							component: {
 								...componentData,
 								url,
-								src: url,
-								...(alt !== undefined && { alt }),
+								src: { literalString: url },
+								...(alt !== undefined && { alt: { literalString: alt } }),
 							} as unknown as SurfaceComponent["component"],
 						};
+						break;
+					}
+					case "setMediaSource": {
+						updatedComponent = applyMediaSourceUpdate(component, updateValue);
 						break;
 					}
 					case "pushChild": {

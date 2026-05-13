@@ -28,6 +28,10 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import {
+	ensureRpaSystemPermissions,
+	requestRpaAutomationConsent,
+} from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
@@ -60,6 +64,47 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 
 export class EventState implements IEventState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async ensureRpaApprovalForEvent(
+		appId: string,
+		event: IEvent,
+		board: IBoard,
+		context: "execution" | "event_registration",
+	): Promise<void> {
+		if (event.execution_mode === "Remote") return;
+		if (context === "event_registration" && event.active === false) return;
+
+		const { requires_local_execution } =
+			extractOAuthRequirementsFromBoard(board);
+		if (!requires_local_execution) return;
+
+		const approved = await requestRpaAutomationConsent({
+			appId,
+			boardId: event.board_id,
+			context,
+			eventId: event.id,
+		});
+		if (!approved) {
+			const error = new Error(
+				"Computer automation was not approved for this event.",
+			) as Error & { isRpaConsentError?: boolean };
+			error.isRpaConsentError = true;
+			throw error;
+		}
+
+		const permissionsGranted = await ensureRpaSystemPermissions({
+			appId,
+			boardId: event.board_id,
+			eventId: event.id,
+		});
+		if (!permissionsGranted) {
+			const error = new Error(
+				"RPA system permissions were not granted.",
+			) as Error & { isRpaPermissionDeclined?: boolean };
+			error.isRpaPermissionDeclined = true;
+			throw error;
+		}
+	}
 
 	async getEvent(
 		appId: string,
@@ -277,6 +322,21 @@ export class EventState implements IEventState {
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 	): Promise<IEvent> {
+		if (event.board_id && event.execution_mode !== "Remote") {
+			const board = await this.backend.boardState.getBoard(
+				appId,
+				event.board_id,
+				event.board_version as [number, number, number] | undefined,
+				true,
+			);
+			await this.ensureRpaApprovalForEvent(
+				appId,
+				event,
+				board,
+				"event_registration",
+			);
+		}
+
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
 			return await invoke("upsert_event", {
@@ -513,6 +573,7 @@ export class EventState implements IEventState {
 			(event.board_version as [number, number, number]) ?? undefined,
 			true,
 		);
+		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),

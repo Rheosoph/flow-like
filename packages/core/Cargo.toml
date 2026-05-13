@@ -53,7 +53,7 @@ serde_json.workspace = true
 async-trait.workspace = true
 percent-encoding.workspace = true
 utoipa = { version = "5", optional = true }
-any-tts = { version = "0.1.1", default-features = false, optional = true }
+any-tts = { version = "0.1.2", default-features = false, optional = true }
 
 [features]
 tauri = ["flow-like-storage/tauri"]

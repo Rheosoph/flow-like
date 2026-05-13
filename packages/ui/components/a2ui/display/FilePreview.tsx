@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import { AudioPreview } from "../../ui/audio-preview";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -13,7 +14,15 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
-function rawFileName(url: string): string {
+function rawFileName(url: string, filename?: string): string {
+	if (filename) return filename;
+
+	try {
+		const parsed = new URL(url, window.location.href);
+		const queryFilename = parsed.searchParams.get("filename");
+		if (queryFilename) return queryFilename;
+	} catch {}
+
 	if (url.startsWith("data:")) {
 		const mediaType = url.split(";")[0].split(":")[1];
 		if (mediaType) {
@@ -27,12 +36,36 @@ function rawFileName(url: string): string {
 
 function getFileType(
 	url: string,
+	mimeType?: string,
+	filename?: string,
+	fileType?: string,
 ): "pdf" | "image" | "video" | "audio" | "code" | "text" | "unknown" {
-	const name = rawFileName(url).toLowerCase();
+	if (
+		fileType === "pdf" ||
+		fileType === "image" ||
+		fileType === "video" ||
+		fileType === "audio" ||
+		fileType === "code" ||
+		fileType === "text"
+	) {
+		return fileType;
+	}
+
+	const normalizedMime = mimeType?.toLowerCase() ?? "";
+	if (normalizedMime === "application/pdf") return "pdf";
+	if (normalizedMime.startsWith("image/")) return "image";
+	if (normalizedMime.startsWith("video/")) return "video";
+	if (normalizedMime.startsWith("audio/")) return "audio";
+	if (normalizedMime.startsWith("text/")) return "text";
+	if (normalizedMime.includes("json") || normalizedMime.includes("javascript"))
+		return "code";
+
+	const name = rawFileName(url, filename).toLowerCase();
 	if (/\.(pdf)$/i.test(name)) return "pdf";
 	if (/\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name)) return "image";
-	if (/\.(mp4|mkv|webm|ogg|avi|mov)$/i.test(name)) return "video";
-	if (/\.(mp3|wav|ogg|flac|aac)$/i.test(name)) return "audio";
+	if (/\.(mp4|mkv|webm|ogv|avi|mov)$/i.test(name)) return "video";
+	if (/\.(mp3|wav|ogg|oga|opus|flac|aac|m4a|aif|aiff)$/i.test(name))
+		return "audio";
 	if (
 		/\.(json|xml|css|js|jsx|ts|tsx|py|java|c|cpp|h|hpp|cs|go|rb|php|swift|kt|rs|html|yml|yaml|toml|sql|sh|bash|scss|sass|less|vue|svelte)$/i.test(
 			name,
@@ -43,10 +76,10 @@ function getFileType(
 	return "unknown";
 }
 
-function getCodeLanguage(file: string): string {
+function getCodeLanguage(file: string, filename?: string): string {
 	const match =
 		/\.(json|xml|css|js|jsx|ts|tsx|py|java|c|cpp|h|hpp|cs|go|rb|php|swift|kt|rs|html|yml|yaml|toml|sql|sh|bash|scss|sass|less|vue|svelte)$/i.exec(
-			rawFileName(file),
+			rawFileName(file, filename),
 		);
 	return match?.[0]?.replace(".", "") ?? "text";
 }
@@ -55,8 +88,12 @@ export function A2UIFilePreview({
 	component,
 	style,
 }: ComponentProps<FilePreviewComponent>) {
-	const src = useResolved<string>(component.src);
+	const src = useResolved<string>(component.src ?? component.url);
+	const filename = useResolved<string>(component.filename);
+	const mimeType = useResolved<string>(component.mimeType);
+	const fileTypeOverride = useResolved<string>(component.fileType);
 	const showControls = useResolved<boolean>(component.showControls) ?? true;
+	const showDownload = useResolved<boolean>(component.showDownload) ?? false;
 	const fit = useResolved<string>(component.fit) ?? "contain";
 	const fallbackText =
 		useResolved<string>(component.fallbackText) ?? "Cannot preview this file";
@@ -66,7 +103,9 @@ export function A2UIFilePreview({
 	const [pdfKey, setPdfKey] = useState(0);
 	const containerRef = useRef<HTMLDivElement>(null);
 
-	const fileType = src ? getFileType(src) : "unknown";
+	const fileType = src
+		? getFileType(src, mimeType, filename, fileTypeOverride)
+		: "unknown";
 
 	const loadTextContent = useCallback(async () => {
 		if (!src) return;
@@ -129,7 +168,7 @@ export function A2UIFilePreview({
 					key={pdfKey}
 					src={`${src}#toolbar=1&#view=FitH`}
 					className="w-full h-full border-0"
-					title={`PDF Preview: ${rawFileName(src)}`}
+					title={`PDF Preview: ${rawFileName(src, filename)}`}
 				>
 					<p>
 						Your browser cannot display the PDF.{" "}
@@ -146,7 +185,7 @@ export function A2UIFilePreview({
 		return (
 			<img
 				src={src}
-				alt={rawFileName(src)}
+				alt={rawFileName(src, filename)}
 				className={cn("w-full h-full", fitClass, resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 				onError={() => setError(true)}
@@ -170,22 +209,21 @@ export function A2UIFilePreview({
 
 	if (fileType === "audio") {
 		return (
-			<div
-				className={cn(
-					"flex items-center justify-center p-4",
-					resolveStyle(style),
-				)}
+			<AudioPreview
+				src={src}
+				title={rawFileName(src, filename)}
+				mimeType={mimeType}
+				showControls={showControls}
+				showDownload={showDownload}
+				className={resolveStyle(style)}
 				style={resolveInlineStyle(style)}
-			>
-				<audio src={src} controls={showControls} className="w-full max-w-md">
-					Your browser does not support the audio tag.
-				</audio>
-			</div>
+				onError={() => setError(true)}
+			/>
 		);
 	}
 
 	if (fileType === "code" || fileType === "text") {
-		const lang = fileType === "code" ? getCodeLanguage(src) : "";
+		const lang = fileType === "code" ? getCodeLanguage(src, filename) : "";
 		return (
 			<div
 				className={cn(

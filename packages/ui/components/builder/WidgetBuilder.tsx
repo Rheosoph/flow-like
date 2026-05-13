@@ -27,6 +27,7 @@ import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
+import { applyMediaSourceUpdate } from "../a2ui/media-source";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -1297,6 +1298,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 								viewport,
 							} as unknown as SurfaceComponent["component"],
 						};
+						break;
+					}
+					case "setMediaSource": {
+						updatedComponent = applyMediaSourceUpdate(component, updateValue);
 						break;
 					}
 					case "setChartData":

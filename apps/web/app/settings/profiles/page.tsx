@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { appsDB } from "../../../lib/apps-db";
 import AMBER_MINIMAL from "./themes/amber-minimal.json";
 import AMETHYST_HAZE from "./themes/amethyst-haze.json";
 import BOLD_TECH from "./themes/bold-tech.json";
@@ -312,16 +313,43 @@ export default function SettingsProfilesPage() {
 		const baseUrl =
 			process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
 
-		const response = await fetch(`${baseUrl}/api/v1/profile/${profileId}`, {
-			method: "DELETE",
-			headers: {
-				Authorization: `Bearer ${auth.user.access_token}`,
-			},
-		});
+		try {
+			const response = await fetch(
+				`${baseUrl}/api/v1/profile/${encodeURIComponent(profileId)}`,
+				{
+					method: "DELETE",
+					headers: {
+						Authorization: `Bearer ${auth.user.access_token}`,
+					},
+				},
+			);
 
-		if (!response.ok && response.status !== 404) {
-			throw new Error(`Failed to delete profile: ${response.status}`);
+			if (!response.ok && response.status !== 404) {
+				const message = await response.text().catch(() => "");
+				toast.error(message || `Failed to delete profile: ${response.status}`);
+				return;
+			}
+		} catch (error) {
+			console.error("Failed to delete profile:", error);
+			toast.error("Failed to delete profile");
+			return;
 		}
+
+		if (typeof window !== "undefined") {
+			const remainingProfile = allProfiles.data?.find(
+				(profile) => profile.hub_profile.id !== profileId,
+			);
+			if (remainingProfile?.hub_profile.id) {
+				localStorage.setItem(
+					"flow-like-profile-id",
+					remainingProfile.hub_profile.id,
+				);
+			} else {
+				localStorage.removeItem("flow-like-profile-id");
+			}
+			localStorage.removeItem(`flow-like-offline-apps-${profileId}`);
+		}
+		await appsDB.shortcuts.where("profileId").equals(profileId).delete();
 
 		toast.success("Profile deleted");
 		await invalidate(backend.userState.getProfile, []);
@@ -330,7 +358,7 @@ export default function SettingsProfilesPage() {
 		await currentProfile.refetch();
 		router.push("/");
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [profileCount, auth, invalidate, router]);
+	}, [profileCount, auth, invalidate, router, allProfiles.data]);
 
 	if (!localProfile) {
 		return (

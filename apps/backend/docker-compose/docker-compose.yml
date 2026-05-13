@@ -42,9 +42,10 @@ services:
   # Database Migration Job
   # =============================================================================
   db-init:
+    image: ${DB_INIT_IMAGE:-flow-like-db-init:latest}
     build:
       context: ../../../packages/api
-      dockerfile: Dockerfile.tools
+      dockerfile: ../../apps/backend/docker-compose/db-init/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,8 +56,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-flowlike}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-    volumes:
-      - ../../../packages/api:/workspace
     entrypoint: ["/usr/local/bin/export-database-url.sh"]
     command:
       - bash
@@ -69,6 +68,11 @@ services:
         echo '✅ Database schema applied!' &&
         rm -rf node_modules bun.lockb bun.lock prisma-postgres-mirror &&
         echo '✅ Cleanup complete!'
+    restart: "no"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
     networks:
       - flowlike
 
@@ -76,9 +80,13 @@ services:
   # Flow-Like API Service
   # =============================================================================
   api:
+    image: ${API_IMAGE:-flow-like-api:latest}
+    scale: ${API_REPLICAS:-2}
     build:
       context: ../../..
       dockerfile: apps/backend/docker-compose/api/Dockerfile
+      args:
+        FLOW_LIKE_CONFIG: ${FLOW_LIKE_CONFIG:-apps/backend/docker-compose/flow-like.config.example.json}
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,9 +94,9 @@ services:
         condition: service_healthy
       db-init:
         condition: service_completed_successfully
-    ports:
-      - "${API_PORT:-8080}:8080"
-      - "${METRICS_PORT:-9090}:9090"
+    expose:
+      - "8080"
+      - "9090"
     environment:
       # Server
       PORT: 8080
@@ -140,13 +148,15 @@ services:
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
       COMPILATION_BACKEND: ${COMPILATION_BACKEND:-inline}
       COMPILER_URL: http://compiler:8081
-      API_BASE_URL: http://api:${API_PORT:-8080}
+      API_BASE_URL: http://api:8080
       WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
 
       # Unified backend JWT keys (used for execution, realtime, etc.)
       BACKEND_KEY: ${BACKEND_KEY:-}
       BACKEND_PUB: ${BACKEND_PUB:-}
       BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      SINK_SECRET: ${SINK_SECRET:-}
+      SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
 
       # Optional services
       SENTRY_DSN: ${SENTRY_DSN:-}
@@ -162,6 +172,13 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 10s
@@ -171,9 +188,36 @@ services:
       - flowlike
 
   # =============================================================================
+  # API Gateway (single published API port for scaled API replicas)
+  # =============================================================================
+  api-gateway:
+    image: nginx:alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8080}:8080"
+    configs:
+      - source: api_gateway_nginx
+        target: /etc/nginx/conf.d/default.conf
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  # =============================================================================
   # Execution Runtime (Shared Mode + Queue Worker)
   # =============================================================================
   runtime:
+    image: ${RUNTIME_IMAGE:-flow-like-runtime:latest}
+    scale: ${RUNTIME_REPLICAS:-3}
     build:
       context: ../../..
       dockerfile: apps/backend/docker-compose/runtime/Dockerfile
@@ -182,8 +226,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "${RUNTIME_PORT:-9000}:9000"
+    expose:
+      - "9000"
     environment:
       # Server mode (multiple concurrent executions)
       EXECUTOR_SERVER_MODE: "true"
@@ -191,12 +235,14 @@ services:
       RUST_LOG: ${RUST_LOG:-info,docker_compose_runtime=debug}
 
       # API callback URL
-      API_URL: http://api:${API_PORT:-8080}
+      API_URL: http://api:8080
 
       # Redis queue worker (for async execution)
       QUEUE_WORKER_ENABLED: ${QUEUE_WORKER_ENABLED:-true}
       REDIS_URL: redis://redis:6379
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
+      QUEUE_WORKER_CONCURRENCY: ${QUEUE_WORKER_CONCURRENCY:-10}
+      QUEUE_POLL_TIMEOUT_SECS: ${QUEUE_POLL_TIMEOUT_SECS:-30}
 
       # Backend JWT public key for verifying API tokens
       BACKEND_PUB: ${BACKEND_PUB:-}
@@ -212,6 +258,7 @@ services:
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
     deploy:
+      replicas: ${RUNTIME_REPLICAS:-3}
       resources:
         limits:
           cpus: '4'
@@ -219,6 +266,11 @@ services:
         reservations:
           cpus: '1'
           memory: 2G
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 10s
@@ -231,6 +283,7 @@ services:
   # WASM Compiler Service
   # =============================================================================
   compiler:
+    image: ${COMPILER_IMAGE:-flow-like-compiler:latest}
     build:
       context: ../../..
       dockerfile: apps/backend/docker-compose/compiler/Dockerfile
@@ -244,7 +297,7 @@ services:
       PORT: 8081
       METRICS_PORT: 9091
       RUST_LOG: ${RUST_LOG:-info,k8s_compiler=debug}
-      API_URL: http://api:${API_PORT:-8080}
+      API_URL: http://api:8080
       BACKEND_PUB: ${BACKEND_PUB:-}
       BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
       COMPILER_TIMEOUT_SECS: ${COMPILER_TIMEOUT_SECS:-600}
@@ -276,20 +329,58 @@ services:
   # Sink Services (Cron Scheduler, Discord, Telegram bots)
   # =============================================================================
   sink-services:
+    image: ${SINK_SERVICES_IMAGE:-flow-like-sink-services:latest}
     build:
       context: ../../..
       dockerfile: apps/backend/docker-compose/sink-services/Dockerfile
     depends_on:
       api:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       RUST_LOG: ${RUST_LOG:-info,docker_compose_sink_services=debug}
       API_BASE_URL: http://api:8080
+      REDIS_URL: redis://redis:6379
       SINK_TRIGGER_JWT: ${SINK_TRIGGER_JWT:-}
       CONFIG_PATH: /app/flow-like.config.json
-    volumes:
-      - ./flow-like.config.json:/app/flow-like.config.json:ro
+    configs:
+      - source: flowlike_runtime_config
+        target: /app/flow-like.config.json
     restart: unless-stopped
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  # =============================================================================
+  # Realtime Collaboration Signaling (Yjs/y-webrtc)
+  # =============================================================================
+  signaling:
+    image: ${SIGNALING_IMAGE:-flow-like-signaling:latest}
+    build:
+      context: ../../..
+      dockerfile: apps/backend/docker-compose/signaling/Dockerfile
+    ports:
+      - "${SIGNALING_PORT:-4444}:4444"
+    environment:
+      PORT: 4444
+      REDIS_URL: redis://redis:6379
+      SIGNAL_CHANNEL: ${SIGNAL_CHANNEL:-signal:publish}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4444/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
     networks:
       - flowlike
 
@@ -297,6 +388,7 @@ services:
   # Web Application (Next.js Static Export)
   # =============================================================================
   web:
+    image: ${WEB_IMAGE:-flow-like-web:latest}
     build:
       context: ../../..
       dockerfile: apps/backend/docker-compose/web/Dockerfile
@@ -305,7 +397,7 @@ services:
         NEXT_PUBLIC_REDIRECT_URL: ${NEXT_PUBLIC_REDIRECT_URL:-http://localhost:3001/callback}
         NEXT_PUBLIC_REDIRECT_LOGOUT_URL: ${NEXT_PUBLIC_REDIRECT_LOGOUT_URL:-http://localhost:3001/}
     depends_on:
-      api:
+      api-gateway:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-3001}:3001"
@@ -433,4 +525,9 @@ volumes:
 
 networks:
   flowlike:
-    driver: bridge
+
+configs:
+  api_gateway_nginx:
+    file: ./proxy/nginx.conf
+  flowlike_runtime_config:
+    file: ${FLOW_LIKE_RUNTIME_CONFIG_FILE:-./flow-like.config.example.json}

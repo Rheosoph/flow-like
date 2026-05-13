@@ -14,6 +14,7 @@ pub mod get_current_route;
 pub mod get_element;
 pub mod get_element_text;
 pub mod get_element_value;
+pub mod get_file_input_files;
 pub mod get_iframe_src;
 pub mod get_input_placeholder;
 pub mod get_query_params;

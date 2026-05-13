@@ -55,11 +55,11 @@ impl NodeLogic for AttachmentToUrlNode {
                     .await?;
                 context.set_pin_value("success", json!(true)).await?;
             }
-            _ => {
+            Attachment::Complex(complex) => {
                 context
-                    .set_pin_value("signed_url", Value::String("".to_string()))
+                    .set_pin_value("signed_url", Value::String(complex.url))
                     .await?;
-                context.set_pin_value("success", json!(false)).await?;
+                context.set_pin_value("success", json!(true)).await?;
             }
         }
 

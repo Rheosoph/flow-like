@@ -21,9 +21,15 @@ tauri-build = { version = "2.5.3", features = [] }
 serde_json = "1"
 plist = "1.8.0"
 
+[features]
+default = []
+local-tts-accelerate = ["flow-like/local-tts-accelerate", "flow-like-catalog/local-tts-accelerate"]
+local-tts-cuda = ["flow-like/local-tts-cuda", "flow-like-catalog/local-tts-cuda"]
+local-tts-metal = ["flow-like/local-tts-metal", "flow-like-catalog/local-tts-metal"]
+
 [dependencies]
-flow-like = { workspace = true, features = ["tauri", "local-ml"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local"] }
+flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts", "local"] }
 flow-like-types.workspace = true
 flow-like-wasm.workspace = true
 
@@ -99,6 +105,10 @@ enigo = "0.6.1"
 
 [target."cfg(any(target_os = \"macos\", windows))".dependencies]
 rdev.workspace = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies]
+flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts-metal", "local-tts-accelerate"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]
 rdev = { workspace = true, features = ["x11", "wayland"] }

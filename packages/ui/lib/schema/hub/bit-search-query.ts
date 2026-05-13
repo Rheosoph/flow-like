@@ -24,5 +24,7 @@ export enum IBitTypes {
 	Template = "Template",
 	Tokenizer = "Tokenizer",
 	TokenizerConfig = "TokenizerConfig",
+	Stt = "Stt",
+	Tts = "Tts",
 	Vlm = "Vlm",
 }

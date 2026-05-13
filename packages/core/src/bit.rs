@@ -488,6 +488,10 @@ async fn collect_dependencies(
 }
 
 impl BitPack {
+    fn is_virtual_bit(bit: &Bit) -> bool {
+        bit.download_link.is_none()
+    }
+
     pub async fn get_installed(
         &self,
         state: Arc<FlowLikeState>,
@@ -496,6 +500,11 @@ impl BitPack {
 
         let mut installed_bits = vec![];
         for bit in self.bits.iter() {
+            if Self::is_virtual_bit(bit) {
+                installed_bits.push(bit.clone());
+                continue;
+            }
+
             let file_name = match bit.file_name.clone() {
                 Some(file_name) => Some(file_name),
                 None => continue,
@@ -527,7 +536,7 @@ impl BitPack {
             // If there is no download link we treat it as a virtual / proxied bit.
             // These should count as a successful "download" operation from a UX perspective
             // so we simply don't schedule a download but DO include it in the returned list.
-            if bit.download_link.is_none() {
+            if Self::is_virtual_bit(bit) {
                 println!("Skipping network download for bit {}: no download link (proxied or empty model)", bit.id);
                 // Do not attempt any download but keep it in the final success vector
                 return;
@@ -561,7 +570,7 @@ impl BitPack {
             let filtered: Vec<Bit> = self
                 .bits
                 .iter()
-                .filter(|b| b.download_link.is_none() && b.size.unwrap_or(0) > 0)
+                .filter(|b| Self::is_virtual_bit(b))
                 .cloned()
                 .collect();
             return Ok(filtered);
@@ -595,7 +604,7 @@ impl BitPack {
         let mut result = self
             .bits
             .iter()
-            .filter(|b| b.download_link.is_none() && b.size.unwrap_or(0) > 0)
+            .filter(|b| Self::is_virtual_bit(b))
             .cloned()
             .collect::<Vec<_>>();
         result.extend(deduplicated_bits);
@@ -621,6 +630,10 @@ impl BitPack {
         let bits_store = FlowLikeState::bit_store(&state).await?.as_generic();
         let mut installed = true;
         for bit in self.bits.iter() {
+            if Self::is_virtual_bit(bit) {
+                continue;
+            }
+
             let file_name = match bit.file_name.clone() {
                 Some(file_name) => file_name,
                 None => {

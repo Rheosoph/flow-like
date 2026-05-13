@@ -115,6 +115,7 @@ import {
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
+import { appsDB } from "../lib/apps-db";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
@@ -535,6 +536,8 @@ function Profiles() {
 					bit_types: [
 						IBitTypes.Llm,
 						IBitTypes.Vlm,
+						IBitTypes.Tts,
+						IBitTypes.Stt,
 						IBitTypes.Embedding,
 						IBitTypes.ImageEmbedding,
 					],
@@ -586,7 +589,7 @@ function Profiles() {
 						baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
 					).replace(/\/+$/, "");
 
-					await tauriFetch(
+					const response = await tauriFetch(
 						`${apiBase}/api/v1/profile/${encodeURIComponent(deleteTarget.id)}`,
 						{
 							method: "DELETE",
@@ -595,12 +598,23 @@ function Profiles() {
 							},
 						},
 					);
+					if (!response.ok && response.status !== 404) {
+						const message = await response.text().catch(() => "");
+						throw new Error(
+							message || `Failed to delete profile: ${response.status}`,
+						);
+					}
 				} catch (err) {
 					console.warn("[ProfileDelete] Server delete error:", err);
+					throw err;
 				}
 			}
 
 			await invoke("delete_profile", { profileId: deleteTarget.id });
+			await appsDB.shortcuts
+				.where("profileId")
+				.equals(deleteTarget.id)
+				.delete();
 			toast.success("Profile removed");
 			await profiles.refetch();
 			await invalidate(backend.userState.getProfile, []);
@@ -624,7 +638,7 @@ function Profiles() {
 							initial="initial"
 							whileHover="hover"
 						>
-							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg">
 								<Avatar className="h-8 w-8 rounded-lg">
 									<AvatarImage
 										className="rounded-lg size-8 w-8 h-8"
@@ -679,7 +693,7 @@ function Profiles() {
 										}}
 										className="group gap-2 p-2"
 									>
-										<div className="flex size-6 items-center justify-center rounded-sm border">
+										<div className="flex size-6 items-center justify-center rounded-sm">
 											<Avatar className="h-8 w-8 rounded-sm">
 												<AvatarImage
 													className="rounded-sm w-8 h-8"
@@ -1139,7 +1153,7 @@ export function NavUser({
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
-								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+								<div className="absolute -top-2 -right-2 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 									{notificationCount > 5 ? "5+" : notificationCount}
 								</div>
 							)}
@@ -1220,7 +1234,7 @@ export function NavUser({
 												<BellIcon className="size-4" />
 												{/* Add notification indicator */}
 												{notificationCount > 0 && (
-													<div className="absolute top-0 left-0 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+													<div className="absolute top-0 left-0 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 														{notificationCount > 5 ? "5+" : notificationCount}
 													</div>
 												)}

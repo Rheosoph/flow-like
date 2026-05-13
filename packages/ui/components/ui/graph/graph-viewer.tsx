@@ -19,7 +19,7 @@ import {
 import { GraphQueryPanel } from "./graph-query-panel";
 
 const GRAPH_VIEW_LIMIT_OPTIONS = [
-	50, 100, 200, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 1000000,
+	50, 100, 200, 500, 1000, 2500, 5000, 10000,
 ] as const;
 
 function formatGraphLimitOption(limit: number): string {

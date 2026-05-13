@@ -135,6 +135,10 @@ async fn missing_local_artifacts(
 
     let mut missing = Vec::new();
     for bit in &pack.bits {
+        if bit.download_link.is_none() {
+            continue;
+        }
+
         let path = match bit.to_path(&local_store) {
             Some(path) => path,
             None => {

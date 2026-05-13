@@ -1,4 +1,8 @@
-import type { IFileMetadata, IHelperState } from "@tm9657/flow-like-ui";
+import type {
+	IFileMetadata,
+	IHelperState,
+	ITemporaryUploadedFile,
+} from "@tm9657/flow-like-ui";
 
 export class EmptyHelperState implements IHelperState {
 	getPathMeta(folderPath: string): Promise<IFileMetadata[]> {
@@ -12,6 +16,9 @@ export class EmptyHelperState implements IHelperState {
 		throw new Error("Method not implemented.");
 	}
 	fileToUrl(file: File): Promise<string> {
+		throw new Error("Method not implemented.");
+	}
+	fileToTemporaryFile(file: File): Promise<ITemporaryUploadedFile> {
 		throw new Error("Method not implemented.");
 	}
 }
