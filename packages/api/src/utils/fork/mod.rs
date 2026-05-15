@@ -1,5 +1,4 @@
 use crate::{
-    credentials::CredentialsAccess,
     entity::{
         app, app_package, event, event_sink, membership, meta, page, role,
         sea_orm_active_enums::{Status, Visibility, WasmPackageVisibility},
@@ -25,7 +24,7 @@ use sea_orm::{
     ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
@@ -243,13 +242,17 @@ pub struct OfflineMetaBundle {
 ///    apps run only Local events. `event_type` is irrelevant here:
 ///    api / cron / webhook events that the user marked Local stay in
 ///    the bundle and execute on the desktop.
-/// 5. Base64-encodes each remapped blob with its `apps/{new_app_id}/`-
+/// 5. Encodes DB-backed app/widget/template metadata rows as local
+///    `metadata/.../*.meta` files in the destination id space.
+/// 6. Base64-encodes each remapped blob with its `apps/{new_app_id}/`-
 ///    relative path.
 ///
-/// User-content (`metadata/`, `upload/`, `storage/`) is **not** in
-/// the bundle — `begin_offline_fork` hands the desktop a single
-/// scoped `ReadAppContent` credential over the source's content
-/// prefix and the desktop pulls those bytes directly.
+/// Storage-backed user content (`upload/`, `storage/`, and any legacy
+/// `metadata/` files) is **not** in the bundle — `begin_offline_fork`
+/// hands the desktop a single scoped `ReadAppContent` credential over
+/// the source's content prefix and the desktop pulls those bytes
+/// directly. Inline DB metadata wins if both sources provide the same
+/// destination path.
 pub async fn compute_offline_fork_bundle(
     state: &AppState,
     src_app_id: &str,
@@ -346,15 +349,22 @@ pub async fn compute_offline_fork_bundle(
     // ship a manifest reference that points at a missing blob — e.g.
     // if a manifest entry's DB row was deleted, or a storage read
     // failed. The desktop sees only IDs whose data is in the bundle.
-    let mut shipped_events: std::collections::HashSet<String> = Default::default();
-    let mut shipped_pages: std::collections::HashSet<String> = Default::default();
-    let mut shipped_widgets: std::collections::HashSet<String> = Default::default();
-    let mut shipped_templates: std::collections::HashSet<String> = Default::default();
+    let mut shipped_boards: HashSet<String> = Default::default();
+    let mut shipped_events: HashSet<String> = Default::default();
+    let mut shipped_pages: HashSet<String> = Default::default();
+    let mut shipped_widgets: HashSet<String> = Default::default();
+    let mut shipped_templates: HashSet<String> = Default::default();
 
-    // ---- 2. Boards: load, remap (allocates internal IDs), strip ----
+    // ---- 2. Boards: load + remap in memory -----------------------
+    // Board files are the UI's source for page discovery
+    // (`board.page_ids`), but that list can drift from the Page DB
+    // rows. Reconcile it before remapping, then delay the write until
+    // after page copying so the final board lists only pages that
+    // actually made it into the bundle.
+    let mut remapped_boards: Vec<(String, String, proto::Board)> = Vec::new();
     for src_board_id in &manifest_proto.boards.clone() {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
-        let board_proto: proto::Board =
+        let mut board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
                 Ok(b) => b,
                 Err(err) => {
@@ -362,14 +372,12 @@ pub async fn compute_offline_fork_bundle(
                     continue;
                 }
             };
+        overlay_board_page_ids_from_rows(&mut board_proto, src_board_id, &page_rows);
         let dst_board_id = maps.translate_board(src_board_id);
-        let remapped = remap_board(board_proto, &mut maps);
-        // remap_board strips secrets + remaps internal IDs.
-        let bytes = encode_proto(&remapped).await?;
-        blobs.push(MetaBlob {
-            relative_path: format!("{}.board", dst_board_id),
-            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        });
+        let mut remapped = remap_board(board_proto, &mut maps);
+        remapped.id = dst_board_id.clone();
+        remapped_boards.push((src_board_id.clone(), dst_board_id, remapped));
+        shipped_boards.insert(src_board_id.clone());
     }
 
     // ---- 2b. Pages: DB-driven, board-scoped binary --------------
@@ -381,21 +389,40 @@ pub async fn compute_offline_fork_bundle(
     for row in &page_rows {
         let src_page_id = row.id.clone();
         let new_page_id = maps.translate_page(&src_page_id);
-        let new_board_id = row.board_id.as_ref().map(|b| maps.translate_board(b));
-
-        let Some(dst_board_id) = new_board_id else {
+        let Some(src_board_id) = row.board_id.as_deref() else {
             tracing::warn!(
                 "skip page {} in offline bundle: row has no board_id",
                 src_page_id
             );
             continue;
         };
+        let Some(dst_board_id) = maps
+            .boards
+            .get(src_board_id)
+            .filter(|_| shipped_boards.contains(src_board_id))
+            .cloned()
+        else {
+            tracing::warn!(
+                "skip page {} in offline bundle: row points at unknown board {}",
+                src_page_id,
+                src_board_id
+            );
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_page_id,
+                reason: format!(
+                    "page points at board {} which was not shipped in the fork",
+                    src_board_id
+                ),
+            });
+            continue;
+        };
 
         let mut page_proto = match read_source_page(
             &src_meta_store,
             &src_prefix,
-            row.board_id.as_deref(),
-            &src_page_id,
+            Some(src_board_id),
+            row.id.as_str(),
         )
         .await
         {
@@ -403,7 +430,7 @@ pub async fn compute_offline_fork_bundle(
             None => {
                 tracing::warn!(
                     "skip page {} in offline bundle: no readable source file",
-                    src_page_id
+                    row.id
                 );
                 continue;
             }
@@ -416,7 +443,20 @@ pub async fn compute_offline_fork_bundle(
             relative_path: format!("_{}/{}.page", dst_board_id, new_page_id),
             data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
-        shipped_pages.insert(src_page_id);
+        shipped_pages.insert(row.id.clone());
+    }
+
+    let shipped_page_dst_ids: HashSet<String> = shipped_pages
+        .iter()
+        .map(|p| maps.translate_page(p))
+        .collect();
+    for (_src_board_id, dst_board_id, mut board) in remapped_boards {
+        retain_shipped_board_pages(&mut board, &shipped_page_dst_ids);
+        let bytes = encode_proto(&board).await?;
+        blobs.push(MetaBlob {
+            relative_path: format!("{}.board", dst_board_id),
+            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
     }
 
     // ---- 3. Events: DB-driven, drop Remote, remap, strip ----------
@@ -458,6 +498,33 @@ pub async fn compute_offline_fork_bundle(
             continue;
         }
 
+        if !event_target_available(&event_proto, &shipped_boards, &maps) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_event_id.clone(),
+                reason: format!(
+                    "event {} points at board/node that was not shipped in the fork",
+                    src_event_id
+                ),
+            });
+            continue;
+        }
+        if event_proto
+            .canary
+            .as_ref()
+            .is_some_and(|canary| !canary_target_available(canary, &shipped_boards, &maps))
+        {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_event_id.clone(),
+                reason: format!(
+                    "canary target for event {} pointed at a board/node that was not shipped and was cleared",
+                    src_event_id
+                ),
+            });
+            event_proto.canary = None;
+        }
+
         // Note pointed-to board versions for step 4.
         if let Some(v) = event_proto.board_version.as_ref() {
             pointed_board_versions
@@ -467,6 +534,22 @@ pub async fn compute_offline_fork_bundle(
             && let Some(v) = canary.board_version.as_ref()
         {
             pointed_board_versions.insert((canary.board_id.clone(), (v.major, v.minor, v.patch)));
+        }
+
+        if matches!(event_proto.event_type.as_str(), "api" | "http" | "webhook")
+            && let Some(rewritten) = rewrite_auth_token_in_config(&event_proto.config, None)
+        {
+            event_proto.config = rewritten.bytes;
+            if rewritten.had_token {
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::RemoteEvent,
+                    source_id: src_event_id.clone(),
+                    reason: format!(
+                        "HTTP auth_token cleared on event {} — set a new token in the fork's event settings if this local event should keep one",
+                        src_event_id
+                    ),
+                });
+            }
         }
 
         let new_event_id = maps.translate_event(&src_event_id);
@@ -534,6 +617,7 @@ pub async fn compute_offline_fork_bundle(
                 flow_like_types::Value::String(new_widget_id.clone()),
             );
         }
+        walk_remap_action_refs(&mut widget, &maps);
         let bytes = encode_json(&widget).await?;
         blobs.push(MetaBlob {
             relative_path: format!("{}.widget", new_widget_id),
@@ -568,7 +652,18 @@ pub async fn compute_offline_fork_bundle(
         shipped_templates.insert(src_template_id);
     }
 
-    // ---- 7. Rewrite + ship the manifest ----------------------------
+    // ---- 7. Metadata rows: DB → local content-store files -----------
+    append_metadata_blobs_from_db(
+        state,
+        src_app_id,
+        &maps,
+        &shipped_widgets,
+        &shipped_templates,
+        &mut blobs,
+    )
+    .await?;
+
+    // ---- 8. Rewrite + ship the manifest ----------------------------
     // Rebuild each id list as the union of (manifest, DB rows) so a
     // resource that exists only in the DB still ends up on the
     // desktop's manifest. Source ids are deduped via HashSet, then
@@ -578,6 +673,7 @@ pub async fn compute_offline_fork_bundle(
     manifest_proto.boards = manifest_proto
         .boards
         .iter()
+        .filter(|b| shipped_boards.contains(*b))
         .map(|b| maps.translate_board(b))
         .collect();
 
@@ -742,6 +838,24 @@ fn is_remote_event(event: &proto::Event) -> bool {
         .unwrap_or(false)
 }
 
+fn event_target_available(
+    event: &proto::Event,
+    shipped_boards: &HashSet<String>,
+    maps: &ForkIdMap,
+) -> bool {
+    shipped_boards.contains(&event.board_id)
+        && (event.node_id.is_empty() || maps.nodes.contains_key(&event.node_id))
+}
+
+fn canary_target_available(
+    canary: &proto::Canary,
+    shipped_boards: &HashSet<String>,
+    maps: &ForkIdMap,
+) -> bool {
+    shipped_boards.contains(&canary.board_id)
+        && (canary.node_id.is_empty() || maps.nodes.contains_key(&canary.node_id))
+}
+
 /// Encode a proto message in the same format the rest of the
 /// codebase writes to disk (prost-encode → lz4 with size prefix).
 /// Reuses `flow_like::utils::compression::compress_to_file` against
@@ -783,6 +897,88 @@ async fn encode_json(value: &flow_like_types::Value) -> Result<Vec<u8>, ApiError
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("read encoded json bytes: {e}")))?;
     Ok(bytes.to_vec())
+}
+
+async fn append_metadata_blobs_from_db(
+    state: &AppState,
+    src_app_id: &str,
+    maps: &ForkIdMap,
+    shipped_widgets: &std::collections::HashSet<String>,
+    shipped_templates: &std::collections::HashSet<String>,
+    blobs: &mut Vec<MetaBlob>,
+) -> Result<(), ApiError> {
+    use base64::Engine as _;
+    use flow_like::bit::Metadata;
+    use flow_like_types::ToProto;
+
+    let app_meta_rows = meta::Entity::find()
+        .filter(meta::Column::AppId.eq(src_app_id))
+        .all(&state.db)
+        .await?;
+    for row in app_meta_rows {
+        push_metadata_blob(blobs, format!("metadata/{}.meta", row.lang), row).await?;
+    }
+
+    let widget_ids: Vec<String> = shipped_widgets.iter().cloned().collect();
+    if !widget_ids.is_empty() {
+        let widget_meta_rows = meta::Entity::find()
+            .filter(meta::Column::WidgetId.is_in(widget_ids))
+            .all(&state.db)
+            .await?;
+        for row in widget_meta_rows {
+            let Some(src_id) = row.widget_id.as_deref() else {
+                continue;
+            };
+            let Some(dst_id) = maps.widgets.get(src_id) else {
+                continue;
+            };
+            push_metadata_blob(
+                blobs,
+                format!("metadata/widgets/{}/{}.meta", dst_id, row.lang),
+                row,
+            )
+            .await?;
+        }
+    }
+
+    let template_ids: Vec<String> = shipped_templates.iter().cloned().collect();
+    if !template_ids.is_empty() {
+        let template_meta_rows = meta::Entity::find()
+            .filter(meta::Column::TemplateId.is_in(template_ids))
+            .all(&state.db)
+            .await?;
+        for row in template_meta_rows {
+            let Some(src_id) = row.template_id.as_deref() else {
+                continue;
+            };
+            let Some(dst_id) = maps.templates.get(src_id) else {
+                continue;
+            };
+            push_metadata_blob(
+                blobs,
+                format!("metadata/templates/{}/{}.meta", dst_id, row.lang),
+                row,
+            )
+            .await?;
+        }
+    }
+
+    async fn push_metadata_blob(
+        blobs: &mut Vec<MetaBlob>,
+        relative_path: String,
+        row: meta::Model,
+    ) -> Result<(), ApiError> {
+        let metadata = Metadata::from(row);
+        let proto_metadata = metadata.to_proto();
+        let bytes = encode_proto(&proto_metadata).await?;
+        blobs.push(MetaBlob {
+            relative_path,
+            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
+        Ok(())
+    }
+
+    Ok(())
 }
 
 /// Sanity check: scan the source app's content store for files that
@@ -902,8 +1098,8 @@ pub async fn fork_app_with_visibility(
     remote_event_token: Option<&str>,
     dst_visibility: flow_like::app::AppVisibility,
 ) -> Result<(String, ForkIdMap, Vec<SkippedItem>), ApiError> {
-    use crate::routes::app::events::db::db_model_to_event;
-    use flow_like_types::ToProto;
+    use crate::routes::app::events::db::{db_model_to_event, event_to_db_model};
+    use flow_like_types::{FromProto, ToProto};
 
     let new_app_id = create_id();
     let now = chrono::Utc::now().naive_utc();
@@ -922,9 +1118,7 @@ pub async fn fork_app_with_visibility(
     let src_meta_store = src_credentials.to_store(true).await?.as_generic();
     let src_content_store = src_credentials.to_store(false).await?.as_generic();
 
-    let dst_credentials = state
-        .scoped_credentials(user_sub, &new_app_id, CredentialsAccess::EditApp)
-        .await?;
+    let dst_credentials = state.master_credentials().await?;
     let dst_meta_store = dst_credentials.to_store(true).await?.as_generic();
     let dst_content_store = dst_credentials.to_store(false).await?.as_generic();
 
@@ -1095,11 +1289,16 @@ pub async fn fork_app_with_visibility(
         maps.roles.entry(r.id.clone()).or_insert_with(create_id);
     }
 
-    // ---- 3. Load + remap each board, then save under new prefix -------
-    let mut new_board_protos: Vec<(String, proto::Board)> = Vec::new();
+    // ---- 3. Load + remap boards in memory ---------------------------
+    // See the offline fork path above: reconcile board.page_ids from
+    // Page DB rows, then wait until page copying finishes before
+    // writing boards so stale board files cannot hide pages or point
+    // at missing ones.
+    let mut new_board_protos: Vec<(String, String, proto::Board)> = Vec::new();
+    let mut shipped_boards: HashSet<String> = Default::default();
     for src_board_id in &src_app_proto.boards {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
-        let board_proto: proto::Board =
+        let mut board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
                 Ok(b) => b,
                 Err(err) => {
@@ -1107,16 +1306,12 @@ pub async fn fork_app_with_visibility(
                     continue;
                 }
             };
-        let remapped = remap_board(board_proto, &mut maps);
-        new_board_protos.push((src_board_id.clone(), remapped));
-    }
-
-    for (src_board_id, board) in &new_board_protos {
+        overlay_board_page_ids_from_rows(&mut board_proto, src_board_id, &src_page_rows);
         let new_board_id = maps.translate_board(src_board_id);
-        let board_path = dst_prefix.child(format!("{}.board", new_board_id));
-        compress_to_file(dst_meta_store.clone(), board_path, board)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("write board: {e}")))?;
+        let mut remapped = remap_board(board_proto, &mut maps);
+        remapped.id = new_board_id.clone();
+        new_board_protos.push((src_board_id.clone(), new_board_id, remapped));
+        shipped_boards.insert(src_board_id.clone());
     }
 
     // Pages: DB-driven so we never miss a row whose `.page` file lives at
@@ -1125,15 +1320,28 @@ pub async fn fork_app_with_visibility(
     // removed `App::save_page`, so the read tries both. Writes go only
     // to the canonical board-scoped binary path
     // (`apps/{app}/_{board_id}/{page_id}.page`).
-    fork_pages_db_driven(
+    let shipped_pages = fork_pages_db_driven(
         &src_meta_store,
         &dst_meta_store,
         &src_prefix,
         &dst_prefix,
         &src_page_rows,
         &maps,
+        &shipped_boards,
     )
     .await?;
+
+    let shipped_page_dst_ids: HashSet<String> = shipped_pages
+        .iter()
+        .map(|p| maps.translate_page(p))
+        .collect();
+    for (_src_board_id, new_board_id, mut board) in new_board_protos {
+        retain_shipped_board_pages(&mut board, &shipped_page_dst_ids);
+        let board_path = dst_prefix.child(format!("{}.board", new_board_id));
+        compress_to_file(dst_meta_store.clone(), board_path, &board)
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("write board: {e}")))?;
+    }
 
     // ---- 4. Events: DB-driven, remap, rewrite, write ------------------
     // Source events come from the DB rather than from `apps/{src}/events/`
@@ -1141,9 +1349,10 @@ pub async fn fork_app_with_visibility(
     // or change a schedule write only the DB row, leaving the `.event`
     // file stale. Listing storage would ship that drift.
     //
-    // The same rewritten config bytes are reused for the destination's
-    // DB row (in the txn below) so the storage and DB views agree. We
-    // collect those bytes here keyed by source event id.
+    // The same remapped event proto is reused for the destination's
+    // DB row (in the txn below) so the storage and DB views agree:
+    // board/node/page ids, input pin ids, canary ids, stripped
+    // variables, and rewritten config all come from one source.
     //
     // While we're at it, collect every (board_id, version) tuple any
     // event (or its canary) points at, so we can copy only those
@@ -1153,7 +1362,7 @@ pub async fn fork_app_with_visibility(
     let dst_events_dir = dst_prefix.child("events");
     let mut pointed_board_versions: std::collections::HashSet<(String, (u32, u32, u32))> =
         std::collections::HashSet::new();
-    let mut rewritten_event_configs: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut rewritten_events: HashMap<String, flow_like::flow::event::Event> = HashMap::new();
     for row in &src_event_rows {
         let src_event_id = row.id.clone();
         let core_event = match db_model_to_event(row.clone()) {
@@ -1164,6 +1373,33 @@ pub async fn fork_app_with_visibility(
             }
         };
         let mut event_proto = core_event.to_proto();
+
+        if !event_target_available(&event_proto, &shipped_boards, &maps) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_event_id.clone(),
+                reason: format!(
+                    "event {} points at board/node that was not shipped in the fork",
+                    src_event_id
+                ),
+            });
+            continue;
+        }
+        if event_proto
+            .canary
+            .as_ref()
+            .is_some_and(|canary| !canary_target_available(canary, &shipped_boards, &maps))
+        {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_event_id.clone(),
+                reason: format!(
+                    "canary target for event {} pointed at a board/node that was not shipped and was cleared",
+                    src_event_id
+                ),
+            });
+            event_proto.canary = None;
+        }
 
         if let Some(v) = event_proto.board_version.as_ref() {
             pointed_board_versions
@@ -1185,8 +1421,7 @@ pub async fn fork_app_with_visibility(
             && let Some(rewritten) =
                 rewrite_auth_token_in_config(&event_proto.config, remote_event_token)
         {
-            event_proto.config = rewritten.bytes.clone();
-            rewritten_event_configs.insert(src_event_id.clone(), rewritten.bytes);
+            event_proto.config = rewritten.bytes;
             if rewritten.had_token && remote_event_token.is_none() {
                 skipped.push(SkippedItem {
                     kind: SkippedKind::RemoteEvent,
@@ -1200,11 +1435,15 @@ pub async fn fork_app_with_visibility(
         }
 
         remap_event(&mut event_proto, &maps);
-        let new_event_id = maps.translate_event(&src_event_id);
+        let new_event_id = event_proto.id.clone();
         let dst_event_path = dst_events_dir.child(format!("{}.event", new_event_id));
         compress_to_file(dst_meta_store.clone(), dst_event_path, &event_proto)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("write event: {e}")))?;
+        rewritten_events.insert(
+            src_event_id,
+            flow_like::flow::event::Event::from_proto(event_proto),
+        );
     }
 
     // ---- 4d. Copy versioned boards pointed to by events / canaries ---
@@ -1251,7 +1490,7 @@ pub async fn fork_app_with_visibility(
     // action ids) are widget-scoped and don't need cross-app translation;
     // only the top-level widget id is rewritten. Page-level WidgetInstance
     // bindings (event_id / page_id) live inside `Page` JSON, not here.
-    fork_widgets(
+    let shipped_widgets = fork_widgets(
         &src_meta_store,
         &dst_meta_store,
         &src_prefix,
@@ -1264,7 +1503,7 @@ pub async fn fork_app_with_visibility(
     // Templates *are* boards on disk (`{template_id}.template` is a
     // serialized proto::Board), so we run the same `remap_board` pass
     // we use for live boards. The template id rewrite is layered on top.
-    fork_templates(
+    let shipped_templates = fork_templates(
         &src_meta_store,
         &dst_meta_store,
         &src_prefix,
@@ -1314,6 +1553,7 @@ pub async fn fork_app_with_visibility(
     src_app_proto.boards = src_app_proto
         .boards
         .iter()
+        .filter(|b| shipped_boards.contains(*b))
         .map(|b| maps.translate_board(b))
         .collect();
     src_app_proto.events = dedupe_translated(
@@ -1321,7 +1561,8 @@ pub async fn fork_app_with_visibility(
             .events
             .iter()
             .cloned()
-            .chain(src_event_rows.iter().map(|r| r.id.clone())),
+            .chain(src_event_rows.iter().map(|r| r.id.clone()))
+            .filter(|id| rewritten_events.contains_key(id)),
         |id| maps.translate_event(&id),
     );
     src_app_proto.page_ids = dedupe_translated(
@@ -1329,7 +1570,8 @@ pub async fn fork_app_with_visibility(
             .page_ids
             .iter()
             .cloned()
-            .chain(src_page_rows.iter().map(|r| r.id.clone())),
+            .chain(src_page_rows.iter().map(|r| r.id.clone()))
+            .filter(|id| shipped_pages.contains(id)),
         |id| maps.translate_page(&id),
     );
     src_app_proto.widget_ids = dedupe_translated(
@@ -1337,7 +1579,8 @@ pub async fn fork_app_with_visibility(
             .widget_ids
             .iter()
             .cloned()
-            .chain(src_widget_rows.iter().map(|r| r.id.clone())),
+            .chain(src_widget_rows.iter().map(|r| r.id.clone()))
+            .filter(|id| shipped_widgets.contains(id)),
         |id| translate_in_map(&maps.widgets, &id),
     );
     src_app_proto.templates = dedupe_translated(
@@ -1345,7 +1588,8 @@ pub async fn fork_app_with_visibility(
             .templates
             .iter()
             .cloned()
-            .chain(src_template_rows.iter().map(|r| r.id.clone())),
+            .chain(src_template_rows.iter().map(|r| r.id.clone()))
+            .filter(|id| shipped_templates.contains(id)),
         |id| translate_in_map(&maps.templates, &id),
     );
     // Routes are authoritatively stored on the Event row's `route`
@@ -1355,15 +1599,17 @@ pub async fn fork_app_with_visibility(
     // destination's manifest reflects current state regardless of
     // whether the source manifest had drifted.
     let mut new_routes = HashMap::new();
-    for e in &src_event_rows {
+    for e in rewritten_events.values() {
         if let Some(path) = e.route.as_ref() {
-            new_routes.insert(path.clone(), maps.translate_event(&e.id));
+            new_routes.insert(path.clone(), e.id.clone());
         }
     }
     for (path, event_id) in src_app_proto.route_mappings.iter() {
-        new_routes
-            .entry(path.clone())
-            .or_insert_with(|| maps.translate_event(event_id));
+        if rewritten_events.contains_key(event_id) {
+            new_routes
+                .entry(path.clone())
+                .or_insert_with(|| maps.translate_event(event_id));
+        }
     }
     src_app_proto.route_mappings = new_routes;
     src_app_proto.visibility = app_visibility_to_proto(&dst_visibility);
@@ -1415,9 +1661,15 @@ pub async fn fork_app_with_visibility(
     // re-encrypt PAT with the caller-supplied token (if any), clear
     // OAuth tokens (caller must re-auth on the fork). We compute the
     // destination ActiveModels here so the txn closure stays tight.
+    let shipped_event_id_map: HashMap<String, String> = maps
+        .events
+        .iter()
+        .filter(|(src_id, _)| rewritten_events.contains_key(*src_id))
+        .map(|(src_id, dst_id)| (src_id.clone(), dst_id.clone()))
+        .collect();
     let (sinks_to_insert, sink_skips) = prepare_dst_sinks(
         &src_sink_rows,
-        &maps.events,
+        &shipped_event_id_map,
         remote_event_token,
         &state.encryption_key,
         &new_app_id,
@@ -1429,6 +1681,11 @@ pub async fn fork_app_with_visibility(
     let language_owned = language.to_string();
     let maps_arc = Arc::new(maps.clone());
     let dst_visibility_db = app_visibility_to_db(&dst_visibility);
+    let events_to_insert: Vec<flow_like::flow::event::Event> =
+        rewritten_events.values().cloned().collect();
+    let shipped_pages_for_txn = shipped_pages.clone();
+    let shipped_widgets_for_txn = shipped_widgets.clone();
+    let shipped_templates_for_txn = shipped_templates.clone();
 
     state
         .db
@@ -1597,69 +1854,17 @@ pub async fn fork_app_with_visibility(
                     new_package.insert(txn).await?;
                 }
 
-                for e in &src_event_rows {
-                    let new_event_id = maps_arc
-                        .events
-                        .get(&e.id)
-                        .cloned()
-                        .unwrap_or_else(create_id);
-                    let new_board_id = e.board_id.as_ref().map(|b| maps_arc.translate_board(b));
-                    let new_node_id = e.node_id.as_ref().map(|n| maps_arc.translate_node(n));
-                    let new_page_id = e.page_id.as_ref().map(|p| maps_arc.translate_page(p));
-
-                    // If the event's config had its HTTP auth_token
-                    // rewritten for the storage `.event` blob, mirror
-                    // the same bytes into the DB row so the storage
-                    // and DB views stay in sync. Re-wrap as the
-                    // base64 JsonBinary shape `db_model_to_event`
-                    // expects on read.
-                    let new_config = match rewritten_event_configs.get(&e.id) {
-                        Some(bytes) => {
-                            use base64::Engine as _;
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                            Some(serde_json::json!({ "base64": b64 }))
-                        }
-                        None => e.config.clone(),
-                    };
-
-                    // Event input rows store the publish-time pin id of
-                    // every input pin on the originating node. The ids
-                    // need to land on the destination's pin id space —
-                    // otherwise pre-run / trigger payloads use source
-                    // pin ids that no longer exist on the fork. The
-                    // proto-side blob in `compress_to_file` already
-                    // remapped via `remap_event`; mirror the same
-                    // translation onto the DB JSON column.
-                    let new_inputs = translate_event_inputs_json(&e.inputs, &maps_arc);
-
-                    let new_event = event::ActiveModel {
-                        id: Set(new_event_id),
-                        app_id: Set(new_app_id_db.clone()),
-                        name: Set(e.name.clone()),
-                        description: Set(e.description.clone()),
-                        event_type: Set(e.event_type.clone()),
-                        active: Set(e.active),
-                        priority: Set(e.priority),
-                        board_id: Set(new_board_id),
-                        board_version: Set(e.board_version.clone()),
-                        node_id: Set(new_node_id),
-                        page_id: Set(new_page_id),
-                        route: Set(e.route.clone()),
-                        is_default: Set(e.is_default),
-                        event_version: Set(e.event_version.clone()),
-                        execution_mode: Set(e.execution_mode.clone()),
-                        variables: Set(e.variables.clone()),
-                        config: Set(new_config),
-                        inputs: Set(new_inputs),
-                        notes: Set(e.notes.clone()),
-                        canary: Set(e.canary.clone()),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
+                for e in &events_to_insert {
+                    let mut new_event = event_to_db_model(&new_app_id_db, e);
+                    new_event.created_at = Set(now);
+                    new_event.updated_at = Set(now);
                     new_event.insert(txn).await?;
                 }
 
-                for p in &src_page_rows {
+                for p in src_page_rows
+                    .iter()
+                    .filter(|p| shipped_pages_for_txn.contains(&p.id))
+                {
                     let new_page_id = maps_arc.pages.get(&p.id).cloned().unwrap_or_else(create_id);
                     let new_board_id = p.board_id.as_ref().map(|b| maps_arc.translate_board(b));
                     let new_page = page::ActiveModel {
@@ -1675,7 +1880,10 @@ pub async fn fork_app_with_visibility(
                     new_page.insert(txn).await?;
                 }
 
-                for w in &src_widget_rows {
+                for w in src_widget_rows
+                    .iter()
+                    .filter(|w| shipped_widgets_for_txn.contains(&w.id))
+                {
                     let new_widget_id = maps_arc
                         .widgets
                         .get(&w.id)
@@ -1696,6 +1904,12 @@ pub async fn fork_app_with_visibility(
                 // empty list because the join on Meta drops widgets
                 // without a row.
                 for m in &src_widget_meta_rows {
+                    let Some(src_widget_id) = m.widget_id.as_ref() else {
+                        continue;
+                    };
+                    if !shipped_widgets_for_txn.contains(src_widget_id) {
+                        continue;
+                    }
                     let dst_widget_id = m
                         .widget_id
                         .as_ref()
@@ -1732,7 +1946,10 @@ pub async fn fork_app_with_visibility(
                     new_meta.insert(txn).await?;
                 }
 
-                for t in &src_template_rows {
+                for t in src_template_rows
+                    .iter()
+                    .filter(|t| shipped_templates_for_txn.contains(&t.id))
+                {
                     let new_template_id = maps_arc
                         .templates
                         .get(&t.id)
@@ -1756,6 +1973,12 @@ pub async fn fork_app_with_visibility(
                 // app-scoped query couldn't see them. Without these,
                 // `GET /apps/{id}/templates` returns an empty list.
                 for m in &src_template_meta_rows {
+                    let Some(src_template_id) = m.template_id.as_ref() else {
+                        continue;
+                    };
+                    if !shipped_templates_for_txn.contains(src_template_id) {
+                        continue;
+                    }
                     let dst_template_id = m
                         .template_id
                         .as_ref()
@@ -2033,33 +2256,6 @@ fn lookup_id(src: &str, maps: &ForkIdMap) -> Option<String> {
         .or_else(|| maps.pins.get(src))
         .or_else(|| maps.boards.get(src))
         .cloned()
-}
-
-/// Translates the `id` field of every entry in a serialized
-/// `Vec<EventInput>` from source pin ids to destination pin ids.
-/// Returns the input verbatim when it is `None`, empty, or doesn't
-/// deserialize cleanly — the publish path validates schema, so a
-/// blob that doesn't parse here is tolerated rather than dropped.
-fn translate_event_inputs_json(
-    inputs: &Option<flow_like_types::Value>,
-    maps: &ForkIdMap,
-) -> Option<flow_like_types::Value> {
-    let mut value = inputs.as_ref()?.clone();
-    let Some(items) = value.as_array_mut() else {
-        return Some(value);
-    };
-    for item in items.iter_mut() {
-        let Some(obj) = item.as_object_mut() else {
-            continue;
-        };
-        if let Some(id_value) = obj.get_mut("id")
-            && let Some(src_id) = id_value.as_str()
-            && let Some(dst_id) = maps.pins.get(src_id).cloned()
-        {
-            *id_value = flow_like_types::Value::String(dst_id);
-        }
-    }
-    Some(value)
 }
 
 fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
@@ -2351,7 +2547,11 @@ fn remap_component_blob(comp: &mut proto::Component, maps: &ForkIdMap) {
 ///
 /// Field names recognized (both `camelCase` and `snake_case`):
 ///
-/// * `nodeId` / `flowId` → `maps.nodes` (events_simple node ids)
+/// * `nodeId` / `flowId` / `workflowEventId` → `maps.nodes`
+///   (events_simple node ids)
+/// * `workflowEvent.eventId` → `maps.nodes` (legacy JSON
+///   `ActionBinding::WorkflowEvent` shape names the node id
+///   `eventId`)
 /// * `boardId` → `maps.boards`
 /// * `pageId` → `maps.pages`
 /// * `widgetId` → `maps.widgets`
@@ -2367,11 +2567,26 @@ fn remap_component_blob(comp: &mut proto::Component, maps: &ForkIdMap) {
 /// already on the destination's id space (e.g. after a typed remap
 /// pass) is a no-op since it won't be in the map keys.
 fn walk_remap_action_refs(value: &mut flow_like_types::Value, maps: &ForkIdMap) {
+    walk_remap_action_refs_in(value, maps, JsonRefContext::General);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonRefContext {
+    General,
+    Workflow,
+}
+
+fn walk_remap_action_refs_in(
+    value: &mut flow_like_types::Value,
+    maps: &ForkIdMap,
+    context: JsonRefContext,
+) {
     match value {
         flow_like_types::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
                 match key.as_str() {
-                    "nodeId" | "node_id" | "flowId" | "flow_id" => {
+                    "nodeId" | "node_id" | "flowId" | "flow_id" | "workflowId" | "workflow_id"
+                    | "workflowEventId" | "workflow_event_id" => {
                         translate_bound_string(Some(val), &maps.nodes);
                     }
                     "boardId" | "board_id" => {
@@ -2384,19 +2599,27 @@ fn walk_remap_action_refs(value: &mut flow_like_types::Value, maps: &ForkIdMap) 
                         translate_bound_string(Some(val), &maps.widgets);
                     }
                     "eventId" | "event_id" => {
-                        translate_bound_string(Some(val), &maps.events);
+                        if context == JsonRefContext::Workflow {
+                            translate_bound_string(Some(val), &maps.nodes);
+                        } else {
+                            translate_bound_string(Some(val), &maps.events);
+                        }
                     }
                     "appId" | "app_id" => {
                         translate_app_id(Some(val), maps);
                     }
                     _ => {}
                 }
-                walk_remap_action_refs(val, maps);
+                let child_context = match key.as_str() {
+                    "workflow" | "workflowEvent" | "workflow_event" => JsonRefContext::Workflow,
+                    _ => JsonRefContext::General,
+                };
+                walk_remap_action_refs_in(val, maps, child_context);
             }
         }
         flow_like_types::Value::Array(arr) => {
             for v in arr.iter_mut() {
-                walk_remap_action_refs(v, maps);
+                walk_remap_action_refs_in(v, maps, context);
             }
         }
         _ => {}
@@ -2528,16 +2751,34 @@ async fn fork_pages_db_driven(
     dst_prefix: &Path,
     src_page_rows: &[page::Model],
     maps: &ForkIdMap,
-) -> Result<(), ApiError> {
+    shipped_boards: &HashSet<String>,
+) -> Result<HashSet<String>, ApiError> {
+    let mut shipped_pages = HashSet::new();
     for row in src_page_rows {
         let src_page_id = row.id.clone();
         let new_page_id = maps.translate_page(&src_page_id);
-        let new_board_id = row.board_id.as_ref().map(|b| maps.translate_board(b));
+        let Some(src_board_id) = row.board_id.as_deref() else {
+            tracing::warn!("skip page {} during fork: row has no board_id", src_page_id);
+            continue;
+        };
+        let Some(new_board_id) = maps
+            .boards
+            .get(src_board_id)
+            .filter(|_| shipped_boards.contains(src_board_id))
+            .cloned()
+        else {
+            tracing::warn!(
+                "skip page {} during fork: row points at board {} which was not shipped",
+                src_page_id,
+                src_board_id
+            );
+            continue;
+        };
 
         let mut page_proto = match read_source_page(
             src_store,
             src_prefix,
-            row.board_id.as_deref(),
+            Some(src_board_id),
             &src_page_id,
         )
         .await
@@ -2553,13 +2794,40 @@ async fn fork_pages_db_driven(
         };
 
         remap_page(&mut page_proto, &new_page_id, maps);
-        write_destination_page(dst_store, dst_prefix, new_board_id.as_deref(), &page_proto).await?;
+        write_destination_page(
+            dst_store,
+            dst_prefix,
+            Some(new_board_id.as_str()),
+            &page_proto,
+        )
+        .await?;
+        shipped_pages.insert(src_page_id);
     }
-    Ok(())
+    Ok(shipped_pages)
 }
 
 fn translate_in_map(map: &HashMap<String, String>, src: &str) -> String {
     map.get(src).cloned().unwrap_or_else(|| src.to_string())
+}
+
+fn overlay_board_page_ids_from_rows(
+    board: &mut proto::Board,
+    src_board_id: &str,
+    page_rows: &[page::Model],
+) {
+    let mut seen: HashSet<String> = board.page_ids.iter().cloned().collect();
+    for row in page_rows {
+        if row.board_id.as_deref() == Some(src_board_id) && seen.insert(row.id.clone()) {
+            board.page_ids.push(row.id.clone());
+        }
+    }
+}
+
+fn retain_shipped_board_pages(board: &mut proto::Board, shipped_dst_page_ids: &HashSet<String>) {
+    let mut seen = HashSet::new();
+    board
+        .page_ids
+        .retain(|id| shipped_dst_page_ids.contains(id) && seen.insert(id.clone()));
 }
 
 /// Translates an iterator of source ids through a translation closure
@@ -2608,8 +2876,8 @@ fn app_visibility_to_db(v: &flow_like::app::AppVisibility) -> Visibility {
 
 /// Loads each widget JSON listed at the source app prefix and writes it
 /// under the destination prefix with a fresh top-level id. Widget bodies
-/// (components, actions) live in widget scope and don't reference cross-app
-/// resources, so only the top-level `id` field is rewritten.
+/// can contain the same action/reference JSON shape as pages, so those
+/// references are remapped before writing.
 ///
 /// Widget metadata is handled by `copy_metadata_with_translation` — this
 /// pass only touches the `{widget_id}.widget` JSON files.
@@ -2619,7 +2887,8 @@ async fn fork_widgets(
     src_prefix: &Path,
     dst_prefix: &Path,
     maps: &ForkIdMap,
-) -> Result<(), ApiError> {
+) -> Result<HashSet<String>, ApiError> {
+    let mut shipped_widgets = HashSet::new();
     for (src_widget_id, new_widget_id) in &maps.widgets {
         let src_path = src_prefix.child(format!("{}.widget", src_widget_id));
         let mut widget: flow_like_types::Value =
@@ -2646,8 +2915,9 @@ async fn fork_widgets(
         compress_to_file_json(dst_store.clone(), dst_path, &widget)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("write widget: {e}")))?;
+        shipped_widgets.insert(src_widget_id.clone());
     }
-    Ok(())
+    Ok(shipped_widgets)
 }
 
 /// Loads each template (a serialized `proto::Board`) and runs it through
@@ -2660,7 +2930,8 @@ async fn fork_templates(
     src_prefix: &Path,
     dst_prefix: &Path,
     maps: &mut ForkIdMap,
-) -> Result<(), ApiError> {
+) -> Result<HashSet<String>, ApiError> {
+    let mut shipped_templates = HashSet::new();
     let template_pairs: Vec<(String, String)> = maps
         .templates
         .iter()
@@ -2688,8 +2959,9 @@ async fn fork_templates(
         compress_to_file(dst_store.clone(), dst_path, &remapped)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("write template: {e}")))?;
+        shipped_templates.insert(src_template_id);
     }
-    Ok(())
+    Ok(shipped_templates)
 }
 
 /// Copies the `metadata/` subtree from src to dst, rewriting any path
@@ -2716,6 +2988,9 @@ async fn copy_metadata_with_translation(
         let Some(suffix) = path_str.strip_prefix(src_meta_dir.as_ref()) else {
             continue;
         };
+        if !suffix.is_empty() && !suffix.starts_with('/') {
+            continue;
+        }
         let suffix = suffix.trim_start_matches('/');
         if suffix.is_empty() {
             continue;
@@ -3016,4 +3291,107 @@ async fn is_package_accessible(
         )
     };
     Ok(PackageAccess::Denied(reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page_row(id: &str, board_id: Option<&str>) -> page::Model {
+        let now = chrono::Utc::now().naive_utc();
+        page::Model {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            app_id: "src_app".to_string(),
+            board_id: board_id.map(str::to_string),
+            version: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn board_page_ids_are_overlaid_from_db_and_trimmed_to_shipped_pages() {
+        let mut board = proto::Board {
+            id: "src_board".to_string(),
+            page_ids: vec!["stale_page".to_string(), "src_page_1".to_string()],
+            ..Default::default()
+        };
+        let page_rows = vec![
+            page_row("src_page_1", Some("src_board")),
+            page_row("src_page_2", Some("src_board")),
+            page_row("src_page_3", Some("src_board")),
+            page_row("other_board_page", Some("other_board")),
+            page_row("orphan_page", None),
+        ];
+
+        overlay_board_page_ids_from_rows(&mut board, "src_board", &page_rows);
+        assert_eq!(
+            board.page_ids,
+            vec![
+                "stale_page".to_string(),
+                "src_page_1".to_string(),
+                "src_page_2".to_string(),
+                "src_page_3".to_string(),
+            ]
+        );
+
+        let mut maps = ForkIdMap::default();
+        maps.pages
+            .insert("src_page_1".to_string(), "dst_page_1".to_string());
+        maps.pages
+            .insert("src_page_2".to_string(), "dst_page_2".to_string());
+        maps.pages
+            .insert("src_page_3".to_string(), "dst_page_3".to_string());
+
+        board.page_ids = board
+            .page_ids
+            .iter()
+            .map(|id| maps.translate_page(id))
+            .collect();
+        let shipped_dst_page_ids = ["dst_page_2".to_string(), "dst_page_3".to_string()]
+            .into_iter()
+            .collect();
+        retain_shipped_board_pages(&mut board, &shipped_dst_page_ids);
+
+        assert_eq!(
+            board.page_ids,
+            vec!["dst_page_2".to_string(), "dst_page_3".to_string()]
+        );
+    }
+
+    #[test]
+    fn json_workflow_refs_translate_node_ids_without_rewriting_normal_event_ids() {
+        let mut maps = ForkIdMap::default();
+        maps.nodes
+            .insert("src_node_a".to_string(), "dst_node_a".to_string());
+        maps.nodes
+            .insert("src_node_b".to_string(), "dst_node_b".to_string());
+        maps.nodes
+            .insert("src_node_c".to_string(), "dst_node_c".to_string());
+        maps.events
+            .insert("src_event".to_string(), "dst_event".to_string());
+
+        let mut value = flow_like_types::json::json!({
+            "workflowEvent": {
+                "eventId": { "literalString": "src_node_a" }
+            },
+            "workflow": [
+                { "eventId": "src_node_b" },
+                { "flowId": "src_node_c" }
+            ],
+            "eventId": { "literalString": "src_event" }
+        });
+
+        walk_remap_action_refs(&mut value, &maps);
+
+        assert_eq!(
+            value["workflowEvent"]["eventId"]["literalString"],
+            "dst_node_a"
+        );
+        assert_eq!(value["workflow"][0]["eventId"], "dst_node_b");
+        assert_eq!(value["workflow"][1]["flowId"], "dst_node_c");
+        assert_eq!(value["eventId"]["literalString"], "dst_event");
+    }
 }

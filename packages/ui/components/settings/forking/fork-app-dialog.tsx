@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	type IBeginOfflineForkResponse,
+	type IForkPreviewTarget,
 	type IForkPreviewResponse,
 	type IOnlineForkBody,
 	type IOnlineForkResponse,
@@ -31,6 +32,13 @@ import {
 	DialogTitle,
 } from "../../ui/dialog";
 import { Label } from "../../ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../ui/select";
 
 /**
  * The two response shapes the server returns from `/fork` (online → online)
@@ -41,6 +49,38 @@ import { Label } from "../../ui/label";
 export type IBeginForkResponse =
 	| IBeginOfflineForkResponse
 	| IOnlineForkResponse;
+
+export interface ForkTargetOption {
+	value: IForkPreviewTarget;
+	label: string;
+	description: string;
+}
+
+export const DEFAULT_FORK_TARGET_OPTIONS: Record<
+	IForkPreviewTarget,
+	ForkTargetOption
+> = {
+	online: {
+		value: "online",
+		label: "Online account",
+		description: "Create a private cloud copy on your account.",
+	},
+	offline: {
+		value: "offline",
+		label: "This device",
+		description: "Download a local offline copy into the desktop app.",
+	},
+};
+
+export function normalizeForkTargetOptions(
+	target: IForkPreviewTarget,
+	targets?: readonly IForkPreviewTarget[],
+): ForkTargetOption[] {
+	const values = targets?.length ? targets : [target];
+	const deduped = Array.from(new Set(values));
+	if (!deduped.includes(target)) deduped.unshift(target);
+	return deduped.map((value) => DEFAULT_FORK_TARGET_OPTIONS[value]);
+}
 
 function isOfflineForkResponse(
 	res: IBeginForkResponse,
@@ -53,6 +93,9 @@ export interface ForkAppDialogProps {
 	appName: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	target: IForkPreviewTarget;
+	targetOptions?: ForkTargetOption[];
+	onTargetChange?: (target: IForkPreviewTarget) => void;
 	loadPreview: () => Promise<IForkPreviewResponse>;
 	beginFork: (body: IOnlineForkBody) => Promise<IBeginForkResponse>;
 	/**
@@ -72,6 +115,9 @@ export function ForkAppDialog({
 	appName,
 	open,
 	onOpenChange,
+	target,
+	targetOptions,
+	onTargetChange,
 	loadPreview,
 	beginFork,
 	onForkStarted,
@@ -82,6 +128,13 @@ export function ForkAppDialog({
 	const [showPatSelector, setShowPatSelector] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [response, setResponse] = useState<IBeginForkResponse | null>(null);
+	const options =
+		targetOptions && targetOptions.length > 0
+			? targetOptions
+			: [DEFAULT_FORK_TARGET_OPTIONS[target]];
+	const selectedTargetOption =
+		options.find((option) => option.value === target) ??
+		DEFAULT_FORK_TARGET_OPTIONS[target];
 
 	useEffect(() => {
 		if (!open) {
@@ -112,7 +165,7 @@ export function ForkAppDialog({
 		return () => {
 			cancelled = true;
 		};
-	}, [open, loadPreview]);
+	}, [open, loadPreview, target]);
 
 	const replaceableSites = useMemo(() => {
 		if (!preview) return [];
@@ -124,11 +177,25 @@ export function ForkAppDialog({
 		return preview.remote_token_sites.filter((s) => !isTokenReplaceable(s));
 	}, [preview]);
 
-	const tokenRequired = replaceableSites.length > 0;
+	const tokenRequired = target === "online" && replaceableSites.length > 0;
 	const canSubmit =
 		!!preview?.user_can_fork &&
 		!!preview?.within_limits &&
 		(!tokenRequired || token.trim().length > 0);
+
+	const handleTargetChange = useCallback(
+		(value: string) => {
+			if (value !== "online" && value !== "offline") return;
+			if (value === target || stage === "submitting") return;
+			setPreview(null);
+			setResponse(null);
+			setError(null);
+			setToken("");
+			setStage("loading");
+			onTargetChange?.(value);
+		},
+		[target, stage, onTargetChange],
+	);
 
 	const handleFork = useCallback(async () => {
 		if (!preview) return;
@@ -167,11 +234,37 @@ export function ForkAppDialog({
 						Fork {appName}
 					</DialogTitle>
 					<DialogDescription>
-						A fresh, secret-stripped copy will be created on your account.
+						A fresh, secret-stripped copy will be created{" "}
+						{target === "offline" ? "on this device" : "on your account"}.
 						Variables marked `secret` are cleared and OAuth bindings will need
 						to be re-authenticated on the new app.
 					</DialogDescription>
 				</DialogHeader>
+
+				{options.length > 1 && stage !== "done" && (
+					<div className="space-y-2">
+						<Label className="text-sm font-medium">Fork destination</Label>
+						<Select
+							value={target}
+							onValueChange={handleTargetChange}
+							disabled={stage === "submitting"}
+						>
+							<SelectTrigger className="w-full">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								{options.map((option) => (
+									<SelectItem key={option.value} value={option.value}>
+										{option.label}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<p className="text-xs text-muted-foreground">
+							{selectedTargetOption.description}
+						</p>
+					</div>
+				)}
 
 				{stage === "loading" && (
 					<div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
@@ -333,7 +426,9 @@ export function ForkAppDialog({
 										Forking…
 									</>
 								) : (
-									"Fork to my account"
+									`Fork to ${
+										target === "offline" ? "this device" : "my account"
+									}`
 								)}
 							</Button>
 						</>

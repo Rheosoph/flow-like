@@ -547,13 +547,14 @@ impl App {
         board_id: String,
         board_version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<(String, (u32, u32, u32))> {
-        let mut template_id = template_id.unwrap_or(create_id());
+        let explicit_template_id = template_id.is_some();
+        let mut template_id = template_id.unwrap_or_else(create_id);
         let new_template: Arc<Mutex<Board>> = self
             .open_board(board_id, Some(false), board_version)
             .await?;
         let old_template = self.open_template(template_id.clone(), None).await.ok();
 
-        if old_template.is_none() {
+        if old_template.is_none() && !explicit_template_id {
             template_id = create_id();
         }
 

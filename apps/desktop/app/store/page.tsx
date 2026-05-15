@@ -127,6 +127,7 @@ export default function Page() {
 							appId={id}
 							appName={appName}
 							target="offline"
+							targets={["offline", "online"]}
 							onForkStarted={applyForkBundle}
 						/>
 					) : null

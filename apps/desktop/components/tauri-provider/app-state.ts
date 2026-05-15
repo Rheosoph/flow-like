@@ -657,6 +657,10 @@ export class AppState implements IAppState {
 	}
 
 	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Forking settings are only available for online apps.");
+		}
+
 		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
 			await fetcher<IApp>(
 				this.backend.profile,

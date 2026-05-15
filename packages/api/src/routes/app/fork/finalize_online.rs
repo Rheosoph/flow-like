@@ -1,4 +1,5 @@
 use crate::{
+    credentials::CredentialsAccess,
     ensure_permission,
     entity::{
         app,
@@ -145,6 +146,23 @@ pub async fn finalize_online_fork(
     }
 
     let visibility: Visibility = body.visibility.unwrap_or_default().into();
+    let core_visibility = match &visibility {
+        Visibility::Public => flow_like::app::AppVisibility::Public,
+        Visibility::PublicRequestAccess => flow_like::app::AppVisibility::PublicRequestAccess,
+        Visibility::Private => flow_like::app::AppVisibility::Private,
+        Visibility::Prototype => flow_like::app::AppVisibility::Prototype,
+        Visibility::Offline => flow_like::app::AppVisibility::Offline,
+    };
+
+    let sub = user.sub()?;
+    let mut bucket_app = state
+        .scoped_app(&sub, &app_id, &state, CredentialsAccess::EditApp)
+        .await?;
+    bucket_app.visibility = core_visibility;
+    bucket_app.status = flow_like::app::AppStatus::Active;
+    bucket_app.updated_at = std::time::SystemTime::now();
+    bucket_app.save().await?;
+
     let mut active = app_row.into_active_model();
     active.visibility = Set(visibility.clone());
     active.status = Set(Status::Active);

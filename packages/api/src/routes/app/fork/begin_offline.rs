@@ -35,12 +35,14 @@ pub struct BeginOfflineForkResponse {
     pub new_app_id: String,
     /// Opaque session id for tracking + telemetry.
     pub fork_session_id: String,
-    /// Remapped + secret-stripped + token-rewritten meta artifacts
+    /// Remapped + secret-stripped + token-rewritten inline artifacts
     /// (manifest, boards, events, widgets, templates, pages,
-    /// versioned forms). Each `MetaBlob.data_b64` is the exact bytes
-    /// that would have been written to disk on a server-side
-    /// destination — the desktop just base64-decodes and writes to
-    /// its local meta store at `apps/{new_app_id}/{relative_path}`.
+    /// versioned forms, and DB-backed metadata files). Each
+    /// `MetaBlob.data_b64` is the exact bytes that would have been
+    /// written to disk on a server-side destination — the desktop
+    /// base64-decodes and writes it under
+    /// `apps/{new_app_id}/{relative_path}`, choosing the local meta
+    /// or content store based on the relative path.
     pub meta_blobs: Vec<MetaBlob>,
     /// Bucket-relative prefix of the **source** content store the
     /// desktop should pull from (e.g. `apps/{src_app_id}`). Combined
@@ -81,13 +83,14 @@ pub struct BeginOfflineForkResponse {
 /// What the server does:
 /// 1. Permission + size + token gate (no DB row is created on the
 ///    destination — offline apps live only on the desktop).
-/// 2. Run the fork pipeline against an **in-memory** meta store, so
-///    the remapped + stripped manifest, boards, events, widgets,
-///    templates, and pages stay in memory. Ship them inline.
+/// 2. Run the fork pipeline in memory, so the remapped + stripped
+///    manifest, boards, events, widgets, templates, pages, and
+///    DB-backed metadata files can ship inline.
 /// 3. Issue scoped read credentials for the **source content**
-///    prefix; the desktop pulls metadata/, upload/, storage/
-///    directly via `object_store` — no per-object signing, no fan
-///    out through the API server.
+///    prefix; the desktop pulls legacy metadata/, upload/, storage/
+///    directly via `object_store` — no per-object signing, no fan-out
+///    through the API server. Inline DB metadata wins over legacy
+///    metadata files with the same destination path.
 /// 4. Sanity-check that no `.board`/`.event`/`.template`/`.widget`/
 ///    `.page` files have leaked into the source content store.
 #[utoipa::path(

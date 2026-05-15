@@ -47,11 +47,12 @@ export interface IBeginOfflineForkResponse {
 	new_app_id: string;
 	fork_session_id: string;
 	/**
-	 * Remapped + secret-stripped meta artifacts (manifest, boards,
-	 * events, widgets, templates, pages). Each entry's `data_b64` is
-	 * the exact bytes that would have been written to disk on a
-	 * server-side destination — the desktop just decodes and writes
-	 * to its local meta store at `apps/{new_app_id}/{relative_path}`.
+	 * Remapped + secret-stripped inline artifacts (manifest, boards,
+	 * events, widgets, templates, pages, and DB-backed metadata
+	 * files). Each entry's `data_b64` is the exact bytes that would
+	 * have been written to disk on a server-side destination — the
+	 * desktop decodes and writes it under
+	 * `apps/{new_app_id}/{relative_path}`.
 	 */
 	meta_blobs: IMetaBlob[];
 	/**
@@ -77,6 +78,37 @@ export interface IBeginOfflineForkResponse {
 export interface IOnlineForkResponse {
 	new_app_id: string;
 	report: IForkReport;
+}
+
+export interface IForkBundleSummary {
+	total_size_bytes: number;
+	total_object_count: number;
+}
+
+export interface IBeginOnlineForkBody {
+	source_app_id?: string | null;
+	summary: IForkBundleSummary;
+	language?: string;
+}
+
+export interface IBeginOnlineForkResponse {
+	new_app_id: string;
+	fork_session_id: string;
+	upload_path: string;
+	shared_credentials: unknown;
+	expiration?: string | null;
+}
+
+export interface IFinalizeOnlineForkBody {
+	visibility?: "private" | "prototype";
+}
+
+export interface IFinalizeOnlineForkResponse {
+	app_id: string;
+	total_size_bytes: number;
+	total_object_count: number;
+	visibility: string;
+	status: string;
 }
 
 export interface IOnlineForkBody {

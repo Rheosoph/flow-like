@@ -2,7 +2,7 @@
 
 import { GitForkIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	IForkPreviewTarget,
 	IOnlineForkBody,
@@ -11,6 +11,7 @@ import { useBackend } from "../../state/backend-state";
 import {
 	ForkAppDialog,
 	type IBeginForkResponse,
+	normalizeForkTargetOptions,
 } from "../settings/forking/fork-app-dialog";
 import { Button } from "../ui/button";
 
@@ -18,6 +19,7 @@ export interface StoreForkButtonProps {
 	appId: string;
 	appName: string;
 	target: IForkPreviewTarget;
+	targets?: readonly IForkPreviewTarget[];
 	onForkStarted?: (response: IBeginForkResponse) => void;
 	size?: "default" | "sm" | "lg" | "icon";
 	variant?:
@@ -34,6 +36,7 @@ export function StoreForkButton({
 	appId,
 	appName,
 	target,
+	targets,
 	onForkStarted,
 	size = "sm",
 	variant = "outline",
@@ -42,33 +45,42 @@ export function StoreForkButton({
 	const backend = useBackend();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
+	const [selectedTarget, setSelectedTarget] =
+		useState<IForkPreviewTarget>(target);
+	const targetOptions = useMemo(
+		() => normalizeForkTargetOptions(target, targets),
+		[target, targets],
+	);
+
+	useEffect(() => {
+		if (!targetOptions.some((option) => option.value === selectedTarget)) {
+			setSelectedTarget(target);
+		}
+	}, [selectedTarget, target, targetOptions]);
 
 	const loadPreview = useCallback(
-		() => backend.appState.getForkPreview(appId, target),
-		[backend.appState, appId, target],
+		() => backend.appState.getForkPreview(appId, selectedTarget),
+		[backend.appState, appId, selectedTarget],
 	);
 
 	const beginFork = useCallback(
 		(body: IOnlineForkBody): Promise<IBeginForkResponse> => {
-			if (target === "offline") {
+			if (selectedTarget === "offline") {
 				return backend.appState.beginOfflineFork(appId, body);
 			}
 			return backend.appState.onlineFork(appId, body);
 		},
-		[backend.appState, appId, target],
+		[backend.appState, appId, selectedTarget],
 	);
 
 	const handleForkStarted = useCallback(
 		(response: IBeginForkResponse) => {
-			if (onForkStarted) {
-				onForkStarted(response);
-				return;
-			}
-			if (target === "online") {
+			onForkStarted?.(response);
+			if (selectedTarget === "online") {
 				router.push(`/library/config?id=${response.new_app_id}`);
 			}
 		},
-		[onForkStarted, target, router],
+		[onForkStarted, selectedTarget, router],
 	);
 
 	return (
@@ -82,6 +94,9 @@ export function StoreForkButton({
 				appName={appName}
 				open={open}
 				onOpenChange={setOpen}
+				target={selectedTarget}
+				targetOptions={targetOptions}
+				onTargetChange={setSelectedTarget}
 				loadPreview={loadPreview}
 				beginFork={beginFork}
 				onForkStarted={handleForkStarted}

@@ -700,13 +700,15 @@ export default function DashboardPage() {
 							}}
 						/>
 
-						<AllowForkingCard
-							canEdit={canEdit}
-							localApp={app.data}
-							onChanged={async () => {
-								await app.refetch();
-							}}
-						/>
+						{app.data.visibility !== IAppVisibility.Offline && (
+							<AllowForkingCard
+								canEdit={canEdit}
+								localApp={app.data}
+								onChanged={async () => {
+									await app.refetch();
+								}}
+							/>
+						)}
 
 						<ForkAppButton
 							localApp={app.data}

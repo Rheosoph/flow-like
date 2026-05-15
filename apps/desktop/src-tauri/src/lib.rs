@@ -916,6 +916,8 @@ pub fn run() {
             functions::app::sharing::export_app_to_file,
             functions::app::sharing::import_app_from_file,
             functions::app::fork::apply_fork_bundle,
+            functions::app::fork::summarize_local_app_bundle,
+            functions::app::fork::upload_local_app_content_bundle,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
             functions::app::tables::db_schema,

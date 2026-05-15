@@ -2,7 +2,7 @@
 
 import { GitForkIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	IForkPreviewTarget,
 	IOnlineForkBody,
@@ -16,7 +16,11 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../../ui/card";
-import { ForkAppDialog, type IBeginForkResponse } from "./fork-app-dialog";
+import {
+	ForkAppDialog,
+	type IBeginForkResponse,
+	normalizeForkTargetOptions,
+} from "./fork-app-dialog";
 
 export interface ForkAppCardProps {
 	appId: string;
@@ -25,16 +29,22 @@ export interface ForkAppCardProps {
 	 * Which fork target to wire up:
 	 * - "online" → server keeps the new app on the user's account
 	 *   (web default). After the fork begins the card navigates to the
-	 *   new app's config unless `onForkStarted` is provided.
+	 *   new app's config page.
 	 * - "offline" → server materializes a signed bundle the host pulls
 	 *   to disk (desktop). The host MUST supply `onForkStarted` so the
 	 *   bundle can actually land somewhere.
 	 */
 	target: IForkPreviewTarget;
 	/**
+	 * Optional destination choices. Use this in desktop where a fork
+	 * can land either online or on the local device. The `target` prop
+	 * remains the initial choice.
+	 */
+	targets?: readonly IForkPreviewTarget[];
+	/**
 	 * Fires after `beginFork` resolves. Required for `offline` to apply
-	 * the bundle locally; optional for `online` (default action is
-	 * `router.push("/library/config?id=<new_app_id>")`).
+	 * the bundle locally. For `online`, the callback runs first and the
+	 * card still navigates to the fork's config page afterward.
 	 */
 	onForkStarted?: (response: IBeginForkResponse) => void;
 }
@@ -43,38 +53,48 @@ export function ForkAppCard({
 	appId,
 	appName,
 	target,
+	targets,
 	onForkStarted,
 }: Readonly<ForkAppCardProps>) {
 	const backend = useBackend();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
+	const [selectedTarget, setSelectedTarget] =
+		useState<IForkPreviewTarget>(target);
+	const targetOptions = useMemo(
+		() => normalizeForkTargetOptions(target, targets),
+		[target, targets],
+	);
+
+	useEffect(() => {
+		if (!targetOptions.some((option) => option.value === selectedTarget)) {
+			setSelectedTarget(target);
+		}
+	}, [selectedTarget, target, targetOptions]);
 
 	const loadPreview = useCallback(
-		() => backend.appState.getForkPreview(appId, target),
-		[backend.appState, appId, target],
+		() => backend.appState.getForkPreview(appId, selectedTarget),
+		[backend.appState, appId, selectedTarget],
 	);
 
 	const beginFork = useCallback(
 		(body: IOnlineForkBody): Promise<IBeginForkResponse> => {
-			if (target === "offline") {
+			if (selectedTarget === "offline") {
 				return backend.appState.beginOfflineFork(appId, body);
 			}
 			return backend.appState.onlineFork(appId, body);
 		},
-		[backend.appState, appId, target],
+		[backend.appState, appId, selectedTarget],
 	);
 
 	const handleForkStarted = useCallback(
 		(response: IBeginForkResponse) => {
-			if (onForkStarted) {
-				onForkStarted(response);
-				return;
-			}
-			if (target === "online") {
+			onForkStarted?.(response);
+			if (selectedTarget === "online") {
 				router.push(`/library/config?id=${response.new_app_id}`);
 			}
 		},
-		[onForkStarted, target, router],
+		[onForkStarted, selectedTarget, router],
 	);
 
 	return (
@@ -86,9 +106,13 @@ export function ForkAppCard({
 						Create a fork
 					</CardTitle>
 					<CardDescription>
-						Make a personal copy of this app on your account. Secrets are
-						stripped and OAuth bindings are cleared so the fork never carries
-						the source's credentials.
+						{targetOptions.length > 1
+							? "Choose where to create a personal copy of this app."
+							: selectedTarget === "offline"
+								? "Make a local copy of this app on this device."
+								: "Make a personal copy of this app on your account."}{" "}
+						Secrets are stripped and OAuth bindings are cleared so the fork
+						never carries the source's credentials.
 					</CardDescription>
 				</div>
 			</CardHeader>
@@ -102,6 +126,9 @@ export function ForkAppCard({
 					appName={appName}
 					open={open}
 					onOpenChange={setOpen}
+					target={selectedTarget}
+					targetOptions={targetOptions}
+					onTargetChange={setSelectedTarget}
 					loadPreview={loadPreview}
 					beginFork={beginFork}
 					onForkStarted={handleForkStarted}

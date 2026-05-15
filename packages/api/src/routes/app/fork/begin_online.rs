@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     credentials::{CredentialsAccess, RuntimeCredentials},
     entity::{
@@ -10,11 +12,17 @@ use crate::{
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
+use flow_like::{
+    app::{App, AppStatus as CoreAppStatus},
+    bit::Metadata,
+};
+use flow_like_storage::Path;
 use flow_like_types::create_id;
+use futures_util::TryStreamExt;
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    IntoActiveModel, TransactionTrait,
+    EntityTrait, IntoActiveModel, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -56,8 +64,9 @@ pub struct BeginOnlineForkResponse {
     /// Path the desktop should treat as the upload root (matches
     /// the destination prefix on the server's master store).
     pub upload_path: String,
-    /// Scoped credentials with `EditApp` access — the desktop uses
-    /// these to upload the bundle directly to object storage.
+    /// Scoped credentials with `EditAppContent` access — the desktop
+    /// uses these only for content objects. Meta objects are pushed
+    /// through app-edit endpoints so DB state stays in sync.
     pub shared_credentials: serde_json::Value,
     /// Optional credentials expiration (ISO8601). The desktop must
     /// finish the upload before this and call `finalize`.
@@ -116,6 +125,7 @@ pub async fn begin_online_fork(
     let sub = user.sub()?;
     let new_app_id = create_id();
     let now = chrono::Utc::now().naive_utc();
+    let source_app_id = body.source_app_id.clone();
 
     // Materialize an empty destination app + Owner/Admin/Member
     // roles + caller membership, all in one transaction. The app
@@ -124,7 +134,7 @@ pub async fn begin_online_fork(
     // once the upload is verified.
     let new_app_id_db = new_app_id.clone();
     let sub_owned = sub.clone();
-    let source_app_id_owned = body.source_app_id.clone();
+    let source_app_id_owned = source_app_id.clone();
     state
         .db
         .transaction::<_, (), sea_orm::DbErr>(|txn| {
@@ -220,6 +230,35 @@ pub async fn begin_online_fork(
             sea_orm::TransactionError::Transaction(err) => ApiError::from(err),
         })?;
 
+    // The follow-up sync uses the regular app-edit endpoints. Those
+    // endpoints load `manifest.app`, so the hidden destination needs a
+    // minimal on-disk app before the desktop starts pushing boards,
+    // pages, widgets, templates and events.
+    let bootstrap_result = async {
+        let credentials = state.master_credentials().await?;
+        let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
+        let mut metadata = Metadata::default();
+        metadata.name = "Forked app".to_string();
+        let mut drive_app = App::new(
+            Some(new_app_id.clone()),
+            metadata,
+            Vec::new(),
+            flow_like_state.clone(),
+        )
+        .await?;
+        drive_app.status = CoreAppStatus::Inactive;
+        drive_app.forked_from = source_app_id;
+        drive_app.forked_at = Some(std::time::SystemTime::now());
+        drive_app.save().await?;
+        App::load(new_app_id.clone(), flow_like_state).await?;
+        Ok::<(), ApiError>(())
+    }
+    .await;
+    if let Err(err) = bootstrap_result {
+        cleanup_failed_online_fork_allocation(&state, &new_app_id).await;
+        return Err(err);
+    }
+
     // Issue **content-only** scoped credentials so the desktop can
     // upload metadata/, upload/, storage/ directly to the destination
     // prefix without putting the API server in the data path. Boards
@@ -268,4 +307,46 @@ fn credentials_expiration(creds: &RuntimeCredentials) -> Option<chrono::DateTime
         RuntimeCredentials::R2(r2) => r2.expiration,
         RuntimeCredentials::Mixed(mixed) => credentials_expiration(&mixed.content),
     }
+}
+
+async fn cleanup_failed_online_fork_allocation(state: &AppState, app_id: &str) {
+    if let Err(err) = delete_app_storage_prefixes(state, app_id).await {
+        tracing::warn!(
+            app_id,
+            error = %err,
+            "failed to clean storage after offline-to-online fork allocation bootstrap error"
+        );
+    }
+
+    if let Err(err) = app::Entity::delete_by_id(app_id).exec(&state.db).await {
+        tracing::warn!(
+            app_id,
+            error = %err,
+            "failed to clean database row after offline-to-online fork allocation bootstrap error"
+        );
+    }
+}
+
+async fn delete_app_storage_prefixes(state: &AppState, app_id: &str) -> Result<(), ApiError> {
+    let credentials = state.master_credentials().await?;
+    let prefix = Path::from("apps").child(app_id.to_string());
+
+    for meta_store in [true, false] {
+        let store = credentials.to_store(meta_store).await?.as_generic();
+        let locations: Vec<Path> = store
+            .list(Some(&prefix))
+            .map_ok(|m| m.location)
+            .try_collect()
+            .await
+            .map_err(|err| ApiError::internal(format!("list app storage prefix: {err}")))?;
+
+        for location in locations {
+            store
+                .delete(&location)
+                .await
+                .map_err(|err| ApiError::internal(format!("delete app storage object: {err}")))?;
+        }
+    }
+
+    Ok(())
 }
