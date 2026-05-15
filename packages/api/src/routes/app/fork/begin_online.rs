@@ -260,7 +260,7 @@ pub async fn begin_online_fork(
     }
 
     // Issue **content-only** scoped credentials so the desktop can
-    // upload metadata/, upload/, storage/ directly to the destination
+    // upload metadata/, media/, upload/, storage/ directly to the destination
     // prefix without putting the API server in the data path. Boards
     // / events / widgets / templates / pages live in the meta bucket
     // and must be pushed via the normal app-edit endpoints — that

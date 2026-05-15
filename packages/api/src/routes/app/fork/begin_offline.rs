@@ -37,9 +37,10 @@ pub struct BeginOfflineForkResponse {
     pub fork_session_id: String,
     /// Remapped + secret-stripped + token-rewritten inline artifacts
     /// (manifest, boards, events, widgets, templates, pages,
-    /// versioned forms, and DB-backed metadata files). Each
+    /// versioned forms, DB-backed metadata files, and app metadata
+    /// media). Each
     /// `MetaBlob.data_b64` is the exact bytes that would have been
-    /// written to disk on a server-side destination — the desktop
+    /// written to disk on a destination — the desktop
     /// base64-decodes and writes it under
     /// `apps/{new_app_id}/{relative_path}`, choosing the local meta
     /// or content store based on the relative path.

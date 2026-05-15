@@ -1,2 +1,19 @@
 [install]
 linker = "hoisted"
+exact = true
+minimumReleaseAge = 259200
+minimumReleaseAgeExcludes = [
+	"@flow-like/dexie-tauri-blob-offload",
+	"@flow-like/sdk",
+	"@flow-like/wasm-sdk-assemblyscript",
+	"@flow-like/wasm-sdk-typescript",
+	"@tm9657/flow-like-ui",
+	"flow-like",
+	"flow-like-api",
+	"flow-like-backend-api",
+	"flow-like-backend-runtime",
+	"flow-like-desktop",
+	"flow-like-wasm-node-ts",
+	"flow-like-wasm-node-typescript",
+	"flow-like-web",
+]

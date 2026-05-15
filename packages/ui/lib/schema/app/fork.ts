@@ -30,8 +30,10 @@ export interface IForkPreviewResponse {
 
 export interface IMetaBlob {
 	relative_path: string;
-	/** Base64-encoded compressed bytes (proto for boards/events/templates,
-	 * JSON for widgets/pages). Decode and write to local meta store. */
+	/** Base64-encoded bytes. Most entries are compressed app artifacts
+	 * (proto for boards/events/templates/metadata, JSON for widgets/pages);
+	 * `media/...` entries are raw bytes and should be written to local
+	 * content storage. */
 	data_b64: string;
 }
 
@@ -49,9 +51,9 @@ export interface IBeginOfflineForkResponse {
 	/**
 	 * Remapped + secret-stripped inline artifacts (manifest, boards,
 	 * events, widgets, templates, pages, and DB-backed metadata
-	 * files). Each entry's `data_b64` is the exact bytes that would
-	 * have been written to disk on a server-side destination — the
-	 * desktop decodes and writes it under
+	 * files, plus app metadata media). Each entry's `data_b64` is the
+	 * exact bytes that would have been written to disk on a destination
+	 * — the desktop decodes and writes it under
 	 * `apps/{new_app_id}/{relative_path}`.
 	 */
 	meta_blobs: IMetaBlob[];

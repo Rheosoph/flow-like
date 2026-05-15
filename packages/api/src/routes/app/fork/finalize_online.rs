@@ -9,7 +9,10 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
-    utils::fork::preview::compute_app_content_size_and_count,
+    utils::fork::{
+        materialize_uploaded_app_media, preview::compute_app_content_size_and_count,
+        sync_uploaded_metadata_media_to_db,
+    },
 };
 use axum::{
     Extension, Json,
@@ -61,7 +64,7 @@ pub struct FinalizeOnlineForkResponse {
 /// Finalize an offline → online fork.
 ///
 /// The desktop side splits its work into two streams:
-/// - **Content** (metadata/, upload/, storage/) is uploaded via the
+/// - **Content** (metadata/, media/, upload/, storage/) is uploaded via the
 ///   scoped credentials returned by `/fork/online/begin` directly to
 ///   the content store at `apps/{app_id}/...`.
 /// - **Meta** (boards, events, widgets, templates, pages) is pushed
@@ -124,6 +127,14 @@ pub async fn finalize_online_fork(
             app_id, app_row.visibility
         )));
     }
+
+    // Desktop metadata media lands under `apps/{id}/media`; the API
+    // serves it from `media/apps/{id}`. Move it before the authoritative
+    // size check, then restore DB media ids from the uploaded local
+    // metadata files because normal metadata upserts preserve media
+    // fields by design.
+    materialize_uploaded_app_media(&state, &app_id).await?;
+    sync_uploaded_metadata_media_to_db(&state, &app_id).await?;
 
     // Re-verify the content-store upload size (the body summary at
     // begin was the desktop's claim — this is the authoritative

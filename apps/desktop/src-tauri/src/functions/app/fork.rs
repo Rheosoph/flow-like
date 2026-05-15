@@ -3,7 +3,8 @@
 //! Server side: `POST /apps/{src}/fork/offline/begin` returns:
 //!   - `meta_blobs`: remapped + secret-stripped manifest, boards,
 //!     events, widgets, templates, pages, plus translated DB-backed
-//!     metadata files (base64-encoded compressed bytes)
+//!     metadata files (base64-encoded compressed bytes) and `media/...`
+//!     raw bytes
 //!   - `source_content_prefix` + `shared_credentials`: scoped read
 //!     access to the *source's* content store prefix (metadata/,
 //!     upload/, storage/)
@@ -12,7 +13,7 @@
 //!   1. Decodes each inline blob. Meta artifacts are written to the
 //!      desktop's local **meta** store; `metadata/...` blobs are
 //!      written to the local **content** store because local metadata
-//!      readers resolve there.
+//!      readers resolve there. `media/...` blobs are also content.
 //!   2. Builds an `object_store` client from the scoped credentials
 //!      and lists the source content prefix; for each file, copies
 //!      to the desktop's local **content** store, translating any
@@ -454,6 +455,8 @@ async fn register_profile_app(
 fn is_content_blob_path(relative_path: &str) -> bool {
     relative_path == "metadata"
         || relative_path.starts_with("metadata/")
+        || relative_path == "media"
+        || relative_path.starts_with("media/")
         || relative_path == "upload"
         || relative_path.starts_with("upload/")
         || relative_path == "storage"

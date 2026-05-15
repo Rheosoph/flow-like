@@ -196,15 +196,16 @@ impl ForkIdMap {
 
 /// One serialized meta artifact extracted from the in-memory bundle —
 /// the bytes are exactly what would have been written to disk
-/// (compressed proto for boards/events/templates/manifest, compressed
-/// JSON for widgets/pages). `path` is relative to `apps/{new_app_id}/`
-/// so the desktop can write it back at the same offset.
+/// (compressed proto for boards/events/templates/manifest/metadata,
+/// compressed JSON for widgets/pages, and raw bytes for `media/...`
+/// entries). `path` is relative to `apps/{new_app_id}/` so the desktop
+/// can write it back at the same offset.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct MetaBlob {
     /// Relative path under `apps/{new_app_id}/`, slash-delimited.
     pub relative_path: String,
-    /// Base64-encoded compressed payload — exactly what would land on
-    /// disk if the destination were materialized server-side.
+    /// Base64-encoded payload — exactly what would land on disk if
+    /// the destination were materialized server-side.
     pub data_b64: String,
 }
 
@@ -246,6 +247,10 @@ pub struct OfflineMetaBundle {
 ///    `metadata/.../*.meta` files in the destination id space.
 /// 6. Base64-encodes each remapped blob with its `apps/{new_app_id}/`-
 ///    relative path.
+/// 7. Inlines app metadata media from `media/apps/{src_app_id}/...`
+///    as raw `media/...` blobs. Online app media lives outside the
+///    `apps/{id}` content prefix, while desktop readers expect it
+///    under `apps/{id}/media`.
 ///
 /// Storage-backed user content (`upload/`, `storage/`, and any legacy
 /// `metadata/` files) is **not** in the bundle — `begin_offline_fork`
@@ -263,6 +268,7 @@ pub async fn compute_offline_fork_bundle(
 
     let credentials = state.master_credentials().await?;
     let src_meta_store = credentials.to_store(true).await?.as_generic();
+    let src_content_store = credentials.to_store(false).await?.as_generic();
 
     let src_prefix = Path::from("apps").child(src_app_id.to_string());
     let new_app_id = create_id();
@@ -663,6 +669,9 @@ pub async fn compute_offline_fork_bundle(
     )
     .await?;
 
+    // ---- 7b. App metadata media: server content layout → desktop layout
+    append_media_blobs_from_store(&src_content_store, src_app_id, &mut blobs).await?;
+
     // ---- 8. Rewrite + ship the manifest ----------------------------
     // Rebuild each id list as the union of (manifest, DB rows) so a
     // resource that exists only in the DB still ends up on the
@@ -976,6 +985,48 @@ async fn append_metadata_blobs_from_db(
             data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
         Ok(())
+    }
+
+    Ok(())
+}
+
+async fn append_media_blobs_from_store(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_app_id: &str,
+    blobs: &mut Vec<MetaBlob>,
+) -> Result<(), ApiError> {
+    use base64::Engine as _;
+
+    let src_media_dir = Path::from("media")
+        .child("apps")
+        .child(src_app_id.to_string());
+    let src_media_dir_str = src_media_dir.as_ref().to_string();
+    let mut listing = src_store.list(Some(&src_media_dir));
+
+    while let Some(item) = listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list app metadata media: {e}")))?
+    {
+        let path_str = item.location.as_ref().to_string();
+        let Some(relative_path) = relative_to_prefix(&path_str, &src_media_dir_str) else {
+            continue;
+        };
+        if relative_path.is_empty() {
+            continue;
+        }
+
+        let bytes = src_store
+            .get(&item.location)
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("read app metadata media: {e}")))?
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("read app metadata media bytes: {e}")))?;
+        blobs.push(MetaBlob {
+            relative_path: format!("media/{}", relative_path),
+            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
     }
 
     Ok(())
@@ -1541,6 +1592,16 @@ pub async fn fork_app_with_visibility(
         "app storage",
     )
     .await?;
+    copy_object_prefix(
+        &src_content_store,
+        &dst_content_store,
+        &Path::from("media")
+            .child("apps")
+            .child(src_app_id.to_string()),
+        &Path::from("media").child("apps").child(new_app_id.clone()),
+        "app metadata media",
+    )
+    .await?;
 
     // ---- 7. Rewrite the manifest --------------------------------------
     // The manifest's id lists are rebuilt from union(manifest, DB) and
@@ -2033,6 +2094,87 @@ pub async fn fork_app_with_visibility(
     Ok((new_app_id, maps, skipped))
 }
 
+/// Offline → online uploads come from the desktop content layout, where
+/// app metadata images live under `apps/{id}/media`. The API serves and
+/// presigns those same images from `media/apps/{id}`. Finalization moves
+/// the uploaded files into the server layout, then drops the transient
+/// desktop-layout copy so app content accounting does not double-count it.
+pub async fn materialize_uploaded_app_media(
+    state: &AppState,
+    app_id: &str,
+) -> Result<(), ApiError> {
+    let credentials = state.master_credentials().await?;
+    let content_store = credentials.to_store(false).await?.as_generic();
+    let src_media_dir = Path::from("apps").child(app_id.to_string()).child("media");
+    let dst_media_dir = Path::from("media").child("apps").child(app_id.to_string());
+
+    copy_object_prefix(
+        &content_store,
+        &content_store,
+        &src_media_dir,
+        &dst_media_dir,
+        "uploaded app metadata media",
+    )
+    .await?;
+    delete_object_prefix(
+        &content_store,
+        &src_media_dir,
+        "uploaded app metadata media",
+    )
+    .await?;
+    Ok(())
+}
+
+/// Offline → online uses normal metadata upsert endpoints, and those
+/// endpoints intentionally preserve existing media fields. During a fork
+/// the destination metadata rows are fresh defaults, so restore icon,
+/// thumbnail and preview media from the uploaded local metadata files.
+pub async fn sync_uploaded_metadata_media_to_db(
+    state: &AppState,
+    app_id: &str,
+) -> Result<(), ApiError> {
+    let credentials = state.master_credentials().await?;
+    let content_store = credentials.to_store(false).await?.as_generic();
+    let metadata_dir = Path::from("apps")
+        .child(app_id.to_string())
+        .child("metadata");
+    let metadata_dir_str = metadata_dir.as_ref().to_string();
+
+    let mut listing = content_store.list(Some(&metadata_dir));
+    let now = chrono::Utc::now().naive_utc();
+    while let Some(item) = listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list uploaded metadata: {e}")))?
+    {
+        let path_str = item.location.as_ref().to_string();
+        let Some(relative_path) = relative_to_prefix(&path_str, &metadata_dir_str) else {
+            continue;
+        };
+        let Some(target) = UploadedMetadataTarget::from_relative_path(&relative_path) else {
+            continue;
+        };
+
+        let uploaded: proto::Metadata =
+            match from_compressed(content_store.clone(), item.location.clone()).await {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    tracing::warn!(
+                        app_id = %app_id,
+                        path = %path_str,
+                        "skip uploaded metadata media sync: {}",
+                        err,
+                    );
+                    continue;
+                }
+            };
+
+        update_meta_media_fields(state, app_id, target, uploaded, now).await?;
+    }
+
+    Ok(())
+}
+
 // ---- helpers ----------------------------------------------------------
 
 fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
@@ -2396,6 +2538,138 @@ async fn copy_object_prefix(
         r?;
     }
     Ok(())
+}
+
+async fn delete_object_prefix(
+    store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    prefix: &Path,
+    label: &str,
+) -> Result<(), ApiError> {
+    use futures::StreamExt;
+
+    let mut listing = store.list(Some(prefix));
+    let mut paths: Vec<Path> = Vec::new();
+    while let Some(item) = listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
+    {
+        paths.push(item.location);
+    }
+
+    let results: Vec<Result<(), ApiError>> =
+        futures::stream::iter(paths.into_iter().map(|path| async move {
+            store
+                .delete(&path)
+                .await
+                .map_err(|e| ApiError::internal_error(anyhow!("delete {label}: {e}")))
+        }))
+        .buffer_unordered(COPY_CONCURRENCY)
+        .collect()
+        .await;
+    for result in results {
+        result?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UploadedMetadataTarget {
+    App { lang: String },
+    Widget { id: String, lang: String },
+    Template { id: String, lang: String },
+}
+
+impl UploadedMetadataTarget {
+    fn from_relative_path(relative_path: &str) -> Option<Self> {
+        let segments: Vec<&str> = relative_path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            [file] => Some(Self::App {
+                lang: lang_from_meta_file(file)?,
+            }),
+            ["widgets", id, file] => Some(Self::Widget {
+                id: (*id).to_string(),
+                lang: lang_from_meta_file(file)?,
+            }),
+            ["templates", id, file] => Some(Self::Template {
+                id: (*id).to_string(),
+                lang: lang_from_meta_file(file)?,
+            }),
+            _ => None,
+        }
+    }
+}
+
+fn lang_from_meta_file(file_name: &str) -> Option<String> {
+    file_name
+        .strip_suffix(".meta")
+        .filter(|lang| !lang.is_empty())
+        .map(ToString::to_string)
+}
+
+async fn update_meta_media_fields(
+    state: &AppState,
+    app_id: &str,
+    target: UploadedMetadataTarget,
+    uploaded: proto::Metadata,
+    now: chrono::NaiveDateTime,
+) -> Result<(), ApiError> {
+    let row = match &target {
+        UploadedMetadataTarget::App { lang } => {
+            meta::Entity::find()
+                .filter(meta::Column::AppId.eq(app_id))
+                .filter(meta::Column::Lang.eq(lang))
+                .one(&state.db)
+                .await?
+        }
+        UploadedMetadataTarget::Widget { id, lang } => {
+            meta::Entity::find()
+                .filter(meta::Column::WidgetId.eq(id))
+                .filter(meta::Column::Lang.eq(lang))
+                .one(&state.db)
+                .await?
+        }
+        UploadedMetadataTarget::Template { id, lang } => {
+            meta::Entity::find()
+                .filter(meta::Column::TemplateId.eq(id))
+                .filter(meta::Column::Lang.eq(lang))
+                .one(&state.db)
+                .await?
+        }
+    };
+
+    let Some(row) = row else {
+        tracing::warn!(
+            app_id = %app_id,
+            target = ?target,
+            "skip uploaded metadata media sync: destination metadata row not found",
+        );
+        return Ok(());
+    };
+
+    let preview_media = if uploaded.preview_media.is_empty() {
+        None
+    } else {
+        Some(uploaded.preview_media)
+    };
+    let mut active = row.into_active_model();
+    active.icon = Set(uploaded.icon);
+    active.thumbnail = Set(uploaded.thumbnail);
+    active.preview_media = Set(preview_media);
+    active.updated_at = Set(now);
+    active.update(&state.db).await?;
+    Ok(())
+}
+
+fn relative_to_prefix(path: &str, prefix: &str) -> Option<String> {
+    let suffix = path.strip_prefix(prefix)?;
+    if !suffix.is_empty() && !suffix.starts_with('/') {
+        return None;
+    }
+    Some(suffix.trim_start_matches('/').to_string())
 }
 
 /// Read a page's content. Tries the canonical board-scoped binary
@@ -3393,5 +3667,41 @@ mod tests {
         assert_eq!(value["workflow"][0]["eventId"], "dst_node_b");
         assert_eq!(value["workflow"][1]["flowId"], "dst_node_c");
         assert_eq!(value["eventId"]["literalString"], "dst_event");
+    }
+
+    #[test]
+    fn uploaded_metadata_target_parses_supported_media_metadata_paths() {
+        assert_eq!(
+            UploadedMetadataTarget::from_relative_path("en.meta"),
+            Some(UploadedMetadataTarget::App {
+                lang: "en".to_string(),
+            })
+        );
+        assert_eq!(
+            UploadedMetadataTarget::from_relative_path("widgets/src_widget/de.meta"),
+            Some(UploadedMetadataTarget::Widget {
+                id: "src_widget".to_string(),
+                lang: "de".to_string(),
+            })
+        );
+        assert_eq!(
+            UploadedMetadataTarget::from_relative_path("templates/src_template/fr.meta"),
+            Some(UploadedMetadataTarget::Template {
+                id: "src_template".to_string(),
+                lang: "fr".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn relative_to_prefix_rejects_partial_prefix_matches() {
+        assert_eq!(
+            relative_to_prefix("media/apps/source/icon.webp", "media/apps/source"),
+            Some("icon.webp".to_string())
+        );
+        assert_eq!(
+            relative_to_prefix("media/apps/source-extra/icon.webp", "media/apps/source"),
+            None
+        );
     }
 }

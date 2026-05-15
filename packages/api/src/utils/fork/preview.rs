@@ -37,10 +37,11 @@ impl RemoteTokenSite {
     }
 }
 
-/// Walks `apps/{app_id}/...` and sums total bytes + object count
-/// across **both** the meta and content stores. Used by the preview
-/// endpoint and by the cross-mode flows for size-cap enforcement —
-/// the cap is on the user-visible bundle, which spans both stores.
+/// Walks `apps/{app_id}/...` and app metadata media, then sums total
+/// bytes + object count across **both** the meta and content stores.
+/// Used by the preview endpoint and by the cross-mode flows for
+/// size-cap enforcement — the cap is on the user-visible bundle,
+/// which spans both stores plus `media/apps/{app_id}`.
 pub async fn compute_app_size_and_count(
     state: &AppState,
     app_id: &str,
@@ -70,16 +71,23 @@ pub async fn compute_app_size_and_count(
     // conservative anyway). For physically separate stores this
     // computes the true total.
     let (content_bytes, content_count) = sum_prefix(&content_store, &prefix).await?;
+    let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
+    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix).await?;
     Ok((
-        meta_bytes.saturating_add(content_bytes),
-        meta_count.saturating_add(content_count),
+        meta_bytes
+            .saturating_add(content_bytes)
+            .saturating_add(media_bytes),
+        meta_count
+            .saturating_add(content_count)
+            .saturating_add(media_count),
     ))
 }
 
 /// Same as [`compute_app_size_and_count`] but only for the content
-/// store. Used by `finalize_online` — the desktop uploads
-/// upload/storage/metadata to the content store; the meta store is
-/// populated server-side via the normal app-edit endpoints.
+/// store. Used by `finalize_online` — the desktop uploads content to
+/// the content store, and metadata media is materialized under
+/// `media/apps/{app_id}` before this check; the meta store is populated
+/// server-side via the normal app-edit endpoints.
 pub async fn compute_app_content_size_and_count(
     state: &AppState,
     app_id: &str,
@@ -94,11 +102,15 @@ pub async fn compute_app_content_size_and_count(
         .map_err(ApiError::internal_error)?
         .as_generic();
 
-    sum_prefix(
-        &content_store,
-        &Path::from("apps").child(app_id.to_string()),
-    )
-    .await
+    let app_prefix = Path::from("apps").child(app_id.to_string());
+    let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
+
+    let (app_bytes, app_count) = sum_prefix(&content_store, &app_prefix).await?;
+    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix).await?;
+    Ok((
+        app_bytes.saturating_add(media_bytes),
+        app_count.saturating_add(media_count),
+    ))
 }
 
 async fn sum_prefix(
