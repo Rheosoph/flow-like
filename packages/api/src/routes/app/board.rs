@@ -11,6 +11,7 @@ pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
 pub mod report_run;
+pub mod secrets;
 pub mod summaries;
 pub mod undo_redo_board;
 pub mod upsert_board;

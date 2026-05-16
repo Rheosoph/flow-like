@@ -11,22 +11,25 @@ import {
 	AlertDialogTitle,
 	cn,
 } from "@tm9657/flow-like-ui";
-import { Check, ShieldAlert, X } from "lucide-react";
+import { AlertCircle, Check, ShieldAlert, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 interface RpaPermissionStatus {
 	accessibility: boolean;
+	executable_path?: string | null;
 	screen_recording: boolean;
 }
 
 interface RpaPermissionDialogProps {
 	open: boolean;
+	onContinueAnyway?: () => void;
 	onOpenChange: (open: boolean) => void;
 	onPermissionsGranted?: () => void;
 }
 
 export function RpaPermissionDialog({
 	open,
+	onContinueAnyway,
 	onOpenChange,
 	onPermissionsGranted,
 }: RpaPermissionDialogProps) {
@@ -34,12 +37,14 @@ export function RpaPermissionDialog({
 		null,
 	);
 	const [checking, setChecking] = useState(false);
+	const [checkError, setCheckError] = useState<string | null>(null);
 
 	const checkPermissions = useCallback(async () => {
 		setChecking(true);
 		try {
 			const status = await invoke<RpaPermissionStatus>("check_rpa_permissions");
 			setPermissions(status);
+			setCheckError(null);
 
 			if (status.accessibility && status.screen_recording) {
 				onPermissionsGranted?.();
@@ -47,6 +52,7 @@ export function RpaPermissionDialog({
 			}
 		} catch (error) {
 			console.error("Failed to check RPA permissions:", error);
+			setCheckError(error instanceof Error ? error.message : String(error));
 		} finally {
 			setChecking(false);
 		}
@@ -58,20 +64,42 @@ export function RpaPermissionDialog({
 		}
 	}, [open, checkPermissions]);
 
+	useEffect(() => {
+		if (!open) return;
+
+		const recheck = () => {
+			checkPermissions();
+		};
+		const recheckWhenVisible = () => {
+			if (document.visibilityState === "visible") recheck();
+		};
+
+		window.addEventListener("focus", recheck);
+		document.addEventListener("visibilitychange", recheckWhenVisible);
+		return () => {
+			window.removeEventListener("focus", recheck);
+			document.removeEventListener("visibilitychange", recheckWhenVisible);
+		};
+	}, [open, checkPermissions]);
+
 	const requestPermission = async (
 		type: "accessibility" | "screen_recording",
 	) => {
 		try {
+			setCheckError(null);
 			await invoke("request_rpa_permission", { permissionType: type });
 			await new Promise((resolve) => setTimeout(resolve, 500));
 			checkPermissions();
 		} catch (error) {
 			console.error(`Failed to request ${type} permission:`, error);
+			setCheckError(error instanceof Error ? error.message : String(error));
 		}
 	};
 
 	const allGranted =
 		permissions?.accessibility && permissions?.screen_recording;
+	const canContinueAnyway =
+		!allGranted && !checking && !!(permissions || checkError);
 
 	return (
 		<AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -82,8 +110,8 @@ export function RpaPermissionDialog({
 						Permissions Required
 					</AlertDialogTitle>
 					<AlertDialogDescription>
-						RPA workflow recording requires system permissions to capture your
-						interactions. These permissions allow the app to:
+						Local computer automation requires system permissions to control the
+						desktop and inspect the screen.
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 
@@ -102,20 +130,67 @@ export function RpaPermissionDialog({
 						onRequest={() => requestPermission("screen_recording")}
 						checking={checking}
 					/>
+					{permissions &&
+					(!permissions.accessibility || !permissions.screen_recording) &&
+					permissions.executable_path ? (
+						<div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+							<p className="font-medium text-foreground">
+								macOS is checking this executable:
+							</p>
+							<p className="mt-1 break-all font-mono">
+								{permissions.executable_path}
+							</p>
+							<p className="mt-2">
+								If System Settings shows another Flow Like entry, remove the
+								stale entry or add this executable with the + button.
+							</p>
+						</div>
+					) : null}
+					{checkError ? (
+						<div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+							<AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+							<div>
+								<p className="font-medium">Permission check failed</p>
+								<p className="mt-1 break-words">{checkError}</p>
+							</div>
+						</div>
+					) : null}
 				</div>
 
-				<AlertDialogFooter>
-					<AlertDialogAction
-						onClick={() => {
-							if (allGranted) {
-								onPermissionsGranted?.();
-							}
-							onOpenChange(false);
-						}}
-						disabled={!allGranted}
+				<AlertDialogFooter className="gap-2">
+					<button
+						type="button"
+						onClick={checkPermissions}
+						disabled={checking}
+						className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
 					>
-						{allGranted ? "Start Recording" : "Grant Permissions First"}
-					</AlertDialogAction>
+						{checking ? "Checking..." : "Re-check"}
+					</button>
+					{allGranted ? (
+						<AlertDialogAction
+							onClick={() => {
+								onPermissionsGranted?.();
+								onOpenChange(false);
+							}}
+						>
+							Continue
+						</AlertDialogAction>
+					) : canContinueAnyway ? (
+						<button
+							type="button"
+							onClick={() => {
+								onContinueAnyway?.();
+								onOpenChange(false);
+							}}
+							className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
+						>
+							Continue Anyway
+						</button>
+					) : (
+						<AlertDialogAction disabled>
+							Grant Permissions First
+						</AlertDialogAction>
+					)}
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>

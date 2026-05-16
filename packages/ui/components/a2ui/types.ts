@@ -976,10 +976,16 @@ export interface PlotlyChartComponent extends ComponentBase {
 // FilePreview - Generic file preview component
 export interface FilePreviewComponent extends ComponentBase {
 	type: "filePreview";
-	src: BoundValue;
+	src?: BoundValue;
+	url?: BoundValue;
+	filename?: BoundValue;
+	mimeType?: BoundValue;
+	fileType?: BoundValue; // "pdf" | "image" | "video" | "audio" | "code" | "text"
 	showControls?: BoundValue;
 	fit?: BoundValue; // "contain" | "cover" | "fill" | "none" | "scaleDown"
 	fallbackText?: BoundValue;
+	height?: BoundValue;
+	showDownload?: BoundValue;
 }
 
 // NivoChart - Nivo chart library component
@@ -1511,6 +1517,9 @@ export type A2UIServerMessage =
 	| {
 			type: "requestElements";
 			elementIds: string[];
+	  }
+	| {
+			type: "showScreen";
 	  }
 	| {
 			type: "upsertElement";

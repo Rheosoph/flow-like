@@ -1,6 +1,7 @@
 use crate::{
     ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions,
+    routes::app::board::secrets::filter_board_secrets, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -66,7 +67,7 @@ pub async fn get_template(
         None
     };
 
-    let template = state
+    let mut template = state
         .scoped_template(
             &sub,
             &app_id,
@@ -76,6 +77,12 @@ pub async fn get_template(
             crate::credentials::CredentialsAccess::ReadApp,
         )
         .await?;
+
+    // Templates are serialized `proto::Board` and carry the same
+    // variable structure as live boards (`Board.variables` +
+    // `Layer.variables`). Strip secrets before the response leaves —
+    // template viewers don't need the source's secret values.
+    filter_board_secrets(&mut template);
 
     Ok(Json(template))
 }

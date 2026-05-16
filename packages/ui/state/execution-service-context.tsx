@@ -8,17 +8,36 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { RuntimeVariablesPrompt } from "../components/flow/runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "../components/flow/wasm-sandbox-warning-dialog";
 import type { IIntercomEvent, ILogMetadata, IRunPayload } from "../lib";
 import type { IBoard, IVariable } from "../lib/schema/flow/board";
 import { IExecutionMode } from "../lib/schema/flow/board";
 import { useBackend } from "./backend-state";
+import {
+	prerunBoardKey,
+	prerunEventKey,
+	prerunSwr,
+} from "./backend-state/prerun-cache";
 import type { IRuntimeVariable } from "./backend-state/types";
 import {
 	type RuntimeVariableValue,
 	useRuntimeVariables,
 } from "./runtime-variables-context";
+
+const DRIFT_TOAST_THROTTLE_MS = 30_000;
+const recentDriftToasts = new Map<string, number>();
+function notifyPrerunDrift(key: string): void {
+	const now = Date.now();
+	const last = recentDriftToasts.get(key) ?? 0;
+	if (now - last < DRIFT_TOAST_THROTTLE_MS) return;
+	recentDriftToasts.set(key, now);
+	toast.warning("Workflow changed", {
+		description:
+			"The workflow has been updated since you opened it. Reload to use the latest version.",
+	});
+}
 
 interface PendingExecution {
 	appId: string;
@@ -350,7 +369,12 @@ export function ExecutionServiceProvider({
 
 			if (backend.boardState.prerunBoard) {
 				try {
-					prerunResult = await backend.boardState.prerunBoard(appId, boardId);
+					const fetchPrerun = backend.boardState.prerunBoard;
+					prerunResult = await prerunSwr(
+						prerunBoardKey(appId, boardId),
+						() => fetchPrerun(appId, boardId),
+						{ onDrift: (key) => notifyPrerunDrift(key) },
+					);
 
 					if (
 						prerunResult.has_wasm_nodes &&
@@ -613,9 +637,11 @@ export function ExecutionServiceProvider({
 
 			if (backend.eventState.prerunEvent) {
 				try {
-					prerunResult = await backend.eventState.prerunEvent(
-						appId,
-						eventIdStr,
+					const fetchPrerun = backend.eventState.prerunEvent;
+					prerunResult = await prerunSwr(
+						prerunEventKey(appId, eventIdStr),
+						() => fetchPrerun(appId, eventIdStr),
+						{ onDrift: (key) => notifyPrerunDrift(key) },
 					);
 
 					if (

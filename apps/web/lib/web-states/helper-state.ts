@@ -1,9 +1,15 @@
-import type { IHelperState } from "@tm9657/flow-like-ui";
+import { getOrUploadTemporaryFile } from "@tm9657/flow-like-ui";
+import type {
+	IHelperState,
+	ITemporaryFlowPath,
+	ITemporaryUploadedFile,
+} from "@tm9657/flow-like-ui";
 import type { IFileMetadata } from "@tm9657/flow-like-ui/lib";
 import { type WebBackendRef, apiGet } from "./api-utils";
 
 interface ITemporaryFileResponse {
 	key: string;
+	flowPath?: ITemporaryFlowPath;
 	contentType: string;
 	uploadUrl: string;
 	uploadExpiresAt: string;
@@ -37,26 +43,62 @@ export class WebHelperState implements IHelperState {
 		return undefined;
 	}
 
-	async fileToUrl(file: File, offline?: boolean): Promise<string> {
-		if (!this.backend.auth) {
-			return URL.createObjectURL(file);
-		}
+	async fileToUrl(
+		file: File,
+		offline?: boolean,
+		appId?: string,
+	): Promise<string> {
+		return (await this.fileToTemporaryFile(file, offline, appId)).url;
+	}
 
-		const response: ITemporaryFileResponse = await apiGet(
-			`tmp?extension=${encodeURIComponent(file.name.split(".").pop() || "")}&filename=${encodeURIComponent(file.name)}`,
-			this.backend.auth,
-		);
+	async fileToTemporaryFile(
+		file: File,
+		_offline?: boolean,
+		appId?: string,
+	): Promise<ITemporaryUploadedFile> {
+		const profileScope =
+			this.backend.profile?.id ?? this.backend.profile?.hub ?? "no-profile";
+		const scope = `web:${profileScope}:${appId ?? "global"}:${this.backend.auth ? "auth" : "anon"}`;
 
-		await fetch(response.uploadUrl, {
-			method: "PUT",
-			headers: {
-				"Content-Type": file.type,
-				"Content-Disposition": buildContentDisposition(file.name, "inline"),
-			},
-			body: file,
+		return getOrUploadTemporaryFile(file, scope, async () => {
+			if (!this.backend.auth) {
+				return { url: URL.createObjectURL(file) };
+			}
+
+			const params = new URLSearchParams({
+				extension: file.name.split(".").pop() || "",
+				filename: file.name,
+			});
+			if (appId) {
+				params.set("appId", appId);
+			}
+
+			const response: ITemporaryFileResponse = await apiGet(
+				`tmp?${params.toString()}`,
+				this.backend.auth,
+			);
+
+			await fetch(response.uploadUrl, {
+				method: "PUT",
+				headers: {
+					"Content-Type": file.type,
+					"Content-Disposition": buildContentDisposition(file.name, "inline"),
+				},
+				body: file,
+			});
+
+			return {
+				url: response.downloadUrl,
+				key: response.key,
+				contentType: response.contentType,
+				flowPath: response.flowPath,
+				uploadExpiresAt: response.uploadExpiresAt,
+				downloadExpiresAt: response.downloadExpiresAt,
+				headUrl: response.headUrl,
+				deleteUrl: response.deleteUrl,
+				sizeLimitBytes: response.sizeLimitBytes,
+			};
 		});
-
-		return response.downloadUrl;
 	}
 }
 

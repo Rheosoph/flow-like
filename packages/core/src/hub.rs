@@ -178,11 +178,54 @@ pub struct Hub {
     #[serde(default)]
     pub push_notifications: PushNotificationsConfig,
 
+    /// Fork-an-app feature configuration
+    #[serde(default)]
+    pub forking: ForkingConfig,
+
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
 
     #[serde(skip)]
     http_client: Option<Arc<HTTPClient>>,
+}
+
+/// Fork-an-app feature config. Controls quotas and the unauthenticated-fork
+/// path. Defaults are conservative: feature on, 1 GB / 10k file cap, no
+/// anonymous forking.
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct ForkingConfig {
+    /// Global kill switch — when false, every fork endpoint refuses
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Hard cap on the total bytes copied in a single fork
+    #[serde(default = "default_fork_max_size_bytes")]
+    pub max_size_bytes: u64,
+    /// Hard cap on the number of objects copied in a single fork
+    #[serde(default = "default_fork_max_file_count")]
+    pub max_file_count: u64,
+    /// Whether anonymous (unauthenticated) callers may fork a public+free app
+    /// to an offline (desktop) destination
+    #[serde(default)]
+    pub allow_unauthenticated_to_offline: bool,
+}
+
+fn default_fork_max_size_bytes() -> u64 {
+    1_073_741_824
+}
+
+fn default_fork_max_file_count() -> u64 {
+    10_000
+}
+
+impl Default for ForkingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_size_bytes: default_fork_max_size_bytes(),
+            max_file_count: default_fork_max_file_count(),
+            allow_unauthenticated_to_offline: false,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

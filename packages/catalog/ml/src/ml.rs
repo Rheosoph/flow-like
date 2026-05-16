@@ -471,7 +471,7 @@ impl MLModel {
         }
     }
 
-    fn predict_on_vector(&self, vector: Vec<f64>) -> Result<MLPrediction> {
+    pub(crate) fn predict_on_vector(&self, vector: Vec<f64>) -> Result<MLPrediction> {
         match self {
             MLModel::KMeans(model) => {
                 let array = Array2::from_shape_vec((1, vector.len()), vector)?;
@@ -501,24 +501,18 @@ impl MLModel {
             }
             MLModel::SVMMultiClass(model) => {
                 let array = Array2::from_shape_vec((1, vector.len()), vector)?;
-                let dataset = DatasetBase::from(array);
-                let mult_class = MultiClassModel::from_iter(model.model.clone());
-                let predictions = mult_class.predict(&dataset);
-                let predicted_class = *predictions
-                    .first()
+                let sample = array.row(0);
+                let (predicted_class, confidence) = model
+                    .model
+                    .iter()
+                    .map(|(class_id, classifier)| {
+                        let probability = classifier.predict(sample.to_owned());
+                        (*class_id, f64::from(*probability))
+                    })
+                    .max_by(|(_, left), (_, right)| {
+                        left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .ok_or_else(|| anyhow!("Got an empty prediction"))?;
-
-                // Calculate confidence as voting ratio
-                // In OvA, confidence = votes_for_winner / total_classifiers
-                let n_classifiers = model.model.len();
-                let confidence = if n_classifiers > 0 {
-                    // Simple confidence: 1/n_classes means random, 1.0 means unanimous
-                    // Since we don't have access to individual votes easily,
-                    // we approximate based on class count
-                    Some(1.0 / n_classifiers as f64)
-                } else {
-                    None
-                };
 
                 let class = if let Some(classes) = &model.classes {
                     Some(classes.get(&predicted_class).ok_or_else(|| {
@@ -533,7 +527,7 @@ impl MLModel {
                 Ok(MLPrediction {
                     score: predicted_class as f64,
                     class: class.cloned(),
-                    confidence,
+                    confidence: Some(confidence),
                 })
             }
             MLModel::GaussianNaiveBayes(model) => {
@@ -594,7 +588,7 @@ pub struct MLPrediction {
     pub class: Option<String>,
     /// Confidence score (0.0-1.0) when available
     /// For KMeans: inverse of distance to centroid (normalized)
-    /// For SVM: voting ratio in OvA
+    /// For SVM: winning one-vs-all probability
     /// For Linear Regression: None (no confidence for regression)
     pub confidence: Option<f64>,
 }

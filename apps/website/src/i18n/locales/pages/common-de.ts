@@ -1,6 +1,5 @@
 export const deCommon = {
 	// Header
-	"header.24h": "24h Lösung",
 	"header.compare": "Vergleich",
 	"header.blog": "Blog",
 	"header.docs": "Dokumentation",
@@ -26,7 +25,6 @@ export const deCommon = {
 	"footer.link.download": "Download",
 	"footer.link.compare": "Vergleich",
 	"footer.link.modernBi": "Modernes BI",
-	"footer.link.24h": "24h Lösung",
 	"footer.link.gettingStarted": "Erste Schritte",
 	"footer.link.whatIs": "Was ist Flow-Like?",
 	"footer.link.selfHosting": "Self-Hosting",
@@ -212,7 +210,6 @@ export const deCommon = {
 	"pricing.ctaSection.title": "Brauchen Sie eine individuelle Lösung?",
 	"pricing.ctaSection.description":
 		"Erhalten Sie eine vollständig individuelle Automatisierungslösung für Ihr Unternehmen in nur 24 Stunden. Wir entwerfen, bauen und deployen einen produktionsreifen Workflow, der auf Ihre genauen Bedürfnisse zugeschnitten ist.",
-	"pricing.ctaSection.24h": "24-Stunden-Lösung",
 	"pricing.ctaSection.enterprise": "Enterprise-Vertrieb kontaktieren",
 	"pricing.ctaSection.startingAt":
 		"Ab €1.999 · Vollständiges Quellcode-Eigentum · Überall einsetzbar",

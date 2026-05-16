@@ -1,6 +1,5 @@
 export const nlCommon = {
 	// Header
-	"header.24h": "24u Oplossing",
 	"header.compare": "Vergelijk",
 	"header.blog": "Blog",
 	"header.docs": "Documentatie",
@@ -25,7 +24,6 @@ export const nlCommon = {
 	"footer.link.download": "Downloaden",
 	"footer.link.compare": "Vergelijk",
 	"footer.link.modernBi": "Moderne BI",
-	"footer.link.24h": "24u Oplossing",
 	"footer.link.gettingStarted": "Aan de Slag",
 	"footer.link.whatIs": "Wat is Flow-Like?",
 	"footer.link.selfHosting": "Self-Hosting",
@@ -208,7 +206,6 @@ export const nlCommon = {
 	"pricing.ctaSection.title": "Een maatwerkoplossing nodig?",
 	"pricing.ctaSection.description":
 		"Krijg een volledig op maat gemaakte automatiseringsoplossing voor je bedrijf in slechts 24 uur. We ontwerpen, bouwen en deployen een productieklare workflow afgestemd op je exacte behoeften.",
-	"pricing.ctaSection.24h": "24-uurs oplossing",
 	"pricing.ctaSection.enterprise": "Neem contact op met enterprise sales",
 	"pricing.ctaSection.startingAt":
 		"Vanaf €1.999 · Volledig eigendom van broncode · Deploy overal",

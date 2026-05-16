@@ -90,6 +90,15 @@ model App {
   price   BigInt  @default(0)
   version String?
 
+  /// Project owner opts in to the Fork-an-app feature. Apps default to
+  /// false; without this flag the fork endpoints reject the request.
+  allowForking Boolean @default(false)
+  /// For forked apps: the source app's id, kept as a free-form string so a
+  /// fork survives even if the source app is later deleted.
+  forkedFrom   String?
+  /// For forked apps: when the fork happened.
+  forkedAt     DateTime?
+
   technicalUsers TechnicalUser[]
   llmUsage       LLMUsageTracking[]
   executionUsage ExecutionUsageTracking[]

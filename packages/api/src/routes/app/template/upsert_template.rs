@@ -30,12 +30,17 @@ async fn create_template(
     state: AppState,
     permission: &AppPermissionResponse,
     app_id: &str,
+    template_id: &str,
     template_data: &TemplateUpsert,
 ) -> Result<(String, (u32, u32, u32)), ApiError> {
     if !permission.has_permission(RolePermissions::ReadBoards) {
         return Err(ApiError::FORBIDDEN);
     }
-    let template_id = create_id();
+    let template_id = if template_id == "new" {
+        create_id()
+    } else {
+        template_id.to_string()
+    };
     let sub = user.sub()?;
     let mut app = state
         .scoped_app(
@@ -134,8 +139,15 @@ pub async fn upsert_template(
     let mut template: template::ActiveModel = match template {
         Some(t) => t.into(),
         None => {
-            let new_template =
-                create_template(user, state, &permission, &app_id, &template_data).await?;
+            let new_template = create_template(
+                user,
+                state,
+                &permission,
+                &app_id,
+                &template_id,
+                &template_data,
+            )
+            .await?;
 
             return Ok(Json(new_template));
         }

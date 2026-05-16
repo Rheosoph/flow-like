@@ -172,13 +172,6 @@ export const zh = {
 	"design.feature3.title": "Compare 和 Debug",
 	"design.feature3.desc": "Input/output snapshots 让找差异变得轻而易举。",
 
-	// 24 Hour Solution Banner
-	"banner24.tagline": "新",
-	"banner24.headline": "24 小时",
-	"banner24.headline.highlight": "解决方案",
-	"banner24.description":
-		"我们 24 小时内构建你的 automation。2,400 €。Production-ready。",
-	"banner24.learnmore": "了解更多",
 
 	// Portability
 	"portability.tagline": "Full Lifecycle",
@@ -580,11 +573,6 @@ export const zh = {
 	"v2.who.community.title": "社区",
 	"v2.who.community.desc": "小而成长中，真诚地乐于助人。来看看吧。",
 	"v2.who.community.join": "→ 加入 GitHub 讨论",
-	"v2.who.cta.heading": "不知道从哪里开始？",
-	"v2.who.cta.desc":
-		"我们为您构建第一个自动化。24 小时内完成。您观看过程，我们移交一切——代码、文档、运行中的基础设施。",
-	"v2.who.cta.from": "起步价",
-	"v2.who.cta.label": "24 小时解决方案",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "开始",
@@ -599,7 +587,6 @@ export const zh = {
 	"v2.start.teams.selfhost": "自托管指南",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "我们会来找你。",
-	"v2.start.enterprise.solution": "24 小时解决方案",
 	"v2.start.enterprise.contact": "联系我们",
 	"v2.start.dev.title": "开发者",
 	"v2.start.dev.desc": "全部在 GitHub 上。Fork、扩展、贡献。",
@@ -1023,9 +1010,4 @@ export const zh = {
 	"v3.cta.developer": "开发者",
 	"v3.cta.developer.desc": "完整源代码。完整 SDK。完整 API 文档。",
 	"v3.cta.developer.action": "在 GitHub 上查看",
-	"v3.cta.24h.headline": "24 小时解决方案",
-	"v3.cta.24h.desc":
-		"不知从何开始？我们为你工程化你的第一个自动化解决方案——只需 24 小时。你观摩，我们交付一切：代码、文档、运行中的基础设施。",
-	"v3.cta.24h.action": "预约你的 24 小时冲刺 →",
-	"v3.cta.24h.price": "起价 €1,999",
 } as const;

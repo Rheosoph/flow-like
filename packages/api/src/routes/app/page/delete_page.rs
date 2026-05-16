@@ -6,6 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_types::anyhow;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 #[utoipa::path(
@@ -30,7 +31,7 @@ pub async fn delete_page(
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
 
-    let mut app = state
+    let app = state
         .scoped_app(
             &user.sub()?,
             &app_id,
@@ -39,13 +40,42 @@ pub async fn delete_page(
         )
         .await?;
 
-    // Delete from bucket storage
-    app.delete_page(&page_id).await?;
+    // Delete the storage object via the owning board so legacy
+    // app-level copies are evicted alongside the canonical board-scoped
+    // file (`Board::delete_page` removes both). If we can't determine
+    // the board (e.g. orphaned row, board missing) the DB delete still
+    // proceeds — leaving a stale blob is preferable to refusing to
+    // remove the row.
+    let row = page::Entity::find_by_id(&page_id)
+        .filter(page::Column::AppId.eq(&app_id))
+        .one(&state.db)
+        .await?;
+    if let Some(board_id) = row.and_then(|r| r.board_id) {
+        if let Ok(board) = app.open_board(board_id.clone(), None, None).await {
+            let mut board_guard = board.lock().await;
+            if let Err(e) = board_guard.delete_page(&page_id, None).await {
+                tracing::warn!(
+                    "delete_page storage cleanup failed for board {}: {e}",
+                    board_id
+                );
+            }
+            if let Err(e) = board_guard.save(None).await {
+                tracing::warn!("delete_page board save failed for {}: {e}", board_id);
+            }
+        } else {
+            tracing::warn!(
+                "delete_page could not open board {} for page {} — DB row will still be removed",
+                board_id,
+                page_id
+            );
+        }
+    } else {
+        tracing::warn!(
+            "delete_page found no board_id for page {} — DB row will still be removed",
+            page_id
+        );
+    }
 
-    app.page_ids.retain(|id| id != &page_id);
-    app.save().await?;
-
-    // Delete from DB
     page::Entity::delete_many()
         .filter(
             page::Column::AppId
@@ -53,7 +83,8 @@ pub async fn delete_page(
                 .and(page::Column::Id.eq(page_id.clone())),
         )
         .exec(&state.db)
-        .await?;
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("delete page row: {e}")))?;
 
     audit_branch!(
         state,

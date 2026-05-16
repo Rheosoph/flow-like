@@ -139,6 +139,13 @@ export interface IPrerunBoardResponse {
 	wasm_package_ids?: string[];
 	/** Per-package deduplicated permissions declared by WASM nodes */
 	wasm_package_permissions?: Record<string, string[]>;
+	/**
+	 * Stable hash over the board-derived fields. Frontends may cache the
+	 * response and revalidate in the background; a changed signature
+	 * signals the underlying board has shifted.
+	 * Optional only because legacy backends may not emit it.
+	 */
+	signature?: string;
 }
 
 /** Response from pre-run analysis for events */
@@ -158,4 +165,6 @@ export interface IPrerunEventResponse {
 	wasm_package_ids?: string[];
 	/** Per-package deduplicated permissions declared by WASM nodes */
 	wasm_package_permissions?: Record<string, string[]>;
+	/** See {@link IPrerunBoardResponse.signature}. */
+	signature?: string;
 }

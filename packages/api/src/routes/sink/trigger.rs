@@ -709,7 +709,7 @@ pub async fn trigger_event(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -1000,7 +1000,7 @@ pub async fn trigger_http(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -1391,7 +1391,7 @@ pub async fn trigger_telegram(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1717,7 +1717,7 @@ pub async fn trigger_discord(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -2143,9 +2143,16 @@ pub async fn get_cron_sinks(
         .into_iter()
         .filter_map(|s| {
             s.cron_expression.map(|expr| CronScheduleInfo {
+                // The docker-compose cron worker keys its in-memory and Redis
+                // state by this id. Keep it equal to event_id so last-triggered
+                // updates address the same record that schedule sync stores.
+                id: s.event_id.clone(),
                 event_id: s.event_id,
                 cron_expression: expr,
                 app_id: s.app_id,
+                enabled: s.active,
+                last_triggered: None,
+                next_trigger: None,
             })
         })
         .collect();
@@ -2156,9 +2163,13 @@ pub async fn get_cron_sinks(
 /// Cron schedule info returned by list_cron_schedules
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CronScheduleInfo {
+    pub id: String,
     pub event_id: String,
     pub cron_expression: String,
     pub app_id: String,
+    pub enabled: bool,
+    pub last_triggered: Option<chrono::DateTime<chrono::Utc>>,
+    pub next_trigger: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Sink config info returned by list_sink_configs

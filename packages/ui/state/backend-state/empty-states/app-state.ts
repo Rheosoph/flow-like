@@ -8,6 +8,14 @@ import type {
 } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
 import type {
+	IBeginOfflineForkBody,
+	IBeginOfflineForkResponse,
+	IForkPreviewResponse,
+	IForkPreviewTarget,
+	IOnlineForkBody,
+	IOnlineForkResponse,
+} from "@tm9657/flow-like-ui/lib/schema/app/fork";
+import type {
 	AppCommentsResponse,
 	IMediaItem,
 	IPurchaseResponse,
@@ -71,6 +79,27 @@ export class EmptyAppState implements IAppState {
 		appId: string,
 		visibility: IAppVisibility,
 	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	getForkPreview(
+		appId: string,
+		target: IForkPreviewTarget,
+	): Promise<IForkPreviewResponse> {
+		throw new Error("Method not implemented.");
+	}
+	beginOfflineFork(
+		appId: string,
+		body: IBeginOfflineForkBody,
+	): Promise<IBeginOfflineForkResponse> {
+		throw new Error("Method not implemented.");
+	}
+	onlineFork(
+		appId: string,
+		body: IOnlineForkBody,
+	): Promise<IOnlineForkResponse> {
 		throw new Error("Method not implemented.");
 	}
 

@@ -21,4 +21,5 @@ export interface IBitState {
 	searchBits(type: IBitSearchQuery): Promise<IBit[]>;
 	isBitInstalled(bit: IBit): Promise<boolean>;
 	getProfileBits(): Promise<IBit[]>;
+	repairTtsBitAssets(bit: IBit, force?: boolean): Promise<IBitPack>;
 }

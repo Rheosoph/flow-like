@@ -48,6 +48,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
+import { AllowForkingCard } from "@tm9657/flow-like-ui/components/settings/forking/allow-forking-card";
 import {
 	hashToGradient,
 	useThemeInfo,
@@ -88,6 +89,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ForkAppButton } from "./fork-app-button";
 import { VisibilityStatusSwitcher } from "./visibility-status-switcher";
 
 export default function DashboardPage() {
@@ -696,6 +698,21 @@ export default function DashboardPage() {
 							refreshApp={async () => {
 								await app.refetch();
 							}}
+						/>
+
+						{app.data.visibility !== IAppVisibility.Offline && (
+							<AllowForkingCard
+								canEdit={canEdit}
+								localApp={app.data}
+								onChanged={async () => {
+									await app.refetch();
+								}}
+							/>
+						)}
+
+						<ForkAppButton
+							localApp={app.data}
+							appName={metadata.data?.name ?? id ?? "this app"}
 						/>
 
 						{/* Visibility promotion hint */}

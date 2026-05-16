@@ -2,10 +2,17 @@
 //!
 //! Queries AppPackage records for an app, looks up the compiled artifact paths,
 //! and generates presigned download URLs so the executor can fetch them.
+//!
+//! Results are cached on `AppState::wasm_resolve_cache` keyed by `app_id` —
+//! the per-app bundle is small and changes only when the package list is
+//! mutated, so caching cuts the AWS-SDK round-trips out of the hot dispatch
+//! path. The cache TTL is set below the signed-URL TTL so callers always
+//! receive a signature with safe remaining lifetime.
 
 use crate::entity::{app_package, wasm_package_version};
-use crate::routes::registry::server::{ServerRegistry, executor_target_platform};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use crate::routes::registry::server::executor_target_platform;
+use crate::state::AppState;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,16 +20,19 @@ use std::sync::Arc;
 ///
 /// Returns `None` if the app has no WASM packages or if the registry is not enabled.
 pub async fn resolve_wasm_packages(
-    db: &DatabaseConnection,
-    registry: &Option<Arc<ServerRegistry>>,
+    state: &AppState,
     app_id: &str,
 ) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
-    let registry = registry.as_ref()?;
+    if let Some(cached) = state.wasm_resolve_cache.get(app_id) {
+        return Some((*cached).clone());
+    }
+
+    let registry = state.wasm_registry.as_ref()?;
     let target = executor_target_platform();
 
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
-        .all(db)
+        .all(&state.db)
         .await
         .ok()?;
 
@@ -36,7 +46,7 @@ pub async fn resolve_wasm_packages(
         let version_record = wasm_package_version::Entity::find()
             .filter(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
             .filter(wasm_package_version::Column::Version.eq(&pkg.version))
-            .one(db)
+            .one(&state.db)
             .await
             .ok()
             .flatten();
@@ -97,6 +107,8 @@ pub async fn resolve_wasm_packages(
     if result.is_empty() {
         None
     } else {
+        let arc = Arc::new(result.clone());
+        state.wasm_resolve_cache.insert(app_id.to_string(), arc);
         Some(result)
     }
 }

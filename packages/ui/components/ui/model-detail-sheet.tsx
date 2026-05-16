@@ -153,8 +153,14 @@ export function ModelDetailSheet({
 
 	const isVirtualBit = useMemo(
 		() =>
-			!displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess),
-		[displayBit?.download_link, bitSize.data, bitSize.isSuccess],
+			(displayBit?.dependencies?.length ?? 0) === 0 &&
+			(!displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess)),
+		[
+			displayBit?.dependencies,
+			displayBit?.download_link,
+			bitSize.data,
+			bitSize.isSuccess,
+		],
 	);
 
 	const tierInfo = useMemo(() => {
@@ -178,7 +184,7 @@ export function ModelDetailSheet({
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
-			if (!b.download_link || isVirtualBit) {
+			if (isVirtualBit) {
 				await isInstalled.refetch();
 				return;
 			}

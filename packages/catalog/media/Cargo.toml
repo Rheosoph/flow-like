@@ -6,6 +6,10 @@ edition = "2024"
 [features]
 default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
+local-tts = ["flow-like/local-tts"]
+local-tts-metal = ["local-tts", "flow-like/local-tts-metal"]
+local-tts-cuda = ["local-tts", "flow-like/local-tts-cuda"]
+local-tts-accelerate = ["local-tts", "flow-like/local-tts-accelerate"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",

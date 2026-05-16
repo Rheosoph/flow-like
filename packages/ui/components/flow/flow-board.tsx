@@ -992,6 +992,26 @@ export function FlowBoard({
 					return;
 				}
 
+				const rpaPermissionError = error as Error & {
+					isRpaPermissionError?: boolean;
+					permissions?: unknown;
+				};
+				if (rpaPermissionError.isRpaPermissionError) {
+					window.dispatchEvent(
+						new CustomEvent("flow:rpa-permissions-required", {
+							detail: {
+								appId,
+								boardId,
+								nodeId: node.id,
+								payload,
+								permissions: rpaPermissionError.permissions,
+								skipConsentCheck,
+							},
+						}),
+					);
+					return;
+				}
+
 				const errorMessage =
 					error instanceof Error ? error.message : String(error);
 				toastError(
@@ -1258,6 +1278,46 @@ export function FlowBoard({
 		window.addEventListener("flow:oauth-retry", handleOAuthRetry);
 		return () => {
 			window.removeEventListener("flow:oauth-retry", handleOAuthRetry);
+		};
+	}, [appId, boardId, nodes, executeBoard]);
+
+	useEffect(() => {
+		const handleRpaPermissionsRetry = (event: Event) => {
+			const retryEvent = event as CustomEvent<{
+				appId: string;
+				boardId: string;
+				nodeId: string;
+				payload?: object;
+				skipConsentCheck?: boolean;
+			}>;
+
+			const {
+				appId: eventAppId,
+				boardId: eventBoardId,
+				nodeId,
+				payload,
+				skipConsentCheck,
+			} = retryEvent.detail;
+
+			if (eventAppId !== appId || eventBoardId !== boardId) return;
+
+			const node = nodes.find((n) => n.id === nodeId);
+			if (node?.data?.node) {
+				executeBoard(node.data.node as INode, payload, skipConsentCheck);
+			} else {
+				console.warn("[FlowBoard] Node not found for RPA retry:", nodeId);
+			}
+		};
+
+		window.addEventListener(
+			"flow:rpa-permissions-retry",
+			handleRpaPermissionsRetry,
+		);
+		return () => {
+			window.removeEventListener(
+				"flow:rpa-permissions-retry",
+				handleRpaPermissionsRetry,
+			);
 		};
 	}, [appId, boardId, nodes, executeBoard]);
 

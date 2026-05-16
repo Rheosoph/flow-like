@@ -5,6 +5,7 @@ pub mod ai;
 pub mod app;
 pub mod bit;
 pub mod developer;
+pub mod device_id;
 pub mod download;
 pub mod event_sink_commands;
 pub mod feedback;

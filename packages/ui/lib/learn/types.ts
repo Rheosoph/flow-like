@@ -41,12 +41,47 @@ export interface CourseListItem {
 	readonly icon_url: string | null;
 	readonly banner_url: string | null;
 	readonly tags: ReadonlyArray<string>;
+	readonly position: number | null;
 	readonly name: string | null;
 	readonly description: string | null;
 }
 
 export interface CourseDetail extends CourseListItem {
 	readonly long_description: string | null;
+}
+
+export type CourseAssetKind = "IMAGE" | "VIDEO" | "AUDIO" | "DOCUMENT";
+
+export interface CourseAsset {
+	readonly id: string;
+	readonly course_id: string;
+	readonly name: string;
+	readonly filename: string;
+	readonly mime_type: string;
+	readonly size: number;
+	readonly kind: CourseAssetKind;
+	readonly created_at: string;
+	readonly updated_at: string;
+}
+
+export interface CreateCourseAssetBody {
+	name: string;
+	filename: string;
+	mime_type: string;
+	size: number;
+	kind: CourseAssetKind;
+	extension: string;
+}
+
+export interface CreateCourseAssetResponse {
+	readonly asset: CourseAsset;
+	readonly signed_url: string;
+}
+
+export interface OptimizeCourseAssetResponse {
+	readonly asset: CourseAsset;
+	readonly previous_size: number;
+	readonly previous_mime_type: string;
 }
 
 export interface LearningPathStep {
@@ -199,11 +234,20 @@ export interface CourseStructure {
 	readonly modules: ReadonlyArray<ModuleWithLessons>;
 }
 
+export interface LessonAssetView {
+	readonly id: string;
+	readonly name: string;
+	readonly mime_type: string;
+	readonly kind: CourseAssetKind;
+	readonly signed_url: string;
+}
+
 export interface LessonWithChildren {
 	readonly lesson: Lesson;
 	readonly challenges: ReadonlyArray<Challenge>;
 	readonly app_refs: ReadonlyArray<LessonAppRef>;
 	readonly attempts: ReadonlyArray<ChallengeAttempt>;
+	readonly assets: ReadonlyArray<LessonAssetView>;
 }
 
 export interface ForkIdMap {

@@ -119,9 +119,6 @@ export function BlogFooter() {
 						<FooterLink href="/modern-bi">
 							{t("footer.link.modernBi")}
 						</FooterLink>
-						<FooterLink href="/24-hour-solution">
-							{t("footer.link.24h")}
-						</FooterLink>
 						<FooterLink href={localizeHref("/integrations")}>
 							{t("footer.link.integrations")}
 						</FooterLink>

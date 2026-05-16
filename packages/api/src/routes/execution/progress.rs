@@ -7,10 +7,7 @@
 //! Events are stored with TTL and deleted after delivery.
 
 use crate::{
-    entity::{
-        execution_usage_tracking,
-        sea_orm_active_enums::ExecutionStatus,
-    },
+    entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
     error::ApiError,
     execution::{
         state::{

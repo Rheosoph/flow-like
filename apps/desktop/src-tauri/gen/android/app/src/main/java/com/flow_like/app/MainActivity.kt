@@ -2,6 +2,7 @@ package com.flow_like.app
 
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.system.Os
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -37,6 +38,20 @@ class MainActivity : TauriActivity() {
       Log.d("FlowLike", "setenv HOME=$home  TMPDIR=$tmp  LANCE_CACHE_DIR=$tmp  CACHE_DIR=$cache")
     } catch (e: Exception) {
       Log.e("FlowLike", "Failed to set env vars", e)
+    }
+
+    // Stable per-install device id used by the push-target dedup key on the
+    // backend. ANDROID_ID is scoped to (signing key, user, device) since
+    // Android 8.0 and survives uninstall/reinstall — exactly the property we
+    // need so a reinstall reuses the existing PushNotificationTarget row
+    // instead of superseding it.
+    try {
+      val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+      if (!androidId.isNullOrBlank()) {
+        Os.setenv("FL_STABLE_DEVICE_ID", androidId, true)
+      }
+    } catch (e: Exception) {
+      Log.e("FlowLike", "Failed to read ANDROID_ID", e)
     }
 
     enableEdgeToEdge()

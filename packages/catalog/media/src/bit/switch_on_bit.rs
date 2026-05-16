@@ -30,7 +30,7 @@ impl NodeLogic for SwitchOnBitNode {
         );
 
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(1);
+        node.set_version(4);
 
         node.add_input_pin(
             "exec_in",
@@ -53,6 +53,18 @@ impl NodeLogic for SwitchOnBitNode {
             "vlm",
             "VLM",
             "Execution if Bit is VLM",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "tts",
+            "TTS",
+            "Execution if Bit is TTS",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "stt",
+            "STT",
+            "Execution if Bit is STT",
             VariableType::Execution,
         );
         node.add_output_pin(
@@ -175,6 +187,8 @@ impl NodeLogic for SwitchOnBitNode {
 
         context.deactivate_exec_pin("llm").await?;
         context.deactivate_exec_pin("vlm").await?;
+        context.deactivate_exec_pin("tts").await?;
+        context.deactivate_exec_pin("stt").await?;
         context.deactivate_exec_pin("embedding").await?;
         context.deactivate_exec_pin("image_embedding").await?;
         context.deactivate_exec_pin("file").await?;
@@ -199,6 +213,8 @@ impl NodeLogic for SwitchOnBitNode {
         let output_pin = match bit.bit_type {
             BitTypes::Llm => "llm",
             BitTypes::Vlm => "vlm",
+            BitTypes::Tts => "tts",
+            BitTypes::Stt => "stt",
             BitTypes::Embedding => "embedding",
             BitTypes::ImageEmbedding => "image_embedding",
             BitTypes::File => "file",

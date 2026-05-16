@@ -8,6 +8,7 @@ use models::{sync_models, upsert_model};
 use crate::state::AppState;
 
 pub mod bit;
+pub mod forks;
 pub mod logs;
 pub mod models;
 pub mod packages;
@@ -87,6 +88,12 @@ pub fn routes() -> Router<AppState> {
         .route("/users/{user_id}", patch(users::update_user::update_user))
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
+        // Fork orphan janitor
+        .route("/forks/orphans", get(forks::list_orphan_forks))
+        .route(
+            "/forks/orphans/{app_id}/delete",
+            post(forks::delete_orphan_fork),
+        )
         // Logs / observability
         .route("/logs/errors", get(logs::list_errors::list_errors))
         .route("/logs/errors/{error_id}", get(logs::get_error::get_error))

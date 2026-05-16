@@ -1,12 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+	IAppVisibility,
 	type IMetadata,
 	type IWidget,
 	type IWidgetState,
 	type Version,
 	type VersionType,
-	injectDataFunction,
 } from "@tm9657/flow-like-ui";
+import { appsDB } from "../../lib/apps-db";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -19,6 +20,27 @@ export class WidgetState implements IWidgetState {
 
 	private hasRemote(): boolean {
 		return !!(this.backend.profile && this.backend.auth?.isAuthenticated);
+	}
+
+	private async canFetchRemoteWidget(appId: string): Promise<boolean> {
+		if (!this.hasRemote()) return false;
+
+		const cachedVisibility = await appsDB.visibility.get(appId);
+		if (cachedVisibility) {
+			return cachedVisibility.visibility !== IAppVisibility.Offline;
+		}
+
+		try {
+			const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
+				appId,
+			});
+			const visibility = app.visibility ?? IAppVisibility.Offline;
+			await appsDB.visibility.put({ appId, visibility });
+			return visibility !== IAppVisibility.Offline;
+		} catch {
+			// The widget can come from a remote app that has not been cached locally.
+			return true;
+		}
 	}
 
 	private async pushWidgetRemote(
@@ -81,24 +103,14 @@ export class WidgetState implements IWidgetState {
 		language?: string,
 	): Promise<[string, string, IMetadata | undefined][]> {
 		const localWidgets = await invoke<IWidget[]>("get_widgets", { appId });
-		const localResult = await this.buildListResult(
-			appId,
-			localWidgets,
-			language,
-		);
 
 		const isOffline = await this.backend.isOffline(appId);
 		const profile = this.backend.profile;
-		if (
-			isOffline ||
-			!this.backend.queryClient ||
-			!profile ||
-			!this.hasRemote()
-		) {
-			return localResult;
+		if (isOffline || !profile || !this.hasRemote()) {
+			return await this.buildListResult(appId, localWidgets, language);
 		}
 
-		const syncRemote = async () => {
+		try {
 			const params = language ? `?language=${language}` : "";
 			const remoteList = await fetcher<
 				[string, string, IMetadata | undefined][]
@@ -109,34 +121,61 @@ export class WidgetState implements IWidgetState {
 				this.getRemoteAuth(),
 			);
 
-			const localById = new Map(localWidgets.map((w) => [w.id, w]));
 			const remoteIds = new Set(remoteList.map(([, id]) => id));
 
-			// Pull remote widgets that don't exist locally; refresh ones that do
-			for (const [, widgetId] of remoteList) {
-				try {
-					const remoteWidget = await this.fetchRemoteWidget(appId, widgetId);
-					const local = localById.get(widgetId);
-					if (
-						!local ||
-						new Date(remoteWidget.updatedAt).getTime() >
-							new Date(local.updatedAt).getTime()
-					) {
-						await invoke("update_widget", { appId, widget: remoteWidget });
-						localById.set(widgetId, remoteWidget);
+			const localOnly = localWidgets.filter((w) => !remoteIds.has(w.id));
+			const localOnlyMeta = await Promise.all(
+				localOnly.map(async (w) => {
+					try {
+						return await invoke<IMetadata>("get_widget_meta", {
+							appId,
+							widgetId: w.id,
+							language,
+						});
+					} catch {
+						return undefined;
 					}
-				} catch (e) {
-					console.warn(
-						"[WidgetState] Failed to pull remote widget:",
-						widgetId,
-						e,
-					);
-				}
+				}),
+			);
+
+			const result: [string, string, IMetadata | undefined][] = [];
+			for (const [, widgetId, metadata] of remoteList) {
+				result.push([appId, widgetId, metadata]);
+			}
+			for (let i = 0; i < localOnly.length; i++) {
+				result.push([appId, localOnly[i].id, localOnlyMeta[i]]);
 			}
 
-			// Push local widgets the remote does not yet know about (e.g. created offline)
-			for (const local of localWidgets) {
-				if (!remoteIds.has(local.id)) {
+			const syncTask = (async () => {
+				for (const [, widgetId, metadata] of remoteList) {
+					if (metadata) {
+						try {
+							await invoke("push_widget_meta", {
+								appId,
+								widgetId,
+								metadata,
+								language,
+							});
+						} catch (e) {
+							console.warn(
+								"[WidgetState] Failed to persist remote widget metadata locally:",
+								widgetId,
+								e,
+							);
+						}
+					}
+					try {
+						const remoteWidget = await this.fetchRemoteWidget(appId, widgetId);
+						await invoke("update_widget", { appId, widget: remoteWidget });
+					} catch (e) {
+						console.warn(
+							"[WidgetState] Failed to pull remote widget:",
+							widgetId,
+							e,
+						);
+					}
+				}
+				for (const local of localOnly) {
 					try {
 						await this.pushWidgetRemote(appId, local);
 					} catch (e) {
@@ -147,27 +186,17 @@ export class WidgetState implements IWidgetState {
 						);
 					}
 				}
-			}
+			})();
+			this.backend.backgroundTaskHandler(syncTask);
 
-			return this.buildListResult(
-				appId,
-				Array.from(localById.values()),
-				language,
+			return result;
+		} catch (e) {
+			console.warn(
+				"[WidgetState] Falling back to local widgets list, remote fetch failed:",
+				e,
 			);
-		};
-
-		const promise = injectDataFunction(
-			syncRemote,
-			this,
-			this.backend.queryClient,
-			this.getWidgets,
-			[appId, language],
-			[],
-			localResult,
-		);
-		this.backend.backgroundTaskHandler(promise);
-
-		return localResult;
+			return await this.buildListResult(appId, localWidgets, language);
+		}
 	}
 
 	async getWidget(
@@ -186,52 +215,36 @@ export class WidgetState implements IWidgetState {
 			local = undefined;
 		}
 
-		const isOffline = await this.backend.isOffline(appId);
+		const canFetchRemote = await this.canFetchRemoteWidget(appId);
 
-		if (local) {
-			if (isOffline || !this.backend.queryClient || !this.hasRemote()) {
+		if (!canFetchRemote) {
+			if (local) {
 				return local;
 			}
-
-			const localSnapshot = local;
-			const syncRemote = async () => {
-				const remote = await this.fetchRemoteWidget(appId, widgetId, version);
-				if (
-					!version &&
-					new Date(remote.updatedAt).getTime() >
-						new Date(localSnapshot.updatedAt).getTime()
-				) {
-					await invoke("update_widget", { appId, widget: remote });
-					return remote;
-				}
-				return localSnapshot;
-			};
-			const promise = injectDataFunction(
-				syncRemote,
-				this,
-				this.backend.queryClient,
-				this.getWidget,
-				[appId, widgetId, version],
-				[],
-				local,
-			);
-			this.backend.backgroundTaskHandler(promise);
-			return local;
-		}
-
-		if (isOffline || !this.hasRemote()) {
 			throw new Error(`Widget not found: ${widgetId}`);
 		}
 
-		const remote = await this.fetchRemoteWidget(appId, widgetId, version);
-		if (!version) {
-			try {
-				await invoke("update_widget", { appId, widget: remote });
-			} catch (e) {
-				console.warn("[WidgetState] Failed to cache remote widget locally:", e);
+		try {
+			const remote = await this.fetchRemoteWidget(appId, widgetId, version);
+			if (!version) {
+				try {
+					await invoke("update_widget", { appId, widget: remote });
+				} catch (e) {
+					console.warn("[WidgetState] Failed to cache remote widget locally:", e);
+				}
 			}
+			return remote;
+		} catch (e) {
+			if (local) {
+				console.warn(
+					"[WidgetState] Falling back to local widget, remote fetch failed:",
+					widgetId,
+					e,
+				);
+				return local;
+			}
+			throw e;
 		}
-		return remote;
 	}
 
 	async createWidget(

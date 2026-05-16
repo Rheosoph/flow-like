@@ -122,10 +122,6 @@ export const pt = {
 	"design.feature3.desc":
 		"O mesmo fluxo roda em local, staging, produção — sem reescritas.",
 
-	// 24 Hour Banner
-	"banner24.headline": "Seu primeiro workflow em 24 horas",
-	"banner24.description": "Do download à automação funcionando — em um dia.",
-	"banner24.cta": "Baixar",
 
 	// Portability
 	"portability.tagline": "Automação em qualquer lugar",
@@ -533,11 +529,6 @@ export const pt = {
 	"v2.who.community.desc":
 		"Pequena, a crescer e genuinamente prestável. Apareça.",
 	"v2.who.community.join": "→ Participar nas discussões no GitHub",
-	"v2.who.cta.heading": "Não sabe por onde começar?",
-	"v2.who.cta.desc":
-		"Construímos a sua primeira automação por si. Em 24 horas. Assiste a como é feito, entregamos tudo — código, documentação, infraestrutura em funcionamento.",
-	"v2.who.cta.from": "A partir de",
-	"v2.who.cta.label": "Solução em 24 horas",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Comece",
@@ -554,7 +545,6 @@ export const pt = {
 	"v2.start.teams.selfhost": "Guia Self-Hosting",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Encontramo-lo onde está.",
-	"v2.start.enterprise.solution": "Solução em 24 horas",
 	"v2.start.enterprise.contact": "Fale connosco",
 	"v2.start.dev.title": "Programadores",
 	"v2.start.dev.desc": "Tudo no GitHub. Fork, estenda, contribua.",
@@ -697,9 +687,6 @@ export const pt = {
 
 	"design.headline.highlight": "visualmente",
 
-	"banner24.tagline": "Novo",
-	"banner24.headline.highlight": "Solução",
-	"banner24.learnmore": "Saiba mais",
 
 	"portability.headline.start": "Comece",
 	"portability.headline.offline": "offline",
@@ -1167,9 +1154,4 @@ export const pt = {
 	"v3.cta.developer.desc":
 		"Código-fonte completo. SDK completo. Documentação API completa.",
 	"v3.cta.developer.action": "Ver no GitHub",
-	"v3.cta.24h.headline": "A Solução de 24 Horas",
-	"v3.cta.24h.desc":
-		"Não sabe por onde começar? Nós engenhamos a sua primeira solução de automação por si — em 24 horas. Você assiste, nós entregamos tudo: código, documentação, infraestrutura a funcionar.",
-	"v3.cta.24h.action": "Agende o Seu Sprint de 24 Horas →",
-	"v3.cta.24h.price": "A partir de €1.999",
 } as const;

@@ -11,8 +11,20 @@ import type {
 	UpsertAppCommentRequest,
 	UpsertAppCommentResponse,
 } from "@tm9657/flow-like-ui";
-import { IExecutionStage, ILogLevel } from "@tm9657/flow-like-ui";
+import {
+	IExecutionStage,
+	ILogLevel,
+	isAzureBlobStorageUrl,
+} from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+import type {
+	IBeginOfflineForkBody,
+	IBeginOfflineForkResponse,
+	IForkPreviewResponse,
+	IForkPreviewTarget,
+	IOnlineForkBody,
+	IOnlineForkResponse,
+} from "@tm9657/flow-like-ui/lib/schema/app/fork";
 import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
 import {
 	type WebBackendRef,
@@ -192,7 +204,7 @@ export class WebAppState implements IAppState {
 		};
 
 		// Azure Blob Storage requires x-ms-blob-type header
-		if (signed_url.includes(".blob.core.windows.net")) {
+		if (isAzureBlobStorageUrl(signed_url)) {
 			headers["x-ms-blob-type"] = "BlockBlob";
 		}
 
@@ -214,6 +226,46 @@ export class WebAppState implements IAppState {
 		await apiPatch(
 			`apps/${appId}/visibility`,
 			{ visibility },
+			this.backend.auth,
+		);
+	}
+
+	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		await apiPatch(
+			`apps/${appId}/settings/forking`,
+			{ allow_forking: allow },
+			this.backend.auth,
+		);
+	}
+
+	async getForkPreview(
+		appId: string,
+		target: IForkPreviewTarget,
+	): Promise<IForkPreviewResponse> {
+		return apiGet<IForkPreviewResponse>(
+			`apps/${appId}/fork/preview?target=${target}`,
+			this.backend.auth,
+		);
+	}
+
+	async beginOfflineFork(
+		appId: string,
+		body: IBeginOfflineForkBody,
+	): Promise<IBeginOfflineForkResponse> {
+		return apiPost<IBeginOfflineForkResponse>(
+			`apps/${appId}/fork/offline/begin`,
+			body,
+			this.backend.auth,
+		);
+	}
+
+	async onlineFork(
+		appId: string,
+		body: IOnlineForkBody,
+	): Promise<IOnlineForkResponse> {
+		return apiPost<IOnlineForkResponse>(
+			`apps/${appId}/fork`,
+			body,
 			this.backend.auth,
 		);
 	}

@@ -1114,6 +1114,11 @@ impl ExecutionContext {
         self.stream_a2ui_update(message).await
     }
 
+    pub async fn show_screen(&mut self) -> flow_like_types::Result<()> {
+        let message = crate::a2ui::A2UIServerMessage::show_screen();
+        self.stream_a2ui_update(message).await
+    }
+
     pub async fn upsert_element(
         &mut self,
         element_id: &str,

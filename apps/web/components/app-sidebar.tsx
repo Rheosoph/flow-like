@@ -5,7 +5,6 @@ import {
 	AnimatedBrainIcon,
 	AnimatedBugIcon,
 	AnimatedDashboardIcon,
-	AnimatedDocsIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
@@ -61,7 +60,6 @@ import {
 	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarRail,
-	SpotlightTrigger,
 	Textarea,
 	useBackend,
 	useInvalidateInvoke,
@@ -133,7 +131,17 @@ const data = {
 			icon: AnimatedStudyHatIcon,
 			isActive: false,
 			permission: false,
-			items: [],
+			items: [
+				{
+					title: "Overview",
+					url: "/learn",
+				},
+				{
+					title: "Documentation",
+					url: "https://docs.flow-like.com",
+					external: true,
+				},
+			],
 		},
 		{
 			title: "Admin",
@@ -216,7 +224,6 @@ function InnerSidebar() {
 		<Sidebar collapsible="icon" side="left">
 			<SidebarHeader>
 				<Profiles />
-				<SpotlightTrigger />
 			</SidebarHeader>
 			<SidebarContent>
 				<NavMain items={data.navMain} devItems={data.navDev} />
@@ -351,24 +358,6 @@ function InnerSidebar() {
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
-					<a
-						href="https://docs.flow-like.com"
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<MotionSidebarMenuButton
-							tooltip="Documentation"
-							initial="initial"
-							whileHover="hover"
-						>
-							<motion.div variants={iconVariants}>
-								<AnimatedDocsIcon className="size-4" />
-							</motion.div>
-							<span className="w-full flex flex-row items-center justify-between">
-								Documentation{" "}
-							</span>
-						</MotionSidebarMenuButton>
-					</a>
 					<MotionSidebarMenuButton
 						tooltip="Toggle Sidebar"
 						onClick={toggleSidebar}
@@ -431,6 +420,8 @@ function Profiles() {
 						bit_types: [
 							IBitTypes.Llm,
 							IBitTypes.Vlm,
+							IBitTypes.Tts,
+							IBitTypes.Stt,
 							IBitTypes.Embedding,
 							IBitTypes.ImageEmbedding,
 						],
@@ -477,10 +468,11 @@ function Profiles() {
 			);
 
 			if (response.ok) {
-				// Parse response to get the server-generated profile ID
 				const createdProfile = await response.json();
-				if (createdProfile?.id && typeof window !== "undefined") {
-					localStorage.setItem("flow-like-profile-id", createdProfile.id);
+				const createdProfileId =
+					createdProfile?.profile?.id ?? createdProfile?.id ?? newProfileId;
+				if (createdProfileId && typeof window !== "undefined") {
+					localStorage.setItem("flow-like-profile-id", createdProfileId);
 				}
 
 				// Refresh profile data
@@ -517,7 +509,7 @@ function Profiles() {
 							initial="initial"
 							whileHover="hover"
 						>
-							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg">
 								<Avatar className="h-8 w-8 rounded-lg">
 									<AvatarImage
 										className="rounded-lg size-8 w-8 h-8"
@@ -575,7 +567,7 @@ function Profiles() {
 										}}
 										className="gap-4 p-2"
 									>
-										<div className="flex size-6 items-center justify-center rounded-sm border">
+										<div className="flex size-6 items-center justify-center rounded-sm">
 											<Avatar className="h-8 w-8 rounded-sm">
 												<AvatarImage
 													className="rounded-sm w-8 h-8"
@@ -684,6 +676,7 @@ interface INavItem {
 	items?: {
 		title: string;
 		url: string;
+		external?: boolean;
 		permission?: GlobalPermission;
 	}[];
 }
@@ -794,18 +787,28 @@ function NavCollapsible({
 						{item.items?.map((subItem) => (
 							<SidebarMenuSubItem key={subItem.title}>
 								<SidebarMenuSubButton asChild>
-									<Link href={subItem.url}>
-										<span
-											className={
-												pathname === subItem.url ||
-												pathname.startsWith(`${subItem.url}/`)
-													? "font-bold text-primary"
-													: ""
-											}
+									{subItem.external ? (
+										<a
+											href={subItem.url}
+											target="_blank"
+											rel="noopener noreferrer"
 										>
-											{subItem.title}
-										</span>
-									</Link>
+											<span>{subItem.title}</span>
+										</a>
+									) : (
+										<Link href={subItem.url}>
+											<span
+												className={
+													pathname === subItem.url ||
+													pathname.startsWith(`${subItem.url}/`)
+														? "font-bold text-primary"
+														: ""
+												}
+											>
+												{subItem.title}
+											</span>
+										</Link>
+									)}
 								</SidebarMenuSubButton>
 							</SidebarMenuSubItem>
 						))}
@@ -1002,7 +1005,7 @@ export function NavUser({
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
-								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+								<div className="absolute -top-2 -right-2 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 									{notificationCount > 5 ? "5+" : notificationCount}
 								</div>
 							)}
@@ -1087,7 +1090,7 @@ export function NavUser({
 												<BellIcon className="size-4" />
 												{/* Add notification indicator */}
 												{notificationCount > 0 && (
-													<div className="absolute top-0 left-0 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+													<div className="absolute top-0 left-0 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 														{notificationCount > 5 ? "5+" : notificationCount}
 													</div>
 												)}

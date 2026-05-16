@@ -117,9 +117,10 @@ export class DownloadManager {
 		cb?: (dl: Download) => void,
 	): Promise<IBit[]> {
 		const key = bit.hash;
+		const hasDependencies = (bit.dependencies?.length ?? 0) > 0;
 
-		// Virtual / hosted bit: no real artifact to download -> immediately resolve.
-		if (!bit.download_link || bit.size === 0) {
+		// Virtual / hosted bit with no dependency artifacts -> immediately resolve.
+		if ((!bit.download_link || bit.size === 0) && !hasDependencies) {
 			// Clear any leftover queued state just in case.
 			this.cleanupForKey(key);
 			if (cb) {

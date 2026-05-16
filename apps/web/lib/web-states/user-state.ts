@@ -6,7 +6,7 @@ import type {
 	ISettings,
 	IUserState,
 } from "@tm9657/flow-like-ui";
-import { IAppVisibility } from "@tm9657/flow-like-ui";
+import { IAppVisibility, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -52,6 +52,10 @@ interface ApiProfile {
 	updated_at: string;
 	deleted_at?: string | null;
 }
+
+type UpsertProfileResponse = {
+	profile: ApiProfile;
+};
 
 function transformApiProfile(apiProfile: ApiProfile): IProfile {
 	return {
@@ -209,6 +213,13 @@ export class WebUserState implements IUserState {
 		);
 		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
 
+		if ((allApiProfiles?.length ?? 0) > 0 && apiProfiles.length === 0) {
+			if (typeof window !== "undefined") {
+				localStorage.removeItem("flow-like-profile-id");
+			}
+			throw new Error("No active profiles available");
+		}
+
 		if (apiProfiles.length > 0) {
 			// Check localStorage for a preferred profile ID
 			const savedProfileId =
@@ -237,7 +248,7 @@ export class WebUserState implements IUserState {
 			process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
 		const newProfileId = createId();
 
-		const newApiProfile = await apiPost<ApiProfile>(
+		const newProfileResponse = await apiPost<UpsertProfileResponse>(
 			`profile/${newProfileId}`,
 			{
 				name: "Default Profile",
@@ -247,8 +258,8 @@ export class WebUserState implements IUserState {
 			},
 			this.backend.auth,
 		);
+		const newApiProfile = newProfileResponse.profile;
 
-		// Save the server-generated profile ID to localStorage
 		if (typeof window !== "undefined" && newApiProfile.id) {
 			localStorage.setItem("flow-like-profile-id", newApiProfile.id);
 		}
@@ -310,7 +321,7 @@ export class WebUserState implements IUserState {
 			};
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (response.signed_url.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(response.signed_url)) {
 				headers["x-ms-blob-type"] = "BlockBlob";
 			}
 

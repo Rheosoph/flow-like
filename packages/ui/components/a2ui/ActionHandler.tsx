@@ -31,9 +31,11 @@ function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
 	if (typeof value === "number") return { literalNumber: value };
 	if (typeof value === "string") return { literalString: value };
-	if (Array.isArray(value)) return { literalString: JSON.stringify(value) };
-	if (value === null || value === undefined) return { literalString: "" };
-	return { literalString: JSON.stringify(value) };
+	if (value === undefined) return { literalString: "" };
+	if (value === null || Array.isArray(value) || typeof value === "object") {
+		return { literalJson: JSON.stringify(value) };
+	}
+	return { literalString: String(value) };
 }
 
 /**

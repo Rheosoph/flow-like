@@ -1,6 +1,6 @@
 use crate::{
     error::ApiError, middleware::jwt::AppUser, permission::global_permission::GlobalPermission,
-    state::AppState,
+    routes::app::board::secrets::filter_board_secrets, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -40,21 +40,7 @@ pub async fn get_board(
         .master_board("admin", &app_id, &board_id, &state, None)
         .await?;
 
-    // Strip secret variable values at board level
-    for var in board.variables.values_mut() {
-        if var.secret {
-            var.default_value = None;
-        }
-    }
-
-    // Strip secret variable values inside layers
-    for layer in board.layers.values_mut() {
-        for var in layer.variables.values_mut() {
-            if var.secret {
-                var.default_value = None;
-            }
-        }
-    }
+    filter_board_secrets(&mut board);
 
     Ok(Json(board))
 }

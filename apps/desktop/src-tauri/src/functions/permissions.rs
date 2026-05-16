@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
+#[cfg(target_os = "macos")]
+use tauri_plugin_opener::OpenerExt;
 
 use crate::functions::TauriFunctionError;
 
@@ -7,6 +9,36 @@ use crate::functions::TauriFunctionError;
 pub struct PermissionStatus {
     pub accessibility: bool,
     pub screen_recording: bool,
+    pub executable_path: Option<String>,
+}
+
+fn current_executable_path() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_privacy_pane(handler: &AppHandle, anchor: &str) -> Result<(), TauriFunctionError> {
+    let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
+
+    if handler
+        .opener()
+        .open_url(url.as_str(), None::<&str>)
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            TauriFunctionError::new(&format!(
+                "Failed to open macOS System Settings privacy pane: {error}"
+            ))
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -105,6 +137,7 @@ mod macos {
         PermissionStatus {
             accessibility: check_accessibility(),
             screen_recording: check_screen_recording(),
+            executable_path: super::current_executable_path(),
         }
     }
 }
@@ -117,6 +150,7 @@ mod other {
         PermissionStatus {
             accessibility: true,
             screen_recording: true,
+            executable_path: super::current_executable_path(),
         }
     }
 
@@ -145,14 +179,29 @@ pub async fn check_rpa_permissions(
 
 #[tauri::command(async)]
 pub async fn request_rpa_permission(
-    _handler: AppHandle,
+    handler: AppHandle,
     permission_type: String,
 ) -> Result<bool, TauriFunctionError> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = handler;
+
     #[cfg(target_os = "macos")]
     {
         match permission_type.as_str() {
-            "accessibility" => Ok(macos::request_accessibility()),
-            "screen_recording" => Ok(macos::request_screen_recording()),
+            "accessibility" => {
+                let granted = macos::request_accessibility();
+                if !granted {
+                    open_macos_privacy_pane(&handler, "Privacy_Accessibility")?;
+                }
+                Ok(granted || macos::check_accessibility())
+            }
+            "screen_recording" => {
+                let granted = macos::request_screen_recording();
+                if !granted {
+                    open_macos_privacy_pane(&handler, "Privacy_ScreenCapture")?;
+                }
+                Ok(granted || macos::check_screen_recording())
+            }
             _ => Err(TauriFunctionError::new(&format!(
                 "Unknown permission type: {}",
                 permission_type

@@ -1,5 +1,7 @@
 use crate::{
-    entity::{challenge, course_module, lesson, lesson_app_ref, user_challenge_attempt},
+    entity::{
+        challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt,
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
@@ -9,6 +11,7 @@ use crate::{
             has_course_read_grant,
         },
         app_refs::AppRefView,
+        assets::{CourseAssetKind, course_asset_storage_path},
         attempts::ChallengeAttemptView,
         challenges::ChallengeView,
     },
@@ -18,12 +21,16 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_types::tokio::try_join;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder,
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use utoipa::ToSchema;
+
+const LESSON_ASSET_SIGNED_URL_TTL_SECS: u64 = 60 * 60 * 12;
 
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct LessonUpsertBody {
@@ -37,12 +44,22 @@ pub struct LessonUpsertBody {
 }
 
 #[derive(Clone, Serialize, ToSchema)]
+pub struct LessonAssetView {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub kind: CourseAssetKind,
+    pub signed_url: String,
+}
+
+#[derive(Clone, Serialize, ToSchema)]
 pub struct LessonWithChildren {
     #[schema(value_type = Object)]
     pub lesson: lesson::Model,
     pub challenges: Vec<ChallengeView>,
     pub app_refs: Vec<AppRefView>,
     pub attempts: Vec<ChallengeAttemptView>,
+    pub assets: Vec<LessonAssetView>,
 }
 
 #[utoipa::path(
@@ -70,37 +87,52 @@ pub async fn get_lesson(
 ) -> Result<Json<LessonWithChildren>, ApiError> {
     let sub = user.sub()?;
 
-    let module = course_module::Entity::find_by_id(&module_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    if module.course_id != course_id {
-        return Err(ApiError::NOT_FOUND);
-    }
     ensure_course_readable(&state, &user, &course_id).await?;
     let include_solution_payload = has_course_read_grant(&state, &user).await;
 
-    let lesson = lesson::Entity::find_by_id(&lesson_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    let module_fut = course_module::Entity::find_by_id(&module_id).one(&state.db);
+    let lesson_fut = lesson::Entity::find_by_id(&lesson_id).one(&state.db);
+    let challenges_fut = challenge::Entity::find()
+        .filter(challenge::Column::LessonId.eq(&lesson_id))
+        .order_by_asc(challenge::Column::Position)
+        .all(&state.db);
+    let app_refs_fut = lesson_app_ref::Entity::find()
+        .filter(lesson_app_ref::Column::LessonId.eq(&lesson_id))
+        .all(&state.db);
+    let course_assets_fut = course_asset::Entity::find()
+        .filter(course_asset::Column::CourseId.eq(&course_id))
+        .all(&state.db);
+
+    let (module_opt, lesson_opt, challenges, app_refs, course_assets): (
+        Option<course_module::Model>,
+        Option<lesson::Model>,
+        Vec<challenge::Model>,
+        Vec<lesson_app_ref::Model>,
+        Vec<course_asset::Model>,
+    ) = try_join!(
+        module_fut,
+        lesson_fut,
+        challenges_fut,
+        app_refs_fut,
+        course_assets_fut,
+    )?;
+
+    let module = module_opt.ok_or(ApiError::NOT_FOUND)?;
+    if module.course_id != course_id {
+        return Err(ApiError::NOT_FOUND);
+    }
+    let lesson = lesson_opt.ok_or(ApiError::NOT_FOUND)?;
     if lesson.module_id != module_id {
         return Err(ApiError::NOT_FOUND);
     }
 
-    let challenges = challenge::Entity::find()
-        .filter(challenge::Column::LessonId.eq(&lesson_id))
-        .order_by_asc(challenge::Column::Position)
-        .all(&state.db)
-        .await?;
-    let challenge_ids = challenges
-        .iter()
-        .map(|challenge| challenge.id.clone())
-        .collect::<Vec<_>>();
-
-    let attempts = if challenge_ids.is_empty() {
+    let attempts = if challenges.is_empty() {
         vec![]
     } else {
+        let challenge_ids = challenges
+            .iter()
+            .map(|challenge| challenge.id.clone())
+            .collect::<Vec<_>>();
         user_challenge_attempt::Entity::find()
             .filter(user_challenge_attempt::Column::UserId.eq(&sub))
             .filter(user_challenge_attempt::Column::ChallengeId.is_in(challenge_ids))
@@ -108,11 +140,37 @@ pub async fn get_lesson(
             .all(&state.db)
             .await?
     };
-
-    let app_refs = lesson_app_ref::Entity::find()
-        .filter(lesson_app_ref::Column::LessonId.eq(&lesson_id))
-        .all(&state.db)
-        .await?;
+    let mut assets = Vec::with_capacity(course_assets.len());
+    for asset in course_assets {
+        let path = course_asset_storage_path(&asset.course_id, &asset.storage_key);
+        let signed_url = match state
+            .content_bucket
+            .sign(
+                "GET",
+                &path,
+                Duration::from_secs(LESSON_ASSET_SIGNED_URL_TTL_SECS),
+            )
+            .await
+        {
+            Ok(url) => url.to_string(),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to sign GET URL for course asset {} ({}): {:?}",
+                    asset.id,
+                    asset.name,
+                    err
+                );
+                continue;
+            }
+        };
+        assets.push(LessonAssetView {
+            id: asset.id,
+            name: asset.name,
+            mime_type: asset.mime_type,
+            kind: asset.kind.into(),
+            signed_url,
+        });
+    }
 
     Ok(Json(LessonWithChildren {
         lesson,
@@ -122,6 +180,7 @@ pub async fn get_lesson(
             .collect(),
         app_refs: app_refs.into_iter().map(Into::into).collect(),
         attempts: attempts.into_iter().map(Into::into).collect(),
+        assets,
     }))
 }
 

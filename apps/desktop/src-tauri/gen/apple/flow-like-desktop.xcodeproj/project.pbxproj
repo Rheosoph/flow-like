@@ -16,8 +16,8 @@
 		BD999E1D015351A22CC3CFE6 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B8D6074E6775B2FD3D0199A8 /* UIKit.framework */; };
 		C3C6EB3F74C498D2FE8F7661 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = FFF51C4D6D9AD2D1364150A6 /* assets */; };
 		DC1EA3752E7C10EC00431604 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */; };
-		DC3181AD2E75CEDB000C3F5C /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DC3181AC2E75CEDB000C3F5C /* icon.icon */; };
-		DC3BF2A02E78AE330048A30D /* splash.png in Resources */ = {isa = PBXBuildFile; fileRef = DC3BF29F2E78AE330048A30D /* splash.png */; };
+		DC29A1BE2FB3412A009DF63B /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DC29A1BD2FB3412A009DF63B /* icon.icon */; };
+		DC29A1C02FB341A6009DF63B /* splash.png in Resources */ = {isa = PBXBuildFile; fileRef = DC29A1BF2FB341A6009DF63B /* splash.png */; };
 		DC66728A2F6BE19D00160C5D /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */; };
 		DC66728D2F6BE41C00160C5D /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = DC66728C2F6BE41C00160C5D /* FirebaseMessaging */; };
 		DC66728F2F6BE82400160C5D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC66728E2F6BE81E00160C5D /* AppDelegate.swift */; };
@@ -64,9 +64,9 @@
 		D2EB56FFB6E36FC9B47C6810 /* settings.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = settings.rs; sourceTree = "<group>"; };
 		D555BD5F5EF13E82EB52F947 /* tables.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tables.rs; sourceTree = "<group>"; };
 		DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = thirdparty/onnxruntime.xcframework; sourceTree = "<group>"; };
-		DC3181AC2E75CEDB000C3F5C /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
+		DC29A1BD2FB3412A009DF63B /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
+		DC29A1BF2FB341A6009DF63B /* splash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = splash.png; sourceTree = "<group>"; };
 		DC380F432E7A0CAE00C066A7 /* libonnxruntime.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libonnxruntime.a; path = ../../../../../thirdparty/onnxruntime/ios/libonnxruntime.a; sourceTree = "<group>"; };
-		DC3BF29F2E78AE330048A30D /* splash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = splash.png; sourceTree = "<group>"; };
 		DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		DC66728E2F6BE81E00160C5D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		DC6672902F6BE83700160C5D /* flow-like-desktop_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "flow-like-desktop_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -168,8 +168,8 @@
 				C645D2495A81C529ACD9E813 /* src */,
 				9B8660A0F20E816C12F3C7DC /* Frameworks */,
 				6A68EDA8DC2D514C157984C2 /* Products */,
-				DC3181AC2E75CEDB000C3F5C /* icon.icon */,
-				DC3BF29F2E78AE330048A30D /* splash.png */,
+				DC29A1BD2FB3412A009DF63B /* icon.icon */,
+				DC29A1BF2FB341A6009DF63B /* splash.png */,
 			);
 			sourceTree = "<group>";
 		};
@@ -335,10 +335,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				E083E5A09A5613BE75ECDE6C /* LaunchScreen.storyboard in Resources */,
-				DC3BF2A02E78AE330048A30D /* splash.png in Resources */,
 				DC66728A2F6BE19D00160C5D /* GoogleService-Info.plist in Resources */,
+				DC29A1BE2FB3412A009DF63B /* icon.icon in Resources */,
 				C3C6EB3F74C498D2FE8F7661 /* assets in Resources */,
-				DC3181AD2E75CEDB000C3F5C /* icon.icon in Resources */,
+				DC29A1C02FB341A6009DF63B /* splash.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -364,7 +364,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/zsh;
-			shellScript = "# ---- Build Rust Code (Xcode Run Script) ----\nset -euo pipefail\n\n# Tools in PATH (Bun, Homebrew, Cargo)\nexport PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/v22.11.0/bin:$HOME/.cargo/bin:$PATH\"\n\n# Required by Xcode\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\nCURRENT_ARCH=\"${CURRENT_ARCH:-arm64}\"\n\n# Build for iOS Simulator explicitly (avoid darwin artifacts)\ncase \"$PLATFORM_DISPLAY_NAME\" in\n  *Simulator*|*simulator*)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios-sim\"\n    export TARGET=\"aarch64-apple-ios-sim\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    ;;\n  *)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios\"\n    export TARGET=\"aarch64-apple-ios\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    # export ORT_STRATEGY=system  \n    # export ORT_LIB_LOCATION=\"./thirdparty/onnxruntime/onnxruntime.xcframework/ios-arm64\"\n    # export ORT_LIB_PROFILE=Release\n    ;;\nesac\n\n# Make optional envs safe under `set -u`\nexport FORCE_COLOR=\"${FORCE_COLOR:-1}\"             # or \"\" if you don't want color\nFRAMEWORK_SEARCH_PATHS=\"${FRAMEWORK_SEARCH_PATHS:-}\"\nHEADER_SEARCH_PATHS=\"${HEADER_SEARCH_PATHS:-}\"\nGCC_PREPROCESSOR_DEFINITIONS=\"${GCC_PREPROCESSOR_DEFINITIONS:-}\"\nARCHS=\"${ARCHS:-${CURRENT_ARCH:-}}\"\n\n# Required envs (fail early if Xcode didn't set them)\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\n\nif [[ \"${CONFIGURATION}\" =~ ^[Dd]ebug ]]; then\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=yes\"\nelse\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=no -C opt-level=z -C panic=unwind -C strip=symbols -C debuginfo=0\"\n  export PUBLIC_SENTRY_ENDPOINT=\"https://4ae66e24333e69b96aac37c6a08dddbe@o4507505692901376.ingest.de.sentry.io/4507508600209488\"\nfi\n\n# Sanity logs\necho \"bun: $(which bun)\"; bun --version || true\necho \"cargo: $(which cargo)\"; cargo --version || true\necho \"target: ${CARGO_BUILD_TARGET}\";\n\n# Call tauri helper with safe quoting\nbun tauri ios xcode-script -v \\\n  --platform \"$PLATFORM_DISPLAY_NAME\" \\\n  --sdk-root \"$SDKROOT\" \\\n  --framework-search-paths \"$FRAMEWORK_SEARCH_PATHS\" \\\n  --header-search-paths \"$HEADER_SEARCH_PATHS\" \\\n  --gcc-preprocessor-definitions \"$GCC_PREPROCESSOR_DEFINITIONS\" \\\n  --configuration ${CONFIGURATION:?} \\\n  -v \\\n  ${ARCHS:?}\n";
+			shellScript = "# ---- Build Rust Code (Xcode Run Script) ----\nset -euo pipefail\n\n# Tools in PATH (Bun, Homebrew, Cargo)\nexport PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/v22.11.0/bin:$HOME/.cargo/bin:$PATH\"\n\n# Required by Xcode\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\nCURRENT_ARCH=\"${CURRENT_ARCH:-arm64}\"\n\n# Build for iOS Simulator explicitly (avoid darwin artifacts)\ncase \"$PLATFORM_DISPLAY_NAME\" in\n  *Simulator*|*simulator*)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios-sim\"\n    export TARGET=\"aarch64-apple-ios-sim\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    ;;\n  *)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios\"\n    export TARGET=\"aarch64-apple-ios\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    # export ORT_STRATEGY=system  \n    # export ORT_LIB_LOCATION=\"./thirdparty/onnxruntime/onnxruntime.xcframework/ios-arm64\"\n    # export ORT_LIB_PROFILE=Release\n    ;;\nesac\n\n# Make optional envs safe under `set -u`\nexport FORCE_COLOR=\"${FORCE_COLOR:-1}\"             # or \"\" if you don't want color\nFRAMEWORK_SEARCH_PATHS=\"${FRAMEWORK_SEARCH_PATHS:-}\"\nHEADER_SEARCH_PATHS=\"${HEADER_SEARCH_PATHS:-}\"\nGCC_PREPROCESSOR_DEFINITIONS=\"${GCC_PREPROCESSOR_DEFINITIONS:-}\"\nARCHS=\"${ARCHS:-${CURRENT_ARCH:-}}\"\n\n# Required envs (fail early if Xcode didn't set them)\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\n\nif [[ \"${CONFIGURATION}\" =~ ^[Dd]ebug ]]; then\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=yes\"\nelse\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=no -C opt-level=z -C panic=unwind -C strip=symbols -C debuginfo=0\"\n  export PUBLIC_SENTRY_ENDPOINT=\"https://4ae66e24333e69b96aac37c6a08dddbe@o4507505692901376.ingest.de.sentry.io/4507508600209488\"\nfi\n\n# Sanity logs\necho \"bun: $(which bun)\"; bun --version || true\necho \"cargo: $(which cargo)\"; cargo --version || true\necho \"target: ${CARGO_BUILD_TARGET}\";\n\n# Call tauri helper with safe quoting\n# Do not leak Xcode's iPhoneOS SDKROOT into Cargo host build dependencies.\nenv -u SDKROOT bun tauri ios xcode-script -v \\\n  --platform \"$PLATFORM_DISPLAY_NAME\" \\\n  --sdk-root \"$SDKROOT\" \\\n  --framework-search-paths \"$FRAMEWORK_SEARCH_PATHS\" \\\n  --header-search-paths \"$HEADER_SEARCH_PATHS\" \\\n  --gcc-preprocessor-definitions \"$GCC_PREPROCESSOR_DEFINITIONS\" \\\n  --configuration ${CONFIGURATION:?} \\\n  -v \\\n  ${ARCHS:?}\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -419,9 +419,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 0.0.6;
-				OTHER_LDFLAGS = (
-					"-lz",
-				);
+				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;
@@ -471,9 +469,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 0.0.6;
-				OTHER_LDFLAGS = (
-					"-lz",
-				);
+				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
 				SDKROOT = iphoneos;

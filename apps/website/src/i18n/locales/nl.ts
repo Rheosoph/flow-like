@@ -120,11 +120,6 @@ export const nl = {
 	"design.feature3.desc":
 		"Dezelfde flow draait lokaal, staging, productie — geen herschrijvingen.",
 
-	// 24 Hour Banner
-	"banner24.headline": "Je eerste workflow in 24 uur",
-	"banner24.description":
-		"Van download tot werkende automatisering — in een dag.",
-	"banner24.cta": "Downloaden",
 
 	// Portability
 	"portability.tagline": "Automatisering overal",
@@ -533,11 +528,6 @@ export const nl = {
 	"v2.who.community.title": "Community",
 	"v2.who.community.desc": "Klein, groeiend en oprecht behulpzaam. Kom langs.",
 	"v2.who.community.join": "→ Doe mee met de discussies op GitHub",
-	"v2.who.cta.heading": "Weet je niet waar je moet beginnen?",
-	"v2.who.cta.desc":
-		"Wij bouwen je eerste automatisering voor je. Binnen 24 uur. Je kijkt mee hoe het wordt gemaakt, wij dragen alles over — code, documentatie, draaiende infrastructuur.",
-	"v2.who.cta.from": "Vanaf",
-	"v2.who.cta.label": "24-uur oplossing",
 
 	// ───── Index V2: Start Building ─────
 	"v2.start.heading.start": "Begin",
@@ -553,7 +543,6 @@ export const nl = {
 	"v2.start.teams.selfhost": "Self-Hosting gids",
 	"v2.start.enterprise.title": "Enterprise",
 	"v2.start.enterprise.desc": "Wij komen naar je toe.",
-	"v2.start.enterprise.solution": "24-uur oplossing",
 	"v2.start.enterprise.contact": "Neem contact op",
 	"v2.start.dev.title": "Ontwikkelaars",
 	"v2.start.dev.desc": "Alles op GitHub. Fork, breid uit, draag bij.",
@@ -700,9 +689,6 @@ export const nl = {
 
 	"design.headline.highlight": "visueel",
 
-	"banner24.tagline": "Nieuw",
-	"banner24.headline.highlight": "Oplossing",
-	"banner24.learnmore": "Meer weten",
 
 	"portability.headline.start": "Begin",
 	"portability.headline.offline": "offline",
@@ -1172,9 +1158,4 @@ export const nl = {
 	"v3.cta.developer.desc":
 		"Volledige broncode. Volledige SDK. Volledige API-docs.",
 	"v3.cta.developer.action": "Bekijk op GitHub",
-	"v3.cta.24h.headline": "De 24-Uurs Oplossing",
-	"v3.cta.24h.desc":
-		"Weet je niet waar je moet beginnen? Wij bouwen je eerste automatiseringsoplossing voor je — in 24 uur. Jij kijkt, wij leveren alles: code, docs, draaiende infrastructuur.",
-	"v3.cta.24h.action": "Boek Je 24-Uurs Sprint →",
-	"v3.cta.24h.price": "Vanaf €1.999",
 } as const;

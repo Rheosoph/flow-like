@@ -21,12 +21,14 @@ pub mod comments;
 pub mod data;
 pub mod db;
 pub mod events;
+pub mod fork;
 pub mod graph;
 pub mod invoke;
 pub mod meta;
 pub mod notifications;
 pub mod packages;
 pub mod page;
+pub mod prerun_shared;
 pub mod publication;
 pub mod roles;
 pub mod route;
@@ -53,6 +55,11 @@ pub fn routes() -> Router<AppState> {
             patch(internal::change_visibility::change_visibility),
         )
         .route(
+            "/{app_id}/settings/forking",
+            patch(internal::change_forking::change_forking),
+        )
+        .route("/{app_id}/fork", post(fork::online_fork::online_fork))
+        .route(
             "/{app_id}/notifications/create",
             post(notifications::create_notification),
         )
@@ -66,6 +73,8 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/analytics", analytics::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())
+        .nest("/{app_id}/fork", fork::routes())
+        .merge(fork::root_routes())
         .nest("/{app_id}/comments", comments::routes())
         .nest("/{app_id}/publication", publication::routes())
         .nest("/{app_id}/packages", packages::routes())
@@ -334,6 +343,12 @@ impl From<app::Model> for flow_like::app::App {
             app_state: None,
             widget_ids: vec![],
             page_ids: vec![],
+            allow_forking: model.allow_forking,
+            forked_from: model.forked_from,
+            forked_at: model.forked_at.map(|dt| {
+                SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(dt.and_utc().timestamp() as u64)
+            }),
         }
     }
 }
@@ -398,6 +413,14 @@ impl From<flow_like::app::App> for app::Model {
             created_at: chrono::Utc::now().naive_utc(),
             primary_category: app.primary_category.map(|cat| cat.into()),
             secondary_category: app.secondary_category.map(|cat| cat.into()),
+            allow_forking: app.allow_forking,
+            forked_from: app.forked_from,
+            forked_at: app.forked_at.and_then(|t| {
+                t.duration_since(SystemTime::UNIX_EPOCH).ok().and_then(|d| {
+                    chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0)
+                        .map(|dt| dt.naive_utc())
+                })
+            }),
         }
     }
 }

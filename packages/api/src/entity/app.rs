@@ -48,6 +48,12 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "allowForking")]
+    pub allow_forking: bool,
+    #[sea_orm(column_name = "forkedAt")]
+    pub forked_at: Option<DateTime>,
+    #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]
+    pub forked_from: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

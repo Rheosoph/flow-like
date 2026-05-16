@@ -22,7 +22,6 @@ import FlowPilot from "../sections/flowpilot.astro";
 import Integrations from "../sections/integrations.astro";
 import UseCases from "../sections/use-cases.astro";
 import CtaAutomate from "../sections/cta-automate.astro";
-import TwentyFourHourBanner from "../sections/24-hour-solution-banner.astro";
 import EnterpriseStack from "../sections/enterprise-stack.astro";
 import EnterpriseServices from "../sections/enterprise-services.astro";
 import TargetAudience from "../sections/target-audience.astro";
@@ -250,9 +249,6 @@ const alternateLinks = Object.keys(languages).map(l => ({
       <slot name="services">
         <EnterpriseServices />
       </slot>
-
-      <!-- 24 Hour Solution Banner -->
-      <TwentyFourHourBanner />
 
       <!-- Core features: Portability -->
       <Portability />

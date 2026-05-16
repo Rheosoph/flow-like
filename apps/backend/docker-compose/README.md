@@ -7,7 +7,9 @@ Single-machine deployment using Docker Compose with shared execution runtime.
 ```bash
 cd apps/backend/docker-compose
 cp .env.example .env
-# Configure storage credentials in .env
+# Configure storage credentials, BACKEND_KEY/BACKEND_PUB, and SINK_SECRET in .env
+# For cron sinks, generate SINK_TRIGGER_JWT with:
+# bun run ../../../tools/gen-sink-jwt.ts --type cron --secret "$SINK_SECRET"
 
 docker compose up -d
 ```
@@ -36,13 +38,47 @@ Full step-by-step documentation: **[docs.flow-like.com/self-hosting/docker-compo
 
 | Service | Port | Description |
 |---------|------|-------------|
-| api | 8080 | Flow-Like API |
+| api-gateway | 8080 | Published API entrypoint/load balancer |
+| api | internal 8080 | Flow-Like API replicas |
 | web | 3001 | Web application |
-| runtime | 9000 | Execution runtime |
+| runtime | internal 9000 | Execution runtime replicas |
+| signaling | 4444 | Realtime collaboration signaling |
 | postgres | 5432 | Database |
 | redis | 6379 | Job queue |
 | grafana | 3002 | Dashboards (monitoring profile) |
 | prometheus | 9091 | Metrics (monitoring profile) |
+
+## Execution Flows
+
+- Normal web executions call `/api/v1/apps/{app_id}/board/{board_id}/invoke`, then the API streams to a runtime replica over HTTP at `http://runtime:9000`.
+- Async executions and sink-triggered executions enqueue through Redis on `REDIS_EXECUTION_QUEUE`; runtime replicas poll that queue.
+- Cron sinks are handled by the singleton `sink-services` process. It syncs active cron schedules from `/api/v1/sink/schedules` and triggers them through `/api/v1/sink/trigger/async`.
+- Realtime collaboration uses the API only for JWT/room-key issuance; browser peers use the `signaling` service from the hub config (`ws://localhost:4444` in the template). The compose signaling image builds the Redis-backed implementation in `apps/backend/signaling`.
+
+## Scaling And Swarm
+
+The default compose configuration declares `API_REPLICAS=2` and `RUNTIME_REPLICAS=3`. API replicas are not directly published to the host; `api-gateway` owns the host API port and forwards to the internal API service. Runtime replicas are internal and are reached through Docker DNS at `runtime:9000`.
+
+For Docker Swarm, use `docker-stack.yml`. Build and push the images first, set the `*_IMAGE` values in `.env` to registry-backed image names, then deploy from this directory with:
+
+```bash
+set -a && . ./.env && set +a
+docker compose build
+for image in \
+  "${DB_INIT_IMAGE:-flow-like-db-init:latest}" \
+  "${API_IMAGE:-flow-like-api:latest}" \
+  "${RUNTIME_IMAGE:-flow-like-runtime:latest}" \
+  "${COMPILER_IMAGE:-flow-like-compiler:latest}" \
+  "${SINK_SERVICES_IMAGE:-flow-like-sink-services:latest}" \
+  "${SIGNALING_IMAGE:-flow-like-signaling:latest}" \
+  "${WEB_IMAGE:-flow-like-web:latest}"; do
+  docker push "$image"
+done
+docker stack config -c docker-stack.yml
+docker stack deploy -c docker-stack.yml flowlike
+```
+
+Swarm does not build images from the stack file and does not load `.env` automatically. Keep `sink-services` at one replica to avoid duplicate cron triggers.
 
 ## Supported Event Sinks
 
@@ -82,7 +118,7 @@ docker builder prune --filter type=exec.cachemount
 docker compose logs -f api
 
 # Check health
-curl http://localhost:8080/health/live
+curl http://localhost:8080/health
 
 # Stop services
 docker compose down

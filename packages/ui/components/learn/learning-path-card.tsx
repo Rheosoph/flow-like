@@ -108,10 +108,6 @@ function PathStep({
 
 	return (
 		<li className="relative">
-			<div
-				className="absolute left-1/2 top-4 hidden h-px w-full translate-x-0 bg-border/60 lg:block"
-				aria-hidden
-			/>
 			<button
 				type="button"
 				onClick={() => {

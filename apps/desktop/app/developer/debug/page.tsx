@@ -96,7 +96,12 @@ interface JsonSchema {
 	definitions?: Record<string, JsonSchema>;
 }
 
-const MODEL_BIT_TYPES = new Set<IBitTypes>([IBitTypes.Llm, IBitTypes.Vlm]);
+const MODEL_BIT_TYPES = new Set<IBitTypes>([
+	IBitTypes.Llm,
+	IBitTypes.Vlm,
+	IBitTypes.Tts,
+	IBitTypes.Stt,
+]);
 
 function parseSchema(raw: string | undefined): JsonSchema | null {
 	if (!raw) return null;

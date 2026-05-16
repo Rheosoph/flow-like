@@ -20,6 +20,8 @@ impl From<BitType> for BitTypes {
         match value {
             BitType::Llm => BitTypes::Llm,
             BitType::Vlm => BitTypes::Vlm,
+            BitType::Tts => BitTypes::Tts,
+            BitType::Stt => BitTypes::Stt,
             BitType::Embedding => BitTypes::Embedding,
             BitType::ImageEmbedding => BitTypes::ImageEmbedding,
             BitType::File => BitTypes::File,
@@ -47,6 +49,8 @@ impl From<BitTypes> for BitType {
         match value {
             BitTypes::Llm => BitType::Llm,
             BitTypes::Vlm => BitType::Vlm,
+            BitTypes::Tts => BitType::Tts,
+            BitTypes::Stt => BitType::Stt,
             BitTypes::Embedding => BitType::Embedding,
             BitTypes::ImageEmbedding => BitType::ImageEmbedding,
             BitTypes::File => BitType::File,

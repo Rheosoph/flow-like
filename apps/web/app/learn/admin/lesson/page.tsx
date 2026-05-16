@@ -25,7 +25,9 @@ import {
 import type {
 	Challenge,
 	LessonAppRef,
+	LessonAssetView,
 } from "@tm9657/flow-like-ui/lib/learn/types";
+import { buildAssetPlateNode } from "@tm9657/flow-like-ui/lib/learn/asset-elements";
 import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -97,6 +99,24 @@ function LessonAdminContent() {
 	const lesson = lessonQuery.data?.lesson ?? null;
 	const challenges = lessonQuery.data?.challenges ?? [];
 	const appRefs = lessonQuery.data?.app_refs ?? [];
+	const assetMentionItems = useMemo(
+		() =>
+			(lessonQuery.data?.assets ?? []).map((asset: LessonAssetView) => ({
+				key: asset.id,
+				text: asset.name,
+				onSelect: (editor: unknown) => {
+					const e = editor as {
+						tf: {
+							insertNodes: (node: unknown) => void;
+							move?: (opts: { unit: "offset" }) => void;
+						};
+					};
+					e.tf.insertNodes(buildAssetPlateNode(asset));
+					e.tf.move?.({ unit: "offset" });
+				},
+			})),
+		[lessonQuery.data?.assets],
+	);
 
 	// Form state for the lesson body.
 	const [title, setTitle] = useState("");
@@ -311,6 +331,7 @@ function LessonAdminContent() {
 												onChange={setContent}
 												editable
 												isMarkdown
+												mentionItems={assetMentionItems}
 											/>
 										</div>
 									</div>

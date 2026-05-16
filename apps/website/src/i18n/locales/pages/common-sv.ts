@@ -1,6 +1,5 @@
 export const svCommon = {
 	// Header
-	"header.24h": "24h Lösning",
 	"header.compare": "Jämför",
 	"header.blog": "Blogg",
 	"header.docs": "Dokumentation",
@@ -25,7 +24,6 @@ export const svCommon = {
 	"footer.link.download": "Ladda ner",
 	"footer.link.compare": "Jämför",
 	"footer.link.modernBi": "Modern BI",
-	"footer.link.24h": "24h Lösning",
 	"footer.link.gettingStarted": "Kom igång",
 	"footer.link.whatIs": "Vad är Flow-Like?",
 	"footer.link.selfHosting": "Självhosting",
@@ -209,7 +207,6 @@ export const svCommon = {
 	"pricing.ctaSection.title": "Behöver du en anpassad lösning?",
 	"pricing.ctaSection.description":
 		"Få en helt skräddarsydd automatiseringslösning för ditt företag på bara 24 timmar. Vi designar, bygger och distribuerar ett produktionsfärdigt workflow anpassat till dina exakta behov.",
-	"pricing.ctaSection.24h": "24-timmarslösning",
 	"pricing.ctaSection.enterprise": "Kontakta enterprise-försäljning",
 	"pricing.ctaSection.startingAt":
 		"Från €1 999 · Fullständigt ägande av källkod · Distribuera var som helst",

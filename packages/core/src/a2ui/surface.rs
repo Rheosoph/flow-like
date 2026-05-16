@@ -206,6 +206,7 @@ pub enum A2UIServerMessage {
     RequestElements {
         element_ids: Vec<String>,
     },
+    ShowScreen,
     UpsertElement {
         element_id: String,
         value: Value,
@@ -307,6 +308,10 @@ impl A2UIServerMessage {
 
     pub fn request_elements(element_ids: Vec<String>) -> Self {
         Self::RequestElements { element_ids }
+    }
+
+    pub fn show_screen() -> Self {
+        Self::ShowScreen
     }
 
     pub fn upsert_element(element_id: impl Into<String>, value: Value) -> Self {

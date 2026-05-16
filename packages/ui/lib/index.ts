@@ -16,6 +16,7 @@ export * from "./runtime-vars-utils";
 
 export * from "./bit/bit";
 export * from "./bit/bit-pack";
+export * from "./bit/tts-asset-repair";
 
 export * from "./schema/index";
 export * from "./command/generic-command";
@@ -32,5 +33,7 @@ export * from "./oauth";
 export * from "./builder/KeyboardShortcuts";
 export * from "./flowpilot/index";
 export * from "./presign-assets";
+export * from "./storage-url";
+export * from "./temporary-upload-cache";
 export * from "./css-utils";
 export * from "./idb-cleanup";

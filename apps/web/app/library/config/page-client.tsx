@@ -48,6 +48,8 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
+import { AllowForkingCard } from "@tm9657/flow-like-ui/components/settings/forking/allow-forking-card";
+import { ForkAppCard } from "@tm9657/flow-like-ui/components/settings/forking/fork-app-card";
 import {
 	hashToGradient,
 	useThemeInfo,
@@ -696,6 +698,20 @@ export default function LibraryConfigPage() {
 							refreshApp={async () => {
 								await app.refetch();
 							}}
+						/>
+
+						<AllowForkingCard
+							canEdit={canEdit}
+							localApp={app.data}
+							onChanged={async () => {
+								await app.refetch();
+							}}
+						/>
+
+						<ForkAppCard
+							appId={app.data.id}
+							appName={metadata.data?.name ?? id ?? "this app"}
+							target="online"
 						/>
 
 						{app.data.visibility === IAppVisibility.Private && (

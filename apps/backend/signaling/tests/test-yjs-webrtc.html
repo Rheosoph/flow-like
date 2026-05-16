@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Yjs + y-webrtc Signaling Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background: #f7f7fb;
+    }
+    h1 {
+      margin-bottom: 0.5rem;
+    }
+    .card {
+      max-width: 720px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 12px 36px rgba(45, 55, 72, 0.15);
+    }
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid #d1d1e0;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 15px;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.25);
+    }
+    .info {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: #ebf4ff;
+      border-left: 4px solid #667eea;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #2c5282;
+    }
+    .status {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 1.5rem 0 0.75rem;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #edf2ff;
+      color: #4c51bf;
+    }
+    .chip.connected { background: #e6fffa; color: #2f855a; }
+    .chip.peers { background: #fffaf0; color: #b7791f; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Yjs + y-webrtc Signaling Test</h1>
+    <p>
+      This page connects to <code>wss://signaling.flow-like.com</code> through the
+      <code>y-webrtc</code> provider. Open it in two different browsers or devices,
+      type below, and you should see live synchronization.
+    </p>
+
+    <div class="status">
+      <span id="connStatus" class="chip">Signaling: connecting…</span>
+      <span id="peerStatus" class="chip peers">Peers: 0</span>
+    </div>
+
+    <textarea id="editor" placeholder="Start typing to sync via y-webrtc…"></textarea>
+
+    <div class="info">
+      <strong>Tips</strong>
+      <ul>
+        <li>Each browser joins room <code>yjs-webrtc-demo</code>.</li>
+        <li>Use private/incognito windows or different devices to simulate peers.</li>
+        <li>The document contents are stored in Yjs; closing all peers wipes state.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as Y from 'https://cdn.jsdelivr.net/npm/yjs@13.6.16/+esm';
+    import { WebrtcProvider } from 'https://cdn.jsdelivr.net/npm/y-webrtc@10.2.6/+esm';
+
+    const doc = new Y.Doc();
+    const yText = doc.getText('shared-text');
+
+    const roomName = 'yjs-webrtc-demo';
+    const signalingUrls = ['wss://signaling.flow-like.com'];
+
+    const provider = new WebrtcProvider(roomName, doc, {
+      signaling: signalingUrls,
+      password: undefined,
+      // Provide an explicit peer ID for easier debugging
+      peerId: `client-${Math.random().toString(36).slice(2, 8)}`,
+      connect: true
+    });
+
+    const awareness = provider.awareness;
+    const editorEl = document.getElementById('editor');
+    const connStatusEl = document.getElementById('connStatus');
+    const peerStatusEl = document.getElementById('peerStatus');
+
+    const updatePeerCount = () => {
+      const states = Array.from(awareness.getStates().keys());
+      peerStatusEl.textContent = `Peers: ${states.length}`;
+    };
+
+    // Yjs -> textarea
+    yText.observe(event => {
+      const newText = yText.toString();
+      if (editorEl.value !== newText) {
+        const pos = editorEl.selectionStart;
+        editorEl.value = newText;
+        editorEl.setSelectionRange(pos, pos);
+      }
+    });
+
+    // textarea -> Yjs
+    editorEl.addEventListener('input', () => {
+      const value = editorEl.value;
+      Y.transact(doc, () => {
+        yText.delete(0, yText.length);
+        yText.insert(0, value);
+      });
+    });
+
+    // Populate initial value
+    editorEl.value = yText.toString();
+
+    // Awareness updates for peer count
+    awareness.setLocalStateField('user', {
+      name: provider.peerId,
+      color: '#' + Math.random().toString(16).slice(-6)
+    });
+
+    awareness.on('change', updatePeerCount);
+    updatePeerCount();
+
+    // Signaling connection status (best effort – y-webrtc doesn't emit dedicated events)
+    const setConnStatus = text => {
+      connStatusEl.textContent = `Signaling: ${text}`;
+      connStatusEl.classList.toggle('connected', text === 'connected');
+    };
+
+    provider.signalingConns.forEach(conn => {
+      conn.on('connect', () => setConnStatus('connected'));
+      conn.on('close', () => setConnStatus('disconnected'));
+      conn.on('error', () => setConnStatus('error'));
+    });
+
+    // Attempt reconnect if connection drops
+    provider.on('status', ({ status }) => {
+      if (status === 'connected') {
+        setConnStatus('connected');
+      } else if (status === 'connecting') {
+        setConnStatus('connecting…');
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      awareness.setLocalState(null);
+      provider.destroy();
+      doc.destroy();
+    });
+  </script>
+</body>
+</html>

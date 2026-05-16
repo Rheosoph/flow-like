@@ -30,6 +30,7 @@ pub struct MetaQuery {
     pub language: Option<String>,
     pub template_id: Option<String>,
     pub course_id: Option<String>,
+    pub widget_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, ToSchema)]
@@ -44,6 +45,7 @@ pub struct MediaQuery {
     pub language: Option<String>,
     pub template_id: Option<String>,
     pub course_id: Option<String>,
+    pub widget_id: Option<String>,
     pub item: MediaItem,
     pub extension: String,
 }
@@ -52,6 +54,7 @@ pub enum MetaMode {
     Template(String),
     App(String),
     Course(String),
+    Widget(String),
 }
 
 impl MetaMode {
@@ -60,6 +63,8 @@ impl MetaMode {
             MetaMode::Template(template_id.clone())
         } else if let Some(course_id) = &query.course_id {
             MetaMode::Course(course_id.clone())
+        } else if let Some(widget_id) = &query.widget_id {
+            MetaMode::Widget(widget_id.clone())
         } else {
             MetaMode::App(app_id.to_string())
         }
@@ -70,6 +75,8 @@ impl MetaMode {
             MetaMode::Template(template_id.clone())
         } else if let Some(course_id) = &query.course_id {
             MetaMode::Course(course_id.clone())
+        } else if let Some(widget_id) = &query.widget_id {
+            MetaMode::Widget(widget_id.clone())
         } else {
             MetaMode::App(app_id.to_string())
         }
@@ -93,6 +100,12 @@ impl MetaMode {
                 app_id,
                 state,
                 RolePermissions::WriteCourses
+            )),
+            MetaMode::Widget(_) => Ok(ensure_permission!(
+                user,
+                app_id,
+                state,
+                RolePermissions::WriteWidgets
             )),
             MetaMode::App(_) => Ok(ensure_permission!(
                 user,
@@ -122,6 +135,12 @@ impl MetaMode {
                 state,
                 RolePermissions::ReadCourses
             )),
+            MetaMode::Widget(_) => Ok(ensure_permission!(
+                user,
+                app_id,
+                state,
+                RolePermissions::ReadWidgets
+            )),
             MetaMode::App(_) => Ok(ensure_in_project!(user, &app_id, &state)),
         }
     }
@@ -149,6 +168,13 @@ impl MetaMode {
             MetaMode::Course(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::CourseId.eq(id))
+                    .filter(meta::Column::Lang.eq(language))
+                    .one(txn)
+                    .await
+            }
+            MetaMode::Widget(id) => {
+                meta::Entity::find()
+                    .filter(meta::Column::WidgetId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
                     .one(txn)
                     .await

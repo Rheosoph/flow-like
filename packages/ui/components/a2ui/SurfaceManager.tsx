@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { applyMediaSourceUpdate } from "./media-source";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -386,7 +387,7 @@ export function useSurfaceManager() {
 							break;
 						}
 						case "setImageSrc": {
-							const src = updateValue.src as string;
+							const src = String(updateValue.src ?? updateValue.url ?? "");
 							const alt = updateValue.alt as string | undefined;
 							const componentData = component.component as unknown as Record<
 								string,
@@ -396,10 +397,15 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
+									src: { literalString: src },
 									url: src,
-									alt: alt ?? componentData.alt,
+									...(alt !== undefined && { alt: { literalString: alt } }),
 								} as unknown as SurfaceComponent["component"],
 							};
+							break;
+						}
+						case "setMediaSource": {
+							updatedComponent = applyMediaSourceUpdate(component, updateValue);
 							break;
 						}
 						case "setSpeakerName": {

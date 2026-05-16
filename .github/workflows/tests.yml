@@ -17,6 +17,9 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run package manager security E2E tests
+        run: bun run test:e2e:package-security
+
       - name: Run Rust tests
         run: cargo test
         env:

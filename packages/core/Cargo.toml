@@ -53,10 +53,22 @@ serde_json.workspace = true
 async-trait.workspace = true
 percent-encoding.workspace = true
 utoipa = { version = "5", optional = true }
+any-tts = { version = "0.1.2", default-features = false, optional = true }
 
 [features]
 tauri = ["flow-like-storage/tauri"]
 local-ml = ["flow-like-model-provider/local-ml"]
+local-tts = [
+    "dep:any-tts",
+    "any-tts/kokoro",
+    "any-tts/omnivoice",
+    "any-tts/qwen3-tts",
+    "any-tts/vibevoice",
+    "any-tts/voxtral",
+]
+local-tts-metal = ["local-tts", "any-tts/metal"]
+local-tts-cuda = ["local-tts", "any-tts/cuda"]
+local-tts-accelerate = ["local-tts", "any-tts/accelerate"]
 remote-ml = ["flow-like-model-provider/remote-ml"]
 schema-gen = []
 flow-runtime = []

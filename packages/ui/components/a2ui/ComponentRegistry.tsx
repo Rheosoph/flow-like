@@ -102,6 +102,8 @@ export interface ComponentProps<T extends A2UIComponent = A2UIComponent> {
 	component: T;
 	componentId: string;
 	surfaceId: string;
+	appId?: string;
+	boardId?: string;
 	style?: Style;
 	onAction?: (message: A2UIClientMessage) => void;
 	renderChild: RenderChildFn;

@@ -736,41 +736,25 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 						{/* Use Case */}
 						{meta?.useCase && (
-							<Card className="overflow-hidden border-border/60 bg-linear-to-br from-background via-background to-primary/5">
-								<div className="grid gap-0 md:grid-cols-[240px_minmax(0,1fr)]">
-									<CardHeader className="border-b bg-muted/30 md:border-b-0 md:border-r">
-										<div className="flex items-start gap-3">
-											<div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-												<Target className="h-5 w-5" />
-											</div>
-											<div className="space-y-2">
-												<Badge variant="secondary" className="w-fit">
-													Use Case
-												</Badge>
-												<div className="space-y-1">
-													<CardTitle className="text-base">
-														Where this package fits best
-													</CardTitle>
-													<CardDescription>
-														The primary workflow or scenario this package is
-														designed for.
-													</CardDescription>
-												</div>
-											</div>
+							<Card className="border-border/60">
+								<CardHeader className="pb-3">
+									<div className="flex items-center gap-3">
+										<div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+											<Target className="h-4 w-4" />
 										</div>
-									</CardHeader>
-									<CardContent className="flex p-6">
-										<div className="flex w-full items-center rounded-2xl border bg-background/80 px-4 py-3 shadow-sm">
-											<div className="w-full text-sm leading-relaxed text-foreground/90">
-												<TextEditor
-													initialContent={meta.useCase}
-													isMarkdown
-													minimal
-												/>
-											</div>
+										<div className="min-w-0">
+											<CardTitle className="text-base">Use Case</CardTitle>
+											<CardDescription>
+												Where this package fits best
+											</CardDescription>
 										</div>
-									</CardContent>
-								</div>
+									</div>
+								</CardHeader>
+								<CardContent>
+									<p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">
+										{meta.useCase}
+									</p>
+								</CardContent>
 							</Card>
 						)}
 
@@ -806,9 +790,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										<div>
 											<h4 className="text-sm font-medium mb-2">Authors</h4>
 											<div className="flex flex-wrap gap-2">
-												{manifest.authors?.map((author, idx) => (
+												{manifest.authors?.map((author) => (
 													<div
-														key={idx}
+														key={`${author.name}:${author.email ?? ""}:${author.url ?? ""}`}
 														className="flex items-center gap-1 text-sm"
 													>
 														<User className="h-4 w-4 text-muted-foreground" />
@@ -1178,8 +1162,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								{(manifest.permissions?.oauthScopes?.length ?? 0) > 0 && (
 									<div className="mt-4">
 										<p className="text-sm font-medium mb-2">OAuth Scopes</p>
-										{manifest.permissions?.oauthScopes?.map((oauth, idx) => (
-											<div key={idx} className="p-3 rounded-lg bg-muted mt-2">
+										{manifest.permissions?.oauthScopes?.map((oauth) => (
+											<div
+												key={`${oauth.provider}:${oauth.scopes.join(",")}:${oauth.reason}`}
+												className="p-3 rounded-lg bg-muted mt-2"
+											>
 												<div className="flex items-center gap-2">
 													<Badge>{oauth.provider}</Badge>
 													{oauth.required && (

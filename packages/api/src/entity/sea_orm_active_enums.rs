@@ -4,6 +4,18 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AssetKind")]
+pub enum AssetKind {
+    #[sea_orm(string_value = "IMAGE")]
+    Image,
+    #[sea_orm(string_value = "VIDEO")]
+    Video,
+    #[sea_orm(string_value = "AUDIO")]
+    Audio,
+    #[sea_orm(string_value = "DOCUMENT")]
+    Document,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AuditActorType")]
 pub enum AuditActorType {
     #[sea_orm(string_value = "USER")]
@@ -36,10 +48,6 @@ pub enum BitType {
     File,
     #[sea_orm(string_value = "MEDIA")]
     Media,
-    #[sea_orm(string_value = "IMAGE_GENERATION")]
-    ImageGeneration,
-    #[sea_orm(string_value = "VIDEO_GENERATION")]
-    VideoGeneration,
     #[sea_orm(string_value = "TEMPLATE")]
     Template,
     #[sea_orm(string_value = "TOKENIZER")]
@@ -60,6 +68,14 @@ pub enum BitType {
     Board,
     #[sea_orm(string_value = "OTHER")]
     Other,
+    #[sea_orm(string_value = "IMAGE_GENERATION")]
+    ImageGeneration,
+    #[sea_orm(string_value = "VIDEO_GENERATION")]
+    VideoGeneration,
+    #[sea_orm(string_value = "TTS")]
+    Tts,
+    #[sea_orm(string_value = "STT")]
+    Stt,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Category")]

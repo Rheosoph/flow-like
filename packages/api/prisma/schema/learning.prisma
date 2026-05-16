@@ -11,10 +11,12 @@ model Course {
   iconUrl        String?
   bannerUrl      String?
   tags           String[]
+  position       Int?
 
   meta        Meta[]
   modules     CourseModule[]
   appLinks    CourseAppLink[]
+  assets      CourseAsset[]
   enrollments UserCourseEnrollment[]
   certificates Certificate[]
   pathSteps   LearningPathCourse[]
@@ -26,6 +28,7 @@ model Course {
   @@index([category])
   @@index([isPublished])
   @@index([slug])
+  @@index([position])
 }
 
 model LearningPath {
@@ -137,6 +140,25 @@ model CourseAppLink {
 
   @@unique([courseId, appId])
   @@index([appId])
+  @@index([courseId])
+}
+
+model CourseAsset {
+  id       String @id
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  name        String
+  storageKey  String
+  filename    String
+  mimeType    String
+  size        Int
+  kind        AssetKind @default(DOCUMENT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, name])
   @@index([courseId])
 }
 
@@ -298,4 +320,11 @@ enum LessonStatus {
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
+}
+
+enum AssetKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
 }

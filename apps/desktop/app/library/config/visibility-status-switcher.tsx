@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	type IApp,
-	type IAppVisibility,
+	IAppVisibility,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
@@ -31,6 +31,7 @@ export function VisibilityStatusSwitcher({
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const queryClient = useQueryClient();
+	const isOffline = localApp.visibility === IAppVisibility.Offline;
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -50,7 +51,7 @@ export function VisibilityStatusSwitcher({
 				`apps/${localApp.id}/publication`,
 			);
 		},
-		enabled: !!profile.data && canEdit,
+		enabled: !!profile.data && canEdit && !isOffline,
 		select: normalizeAppPublicationRequests,
 	});
 
@@ -74,16 +75,18 @@ export function VisibilityStatusSwitcher({
 				canEdit={canEdit}
 				onVisibilityChange={handleVisibilityChange}
 			/>
-			<AppPublicationReviewCard
-				requests={publicationRequests.data ?? []}
-				isLoading={publicationRequests.isLoading}
-				error={
-					publicationRequests.isError
-						? (publicationRequests.error?.message ??
-							"Failed to load publication review history")
-						: null
-				}
-			/>
+			{!isOffline && (
+				<AppPublicationReviewCard
+					requests={publicationRequests.data ?? []}
+					isLoading={publicationRequests.isLoading}
+					error={
+						publicationRequests.isError
+							? (publicationRequests.error?.message ??
+								"Failed to load publication review history")
+							: null
+					}
+				/>
+			)}
 		</>
 	);
 }

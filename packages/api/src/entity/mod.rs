@@ -18,6 +18,7 @@ pub mod challenge;
 pub mod comment;
 pub mod course;
 pub mod course_app_link;
+pub mod course_asset;
 pub mod course_module;
 pub mod embedding_usage_tracking;
 pub mod error_report;

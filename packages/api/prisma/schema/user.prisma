@@ -17,7 +17,7 @@ model User {
   stripeId   String? @unique
   trackingId String? @unique
 
-  email             String? @unique
+  email             String?
   username          String? @unique
   preferredUsername String? @unique
   name              String?

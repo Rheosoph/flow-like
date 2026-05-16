@@ -18,6 +18,14 @@ import {
 	injectDataFunction,
 } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+import type {
+	IBeginOfflineForkBody,
+	IBeginOfflineForkResponse,
+	IForkPreviewResponse,
+	IForkPreviewTarget,
+	IOnlineForkBody,
+	IOnlineForkResponse,
+} from "@tm9657/flow-like-ui/lib/schema/app/fork";
 import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
@@ -646,6 +654,77 @@ export class AppState implements IAppState {
 				this.backend.auth,
 			);
 		}
+	}
+
+	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Forking settings are only available for online apps.");
+		}
+
+		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
+			await fetcher<IApp>(
+				this.backend.profile,
+				`apps/${appId}/settings/forking`,
+				{
+					method: "PATCH",
+					body: JSON.stringify({
+						allow_forking: allow,
+					}),
+				},
+				this.backend.auth,
+			);
+		}
+	}
+
+	async getForkPreview(
+		appId: string,
+		target: IForkPreviewTarget,
+	): Promise<IForkPreviewResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IForkPreviewResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork/preview?target=${target}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async beginOfflineFork(
+		appId: string,
+		body: IBeginOfflineForkBody,
+	): Promise<IBeginOfflineForkResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IBeginOfflineForkResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork/offline/begin`,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+			this.backend.auth,
+		);
+	}
+
+	async onlineFork(
+		appId: string,
+		body: IOnlineForkBody,
+	): Promise<IOnlineForkResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IOnlineForkResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork`,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+			this.backend.auth,
+		);
 	}
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {

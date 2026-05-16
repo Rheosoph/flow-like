@@ -179,6 +179,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 							bit_types: [
 								IBitTypes.Llm,
 								IBitTypes.Vlm,
+								IBitTypes.Tts,
+								IBitTypes.Stt,
 								IBitTypes.Embedding,
 								IBitTypes.ImageEmbedding,
 							],

@@ -155,8 +155,17 @@ impl GcpRuntimeCredentials {
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
 
         let (allowed_prefixes, write_access) = match mode {
-            CredentialsAccess::EditApp => (vec![apps_prefix], true),
-            CredentialsAccess::ReadApp => (vec![apps_prefix], false),
+            CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
+            CredentialsAccess::ReadApp => (vec![apps_prefix.clone()], false),
+            // GCP scoping is prefix-based on a single bucket; we
+            // don't have a per-bucket policy to fall back to.
+            // Practical safety relies on the client only ever using
+            // these creds against the content store; the fork code
+            // enforces that, but a misbehaving client could read or
+            // write meta paths if both stores live in the same
+            // bucket. Same scope as `ReadApp` / `EditApp`.
+            CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
+            CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix], true),
             CredentialsAccess::ReadUser => (vec![user_prefix], false),
             CredentialsAccess::InvokeNone => {
@@ -238,8 +247,17 @@ impl GcpRuntimeCredentials {
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
 
         let (allowed_prefixes, write_access) = match mode {
-            CredentialsAccess::EditApp => (vec![apps_prefix], true),
-            CredentialsAccess::ReadApp => (vec![apps_prefix], false),
+            CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
+            CredentialsAccess::ReadApp => (vec![apps_prefix.clone()], false),
+            // GCP scoping is prefix-based on a single bucket; we
+            // don't have a per-bucket policy to fall back to.
+            // Practical safety relies on the client only ever using
+            // these creds against the content store; the fork code
+            // enforces that, but a misbehaving client could read or
+            // write meta paths if both stores live in the same
+            // bucket. Same scope as `ReadApp` / `EditApp`.
+            CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
+            CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix], true),
             CredentialsAccess::ReadUser => (vec![user_prefix], false),
             CredentialsAccess::InvokeNone => {

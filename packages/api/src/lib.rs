@@ -35,6 +35,7 @@ pub mod push_notifications;
 pub mod state;
 pub mod storage_config;
 pub mod user_management;
+pub mod utils;
 
 pub mod backend_jwt;
 pub mod compilation;

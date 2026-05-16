@@ -30,7 +30,7 @@ import {
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
-import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Save, Search, Trash2, Wrench } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -40,6 +40,8 @@ const ITEMS_PER_PAGE_OPTIONS = [12, 24, 48, 96];
 const ALL_BIT_TYPES = [
 	IBitTypes.Llm,
 	IBitTypes.Vlm,
+	IBitTypes.Tts,
+	IBitTypes.Stt,
 	IBitTypes.Embedding,
 	IBitTypes.ImageEmbedding,
 	IBitTypes.File,
@@ -58,7 +60,7 @@ const ALL_BIT_TYPES = [
 	IBitTypes.ObjectDetection,
 ];
 
-const MODEL_BIT_TYPES = [IBitTypes.Llm, IBitTypes.Vlm] as const;
+const MODEL_BIT_TYPES = [IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.Tts, IBitTypes.Stt] as const;
 const HOSTED_FILTER = "hosted";
 const HOSTED_PROVIDER_OPTIONS = [
 	"Hosted",
@@ -205,6 +207,7 @@ export default function EditBitsPage() {
 	);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
+	const [isRepairingTts, setIsRepairingTts] = useState(false);
 	const debouncedSearch = useDebounce(searchTerm, 250);
 
 	const queryParams = useMemo(
@@ -551,6 +554,37 @@ export default function EditBitsPage() {
 		}
 	}, [backend.apiState, draft, profile.data, queryClient]);
 
+	const handleRepairTtsAssets = useCallback(async () => {
+		if (!draft) {
+			toast.error("Bit not ready to repair");
+			return;
+		}
+
+		setIsRepairingTts(true);
+		try {
+			const pack = await backend.bitState.repairTtsBitAssets(draft);
+			const replacementBit = pack.bits[0];
+			toast.success(
+				replacementBit?.id && replacementBit.id !== draft.id
+					? `Created replacement TTS bit ${replacementBit.id}`
+					: "TTS bit repair completed",
+			);
+			if (replacementBit?.id && replacementBit.id !== draft.id) {
+				setSelectedId(replacementBit.id);
+			}
+			queryClient.invalidateQueries({ queryKey: ["bit-search"] });
+			queryClient.invalidateQueries({ queryKey: ["bit", draft.id] });
+			if (replacementBit?.id) {
+				queryClient.invalidateQueries({ queryKey: ["bit", replacementBit.id] });
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			toast.error(`Failed to repair TTS assets: ${message}`);
+		} finally {
+			setIsRepairingTts(false);
+		}
+	}, [backend.bitState, draft, queryClient]);
+
 	const modelParameters = useMemo(() => {
 		if (
 			!draft ||
@@ -562,6 +596,7 @@ export default function EditBitsPage() {
 	}, [draft]);
 
 	const draftIsHosted = isHostedBit(draft);
+	const canRepairTtsAssets = draft?.type === IBitTypes.Tts;
 
 	return (
 		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
@@ -1159,6 +1194,16 @@ export default function EditBitsPage() {
 											<Button variant="outline" onClick={handleRefresh}>
 												Refresh
 											</Button>
+											{canRepairTtsAssets ? (
+												<Button
+													variant="outline"
+													onClick={handleRepairTtsAssets}
+													disabled={isRepairingTts}
+												>
+													<Wrench className="mr-2 h-4 w-4" />
+													Repair TTS Assets
+												</Button>
+											) : null}
 											<Button onClick={handleSave} disabled={isSaving}>
 												<Save className="mr-2 h-4 w-4" />
 												Save Changes

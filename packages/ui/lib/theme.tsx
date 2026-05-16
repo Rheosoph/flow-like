@@ -39,6 +39,12 @@ export interface IThemeColors {
 	fontSerif?: string;
 	fontMono?: string;
 	radius?: string;
+	shadowX?: string;
+	shadowY?: string;
+	shadowBlur?: string;
+	shadowSpread?: string;
+	shadowOpacity?: string;
+	shadowColor?: string;
 	shadow?: string;
 	shadow2xs?: string;
 	shadowXs?: string;

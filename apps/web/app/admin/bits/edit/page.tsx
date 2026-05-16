@@ -34,6 +34,8 @@ const ITEMS_PER_PAGE_OPTIONS = [12, 24, 48, 96];
 const ALL_BIT_TYPES = [
 	IBitTypes.Llm,
 	IBitTypes.Vlm,
+	IBitTypes.Tts,
+	IBitTypes.Stt,
 	IBitTypes.Embedding,
 	IBitTypes.ImageEmbedding,
 	IBitTypes.File,
@@ -60,6 +62,8 @@ export default function EditPage() {
 	const [selectedBitTypes, setSelectedBitTypes] = useState<IBitTypes[]>([
 		IBitTypes.Llm,
 		IBitTypes.Vlm,
+		IBitTypes.Tts,
+		IBitTypes.Stt,
 		IBitTypes.Embedding,
 		IBitTypes.ImageEmbedding,
 	]);

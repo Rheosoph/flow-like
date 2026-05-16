@@ -3,6 +3,7 @@ export * from "./accordion";
 export * from "./alert";
 export * from "./alert-dialog";
 export * from "./app-card";
+export * from "./audio-preview";
 export * from "./avatar";
 export * from "./badge";
 export * from "./bento-grid";

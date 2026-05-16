@@ -502,6 +502,7 @@ function LessonContentPage() {
 		return byChallenge;
 	}, [lessonQuery.data?.attempts]);
 	const appRefs = lessonQuery.data?.app_refs ?? [];
+	const assets = lessonQuery.data?.assets ?? [];
 
 	const boardDefaultTarget = useMemo<PaneTarget | null>(() => {
 		const boardChallenge = challenges.find(
@@ -652,7 +653,7 @@ function LessonContentPage() {
 	const lessonBody = (
 		<div className="mx-auto w-full max-w-3xl space-y-6 p-6 md:p-8 lg:p-10">
 			{lesson ? (
-				<LessonContent lesson={lesson} />
+				<LessonContent lesson={lesson} assets={assets} />
 			) : (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			)}

@@ -29,7 +29,7 @@ const paths = [
     title: t("v3.cta.enterprise"),
     desc: t("v3.cta.enterprise.desc"),
     action: t("v3.cta.enterprise.action"),
-    href: "/24-hour-solution",
+    href: "mailto:hello@flow-like.com?subject=Enterprise%20Inquiry",
     variant: "outline" as const,
   },
   {
@@ -87,31 +87,6 @@ const paths = [
       ))}
     </div>
 
-    <!-- 24-Hour Solution banner -->
-    <div class="ctav3-reveal mt-14 md:mt-20">
-      <div class="ctav3-banner relative overflow-hidden rounded-2xl border border-amber-500/20 px-6 py-10 sm:px-10 sm:py-12 text-center">
-        <div class="pointer-events-none absolute inset-0 -z-10 ctav3-banner-bg"></div>
-
-        <h3 class="text-2xl sm:text-3xl font-bold tracking-tight text-foreground mb-4">
-          {t("v3.cta.24h.headline")}
-        </h3>
-        <p class="mx-auto max-w-2xl text-sm sm:text-base text-muted-foreground leading-relaxed mb-8">
-          {t("v3.cta.24h.desc")}
-        </p>
-
-        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <a
-            href="/24-hour-solution"
-            class="rounded-lg bg-amber-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:ring-offset-2 focus:ring-offset-background"
-          >
-            {t("v3.cta.24h.action")}
-          </a>
-          <span class="text-sm font-medium text-muted-foreground">
-            {t("v3.cta.24h.price")}
-          </span>
-        </div>
-      </div>
-    </div>
   </div>
 </section>
 
@@ -135,10 +110,6 @@ const paths = [
     bottom: -60px;
     right: -80px;
     background: radial-gradient(circle, hsl(161 50% 45% / 0.06), transparent 70%);
-  }
-
-  .ctav3-banner-bg {
-    background: linear-gradient(135deg, hsl(38 90% 55% / 0.06), hsl(25 90% 50% / 0.08));
   }
 
   .ctav3-reveal {

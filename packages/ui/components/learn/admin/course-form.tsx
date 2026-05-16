@@ -65,6 +65,7 @@ export interface CourseFormValue {
 	readonly estimated_minutes: number;
 	readonly is_published: boolean;
 	readonly tags: ReadonlyArray<string>;
+	readonly position: number | null;
 	readonly name: string;
 	readonly description: string | null;
 	readonly long_description: string | null;
@@ -91,6 +92,7 @@ function fromDetail(d: CourseDetail | null | undefined): CourseFormValue {
 		estimated_minutes: d?.estimated_minutes ?? 0,
 		is_published: d?.is_published ?? false,
 		tags: d?.tags ?? [],
+		position: d?.position ?? null,
 		name: d?.name ?? "",
 		description: d?.description ?? null,
 		long_description: d?.long_description ?? null,
@@ -236,6 +238,28 @@ export function CourseForm({
 							))}
 						</SelectContent>
 					</Select>
+				</div>
+				<div className="space-y-2">
+					<Label htmlFor="course-position">Catalog position</Label>
+					<Input
+						id="course-position"
+						type="number"
+						value={value.position ?? ""}
+						onChange={(e) => {
+							const raw = e.target.value;
+							if (raw === "") {
+								patch("position", null);
+								return;
+							}
+							const parsed = Number.parseInt(raw, 10);
+							patch("position", Number.isFinite(parsed) ? parsed : null);
+						}}
+						placeholder="Leave empty to sort by name only"
+					/>
+					<p className="text-xs text-muted-foreground">
+						Lower numbers appear first. Courses without a position fall to the
+						end and sort alphabetically by title.
+					</p>
 				</div>
 			</div>
 			<div className="space-y-3">

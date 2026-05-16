@@ -1,25 +1,19 @@
 use super::element_utils::extract_element_id;
-use super::update_schemas::{AvatarSource, ImageSource, VideoSource};
 use flow_like::flow::{
-    board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_pin},
+    node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::FlowPath;
 use flow_like_types::{Value, async_trait, json::json};
+use std::time::Duration;
 
-/// Unified media source setter node.
+/// Sets a media component source from a FlowPath.
 ///
-/// Set the source URL for various media elements with a single node.
-/// The input pins change dynamically based on the selected media type.
-///
-/// **Media Types:**
-/// - Image: src + alt text
-/// - Avatar: src + fallback text
-/// - Video: src + poster image
-/// - Lottie: animation JSON URL
-/// - Iframe: page URL
+/// The node signs the FlowPath internally and lets the frontend update the target element
+/// according to its component type. `filePreview` can then render image, video, audio, PDF,
+/// text, and code files from the same source pin.
 #[crate::register_node]
 #[derive(Default)]
 pub struct SetMediaSource;
@@ -30,13 +24,72 @@ impl SetMediaSource {
     }
 }
 
+fn mime_from_extension(extension: &str) -> &'static str {
+    match extension {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "m4a" => "audio/mp4",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" => "application/javascript",
+        "ts" | "tsx" => "text/typescript",
+        "txt" => "text/plain",
+        "md" | "mdx" => "text/markdown",
+        "csv" => "text/csv",
+        "toml" => "text/toml",
+        "yaml" | "yml" => "text/yaml",
+        _ => "application/octet-stream",
+    }
+}
+
+fn media_kind_from_mime(mime_type: &str) -> &'static str {
+    if mime_type.starts_with("image/") {
+        return "image";
+    }
+    if mime_type.starts_with("video/") {
+        return "video";
+    }
+    if mime_type.starts_with("audio/") {
+        return "audio";
+    }
+    if mime_type == "application/pdf" {
+        return "pdf";
+    }
+    if mime_type.contains("json")
+        || mime_type.contains("javascript")
+        || mime_type.contains("typescript")
+    {
+        return "code";
+    }
+    if mime_type.starts_with("text/") {
+        return "text";
+    }
+    "file"
+}
+
 #[async_trait]
 impl NodeLogic for SetMediaSource {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "a2ui_set_media_source",
             "Set Media Source",
-            "Set source URL for image, video, avatar, lottie, or iframe elements",
+            "Signs a FlowPath and sets it as the source for image, video, avatar, iframe, lottie, or file preview elements",
             "UI/Elements/Media",
         );
         node.add_icon("/flow/icons/a2ui.svg");
@@ -52,34 +105,41 @@ impl NodeLogic for SetMediaSource {
         .set_options(PinOptions::new().set_enforce_schema(false).build());
 
         node.add_input_pin(
-            "media_type",
-            "Media Type",
-            "Type of media element",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "Image".to_string(),
-                    "Avatar".to_string(),
-                    "Video".to_string(),
-                    "Lottie".to_string(),
-                    "Iframe".to_string(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("Image")));
-
-        // Default: Image pins
-        node.add_input_pin(
-            "image",
-            "Image",
-            "Image source and alt",
+            "file",
+            "File",
+            "FlowPath to sign and use as the element source",
             VariableType::Struct,
         )
-        .set_schema::<ImageSource>();
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin(
+            "expiration",
+            "Expiration (seconds)",
+            "Expiration time for the signed URL",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(3600)));
 
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
+        node.add_output_pin(
+            "signed_url",
+            "Signed URL",
+            "The generated signed URL",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "mime_type",
+            "MIME Type",
+            "Detected MIME type from the FlowPath extension",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "media_kind",
+            "Media Kind",
+            "Detected media kind: image, video, audio, pdf, text, or file",
+            VariableType::String,
+        );
 
         node.set_long_running(true);
 
@@ -92,121 +152,47 @@ impl NodeLogic for SetMediaSource {
         let element_value: Value = context.evaluate_pin("element_ref").await?;
         let element_id = extract_element_id(&element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
+        let file: FlowPath = context.evaluate_pin("file").await?;
+        let expiration: i64 = context.evaluate_pin("expiration").await?;
 
-        let media_type: String = context.evaluate_pin("media_type").await?;
+        let runtime_path = file.to_runtime(context).await?;
+        let signed_url = runtime_path
+            .store
+            .sign(
+                "GET",
+                &runtime_path.path,
+                Duration::from_secs(expiration.max(1) as u64),
+            )
+            .await?;
 
-        let update = match media_type.as_str() {
-            "Image" => {
-                let image: ImageSource = context.evaluate_pin("image").await?;
-                let mut u = json!({
-                    "type": "setImageSrc",
-                    "src": image.src
-                });
-                if let Some(alt) = image.alt {
-                    u["alt"] = json!(alt);
-                }
-                u
-            }
-            "Avatar" => {
-                let avatar: AvatarSource = context.evaluate_pin("avatar").await?;
-                let mut u = json!({
-                    "type": "setAvatarSrc",
-                    "src": avatar.src
-                });
-                if let Some(fallback) = avatar.fallback {
-                    u["fallback"] = json!(fallback);
-                }
-                u
-            }
-            "Video" => {
-                let video: VideoSource = context.evaluate_pin("video").await?;
-                let mut u = json!({
-                    "type": "setVideoSrc",
-                    "src": video.src
-                });
-                if let Some(poster) = video.poster {
-                    u["poster"] = json!(poster);
-                }
-                u
-            }
-            "Lottie" => {
-                let src: String = context.evaluate_pin("src").await?;
-                json!({
-                    "type": "setLottieSrc",
-                    "src": src
-                })
-            }
-            "Iframe" => {
-                let src: String = context.evaluate_pin("src").await?;
-                json!({
-                    "type": "setIframeSrc",
-                    "src": src
-                })
-            }
-            _ => {
-                return Err(flow_like_types::anyhow!(
-                    "Unknown media type: {}",
-                    media_type
-                ));
-            }
-        };
+        let filename = runtime_path.path.filename().map(|name| name.to_string());
+        let extension = runtime_path
+            .path
+            .extension()
+            .map(|ext| ext.to_ascii_lowercase())
+            .unwrap_or_default();
+        let mime_type = mime_from_extension(&extension).to_string();
+        let media_kind = media_kind_from_mime(&mime_type).to_string();
+
+        let update = json!({
+            "type": "setMediaSource",
+            "src": signed_url.to_string(),
+            "url": signed_url.to_string(),
+            "filename": filename,
+            "mimeType": mime_type,
+            "mediaKind": media_kind
+        });
 
         context.upsert_element(&element_id, update).await?;
+        context
+            .set_pin_value("signed_url", json!(signed_url.to_string()))
+            .await?;
+        context.set_pin_value("mime_type", json!(mime_type)).await?;
+        context
+            .set_pin_value("media_kind", json!(media_kind))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
-    }
-
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
-        let media_type = node
-            .get_pin_by_name("media_type")
-            .and_then(|pin| pin.default_value.clone())
-            .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok())
-            .unwrap_or_else(|| "Image".to_string());
-
-        // Remove dynamic pins
-        let pins_to_check = ["image", "avatar", "video", "src"];
-        for pin_name in pins_to_check {
-            if let Some(pin) = node.get_pin_by_name(pin_name).cloned() {
-                remove_pin(node, Some(pin));
-            }
-        }
-
-        match media_type.as_str() {
-            "Image" => {
-                node.add_input_pin(
-                    "image",
-                    "Image",
-                    "Image source and alt",
-                    VariableType::Struct,
-                )
-                .set_schema::<ImageSource>();
-            }
-            "Avatar" => {
-                node.add_input_pin(
-                    "avatar",
-                    "Avatar",
-                    "Avatar source and fallback",
-                    VariableType::Struct,
-                )
-                .set_schema::<AvatarSource>();
-            }
-            "Video" => {
-                node.add_input_pin(
-                    "video",
-                    "Video",
-                    "Video source and poster",
-                    VariableType::Struct,
-                )
-                .set_schema::<VideoSource>();
-            }
-            "Lottie" => {
-                node.add_input_pin("src", "URL", "Lottie animation URL", VariableType::String);
-            }
-            "Iframe" => {
-                node.add_input_pin("src", "URL", "Iframe page URL", VariableType::String);
-            }
-            _ => {}
-        }
     }
 }

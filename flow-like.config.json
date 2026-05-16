@@ -44,6 +44,12 @@
 		"ip_retention_days": null,
 		"require_signing": true
 	},
+	"forking": {
+		"enabled": true,
+		"max_size_bytes": 1073741824,
+		"max_file_count": 10000,
+		"allow_unauthenticated_to_offline": true
+	},
 	"supported_sinks": {
 		"http": true,
 		"webhook": true,
