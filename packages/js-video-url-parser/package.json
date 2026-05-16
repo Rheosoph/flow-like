@@ -1,0 +1,23 @@
+{
+	"name": "js-video-url-parser",
+	"version": "0.5.2",
+	"private": true,
+	"type": "commonjs",
+	"description": "Flow-Like compatibility shim for the unmaintained js-video-url-parser package.",
+	"main": "lib/index.js",
+	"types": "lib/index.d.ts",
+	"scripts": {
+		"build": "tsc -p tsconfig.json && biome format --write lib/index.js lib/index.d.ts"
+	},
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4",
+		"typescript": "^5.7.0"
+	}
+}

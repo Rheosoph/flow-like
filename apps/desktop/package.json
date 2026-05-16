@@ -167,7 +167,7 @@
 		"happy-dom": "^20.8.9",
 		"internal-ip": "^8.0.0",
 		"license-report": "^6.7.1",
-		"puppeteer": "^23.11.1",
+		"puppeteer": "24.43.1",
 		"sharp": "^0.33.5",
 		"tailwindcss": "^4.1.11",
 		"tw-animate-css": "^1.3.6",
