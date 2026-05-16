@@ -202,11 +202,13 @@ jobs:
           # Stagger retries to reduce concurrent upload collisions
           sleep $((RANDOM % 30 + 10))
 
-          # Ensure the draft release exists
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "Flow Like - Beta v${VERSION}"
-
           # Find all release artifacts and upload with retry
+          if [ ! -d target/release/bundle ]; then
+            echo "::error::No release bundle directory found at target/release/bundle. The build likely failed before Tauri produced artifacts."
+            exit 1
+          fi
+
+          artifacts="$(mktemp)"
           find target/release/bundle -type f \( \
             -name "*.deb" -o -name "*.deb.sig" \
             -o -name "*.rpm" -o -name "*.rpm.sig" \
@@ -218,18 +220,43 @@ jobs:
             -o -name "*.msi" -o -name "*.msi.sig" \
             -o -name "*.msi.zip" -o -name "*.msi.zip.sig" \
             -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" \
-          \) 2>/dev/null | while read -r file; do
+          \) > "$artifacts"
+
+          if [ ! -s "$artifacts" ]; then
+            echo "::error::No release artifacts found under target/release/bundle."
+            find target/release/bundle -type f | sed 's/^/  /'
+            exit 1
+          fi
+
+          # Ensure the draft release exists after confirming there is something to upload
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "Flow Like - Beta v${VERSION}" || \
+              gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+
+          upload_failed=0
+          while read -r file; do
             filename=$(basename "$file")
             echo "Uploading $filename..."
+            uploaded=0
             for attempt in 1 2 3; do
               if gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber; then
                 echo "  Uploaded $filename"
+                uploaded=1
                 break
               fi
-              echo "  Attempt $attempt failed, retrying in $((attempt * 15))s..."
-              sleep $((attempt * 15))
+              if [ "$attempt" -lt 3 ]; then
+                echo "  Attempt $attempt failed, retrying in $((attempt * 15))s..."
+                sleep $((attempt * 15))
+              fi
             done
-          done
+            if [ "$uploaded" -ne 1 ]; then
+              echo "::error::Failed to upload $filename after 3 attempts."
+              upload_failed=1
+            fi
+          done < "$artifacts"
+
+          exit "$upload_failed"
 
       - name: Fail if build failed
         if: steps.build_release.outcome == 'failure'
