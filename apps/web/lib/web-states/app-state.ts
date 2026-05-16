@@ -11,7 +11,11 @@ import type {
 	UpsertAppCommentRequest,
 	UpsertAppCommentResponse,
 } from "@tm9657/flow-like-ui";
-import { IExecutionStage, ILogLevel } from "@tm9657/flow-like-ui";
+import {
+	IExecutionStage,
+	ILogLevel,
+	isAzureBlobStorageUrl,
+} from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -200,7 +204,7 @@ export class WebAppState implements IAppState {
 		};
 
 		// Azure Blob Storage requires x-ms-blob-type header
-		if (signed_url.includes(".blob.core.windows.net")) {
+		if (isAzureBlobStorageUrl(signed_url)) {
 			headers["x-ms-blob-type"] = "BlockBlob";
 		}
 

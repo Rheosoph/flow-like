@@ -1,4 +1,4 @@
-import type { IProfile } from "@tm9657/flow-like-ui";
+import { type IProfile, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
 import type {
 	AttemptResult,
 	CertificateView,
@@ -135,7 +135,7 @@ export const learnApi = {
 		const headers: HeadersInit = {
 			"Content-Type": file.type || "application/octet-stream",
 		};
-		if (signedUrl.includes(".blob.core.windows.net")) {
+		if (isAzureBlobStorageUrl(signedUrl)) {
 			headers["x-ms-blob-type"] = "BlockBlob";
 		}
 
@@ -271,7 +271,7 @@ export const learnApi = {
 		const headers: HeadersInit = {
 			"Content-Type": file.type || body.mime_type || "application/octet-stream",
 		};
-		if (created.signed_url.includes(".blob.core.windows.net")) {
+		if (isAzureBlobStorageUrl(created.signed_url)) {
 			headers["x-ms-blob-type"] = "BlockBlob";
 		}
 		const response = await fetch(created.signed_url, {

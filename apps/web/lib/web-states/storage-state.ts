@@ -1,4 +1,8 @@
-import type { IStorageItem, IStorageState } from "@tm9657/flow-like-ui";
+import {
+	type IStorageItem,
+	type IStorageState,
+	isAzureBlobStorageUrl,
+} from "@tm9657/flow-like-ui";
 import type { IStorageItemActionResult } from "@tm9657/flow-like-ui/state/backend-state/types";
 import { type WebBackendRef, apiDelete, apiPost, apiPut } from "./api-utils";
 
@@ -86,7 +90,7 @@ export class WebStorageState implements IStorageState {
 					file.type || "application/octet-stream",
 				);
 
-				if (signedUrl.includes(".blob.core.windows.net")) {
+				if (isAzureBlobStorageUrl(signedUrl)) {
 					xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 				}
 

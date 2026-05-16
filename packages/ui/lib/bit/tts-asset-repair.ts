@@ -1,7 +1,7 @@
 import { createId } from "@paralleldrive/cuid2";
 import {
-	IBitTypes,
 	type IBit,
+	IBitTypes,
 	type ITtsAssetRef,
 	type ITtsModelParameters,
 	ITtsModelType,
@@ -197,7 +197,7 @@ function getTtsAssetSource(
 }
 
 function normalizeHfRepo(value?: null | string): null | string {
-	const trimmed = value?.trim().replace(/\/+$/, "");
+	const trimmed = trimTrailingSlashes(value?.trim());
 	if (!trimmed) return null;
 
 	if (trimmed.startsWith(`${HF_BASE}/`)) {
@@ -209,4 +209,15 @@ function normalizeHfRepo(value?: null | string): null | string {
 	}
 
 	return null;
+}
+
+function trimTrailingSlashes(value?: string): string {
+	if (!value) return "";
+
+	let end = value.length;
+	while (end > 0 && value.charCodeAt(end - 1) === 47) {
+		end--;
+	}
+
+	return end === value.length ? value : value.slice(0, end);
 }

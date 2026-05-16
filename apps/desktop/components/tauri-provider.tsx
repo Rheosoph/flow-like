@@ -34,6 +34,7 @@ import {
 	type IWidgetState,
 	LoadingScreen,
 	type QueryClient,
+	isAzureBlobStorageUrl,
 	offlineSyncDB,
 	useBackend,
 	useBackendStore,
@@ -268,7 +269,7 @@ export class TauriBackend implements IBackendState {
 			);
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (signedUrl.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(signedUrl)) {
 				xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 			}
 

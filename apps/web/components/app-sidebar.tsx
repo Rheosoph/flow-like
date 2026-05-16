@@ -5,7 +5,6 @@ import {
 	AnimatedBrainIcon,
 	AnimatedBugIcon,
 	AnimatedDashboardIcon,
-	AnimatedDocsIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
@@ -61,7 +60,6 @@ import {
 	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarRail,
-	SpotlightTrigger,
 	Textarea,
 	useBackend,
 	useInvalidateInvoke,
@@ -133,7 +131,17 @@ const data = {
 			icon: AnimatedStudyHatIcon,
 			isActive: false,
 			permission: false,
-			items: [],
+			items: [
+				{
+					title: "Overview",
+					url: "/learn",
+				},
+				{
+					title: "Documentation",
+					url: "https://docs.flow-like.com",
+					external: true,
+				},
+			],
 		},
 		{
 			title: "Admin",
@@ -216,7 +224,6 @@ function InnerSidebar() {
 		<Sidebar collapsible="icon" side="left">
 			<SidebarHeader>
 				<Profiles />
-				<SpotlightTrigger />
 			</SidebarHeader>
 			<SidebarContent>
 				<NavMain items={data.navMain} devItems={data.navDev} />
@@ -348,24 +355,6 @@ function InnerSidebar() {
 							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
 								Settings
-							</span>
-						</MotionSidebarMenuButton>
-					</a>
-					<a
-						href="https://docs.flow-like.com"
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<MotionSidebarMenuButton
-							tooltip="Documentation"
-							initial="initial"
-							whileHover="hover"
-						>
-							<motion.div variants={iconVariants}>
-								<AnimatedDocsIcon className="size-4" />
-							</motion.div>
-							<span className="w-full flex flex-row items-center justify-between">
-								Documentation{" "}
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
@@ -687,6 +676,7 @@ interface INavItem {
 	items?: {
 		title: string;
 		url: string;
+		external?: boolean;
 		permission?: GlobalPermission;
 	}[];
 }
@@ -797,18 +787,28 @@ function NavCollapsible({
 						{item.items?.map((subItem) => (
 							<SidebarMenuSubItem key={subItem.title}>
 								<SidebarMenuSubButton asChild>
-									<Link href={subItem.url}>
-										<span
-											className={
-												pathname === subItem.url ||
-												pathname.startsWith(`${subItem.url}/`)
-													? "font-bold text-primary"
-													: ""
-											}
+									{subItem.external ? (
+										<a
+											href={subItem.url}
+											target="_blank"
+											rel="noopener noreferrer"
 										>
-											{subItem.title}
-										</span>
-									</Link>
+											<span>{subItem.title}</span>
+										</a>
+									) : (
+										<Link href={subItem.url}>
+											<span
+												className={
+													pathname === subItem.url ||
+													pathname.startsWith(`${subItem.url}/`)
+														? "font-bold text-primary"
+														: ""
+												}
+											>
+												{subItem.title}
+											</span>
+										</Link>
+									)}
 								</SidebarMenuSubButton>
 							</SidebarMenuSubItem>
 						))}

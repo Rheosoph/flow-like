@@ -28,6 +28,7 @@ import {
 	type IUserState,
 	type IWidgetState,
 	LoadingScreen,
+	isAzureBlobStorageUrl,
 	useBackendStore,
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
@@ -219,7 +220,7 @@ export class WebBackend implements IBackendState {
 			);
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (signedUrl.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(signedUrl)) {
 				xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 			}
 

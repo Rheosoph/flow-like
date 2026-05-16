@@ -3,6 +3,7 @@
 import {
 	type ISettingsProfile,
 	IThemes,
+	isAzureBlobStorageUrl,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
@@ -140,7 +141,7 @@ async function uploadToSignedUrl(url: string, file: File): Promise<void> {
 		"Content-Type": file.type || "application/octet-stream",
 	};
 
-	if (url.includes(".blob.core.windows.net")) {
+	if (isAzureBlobStorageUrl(url)) {
 		headers["x-ms-blob-type"] = "BlockBlob";
 	}
 

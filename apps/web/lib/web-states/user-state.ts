@@ -6,7 +6,7 @@ import type {
 	ISettings,
 	IUserState,
 } from "@tm9657/flow-like-ui";
-import { IAppVisibility } from "@tm9657/flow-like-ui";
+import { IAppVisibility, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -321,7 +321,7 @@ export class WebUserState implements IUserState {
 			};
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (response.signed_url.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(response.signed_url)) {
 				headers["x-ms-blob-type"] = "BlockBlob";
 			}
 
