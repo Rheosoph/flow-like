@@ -109,7 +109,7 @@ moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
 lambda_runtime = "0.14.2"
-aws-config = "1.8.8"
+aws-config = "1.8.16"
 aws-sdk-dynamodb = "1.80.0"
 aws-sdk-lambda = "1.88.0"
 aws-sdk-s3 = "1.93.0"
@@ -137,14 +137,14 @@ rig-core = {version="0.34.0", default-features = false, features = ["rmcp", "rus
 rig-vertexai = { version = "=0.3.3" }
 google-cloud-auth = "1.0"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
-rumqttc = "0.24"
+rumqttc = "0.25.1"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
 async-trait = "0.1.89"
 jsonschema = "0.33.0"
 rmcp = { version = "0.16.0", features = ["auth", "client", "client-side-sse", "macros", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
-lettre = { version = "0.11.17", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
+lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "2e2e7fd", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
@@ -159,9 +159,9 @@ dashmap = "6"
 
 rdev = { git = "https://github.com/TM9657/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "43.0.1", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "43.0.1"
-wasmtime-wasi-http = "43.0.1"
+wasmtime = { version = "43.0.2", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "43.0.2"
+wasmtime-wasi-http = "43.0.2"
 
 # Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)
@@ -176,4 +176,3 @@ incremental = true
 
 [profile.dev.package."*"]
 opt-level = 1
-

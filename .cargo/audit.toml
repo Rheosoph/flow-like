@@ -1,0 +1,28 @@
+# cargo audit configuration
+# Tracks known vulnerabilities that cannot currently be fixed due to upstream blockers.
+# Each entry is documented with the reason it cannot be resolved and the blocking dependency.
+# These should be re-evaluated when upstream crates release fixes.
+
+[advisories]
+ignore = [
+    # fast-float 0.2.0 — segmentation fault due to missing bounds check (RUSTSEC-2025-0003)
+    # Blocked by: polars 0.39.2 → lancedb 0.27.2; no fixed fast-float 0.2.x available.
+    "RUSTSEC-2025-0003",
+
+    # rsa 0.9.10 — Marvin Attack timing side-channel (RUSTSEC-2023-0071)
+    # Blocked by: no patched rsa release as of 2026-05-16.
+    "RUSTSEC-2023-0071",
+
+    # rustls-webpki 0.101.7 + 0.102.8 — name-constraint and CRL parsing advisories
+    # (RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0049)
+    # Fix requires rustls-webpki >= 0.103.10, but:
+    #   0.101.7: pulled in by aws-smithy-http-client 1.1.12 (depends on both rustls ^0.21 and ^0.23)
+    #            and by serenity 0.12.5 → reqwest 0.11 → hyper-rustls 0.24 → rustls 0.21.
+    #   0.102.8: pulled in by rumqttc 0.25.1 (direct dep rustls-webpki ^0.102.8)
+    #            and by serenity 0.12.5 → tokio-tungstenite 0.21 → rustls 0.22.
+    # Both require upstream crates to update; no action possible in this workspace.
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0049",
+]
