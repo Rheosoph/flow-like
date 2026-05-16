@@ -409,6 +409,10 @@
     "packages/js-video-url-parser": {
       "name": "js-video-url-parser",
       "version": "0.5.2",
+      "devDependencies": {
+        "@biomejs/biome": "1.9.4",
+        "typescript": "^5.7.0",
+      },
     },
     "packages/ui": {
       "name": "@tm9657/flow-like-ui",
