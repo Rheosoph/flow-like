@@ -12,6 +12,7 @@ import {
 	useState,
 } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import { cn } from "../../lib/utils";
 import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -31,6 +32,7 @@ import {
 	RouteDialogProvider,
 	useRouteDialog,
 } from "../a2ui";
+import { applyMediaSourceUpdate } from "../a2ui/media-source";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -38,6 +40,10 @@ import type {
 } from "../a2ui/types";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
+
+function isBackgroundClass(value: string | undefined): value is string {
+	return value?.startsWith("bg-") ?? false;
+}
 
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
@@ -91,9 +97,7 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					return {
@@ -116,6 +120,26 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						updatedComponents[comp.id] = comp;
 					}
 					return { ...prevSurface, components: updatedComponents };
+				});
+				return;
+			}
+
+			if (message.type === "dataModelUpdate") {
+				setSurface((prevSurface) => {
+					if (!prevSurface || message.surfaceId !== prevSurface.id)
+						return prevSurface;
+
+					const entries = new Map(
+						(prevSurface.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+
+					return {
+						...prevSurface,
+						dataModel: Array.from(entries.values()),
+					};
 				});
 				return;
 			}
@@ -166,6 +190,30 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 					if (!prevSurface || message.surfaceId !== prevSurface.id)
 						return prevSurface;
 					const updatedComponents = { ...prevSurface.components };
+					for (const [componentId, component] of Object.entries(
+						updatedComponents,
+					)) {
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const children = componentData.children as
+							| { explicitList?: string[] }
+							| undefined;
+						if (!children?.explicitList?.includes(message.elementId)) continue;
+						updatedComponents[componentId] = {
+							...component,
+							component: {
+								...component.component,
+								children: {
+									...children,
+									explicitList: children.explicitList.filter(
+										(id) => id !== message.elementId,
+									),
+								},
+							} as SurfaceComponent["component"],
+						};
+					}
 					delete updatedComponents[message.elementId];
 					return { ...prevSurface, components: updatedComponents };
 				});
@@ -210,6 +258,22 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 
 				const updateValue = value as Record<string, unknown>;
 				const updateType = updateValue?.type as string;
+
+				if (updateType === "createComponent") {
+					const replacement: SurfaceComponent = {
+						id: componentId,
+						component: updateValue.component as SurfaceComponent["component"],
+						style:
+							(updateValue.style as SurfaceComponent["style"]) ?? component.style,
+					};
+					return {
+						...prevSurface,
+						components: {
+							...prevSurface.components,
+							[componentId]: replacement,
+						},
+					};
+				}
 
 				let updatedComponent: SurfaceComponent = { ...component };
 
@@ -411,8 +475,12 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.layout !== undefined && {
+									layout: { literalJson: JSON.stringify(configOrLayout) },
+								}),
+								...(updateValue.config !== undefined && {
+									config: { literalJson: JSON.stringify(configOrLayout) },
+								}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -433,7 +501,7 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						break;
 					}
 					case "setImageSrc": {
-						const url = updateValue.url as string;
+						const url = String(updateValue.src ?? updateValue.url ?? "");
 						const alt = updateValue.alt as string | undefined;
 						const componentData = component.component as unknown as Record<
 							string,
@@ -444,10 +512,14 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							component: {
 								...componentData,
 								url,
-								src: url,
-								...(alt !== undefined && { alt }),
+								src: { literalString: url },
+								...(alt !== undefined && { alt: { literalString: alt } }),
 							} as unknown as SurfaceComponent["component"],
 						};
+						break;
+					}
+					case "setMediaSource": {
+						updatedComponent = applyMediaSourceUpdate(component, updateValue);
 						break;
 					}
 					case "pushChild": {
@@ -593,11 +665,13 @@ function PageInterfaceInner({
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [isCacheLoading, setIsCacheLoading] = useState(false);
+	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [loadEventPhase, setLoadEventPhase] = useState<
 		"idle" | "preparing" | "running"
 	>("idle");
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
+	const localWidgetWarmupsRef = useRef<Map<string, Promise<void>>>(new Map());
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	const pageRoute = route || (config?.route as string);
@@ -824,7 +898,8 @@ function PageInterfaceInner({
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
-		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning) return;
+		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning)
+			return;
 		void writePageSurfaceCache(appId, page, surface);
 	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
 
@@ -832,6 +907,12 @@ function PageInterfaceInner({
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
 			console.log("[PageInterface] A2UI message:", message.type, message);
+
+			// Reveal the current screen while the workflow continues running.
+			if (message.type === "showScreen") {
+				setIsScreenRevealed(true);
+				return;
+			}
 
 			// Handle navigation
 			if (message.type === "navigateTo") {
@@ -957,6 +1038,44 @@ function PageInterfaceInner({
 		return elements;
 	}, []); // No dependencies - uses ref
 
+	const prepareLocalWidgetDefinitions = useCallback(async () => {
+		if (!appId || !backend.capabilities().canExecuteLocally) return;
+
+		const existingWarmup = localWidgetWarmupsRef.current.get(appId);
+		if (existingWarmup) {
+			await existingWarmup.catch(() => undefined);
+			return;
+		}
+
+		const warmup = (async () => {
+			const widgets = await backend.widgetState.getWidgets(appId);
+			const results = await Promise.allSettled(
+				widgets.map(([widgetAppId, widgetId]) =>
+					backend.widgetState.getWidget(widgetAppId, widgetId),
+				),
+			);
+			const failedCount = results.filter(
+				(result) => result.status === "rejected",
+			).length;
+			if (failedCount > 0) {
+				console.warn(
+					`[PageInterface] Failed to warm ${failedCount} widget definition(s) before local execution`,
+				);
+			}
+		})();
+
+		localWidgetWarmupsRef.current.set(appId, warmup);
+		try {
+			await warmup;
+		} catch (e) {
+			localWidgetWarmupsRef.current.delete(appId);
+			console.warn(
+				"[PageInterface] Failed to warm widget definitions before local execution:",
+				e,
+			);
+		}
+	}, [appId, backend]);
+
 	// Helper to execute a page lifecycle event
 	const executePageEvent = useCallback(
 		async (
@@ -1000,6 +1119,7 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
+				await prepareLocalWidgetDefinitions();
 				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
@@ -1023,6 +1143,7 @@ function PageInterfaceInner({
 			executionService,
 			handleA2UIMessage,
 			getElementsFromSurface,
+			prepareLocalWidgetDefinitions,
 		],
 	);
 
@@ -1039,14 +1160,12 @@ function PageInterfaceInner({
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
+			setIsScreenRevealed(false);
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
-				await executePageEvent(
-					page.onLoadEventId,
-					"onLoad",
-					undefined,
-					() => setLoadEventPhase("running"),
+				await executePageEvent(page.onLoadEventId, "onLoad", undefined, () =>
+					setLoadEventPhase("running"),
 				);
 			} finally {
 				setLoadEventPhase("idle");
@@ -1107,12 +1226,13 @@ function PageInterfaceInner({
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
-	const shouldHoldForCachedState = Boolean(cacheSource?.cache) && isCacheLoading;
+	const shouldHoldForCachedState =
+		Boolean(cacheSource?.cache) && isCacheLoading;
 	const canRenderFromCache = Boolean(cacheSource?.cache && cachedSurface);
 	const shouldShowLoading =
 		(isLoading && !canRenderFromCache) ||
 		shouldHoldForCachedState ||
-		(isLoadEventRunning && !canRenderFromCache);
+		(isLoadEventRunning && !canRenderFromCache && !isScreenRevealed);
 	const loadingTitle = isLoadEventRunning
 		? loadEventPhase === "running"
 			? "Running workflow"
@@ -1161,10 +1281,18 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings = activeSurface?.canvasSettings ?? page?.canvasSettings;
+	const runtimeCanvasSettings =
+		activeSurface?.canvasSettings ?? page?.canvasSettings;
+	const backgroundClass = isBackgroundClass(
+		runtimeCanvasSettings?.backgroundColor,
+	)
+		? runtimeCanvasSettings?.backgroundColor
+		: undefined;
 
 	const canvasStyle: React.CSSProperties = {
-		backgroundColor: runtimeCanvasSettings?.backgroundColor,
+		backgroundColor: backgroundClass
+			? undefined
+			: runtimeCanvasSettings?.backgroundColor,
 		padding: runtimeCanvasSettings?.padding,
 		backgroundImage: runtimeCanvasSettings?.backgroundImage
 			? `url(${runtimeCanvasSettings.backgroundImage})`
@@ -1190,7 +1318,7 @@ function PageInterfaceInner({
 			)}
 			<div
 				data-page-id={pageContainerId}
-				className="min-h-full flex flex-col"
+				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
 			>
 				<DataProvider initialData={[]}>

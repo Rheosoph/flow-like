@@ -6,9 +6,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
+use std::collections::HashSet;
 use std::collections::hash_set::Difference;
 use std::hash::RandomState;
-use std::{collections::HashSet, sync::Arc};
 
 #[crate::register_node]
 #[derive(Default)]

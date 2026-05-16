@@ -3,16 +3,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	type IApp,
-	type IAppVisibility,
-	useInvoke,
+	IAppVisibility,
 	useBackend,
 	useInvalidateInvoke,
+	useInvoke,
 } from "@tm9657/flow-like-ui";
 import {
-	AppPublicationReviewCard,
-	normalizeAppPublicationRequests,
 	type AppPublicationRequestItem,
+	AppPublicationReviewCard,
 	type RawAppPublicationRequestItem,
+	normalizeAppPublicationRequests,
 } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@tm9657/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
 import { useCallback } from "react";
@@ -31,6 +31,7 @@ export function VisibilityStatusSwitcher({
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const queryClient = useQueryClient();
+	const isOffline = localApp.visibility === IAppVisibility.Offline;
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -50,7 +51,7 @@ export function VisibilityStatusSwitcher({
 				`apps/${localApp.id}/publication`,
 			);
 		},
-		enabled: !!profile.data && canEdit,
+		enabled: !!profile.data && canEdit && !isOffline,
 		select: normalizeAppPublicationRequests,
 	});
 
@@ -74,16 +75,18 @@ export function VisibilityStatusSwitcher({
 				canEdit={canEdit}
 				onVisibilityChange={handleVisibilityChange}
 			/>
-			<AppPublicationReviewCard
-				requests={publicationRequests.data ?? []}
-				isLoading={publicationRequests.isLoading}
-				error={
-					publicationRequests.isError
-						? publicationRequests.error?.message ??
-							"Failed to load publication review history"
-						: null
-				}
-			/>
+			{!isOffline && (
+				<AppPublicationReviewCard
+					requests={publicationRequests.data ?? []}
+					isLoading={publicationRequests.isLoading}
+					error={
+						publicationRequests.isError
+							? (publicationRequests.error?.message ??
+								"Failed to load publication review history")
+							: null
+					}
+				/>
+			)}
 		</>
 	);
 }

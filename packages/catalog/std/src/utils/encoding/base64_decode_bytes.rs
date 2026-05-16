@@ -37,13 +37,8 @@ impl NodeLogic for Base64DecodeBytesNode {
             "Base64 encoded string",
             VariableType::String,
         );
-        node.add_output_pin(
-            "output",
-            "Decoded",
-            "Decoded raw bytes",
-            VariableType::Byte,
-        )
-        .set_value_type(ValueType::Array);
+        node.add_output_pin("output", "Decoded", "Decoded raw bytes", VariableType::Byte)
+            .set_value_type(ValueType::Array);
 
         node
     }

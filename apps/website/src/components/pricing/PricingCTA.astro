@@ -22,29 +22,15 @@ const t = (key: string) => tCommon(lang, key);
 
       <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6">
         <a
-          href="mailto:hello@flow-like.com?subject=24-Hour%20Solution%20Request"
+          href="mailto:enterprise@flow-like.com?subject=Enterprise%20Inquiry"
           class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-colors"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          {t("pricing.ctaSection.24h")}
-        </a>
-
-        <a
-          href="mailto:enterprise@flow-like.com?subject=Enterprise%20Inquiry"
-          class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-muted hover:bg-muted/80 font-semibold transition-colors"
-        >
-          <svg class="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
           {t("pricing.ctaSection.enterprise")}
         </a>
       </div>
-
-      <p class="text-sm text-muted-foreground">
-        {t("pricing.ctaSection.startingAt")}
-      </p>
     </div>
   </div>
 </section>

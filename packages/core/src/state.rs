@@ -41,13 +41,26 @@ pub struct FlowLikeStores {
     pub log_store: Option<FlowLikeStore>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FlowLikeCallbacks {
     pub build_project_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     pub build_user_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     pub build_logs_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
-    /// Optional write options for LanceDB (used on Android to avoid hard_link issues)
+    /// Default write options for LanceDB. Android overrides these to add its object store wrapper.
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
+}
+
+impl Default for FlowLikeCallbacks {
+    fn default() -> Self {
+        Self {
+            build_project_database: None,
+            build_user_database: None,
+            build_logs_database: None,
+            lance_write_options: Some(
+                flow_like_storage::lancedb_write_options::default_write_options(),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Default)]

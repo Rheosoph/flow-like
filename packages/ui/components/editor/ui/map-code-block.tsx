@@ -56,15 +56,18 @@ function parseCSVSection(csv: string): MapMarker[] {
 	const labelIdx = headers.indexOf("label");
 	const colorIdx = headers.indexOf("color");
 
-	return lines.slice(1).map((line) => {
-		const cells = line.split(",").map((c) => c.trim());
-		return {
-			lat: Number.parseFloat(cells[latIdx]),
-			lng: Number.parseFloat(cells[lngIdx]),
-			label: labelIdx !== -1 ? cells[labelIdx] : undefined,
-			color: colorIdx !== -1 ? cells[colorIdx] : undefined,
-		};
-	}).filter((m) => !Number.isNaN(m.lat) && !Number.isNaN(m.lng));
+	return lines
+		.slice(1)
+		.map((line) => {
+			const cells = line.split(",").map((c) => c.trim());
+			return {
+				lat: Number.parseFloat(cells[latIdx]),
+				lng: Number.parseFloat(cells[lngIdx]),
+				label: labelIdx !== -1 ? cells[labelIdx] : undefined,
+				color: colorIdx !== -1 ? cells[colorIdx] : undefined,
+			};
+		})
+		.filter((m) => !Number.isNaN(m.lat) && !Number.isNaN(m.lng));
 }
 
 function parseMapContent(raw: string): MapConfig {
@@ -204,7 +207,10 @@ function MapErrorFallback({ markers }: { markers: MapMarker[] }) {
 			<p className="font-medium mb-2">Map Locations</p>
 			<ul className="space-y-1">
 				{markers.map((marker, i) => (
-					<li key={`${marker.lat}-${marker.lng}-${i}`} className="text-muted-foreground">
+					<li
+						key={`${marker.lat}-${marker.lng}-${i}`}
+						className="text-muted-foreground"
+					>
 						{marker.label || `Point ${i + 1}`}: {marker.lat.toFixed(4)},{" "}
 						{marker.lng.toFixed(4)}
 					</li>
@@ -222,7 +228,8 @@ export function MapCodeBlock({ content, className }: MapCodeBlockProps) {
 	const hasExplicitZoom = config.zoom != null;
 
 	const { center, zoom } = useMemo(() => {
-		if (config.center) return { center: config.center, zoom: config.zoom ?? 12 };
+		if (config.center)
+			return { center: config.center, zoom: config.zoom ?? 12 };
 		const bounds = calculateBounds(config.markers);
 		return { center: bounds.center, zoom: config.zoom ?? bounds.zoom };
 	}, [config]);

@@ -118,10 +118,9 @@ export async function createRealtimeSession(args: {
 	// Create a new session
 	console.log(`[WebRTC] Creating new session for room: ${room}`);
 	const doc = new Y.Doc();
-	const effectiveSignaling =
-		args.signalingServers?.length
-			? args.signalingServers
-			: ["wss://signaling.flow-like.com"];
+	const effectiveSignaling = args.signalingServers?.length
+		? args.signalingServers
+		: ["wss://signaling.flow-like.com"];
 	if (!args.signalingServers?.length) {
 		console.warn("No signaling servers provided, using default");
 	} else {
@@ -187,7 +186,11 @@ export async function createRealtimeSession(args: {
 			// Signaling is alive — report connected so users know the session is up
 			lastStatus = "connected";
 			if (onStatusChange) onStatusChange("connected");
-		} else if (!signalingConnected && onStatusChange && lastStatus !== "disconnected") {
+		} else if (
+			!signalingConnected &&
+			onStatusChange &&
+			lastStatus !== "disconnected"
+		) {
 			lastStatus = "disconnected";
 			onStatusChange("disconnected");
 		}

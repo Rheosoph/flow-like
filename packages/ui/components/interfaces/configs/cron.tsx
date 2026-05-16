@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { CheckIcon, ChevronsUpDown, Clock } from "lucide-react";
 
+import { cn } from "../../../lib/utils";
 import {
 	Alert,
 	AlertDescription,
@@ -31,10 +32,9 @@ import {
 	SelectValue,
 	Separator,
 } from "../../ui";
-import type { SinkExecutionTarget } from "./http";
 import { Calendar } from "../../ui/calendar";
-import { cn } from "../../../lib/utils";
 import type { IConfigInterfaceProps } from "../interfaces";
+import type { SinkExecutionTarget } from "./http";
 
 /* -----------------------------------------------------------------------------
    Lightweight cron humanizer (no deps)
@@ -287,6 +287,7 @@ export type CronSink = {
 	scheduled_for?: ScheduledLocal | null; // local date+time, runtime uses timezone to compute UTC
 	last_fired?: string | null; // RFC3339 (from runtime)
 	timezone?: string | null; // IANA e.g. "Europe/Berlin"
+	sink_execution?: SinkExecutionTarget;
 };
 
 type Mode = "one_time" | "recurring";
@@ -371,9 +372,21 @@ const IANA_TIMEZONES: string[] = (() => {
 	try {
 		return Intl.supportedValuesOf("timeZone");
 	} catch {
-		return ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-			"Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Tokyo", "Asia/Shanghai",
-			"Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland"];
+		return [
+			"UTC",
+			"America/New_York",
+			"America/Chicago",
+			"America/Denver",
+			"America/Los_Angeles",
+			"Europe/London",
+			"Europe/Berlin",
+			"Europe/Paris",
+			"Asia/Tokyo",
+			"Asia/Shanghai",
+			"Asia/Kolkata",
+			"Australia/Sydney",
+			"Pacific/Auckland",
+		];
 	}
 })();
 
@@ -385,6 +398,13 @@ function isValidTimezone(tz: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function getUnsupportedRemoteCronSeconds(expr: string): string | null {
+	const parts = expr.trim().split(/\s+/);
+	if (parts.length !== 6) return null;
+	const seconds = parts[0];
+	return seconds === "0" || seconds === "*" ? null : seconds;
 }
 
 function formatRelativeTime(iso: string): string {
@@ -524,7 +544,8 @@ export function CronJobConfig({
 		}
 	}, [expression, timezone]);
 
-	const sinkExecution = (config?.sink_execution as SinkExecutionTarget) || undefined;
+	const sinkExecution =
+		(config?.sink_execution as SinkExecutionTarget) || undefined;
 
 	const supportsRemote = hub?.domain != null;
 	const supportsLocal = canExecuteLocally ?? false;
@@ -536,6 +557,12 @@ export function CronJobConfig({
 		if (supportsRemote) return "REMOTE";
 		return "LOCAL";
 	}, [sinkExecution, supportsBoth, supportsRemote]);
+	const includesRemoteExecution = effectiveExecution !== "LOCAL";
+	const remoteCronUnsupportedSeconds = useMemo(() => {
+		if (!includesRemoteExecution || mode !== "recurring") return null;
+		if (!expression.trim()) return null;
+		return getUnsupportedRemoteCronSeconds(expression);
+	}, [includesRemoteExecution, mode, expression]);
 
 	const setValue = (k: keyof CronSink | string, v: any) =>
 		onConfigUpdate?.({ ...(config as any), [k]: v });
@@ -661,7 +688,10 @@ export function CronJobConfig({
 								variant="outline"
 								role="combobox"
 								aria-expanded={tzOpen}
-								className={cn("flex-1 justify-between", !tzValid && timezone && "border-destructive")}
+								className={cn(
+									"flex-1 justify-between",
+									!tzValid && timezone && "border-destructive",
+								)}
 								disabled={!isEditing}
 							>
 								{timezone || "Select timezone..."}
@@ -678,8 +708,9 @@ export function CronJobConfig({
 								<CommandList>
 									<CommandEmpty>No timezone found.</CommandEmpty>
 									<CommandGroup>
-										{IANA_TIMEZONES
-											.filter((tz) => tz.toLowerCase().includes(tzSearch.toLowerCase()))
+										{IANA_TIMEZONES.filter((tz) =>
+											tz.toLowerCase().includes(tzSearch.toLowerCase()),
+										)
 											.slice(0, 50)
 											.map((tz) => (
 												<CommandItem
@@ -691,7 +722,12 @@ export function CronJobConfig({
 														setTzSearch("");
 													}}
 												>
-													<CheckIcon className={cn("mr-2 h-4 w-4", timezone === tz ? "opacity-100" : "opacity-0")} />
+													<CheckIcon
+														className={cn(
+															"mr-2 h-4 w-4",
+															timezone === tz ? "opacity-100" : "opacity-0",
+														)}
+													/>
 													{tz}
 												</CommandItem>
 											))}
@@ -805,13 +841,31 @@ export function CronJobConfig({
 							onChange={(e) => setValue("expression", e.target.value)}
 							placeholder="0 */5 * * * *"
 							disabled={!isEditing}
-							aria-invalid={!isCronValid}
+							aria-invalid={!isCronValid || remoteCronUnsupportedSeconds != null}
+							className={cn(
+								(!isCronValid || remoteCronUnsupportedSeconds != null) &&
+									"border-destructive",
+							)}
 						/>
 						<p className="text-sm text-muted-foreground">
 							6-field cron (<code>sec min hour dom mon dow</code>) or 5-field (
 							<code>min hour dom mon dow</code>). Timezone applied:{" "}
 							<strong>{timezone}</strong>.
 						</p>
+						{remoteCronUnsupportedSeconds && (
+							<Alert variant="destructive">
+								<AlertTitle>Remote cron is minute-precision only</AlertTitle>
+								<AlertDescription>
+									{effectiveExecution === "HYBRID"
+										? "Hybrid execution still registers this schedule remotely. "
+										: "Remote execution uses EventBridge Scheduler. "}
+									Use 5-field cron, or keep the seconds field at <strong>0</strong>{" "}
+									or <strong>*</strong>. Current seconds field:{" "}
+									<strong>{remoteCronUnsupportedSeconds}</strong>. Switch to local
+									execution if you need sub-minute schedules.
+								</AlertDescription>
+							</Alert>
+						)}
 					</div>
 
 					<div className="space-y-2">
@@ -887,8 +941,7 @@ export function CronJobConfig({
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">
 						<Clock className="h-4 w-4" />
 						<span>
-							Last ran{" "}
-							<strong>{formatRelativeTime(config.last_fired)}</strong>
+							Last ran <strong>{formatRelativeTime(config.last_fired)}</strong>
 							{" — "}
 							{new Intl.DateTimeFormat("en-GB", {
 								timeZone: timezone,

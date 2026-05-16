@@ -1,6 +1,7 @@
 "use client";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
+	AudioLinesIcon,
 	CameraIcon,
 	ClockIcon,
 	DownloadCloudIcon,
@@ -10,6 +11,7 @@ import {
 	ImageIcon,
 	LockIcon,
 	MessagesSquareIcon,
+	MicIcon,
 	MinusIcon,
 	MoreVerticalIcon,
 	Package2Icon,
@@ -163,18 +165,19 @@ export function BitCard({
 		return { isRestricted, requiredTier: isRestricted ? modelTier : null };
 	}, [bit.parameters, hub?.tiers, userInfo.data?.tier]);
 
-	// A bit is considered "virtual" if it has no download link OR its size resolves to 0.
-	// These represent hosted / proxied models (no local artifact). We immediately treat
-	// a download request as a no-op success so the UI does not show a perpetual "Queued" state.
+	// Dependency-backed bits, such as local TTS manifests, still need their
+	// dependent artifacts downloaded even when the parent bit has no artifact.
 	const isVirtualBit = useMemo(
-		() => !bit.download_link || (bitSize.data === 0 && bitSize.isSuccess),
-		[bit.download_link, bitSize.data, bitSize.isSuccess],
+		() =>
+			(bit.dependencies?.length ?? 0) === 0 &&
+			(!bit.download_link || (bitSize.data === 0 && bitSize.isSuccess)),
+		[bit.dependencies, bit.download_link, bitSize.data, bitSize.isSuccess],
 	);
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
 			// Short‑circuit for virtual bits: no progress overlay, just refresh install state.
-			if (!b.download_link || isVirtualBit) {
+			if (isVirtualBit) {
 				await isInstalled.refetch();
 				return; // success path
 			}
@@ -491,6 +494,10 @@ export function BitTypeIcon({
 			return <MessagesSquareIcon className={combinedClass} />;
 		case IBitTypes.Vlm:
 			return <CameraIcon className={combinedClass} />;
+		case IBitTypes.Tts:
+			return <AudioLinesIcon className={combinedClass} />;
+		case IBitTypes.Stt:
+			return <MicIcon className={combinedClass} />;
 		case IBitTypes.Embedding:
 			return <FileSearch className={combinedClass} />;
 		case IBitTypes.ImageEmbedding:

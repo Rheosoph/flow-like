@@ -5,6 +5,7 @@
 
 use crate::entity::sea_orm_active_enums::RunStatus;
 use crate::entity::{execution_run, prelude::*};
+use crate::execution::dispatch::ByteStream;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use eventsource_stream::Eventsource;
 use futures_util::{Stream, StreamExt};
@@ -101,6 +102,179 @@ fn create_sse_stream(
     };
 
     Box::pin(stream)
+}
+
+/// Consume an executor SSE response and return a single JSON body built from
+/// the first `generic_result` event. Mirrors the desktop HTTP-sink behavior
+/// so a synchronous `curl` against the same endpoint returns a single JSON
+/// payload regardless of which transport (desktop/server) is serving it.
+///
+/// Also updates the run record on the `completed` event so the usual
+/// bookkeeping stays in place.
+///
+/// Returns `None` if the stream ends without emitting a `generic_result`
+/// inside `timeout`.
+pub async fn collect_generic_result(
+    response: reqwest::Response,
+    run_id: String,
+    db: Option<Arc<DatabaseConnection>>,
+    timeout: Duration,
+) -> Option<serde_json::Value> {
+    let byte_stream = response.bytes_stream();
+    let mut es = byte_stream.eventsource();
+
+    let collect = async {
+        let mut generic_result: Option<serde_json::Value> = None;
+        while let Some(result) = es.next().await {
+            let sse_event = match result {
+                Ok(evt) => evt,
+                Err(err) => {
+                    tracing::warn!(run_id = %run_id, error = %err, "SSE parse error while collecting result");
+                    break;
+                }
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&sse_event.data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let event_type = parsed
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if event_type == "generic_result" && generic_result.is_none() {
+                generic_result = parsed.get("payload").cloned();
+            }
+
+            if event_type == "completed" {
+                if let Some(db) = &db {
+                    let log_level = parsed
+                        .get("payload")
+                        .and_then(|p| p.get("log_level"))
+                        .and_then(|l| l.as_i64())
+                        .unwrap_or(0) as i32;
+                    let status = parsed
+                        .get("payload")
+                        .and_then(|p| p.get("status"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("Completed");
+                    let run_status = match status {
+                        "Failed" => RunStatus::Failed,
+                        "Cancelled" => RunStatus::Cancelled,
+                        "Timeout" => RunStatus::Timeout,
+                        _ => RunStatus::Completed,
+                    };
+                    let db = db.clone();
+                    let run_id_clone = run_id.clone();
+                    flow_like_types::tokio::spawn(async move {
+                        if let Err(e) =
+                            update_run_on_completion(&db, &run_id_clone, run_status, log_level)
+                                .await
+                        {
+                            tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
+                        }
+                    });
+                }
+                // `completed` is the terminator — we can stop reading.
+                break;
+            }
+        }
+        generic_result
+    };
+
+    match flow_like_types::tokio::time::timeout(timeout, collect).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(run_id = %run_id, "Timed out collecting generic_result");
+            None
+        }
+    }
+}
+
+/// ByteStream variant of `collect_generic_result` for the Lambda streaming
+/// path. Same semantics: drains the SSE stream until the first
+/// `generic_result` event (and `completed` for run bookkeeping), returns the
+/// payload, and gives up after `timeout`.
+///
+/// The Lambda `ByteStream` is already a `Stream<Item = Result<Bytes, _>>` —
+/// `eventsource-stream` parses it the same way as a reqwest response body.
+pub async fn collect_generic_result_bytes(
+    stream: ByteStream,
+    run_id: String,
+    db: Option<Arc<DatabaseConnection>>,
+    timeout: Duration,
+) -> Option<serde_json::Value> {
+    let mut es = stream.eventsource();
+
+    let collect = async {
+        let mut generic_result: Option<serde_json::Value> = None;
+        while let Some(result) = es.next().await {
+            let sse_event = match result {
+                Ok(evt) => evt,
+                Err(err) => {
+                    tracing::warn!(run_id = %run_id, error = %err, "Lambda SSE parse error while collecting result");
+                    break;
+                }
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&sse_event.data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let event_type = parsed
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if event_type == "generic_result" && generic_result.is_none() {
+                generic_result = parsed.get("payload").cloned();
+            }
+
+            if event_type == "completed" {
+                if let Some(db) = &db {
+                    let log_level = parsed
+                        .get("payload")
+                        .and_then(|p| p.get("log_level"))
+                        .and_then(|l| l.as_i64())
+                        .unwrap_or(0) as i32;
+                    let status = parsed
+                        .get("payload")
+                        .and_then(|p| p.get("status"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("Completed");
+                    let run_status = match status {
+                        "Failed" => RunStatus::Failed,
+                        "Cancelled" => RunStatus::Cancelled,
+                        "Timeout" => RunStatus::Timeout,
+                        _ => RunStatus::Completed,
+                    };
+                    let db = db.clone();
+                    let run_id_clone = run_id.clone();
+                    flow_like_types::tokio::spawn(async move {
+                        if let Err(e) =
+                            update_run_on_completion(&db, &run_id_clone, run_status, log_level)
+                                .await
+                        {
+                            tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
+                        }
+                    });
+                }
+                break;
+            }
+        }
+        generic_result
+    };
+
+    match flow_like_types::tokio::time::timeout(timeout, collect).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(run_id = %run_id, "Timed out collecting generic_result from Lambda stream");
+            None
+        }
+    }
 }
 
 pub async fn update_run_on_completion(

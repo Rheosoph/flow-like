@@ -11,13 +11,6 @@ pub struct CronScheduleInfo {
     pub next_trigger: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct TriggerPayload {
-    pub sink_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
-
 #[derive(Debug)]
 pub struct ApiClient {
     client: Client,
@@ -40,12 +33,13 @@ impl ApiClient {
         sink_type: &str,
         payload: Option<serde_json::Value>,
     ) -> Result<(), ApiError> {
-        let url = format!("{}/api/v1/sink/trigger/{}", self.base_url, event_id);
+        let url = format!("{}/api/v1/sink/trigger/async", self.base_url);
 
-        let body = TriggerPayload {
-            sink_type: sink_type.to_string(),
-            metadata: payload,
-        };
+        let body = serde_json::json!({
+            "event_id": event_id,
+            "sink_type": sink_type,
+            "payload": payload,
+        });
 
         let response = self
             .client

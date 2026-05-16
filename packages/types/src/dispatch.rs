@@ -7,6 +7,13 @@ use crate::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Store reference used for files uploaded through HTTP event sink requests.
+///
+/// The API/desktop sink maps multipart file fields to FlowPath JSON objects
+/// with this store ref. The backing object bytes live in the configured
+/// temporary store, so execution dispatch never carries raw file bytes.
+pub const REQUEST_FILES_STORE_REF: &str = "__flow_like_http_request_files";
+
 /// Reference to a WASM package pre-resolved by the API.
 /// Contains presigned download URLs for the pre-compiled `.cwasm` artifact
 /// and its blake3 checksum.

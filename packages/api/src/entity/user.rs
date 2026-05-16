@@ -14,7 +14,7 @@ pub struct Model {
     pub stripe_id: Option<String>,
     #[sea_orm(column_name = "trackingId", column_type = "Text", nullable, unique)]
     pub tracking_id: Option<String>,
-    #[sea_orm(column_type = "Text", nullable, unique)]
+    #[sea_orm(column_type = "Text", nullable)]
     pub email: Option<String>,
     #[sea_orm(column_type = "Text", nullable, unique)]
     pub username: Option<String>,

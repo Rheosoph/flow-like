@@ -18,8 +18,15 @@ import {
 	injectDataFunction,
 } from "@tm9657/flow-like-ui";
 import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+import type {
+	IBeginOfflineForkBody,
+	IBeginOfflineForkResponse,
+	IForkPreviewResponse,
+	IForkPreviewTarget,
+	IOnlineForkBody,
+	IOnlineForkResponse,
+} from "@tm9657/flow-like-ui/lib/schema/app/fork";
 import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
-import { toast } from "sonner";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
@@ -118,8 +125,7 @@ export class AppState implements IAppState {
 				rating: comment.rating,
 				userId: comment.userId ?? comment.user_id ?? "",
 				userName: comment.userName ?? comment.user_name ?? undefined,
-				userAvatar:
-					comment.userAvatar ?? comment.user_avatar ?? undefined,
+				userAvatar: comment.userAvatar ?? comment.user_avatar ?? undefined,
 				createdAt: comment.createdAt ?? comment.created_at ?? "",
 				updatedAt: comment.updatedAt ?? comment.updated_at ?? "",
 			})),
@@ -429,10 +435,7 @@ export class AppState implements IAppState {
 			console.warn("Failed to get app meta from local cache:", e);
 		}
 
-		if (
-			!this.backend.profile ||
-			!this.backend.queryClient
-		) {
+		if (!this.backend.profile || !this.backend.queryClient) {
 			if (meta) {
 				return meta;
 			}
@@ -653,6 +656,77 @@ export class AppState implements IAppState {
 		}
 	}
 
+	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Forking settings are only available for online apps.");
+		}
+
+		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
+			await fetcher<IApp>(
+				this.backend.profile,
+				`apps/${appId}/settings/forking`,
+				{
+					method: "PATCH",
+					body: JSON.stringify({
+						allow_forking: allow,
+					}),
+				},
+				this.backend.auth,
+			);
+		}
+	}
+
+	async getForkPreview(
+		appId: string,
+		target: IForkPreviewTarget,
+	): Promise<IForkPreviewResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IForkPreviewResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork/preview?target=${target}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async beginOfflineFork(
+		appId: string,
+		body: IBeginOfflineForkBody,
+	): Promise<IBeginOfflineForkResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IBeginOfflineForkResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork/offline/begin`,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+			this.backend.auth,
+		);
+	}
+
+	async onlineFork(
+		appId: string,
+		body: IOnlineForkBody,
+	): Promise<IOnlineForkResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("not authenticated");
+		}
+		return fetcher<IOnlineForkResponse>(
+			this.backend.profile,
+			`apps/${appId}/fork`,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+			this.backend.auth,
+		);
+	}
+
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {
 		const auth = this.backend.auth;
 
@@ -786,7 +860,11 @@ export class AppState implements IAppState {
 		return invoke("app_list_packages", { appId });
 	}
 
-	async addPackage(appId: string, packageId: string, version: string): Promise<void> {
+	async addPackage(
+		appId: string,
+		packageId: string,
+		version: string,
+	): Promise<void> {
 		return invoke("app_add_package", { appId, packageId, version });
 	}
 

@@ -7,7 +7,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]

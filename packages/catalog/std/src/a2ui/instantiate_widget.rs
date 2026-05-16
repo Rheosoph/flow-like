@@ -9,7 +9,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait, json::json};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -305,7 +304,7 @@ impl NodeLogic for InstantiateWidget {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        let widgets = load_app_widgets(&board).await;
+        let widgets = load_app_widgets(board).await;
 
         let widget_names: Vec<String> = widgets.iter().map(|w| w.name.clone()).collect();
 
@@ -460,7 +459,10 @@ impl NodeLogic for InstantiateWidget {
                     .unwrap_or_default();
                 drop(node_guard);
                 if !action_id.is_empty() {
-                    action_bindings.insert(action_id, json!(node_id));
+                    action_bindings.insert(
+                        action_id,
+                        json!({ "workflow": { "flowId": node_id, "inputMappings": {} } }),
+                    );
                 } else {
                     catch_all_nodes.push(node_id);
                 }
@@ -469,7 +471,10 @@ impl NodeLogic for InstantiateWidget {
             for node_id in catch_all_nodes {
                 for action in &widget.actions {
                     if !action_bindings.contains_key(&action.id) {
-                        action_bindings.insert(action.id.clone(), json!(&node_id));
+                        action_bindings.insert(
+                            action.id.clone(),
+                            json!({ "workflow": { "flowId": &node_id, "inputMappings": {} } }),
+                        );
                     }
                 }
             }

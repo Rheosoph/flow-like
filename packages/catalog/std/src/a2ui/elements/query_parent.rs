@@ -7,7 +7,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
-use std::sync::Arc;
 
 use super::element_utils::extract_element_id_from_pin;
 

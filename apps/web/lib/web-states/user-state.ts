@@ -6,7 +6,7 @@ import type {
 	ISettings,
 	IUserState,
 } from "@tm9657/flow-like-ui";
-import { IAppVisibility } from "@tm9657/flow-like-ui";
+import { IAppVisibility, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -53,6 +53,10 @@ interface ApiProfile {
 	deleted_at?: string | null;
 }
 
+type UpsertProfileResponse = {
+	profile: ApiProfile;
+};
+
 function transformApiProfile(apiProfile: ApiProfile): IProfile {
 	return {
 		id: apiProfile.id,
@@ -76,6 +80,13 @@ function transformApiProfile(apiProfile: ApiProfile): IProfile {
 export class WebUserState implements IUserState {
 	constructor(private readonly backend: WebBackendRef) {}
 
+	private hasRemoteAccessToken(): boolean {
+		return Boolean(
+			this.backend.auth?.isAuthenticated &&
+				this.backend.auth.user?.access_token,
+		);
+	}
+
 	async lookupUser(userId: string): Promise<IUserLookup> {
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
@@ -92,6 +103,10 @@ export class WebUserState implements IUserState {
 	}
 
 	async getNotifications(): Promise<INotificationsOverview> {
+		if (!this.hasRemoteAccessToken()) {
+			return { unread_count: 0, invites_count: 0, notifications_count: 0 };
+		}
+
 		try {
 			return await apiGet<INotificationsOverview>(
 				"user/notifications",
@@ -111,6 +126,10 @@ export class WebUserState implements IUserState {
 		if (unreadOnly !== undefined) params.set("unread_only", String(unreadOnly));
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
+
+		if (!this.hasRemoteAccessToken()) {
+			return [];
+		}
 
 		try {
 			return await apiGet<INotification[]>(
@@ -194,6 +213,13 @@ export class WebUserState implements IUserState {
 		);
 		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
 
+		if ((allApiProfiles?.length ?? 0) > 0 && apiProfiles.length === 0) {
+			if (typeof window !== "undefined") {
+				localStorage.removeItem("flow-like-profile-id");
+			}
+			throw new Error("No active profiles available");
+		}
+
 		if (apiProfiles.length > 0) {
 			// Check localStorage for a preferred profile ID
 			const savedProfileId =
@@ -222,7 +248,7 @@ export class WebUserState implements IUserState {
 			process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
 		const newProfileId = createId();
 
-		const newApiProfile = await apiPost<ApiProfile>(
+		const newProfileResponse = await apiPost<UpsertProfileResponse>(
 			`profile/${newProfileId}`,
 			{
 				name: "Default Profile",
@@ -232,8 +258,8 @@ export class WebUserState implements IUserState {
 			},
 			this.backend.auth,
 		);
+		const newApiProfile = newProfileResponse.profile;
 
-		// Save the server-generated profile ID to localStorage
 		if (typeof window !== "undefined" && newApiProfile.id) {
 			localStorage.setItem("flow-like-profile-id", newApiProfile.id);
 		}
@@ -295,7 +321,7 @@ export class WebUserState implements IUserState {
 			};
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (response.signed_url.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(response.signed_url)) {
 				headers["x-ms-blob-type"] = "BlockBlob";
 			}
 

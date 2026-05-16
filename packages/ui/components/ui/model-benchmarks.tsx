@@ -1,15 +1,15 @@
 "use client";
 
 import {
+	BookOpenIcon,
 	BrainIcon,
 	CodeIcon,
-	BookOpenIcon,
-	ExternalLinkIcon,
-	ZapIcon,
-	TimerIcon,
 	DollarSignIcon,
+	ExternalLinkIcon,
+	TimerIcon,
+	ZapIcon,
 } from "lucide-react";
-import type { JSX, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Badge } from "./badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
 
@@ -251,9 +251,7 @@ function PerfRow({
 				{icon}
 				{label}
 			</span>
-			<span
-				className={`font-semibold tabular-nums ${valueColor ?? ""}`}
-			>
+			<span className={`font-semibold tabular-nums ${valueColor ?? ""}`}>
 				{value}
 			</span>
 		</div>
@@ -392,9 +390,7 @@ export function ModelBenchmarks({
 						<IndexCard
 							label="Math"
 							value={mathIndex}
-							icon={
-								<span className="text-sm font-bold">∑</span>
-							}
+							icon={<span className="text-sm font-bold">∑</span>}
 							color="text-violet-600 dark:text-violet-400"
 							bgColor="bg-violet-500/5 border-violet-500/20"
 						/>
@@ -433,9 +429,7 @@ export function ModelBenchmarks({
 						<PerfRow
 							icon={<ZapIcon className="h-3 w-3" />}
 							label="Output Speed"
-							value={formatSpeed(
-								evaluation.median_output_tokens_per_second,
-							)}
+							value={formatSpeed(evaluation.median_output_tokens_per_second)}
 							valueColor={speedColor(
 								evaluation.median_output_tokens_per_second,
 							)}
@@ -514,7 +508,9 @@ function BenchmarkCategory({
 
 	return (
 		<div className={`rounded-lg border p-3 space-y-3 ${meta.bgColor}`}>
-			<h5 className={`text-xs font-medium flex items-center gap-1.5 ${meta.color}`}>
+			<h5
+				className={`text-xs font-medium flex items-center gap-1.5 ${meta.color}`}
+			>
 				{meta.icon}
 				{label}
 			</h5>
@@ -555,9 +551,7 @@ export function IntelligenceIndexBadge({
 				</Badge>
 			</TooltipTrigger>
 			<TooltipContent side="top">
-				<p className="text-xs">
-					Artificial Analysis Intelligence Index
-				</p>
+				<p className="text-xs">Artificial Analysis Intelligence Index</p>
 			</TooltipContent>
 		</Tooltip>
 	);

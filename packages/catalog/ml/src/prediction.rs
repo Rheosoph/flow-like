@@ -30,7 +30,6 @@ use flow_like_types::anyhow;
 use flow_like_types::{Result, Value, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -51,6 +50,7 @@ impl NodeLogic for MLPredictNode {
             "Predict with Machine Learning Model",
             "AI/ML",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

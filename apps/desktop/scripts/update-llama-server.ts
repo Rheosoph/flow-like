@@ -12,9 +12,9 @@
  *   GITHUB_TOKEN  — optional, avoids rate limits
  */
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PINNED_TAG = "b8660";
@@ -203,7 +203,8 @@ async function resolveTag(requested: string | "latest"): Promise<string> {
 
 	const url = `${GITHUB_API}/repos/${OWNER}/${REPO}/releases/latest`;
 	const resp = await fetch(url, { headers: getHeaders() });
-	if (!resp.ok) throw new Error(`Failed to fetch latest release: ${resp.status}`);
+	if (!resp.ok)
+		throw new Error(`Failed to fetch latest release: ${resp.status}`);
 	const data = (await resp.json()) as { tag_name: string };
 	return data.tag_name;
 }
@@ -266,10 +267,7 @@ function extractFiles(
 	}
 }
 
-function fixMacOsDylibNames(
-	outDir: string,
-	config: PlatformConfig,
-): void {
+function fixMacOsDylibNames(outDir: string, config: PlatformConfig): void {
 	if (!config.tauriTriple.includes("apple-darwin")) return;
 	if (process.platform !== "darwin") return;
 
@@ -300,10 +298,9 @@ function fixMacOsDylibNames(
 		}
 
 		if (currentId !== desiredId) {
-			execSync(
-				`install_name_tool -id "${desiredId}" "${dstPath}"`,
-				{ stdio: "pipe" },
-			);
+			execSync(`install_name_tool -id "${desiredId}" "${dstPath}"`, {
+				stdio: "pipe",
+			});
 			console.log(`  🔧 Fixed dylib id: ${currentId} → ${desiredId}`);
 		}
 	}
@@ -323,7 +320,9 @@ function fixMacOsDylibNames(
 				`install_name_tool -change "${oldName}" "${newName}" "${machOPath}"`,
 				{ stdio: "pipe" },
 			);
-			console.log(`  🔗 Fixed dependency in ${path.basename(machOPath)}: ${oldName} → ${newName}`);
+			console.log(
+				`  🔗 Fixed dependency in ${path.basename(machOPath)}: ${oldName} → ${newName}`,
+			);
 		}
 	}
 }
@@ -368,7 +367,10 @@ async function updatePlatform(
 	const assetName = config.assetName.replace("{TAG}", tag);
 	const downloadUrl = `https://github.com/${OWNER}/${REPO}/releases/download/${tag}/${assetName}`;
 	const outDir = path.join(BINARIES_DIR, config.outDir);
-	const archivePath = path.join(outDir, `_download.${config.archiveType === "tar.gz" ? "tar.gz" : "zip"}`);
+	const archivePath = path.join(
+		outDir,
+		`_download.${config.archiveType === "tar.gz" ? "tar.gz" : "zip"}`,
+	);
 
 	console.log(`\n[${platformKey}] → ${assetName}`);
 

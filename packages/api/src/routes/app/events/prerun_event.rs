@@ -1,18 +1,24 @@
 //! Pre-run analysis endpoint for events
 //!
-//! Returns information needed before executing an event:
-//! - Runtime-configured variables that need values
-//! - Required OAuth providers and scopes
+//! Returns information needed before executing an event. Frontends are
+//! expected to cache responses and revalidate in the background using the
+//! `signature` field to detect drift.
 
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::prerun_shared::{
+        OAuthRequirement, PrerunPayload, RuntimeVariable, compute_payload, parse_version,
+    },
+    state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like::flow::{board::ExecutionMode, node::NodePermission};
+use flow_like::flow::{board::ExecutionMode, event::EventExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -24,25 +30,6 @@ use super::db::get_event_from_db;
 pub struct PrerunEventQuery {
     /// Board version as tuple (major, minor, patch) - defaults to latest
     pub version: Option<String>,
-}
-
-/// A runtime-configured variable that needs a value before execution
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RuntimeVariable {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub data_type: String,
-    pub value_type: String,
-    pub secret: bool,
-    pub schema: Option<String>,
-}
-
-/// OAuth provider requirement
-#[derive(Debug, Serialize, ToSchema)]
-pub struct OAuthRequirement {
-    pub provider_id: String,
-    pub scopes: Vec<String>,
 }
 
 /// Response from pre-run analysis
@@ -59,6 +46,11 @@ pub struct PrerunEventResponse {
     /// Board's execution mode setting (Hybrid, Remote, Local)
     #[schema(value_type = String)]
     pub execution_mode: ExecutionMode,
+    /// Event's execution mode — where this specific event runs.
+    /// An event is always either Local or Remote (never Hybrid), and must
+    /// match the board when the board is not Hybrid.
+    #[schema(value_type = String)]
+    pub event_execution_mode: EventExecutionMode,
     /// Whether the user can execute locally (has ReadBoards permission)
     /// If false, execution must happen on server
     pub can_execute_locally: bool,
@@ -68,17 +60,30 @@ pub struct PrerunEventResponse {
     pub wasm_package_ids: Vec<String>,
     /// Per-package permissions declared by WASM nodes (package_id -> list of permissions)
     pub wasm_package_permissions: HashMap<String, Vec<NodePermission>>,
+    /// Stable hash over the board-derived fields. Frontends may cache the
+    /// response and revalidate in the background; a changed signature
+    /// signals the underlying board has shifted.
+    pub signature: String,
 }
 
-fn parse_version(version_str: &str) -> Option<(u32, u32, u32)> {
-    let parts: Vec<&str> = version_str.split('_').collect();
-    if parts.len() == 3 {
-        let major = parts[0].parse().ok()?;
-        let minor = parts[1].parse().ok()?;
-        let patch = parts[2].parse().ok()?;
-        Some((major, minor, patch))
-    } else {
-        None
+fn build_response(
+    board_id: String,
+    payload: &PrerunPayload,
+    event_execution_mode: EventExecutionMode,
+    can_execute_locally: bool,
+) -> PrerunEventResponse {
+    PrerunEventResponse {
+        board_id,
+        runtime_variables: payload.runtime_variables.clone(),
+        oauth_requirements: payload.oauth_requirements.clone(),
+        requires_local_execution: payload.requires_local_execution,
+        execution_mode: payload.execution_mode.clone(),
+        event_execution_mode,
+        can_execute_locally,
+        has_wasm_nodes: payload.has_wasm_nodes,
+        wasm_package_ids: payload.wasm_package_ids.clone(),
+        wasm_package_permissions: payload.wasm_package_permissions.clone(),
+        signature: payload.signature.clone(),
     }
 }
 
@@ -120,132 +125,22 @@ pub async fn prerun_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let sub = permission.sub()?;
 
-    // Check if user can execute locally (has ReadBoards permission)
     let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards);
-
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
-    // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     let board_id = event.board_id.clone();
+    let event_execution_mode = event.execution_mode;
 
-    // Get the board from the event
     let board = state
         .master_board(&sub, &app_id, &board_id, &state, version)
         .await?;
+    let payload = compute_payload(&board);
 
-    // Collect runtime-configured variables
-    let runtime_variables: Vec<RuntimeVariable> = board
-        .variables
-        .values()
-        .filter(|v| v.runtime_configured)
-        .map(|v| RuntimeVariable {
-            id: v.id.clone(),
-            name: v.name.clone(),
-            description: v.description.clone(),
-            data_type: format!("{:?}", v.data_type),
-            value_type: format!("{:?}", v.value_type),
-            secret: v.secret,
-            schema: v.schema.clone(),
-        })
-        .collect();
-
-    // Collect OAuth requirements and WASM info from all nodes (including layers)
-    let mut oauth_scopes: HashMap<String, Vec<String>> = HashMap::new();
-    let mut requires_local_execution = false;
-    let mut wasm_package_ids: Vec<String> = Vec::new();
-    let mut wasm_package_permissions: HashMap<String, Vec<NodePermission>> = HashMap::new();
-
-    let process_node =
-        |node: &flow_like::flow::node::Node,
-         oauth_scopes: &mut HashMap<String, Vec<String>>,
-         requires_local: &mut bool,
-         wasm_ids: &mut Vec<String>,
-         wasm_perms: &mut HashMap<String, Vec<NodePermission>>| {
-            // Collect WASM (external) node package IDs
-            if let Some(wasm) = &node.wasm {
-                if !wasm_ids.contains(&wasm.package_id) {
-                    wasm_ids.push(wasm.package_id.clone());
-                }
-                if !wasm.permissions.is_empty() {
-                    let entry = wasm_perms.entry(wasm.package_id.clone()).or_default();
-                    for perm in &wasm.permissions {
-                        if !entry.contains(perm) {
-                            entry.push(*perm);
-                        }
-                    }
-                }
-            }
-            // Check if node requires local execution
-            if node.only_offline {
-                *requires_local = true;
-            }
-
-            // Collect OAuth provider IDs
-            if let Some(providers) = &node.oauth_providers {
-                for provider_id in providers {
-                    oauth_scopes.entry(provider_id.clone()).or_default();
-                }
-            }
-
-            // Collect required scopes - only for providers already registered via oauth_providers
-            // required_oauth_scopes is informational - it documents what scopes a node needs
-            // IF OAuth is used, but shouldn't trigger OAuth by itself
-            if let Some(required_scopes) = &node.required_oauth_scopes {
-                for (provider_id, scopes) in required_scopes {
-                    // Only add scopes if this provider was already registered by an OAuth provider node
-                    if let Some(entry) = oauth_scopes.get_mut(provider_id) {
-                        for scope in scopes {
-                            if !entry.contains(scope) {
-                                entry.push(scope.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-    // Process main board nodes
-    for node in board.nodes.values() {
-        process_node(
-            node,
-            &mut oauth_scopes,
-            &mut requires_local_execution,
-            &mut wasm_package_ids,
-            &mut wasm_package_permissions,
-        );
-    }
-
-    // Process layer nodes
-    for layer in board.layers.values() {
-        for node in layer.nodes.values() {
-            process_node(
-                node,
-                &mut oauth_scopes,
-                &mut requires_local_execution,
-                &mut wasm_package_ids,
-                &mut wasm_package_permissions,
-            );
-        }
-    }
-
-    let oauth_requirements: Vec<OAuthRequirement> = oauth_scopes
-        .into_iter()
-        .map(|(provider_id, scopes)| OAuthRequirement {
-            provider_id,
-            scopes,
-        })
-        .collect();
-
-    Ok(Json(PrerunEventResponse {
+    Ok(Json(build_response(
         board_id,
-        runtime_variables,
-        oauth_requirements,
-        requires_local_execution,
-        execution_mode: board.execution_mode.clone(),
+        &payload,
+        event_execution_mode,
         can_execute_locally,
-        has_wasm_nodes: !wasm_package_ids.is_empty(),
-        wasm_package_ids,
-        wasm_package_permissions,
-    }))
+    )))
 }

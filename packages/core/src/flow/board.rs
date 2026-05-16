@@ -8,7 +8,9 @@ use crate::{
     a2ui::widget::Page,
     app::App,
     state::FlowLikeState,
-    utils::compression::{compress_to_file, from_compressed},
+    utils::compression::{
+        compress_to_file, from_compressed, from_compressed_json, from_compressed_with_meta,
+    },
 };
 use commands::GenericCommand;
 use flow_like_storage::object_store::{ObjectStore, path::Path};
@@ -691,6 +693,72 @@ impl Board {
         Ok(version_list)
     }
 
+    /// Resolve the on-disk storage path for a board's compressed proto.
+    /// `board_dir` is the per-app root (e.g. `apps/{app_id}`). When `version`
+    /// is `None` this returns the floating "latest" path; otherwise the
+    /// immutable per-version path.
+    pub fn proto_path(board_dir: &Path, id: &str, version: Option<(u32, u32, u32)>) -> Path {
+        match version {
+            Some((maj, min, pat)) => board_dir
+                .child("versions")
+                .child(id.to_string())
+                .child(format!("{}_{}_{}.board", maj, min, pat)),
+            None => board_dir.child(format!("{}.board", id)),
+        }
+    }
+
+    /// Fetch and decompress the board's proto representation. This step is
+    /// independent of any `FlowLikeState` and produces no per-request data,
+    /// so the result is safe to share across users (cf. executor's proto cache).
+    #[instrument(name = "Board::load_proto", skip(store), level = "debug")]
+    pub async fn load_proto(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<flow_like_types::proto::Board> {
+        let path = Self::proto_path(board_dir, id, version);
+        from_compressed(store, path).await
+    }
+
+    /// Like [`Self::load_proto`] but additionally returns the storage
+    /// [`ObjectMeta`] (e_tag / last_modified). Use this when caching the proto
+    /// — a subsequent HEAD against the same path lets you detect mutations
+    /// without re-downloading the body.
+    #[instrument(name = "Board::load_proto_with_meta", skip(store), level = "debug")]
+    pub async fn load_proto_with_meta(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<(
+        flow_like_types::proto::Board,
+        flow_like_storage::object_store::ObjectMeta,
+    )> {
+        let path = Self::proto_path(board_dir, id, version);
+        from_compressed_with_meta(store, path).await
+    }
+
+    /// Build a fully-initialised `Board` from a previously-loaded proto.
+    /// Runs `node_updates` so dynamic nodes/schema migrations apply against
+    /// the caller's registry — this is per-request and must not be cached
+    /// across users.
+    pub async fn from_loaded_proto(
+        proto: flow_like_types::proto::Board,
+        board_dir: Path,
+        app_state: Arc<FlowLikeState>,
+    ) -> Self {
+        let mut board = Board::from_proto(proto);
+        board.board_dir = board_dir;
+        board.app_state = Some(app_state.clone());
+        board.logic_nodes = HashMap::new();
+
+        board.node_updates(app_state).await;
+        board.cleanup();
+
+        board
+    }
+
     #[instrument(name = "Board::load", skip(app_state), level = "debug")]
     pub async fn load(
         path: Path,
@@ -711,26 +779,8 @@ impl Board {
             })?
             .as_generic();
 
-        let board_dir = path.clone();
-        let path = if let Some(version) = version {
-            path.child("versions")
-                .child(id)
-                .child(format!("{}_{}_{}.board", version.0, version.1, version.2))
-        } else {
-            path.child(format!("{}.board", id))
-        };
-
-        let board: flow_like_types::proto::Board = from_compressed(store, path).await?;
-        let mut board = Board::from_proto(board);
-        board.board_dir = board_dir;
-        board.app_state = Some(app_state.clone());
-        board.logic_nodes = HashMap::new();
-
-        // Sync node schemas on load to handle version migrations and OAuth metadata
-        board.node_updates(app_state).await;
-        board.cleanup();
-
-        Ok(board)
+        let proto = Self::load_proto(store, &path, id, version).await?;
+        Ok(Self::from_loaded_proto(proto, path, app_state).await)
     }
 
     pub async fn save(&self, store: Option<Arc<dyn ObjectStore>>) -> flow_like_types::Result<()> {
@@ -840,9 +890,7 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Page> {
         let store = self.get_store(store).await?;
-        let path = self.page_path(page_id);
-        let page_proto: proto::Page = from_compressed(store, path).await?;
-        Ok(page_proto.into())
+        self.load_page_with_legacy_fallback(&store, page_id).await
     }
 
     pub async fn load_all_pages(
@@ -852,11 +900,55 @@ impl Board {
         let store = self.get_store(store).await?;
         let mut pages = Vec::with_capacity(self.page_ids.len());
         for page_id in &self.page_ids {
-            let path = self.page_path(page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), path).await?;
-            pages.push(page_proto.into());
+            pages.push(self.load_page_with_legacy_fallback(&store, page_id).await?);
         }
         Ok(pages)
+    }
+
+    /// Load a page from the canonical board-scoped binary-proto path,
+    /// falling back to the legacy app-level JSON path written by the
+    /// removed `App::save_page`. On a successful fallback the page is
+    /// migrated in-place: the proto is written to the canonical path
+    /// and the legacy file is removed, so subsequent reads short-circuit
+    /// to the canonical lookup. Migration writes are best-effort —
+    /// failures are logged and the loaded page is still returned, so a
+    /// transient storage hiccup never turns a successful read into a
+    /// hard error.
+    async fn load_page_with_legacy_fallback(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        page_id: &str,
+    ) -> flow_like_types::Result<Page> {
+        let canonical = self.page_path(page_id);
+        match from_compressed::<proto::Page>(store.clone(), canonical.clone()).await {
+            Ok(p) => Ok(p.into()),
+            Err(canonical_err) => {
+                let legacy = self.board_dir.child(format!("{}.page", page_id));
+                match from_compressed_json::<Page>(store.clone(), legacy.clone()).await {
+                    Ok(page) => {
+                        let proto: proto::Page = page.clone().into();
+                        if let Err(e) = compress_to_file(store.clone(), canonical, &proto).await {
+                            tracing::warn!(
+                                "page {} legacy→canonical migration write failed: {e}",
+                                page_id
+                            );
+                        } else if let Err(e) = store.delete(&legacy).await {
+                            tracing::warn!(
+                                "page {} legacy→canonical migration: canonical written but legacy delete failed: {e}",
+                                page_id
+                            );
+                        }
+                        Ok(page)
+                    }
+                    Err(legacy_err) => Err(flow_like_types::anyhow!(
+                        "page {} not found at canonical path ({}) or legacy app-level path ({})",
+                        page_id,
+                        canonical_err,
+                        legacy_err
+                    )),
+                }
+            }
+        }
     }
 
     pub async fn load_versioned_page(
@@ -894,8 +986,14 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
-        let path = self.page_path(page_id);
-        store.delete(&path).await?;
+        // Best-effort delete on the canonical path; missing files
+        // (e.g. data only ever written via the legacy `App::save_page`)
+        // shouldn't fail the call.
+        let _ = store.delete(&self.page_path(page_id)).await;
+        // Also evict any legacy app-level copy so a subsequent load
+        // can't resurrect the page through the fallback reader.
+        let legacy = self.board_dir.child(format!("{}.page", page_id));
+        let _ = store.delete(&legacy).await;
         self.page_ids.retain(|id| id != page_id);
         self.updated_at = SystemTime::now();
         Ok(())

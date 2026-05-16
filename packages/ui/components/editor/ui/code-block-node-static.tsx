@@ -61,7 +61,11 @@ export function CodeBlockElementStatic(
 		const isSpoiler = directiveType === "spoiler";
 		return (
 			<SlateElement className="py-1" {...props}>
-				<Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+				<Suspense
+					fallback={
+						<div className="h-16 animate-pulse bg-muted/20 rounded-md" />
+					}
+				>
 					{isSpoiler ? (
 						<SpoilerBlock content={content} />
 					) : (
@@ -77,7 +81,11 @@ export function CodeBlockElementStatic(
 	if (isCustomBlockLanguage(lang)) {
 		return (
 			<SlateElement className="py-1" {...props}>
-				<Suspense fallback={<div className="h-16 animate-pulse bg-muted/20 rounded-md" />}>
+				<Suspense
+					fallback={
+						<div className="h-16 animate-pulse bg-muted/20 rounded-md" />
+					}
+				>
 					{lang === "embed" ? (
 						<EmbedCodeBlock content={content} />
 					) : (

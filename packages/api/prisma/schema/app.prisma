@@ -58,7 +58,7 @@ model App {
   comments  Comment[]
   changelog String?
 
-  courses       CourseConnection[]
+  courseLinks   CourseAppLink[]
   inviteLinks   InviteLink[]
   invitations   Invitation[]
   notifications Notification[]
@@ -89,6 +89,15 @@ model App {
 
   price   BigInt  @default(0)
   version String?
+
+  /// Project owner opts in to the Fork-an-app feature. Apps default to
+  /// false; without this flag the fork endpoints reject the request.
+  allowForking Boolean @default(false)
+  /// For forked apps: the source app's id, kept as a free-form string so a
+  /// fork survives even if the source app is later deleted.
+  forkedFrom   String?
+  /// For forked apps: when the fork happened.
+  forkedAt     DateTime?
 
   technicalUsers TechnicalUser[]
   llmUsage       LLMUsageTracking[]
@@ -307,6 +316,11 @@ model Event {
   /// Event version as semver string "major.minor.patch"
   eventVersion String @default("0.0.0")
 
+  /// Where this event runs: "Local" (offline/desktop) or "Remote" (server).
+  /// Events never run Hybrid — they must be bound to one environment so their
+  /// config (URLs, credentials, tutorials) is unambiguous.
+  executionMode String @default("Local")
+
   /// Variables for this event (JSON blob)
   variables Json?
 
@@ -358,6 +372,11 @@ model EventSink {
   /// For HTTP sinks: the unique path to listen on
   path String?
 
+  /// For HTTP sinks: the accepted HTTP method (GET/POST/PUT/PATCH/DELETE).
+  /// Different methods on the same path are treated as distinct sinks so
+  /// `POST /foo` and `GET /foo` can route to different events.
+  method String?
+
   /// Auth token for securing HTTP endpoints (optional, auto-generated if not provided)
   authToken String?
 
@@ -382,7 +401,7 @@ model EventSink {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([appId, path])
+  @@unique([appId, path, method])
   @@index([appId])
   @@index([active])
   @@index([sinkType])

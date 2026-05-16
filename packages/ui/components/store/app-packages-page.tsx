@@ -25,7 +25,13 @@ import { useBackend } from "../../state/backend-state";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "../ui/card";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -46,7 +52,10 @@ export interface AppPackagesPageProps {
 	appId: string;
 }
 
-function installedToAppPackage(pkg: InstalledPackage, pinnedVersion: string): AppPackage {
+function installedToAppPackage(
+	pkg: InstalledPackage,
+	pinnedVersion: string,
+): AppPackage {
 	return {
 		id: pkg.id,
 		appId: "",
@@ -118,7 +127,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				`apps/${appId}/packages`,
 			);
 		},
-		enabled: !!appId && isOffline.data !== undefined && (isOffline.data || !!profile.data),
+		enabled:
+			!!appId &&
+			isOffline.data !== undefined &&
+			(isOffline.data || !!profile.data),
 	});
 
 	const catalog = useQuery<INode[]>({
@@ -149,11 +161,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				return;
 			}
 			if (!profile.data) throw new Error("Profile not loaded");
-			return backend.apiState.post(
-				profile.data,
-				`apps/${appId}/packages`,
-				req,
-			);
+			return backend.apiState.post(profile.data, `apps/${appId}/packages`, req);
 		},
 		onSuccess: () => {
 			toast.success("Package added");
@@ -161,7 +169,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
 			queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
 		},
-		onError: (err: Error) => toast.error(`Failed to add package: ${err.message}`),
+		onError: (err: Error) =>
+			toast.error(`Failed to add package: ${err.message}`),
 	});
 
 	const removePackage = useMutation({
@@ -182,11 +191,15 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
 			queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
 		},
-		onError: (err: Error) => toast.error(`Failed to remove package: ${err.message}`),
+		onError: (err: Error) =>
+			toast.error(`Failed to remove package: ${err.message}`),
 	});
 
 	const toggleAutoUpdate = useMutation({
-		mutationFn: async ({ pkgId, autoUpdate }: { pkgId: string; autoUpdate: boolean }) => {
+		mutationFn: async ({
+			pkgId,
+			autoUpdate,
+		}: { pkgId: string; autoUpdate: boolean }) => {
 			if (isOffline.data) return;
 			if (!profile.data) throw new Error("Profile not loaded");
 			const body: UpdateAppPackageRequest = { autoUpdate };
@@ -202,7 +215,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
 			}
 		},
-		onError: (err: Error) => toast.error(`Failed to update package: ${err.message}`),
+		onError: (err: Error) =>
+			toast.error(`Failed to update package: ${err.message}`),
 	});
 
 	const reactivatePackage = useMutation({
@@ -218,7 +232,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			toast.success("Package reactivated");
 			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
 		},
-		onError: (err: Error) => toast.error(`Failed to reactivate: ${err.message}`),
+		onError: (err: Error) =>
+			toast.error(`Failed to reactivate: ${err.message}`),
 	});
 
 	const handleSelect = useCallback(
@@ -232,16 +247,15 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
 	const staleCount = packages.data?.filter((p) => p.stale).length ?? 0;
 
-	if (packages.isLoading || isOffline.isLoading) return <PackagesPageSkeleton />;
+	if (packages.isLoading || isOffline.isLoading)
+		return <PackagesPageSkeleton />;
 
 	return (
 		<Card>
 			<CardHeader className="flex flex-row items-center justify-between">
 				<div>
 					<CardTitle>Packages</CardTitle>
-					<CardDescription>
-						WASM packages linked to this app
-					</CardDescription>
+					<CardDescription>WASM packages linked to this app</CardDescription>
 				</div>
 				<Button size="sm" onClick={() => setSearchOpen(true)}>
 					<Package className="mr-2 h-4 w-4" />
@@ -254,10 +268,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						<TriangleAlert className="h-4 w-4" />
 						<AlertTitle>Stale packages detected</AlertTitle>
 						<AlertDescription>
-							{staleCount} package{staleCount > 1 ? "s are" : " is"} stale because
-							the member who added {staleCount > 1 ? "them" : "it"} left the
-							project. Stale packages cannot be updated or placed on new boards.
-							An admin with access to the package can reactivate it.
+							{staleCount} package{staleCount > 1 ? "s are" : " is"} stale
+							because the member who added {staleCount > 1 ? "them" : "it"} left
+							the project. Stale packages cannot be updated or placed on new
+							boards. An admin with access to the package can reactivate it.
 						</AlertDescription>
 					</Alert>
 				)}
@@ -278,7 +292,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 								nodes={nodesByPackage.get(pkg.packageId) ?? []}
 								catalogLoading={catalog.isLoading}
 								onToggleAutoUpdate={(val) =>
-									toggleAutoUpdate.mutate({ pkgId: pkg.packageId, autoUpdate: val })
+									toggleAutoUpdate.mutate({
+										pkgId: pkg.packageId,
+										autoUpdate: val,
+									})
 								}
 								onRemove={() => removePackage.mutate(pkg.packageId)}
 								onReactivate={() => reactivatePackage.mutate(pkg.packageId)}
@@ -335,9 +352,13 @@ function PackageCard(props: {
 							v{pkg.version}
 						</Badge>
 						{pkg.stale ? (
-							<Badge variant="destructive" className="shrink-0 text-xs">Stale</Badge>
+							<Badge variant="destructive" className="shrink-0 text-xs">
+								Stale
+							</Badge>
 						) : (
-							<Badge variant="outline" className="shrink-0 text-xs">Active</Badge>
+							<Badge variant="outline" className="shrink-0 text-xs">
+								Active
+							</Badge>
 						)}
 					</div>
 					{nodes.length > 0 && (
@@ -445,7 +466,9 @@ function NodeCategoryList({ grouped }: { grouped: Map<string, INode[]> }) {
 										</div>
 									</TooltipTrigger>
 									<TooltipContent side="bottom" className="max-w-xs">
-										<p className="font-medium">{node.friendly_name || node.name}</p>
+										<p className="font-medium">
+											{node.friendly_name || node.name}
+										</p>
 										{node.description && (
 											<p className="mt-1 text-xs text-muted-foreground">
 												{node.description}

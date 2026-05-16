@@ -1,5 +1,5 @@
-import Dexie, { type DBCore, type DBCoreMutateRequest } from "dexie";
 import { invoke } from "@tauri-apps/api/core";
+import Dexie, { type DBCore, type DBCoreMutateRequest } from "dexie";
 
 const BLOB_MARKER = "__fl_blob__";
 const PLUGIN_PREFIX = "plugin:flow-like-dexie-blob-offload|";
@@ -117,9 +117,7 @@ async function extractBlobsDeep(
 
 	if (typeof obj === "object") {
 		const clone: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(
-			obj as Record<string, unknown>,
-		)) {
+		for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
 			clone[key] = await extractBlobsDeep(
 				value,
 				threshold,
@@ -149,9 +147,7 @@ function resolvePending(obj: unknown, refMap: Map<string, BlobRef>): unknown {
 		}
 
 		const clone: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(
-			obj as Record<string, unknown>,
-		)) {
+		for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
 			clone[key] = resolvePending(value, refMap);
 		}
 		return clone;
@@ -164,10 +160,7 @@ function resolvePending(obj: unknown, refMap: Map<string, BlobRef>): unknown {
 	return obj;
 }
 
-async function extractBlobs(
-	obj: unknown,
-	threshold: number,
-): Promise<unknown> {
+async function extractBlobs(obj: unknown, threshold: number): Promise<unknown> {
 	const pendingBlobs = new Map<string, number[]>();
 	const extracted = await extractBlobsDeep(obj, threshold, pendingBlobs, "");
 
@@ -217,11 +210,7 @@ function collectBlobRefs(
 		if (isBlobMarker(value)) {
 			result.push({ path: [...path, key], ref_: value[BLOB_MARKER] });
 		} else if (typeof value === "object" && value !== null) {
-			collectBlobRefs(
-				value as Record<string, unknown>,
-				[...path, key],
-				result,
-			);
+			collectBlobRefs(value as Record<string, unknown>, [...path, key], result);
 		}
 	}
 }
@@ -252,7 +241,10 @@ async function rehydrateBlobsDeep(obj: unknown): Promise<unknown> {
 			});
 			return tryDecodeUtf8(data);
 		} catch (e) {
-			console.warn("[blob-offload] blob_get failed, returning marker as-is:", e);
+			console.warn(
+				"[blob-offload] blob_get failed, returning marker as-is:",
+				e,
+			);
 			return obj;
 		}
 	}
@@ -288,7 +280,12 @@ async function rehydrateBlobsDeep(obj: unknown): Promise<unknown> {
 					tryDecodeUtf8(data),
 				);
 			} catch (e) {
-				console.warn("[blob-offload] blob_get failed for path", entry.path, ":", e);
+				console.warn(
+					"[blob-offload] blob_get failed for path",
+					entry.path,
+					":",
+					e,
+				);
 				return obj;
 			}
 		}
@@ -304,7 +301,11 @@ async function rehydrateBlobsDeep(obj: unknown): Promise<unknown> {
 			);
 			let clone = structuredClone(obj) as Record<string, unknown>;
 			for (let i = 0; i < results.length; i++) {
-				clone = setNestedValue(clone, blobKeys[i].path, tryDecodeUtf8(results[i].data));
+				clone = setNestedValue(
+					clone,
+					blobKeys[i].path,
+					tryDecodeUtf8(results[i].data),
+				);
 			}
 			return clone;
 		} catch (e) {
@@ -336,7 +337,9 @@ export function dexieTauriBlobOffload(threshold = 200) {
 				...downcore,
 				table(name: string) {
 					const table = downcore.table(name);
-					const keyPath = table.schema?.primaryKey?.keyPath as string | undefined;
+					const keyPath = table.schema?.primaryKey?.keyPath as
+						| string
+						| undefined;
 
 					return {
 						...table,
@@ -354,10 +357,16 @@ export function dexieTauriBlobOffload(threshold = 200) {
 												oldHashes = new Set();
 												try {
 													for (const val of req.values) {
-														const key = (val as Record<string, unknown>)[keyPath];
+														const key = (val as Record<string, unknown>)[
+															keyPath
+														];
 														if (key != null) {
-															const existing = await table.get({ key, trans: req.trans });
-															if (existing) collectAllBlobHashes(existing, oldHashes);
+															const existing = await table.get({
+																key,
+																trans: req.trans,
+															});
+															if (existing)
+																collectAllBlobHashes(existing, oldHashes);
 														}
 													}
 												} catch {
@@ -375,7 +384,10 @@ export function dexieTauriBlobOffload(threshold = 200) {
 										})(),
 									);
 
-									const result = await table.mutate({ ...req, values: processed });
+									const result = await table.mutate({
+										...req,
+										values: processed,
+									});
 
 									// Collect new blob hashes and adjust ref counts
 									const newHashes = new Set<string>();
@@ -383,7 +395,9 @@ export function dexieTauriBlobOffload(threshold = 200) {
 										collectAllBlobHashes(val, newHashes);
 									}
 
-									const trulyNew = [...newHashes].filter((h) => !oldHashes?.has(h));
+									const trulyNew = [...newHashes].filter(
+										(h) => !oldHashes?.has(h),
+									);
 									incRefs(trulyNew);
 
 									const stale = oldHashes
@@ -397,9 +411,18 @@ export function dexieTauriBlobOffload(threshold = 200) {
 									// during rapid streaming saves), return a synthetic result.
 									// The final save will properly persist and offload blobs.
 									const msg = e instanceof Error ? e.message : String(e);
-									if (msg.includes("transaction") || msg.includes("InvalidState")) {
-										console.debug("[blob-offload] Transaction expired during extraction, deferring to next write");
-										return { numFailures: 0, failures: {}, lastResult: undefined };
+									if (
+										msg.includes("transaction") ||
+										msg.includes("InvalidState")
+									) {
+										console.debug(
+											"[blob-offload] Transaction expired during extraction, deferring to next write",
+										);
+										return {
+											numFailures: 0,
+											failures: {},
+											lastResult: undefined,
+										};
 									}
 									throw e;
 								}
@@ -449,7 +472,10 @@ export function dexieTauriBlobOffload(threshold = 200) {
 									try {
 										return await rehydrateBlobsDeep(r);
 									} catch (e) {
-										console.warn("[blob-offload] rehydration failed in getMany:", e);
+										console.warn(
+											"[blob-offload] rehydration failed in getMany:",
+											e,
+										);
 										return r;
 									}
 								}),
@@ -463,7 +489,10 @@ export function dexieTauriBlobOffload(threshold = 200) {
 									try {
 										return await rehydrateBlobsDeep(r);
 									} catch (e) {
-										console.warn("[blob-offload] rehydration failed in query:", e);
+										console.warn(
+											"[blob-offload] rehydration failed in query:",
+											e,
+										);
 										return r;
 									}
 								}),

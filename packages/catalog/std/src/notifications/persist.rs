@@ -48,12 +48,60 @@ pub struct PersistNotificationParams {
     pub target_user_sub: Option<String>,
 }
 
+fn notification_api_origin(hub: &str, secure: bool) -> Option<String> {
+    let trimmed = hub.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+
+    if trimmed.starts_with("//") {
+        let protocol = if secure { "https:" } else { "http:" };
+        return Some(format!("{protocol}{trimmed}"));
+    }
+
+    let protocol = if secure { "https" } else { "http" };
+    Some(format!("{protocol}://{trimmed}"))
+}
+
+/// Reserved by the `/use` route shell. User-supplied query params with these
+/// names are prefixed with `_` so they don't collide with framework values;
+/// `Get Query Params` reverses the prefix transparently.
+pub const RESERVED_QUERY_KEYS: &[&str] = &["id", "route", "eventId"];
+
+fn prefix_reserved_user_query(query: &str) -> String {
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if RESERVED_QUERY_KEYS.contains(&key) {
+                if pair.contains('=') {
+                    format!("_{key}={value}")
+                } else {
+                    format!("_{key}")
+                }
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 /// Build a notification link from an app_id and a user-provided path.
 ///
 /// If `user_link` is already a non-empty relative path (e.g. `/dashboard`
 /// or `/store?item=abc`), it is turned into `/use?id={app_id}&route={path}&extra=params`.
 /// If `user_link` is empty or missing, defaults to `/use?id={app_id}&route=/`.
 /// Absolute URLs are rejected (security: avoids phishing via push notifications).
+///
+/// Query keys reserved by the `/use` shell (`id`, `route`, `eventId`) are
+/// `_`-prefixed when forwarded so user values never overwrite framework
+/// values in `_query_params`.
 pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String {
     let raw = user_link.unwrap_or("").trim();
 
@@ -78,10 +126,14 @@ pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String 
         urlencoding::encode(&format!("/{path_part}")),
     );
 
-    // Append any extra query params from the user-provided link
+    // Append any extra query params from the user-provided link, prefixing
+    // reserved keys so they don't collide with the `/use` framework keys.
     if !query_part.is_empty() {
-        link.push('&');
-        link.push_str(query_part);
+        let safe = prefix_reserved_user_query(query_part);
+        if !safe.is_empty() {
+            link.push('&');
+            link.push_str(&safe);
+        }
     }
 
     link
@@ -98,14 +150,14 @@ pub async fn persist_notification(
     context: &ExecutionContext,
     params: PersistNotificationParams,
 ) -> flow_like_types::Result<bool> {
-    let hub_url = context.profile.hub.trim_end_matches('/');
+    let hub_url = match notification_api_origin(&context.profile.hub, context.profile.secure) {
+        Some(url) => url,
+        None => return Ok(false),
+    };
     let token = match &context.token {
         Some(t) if !t.is_empty() => t,
         _ => return Ok(false),
     };
-    if hub_url.is_empty() {
-        return Ok(false);
-    }
 
     let app_id = context
         .execution_cache
@@ -145,7 +197,12 @@ pub async fn persist_notification(
             node_id: node_id.clone(),
         };
 
-        let response = client.post(&url).bearer_auth(token).json(&body).send().await;
+        let response = client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await;
 
         match response {
             Ok(resp) if resp.status().is_success() => return Ok(true),
@@ -171,10 +228,11 @@ pub async fn persist_notification(
     }
 
     // For other-user targeting without a valid app, skip (can't verify membership)
-    if let Some(ref target) = params.target_user_sub {
-        if target != "local" && !target.is_empty() {
-            return Ok(false);
-        }
+    if let Some(ref target) = params.target_user_sub
+        && target != "local"
+        && !target.is_empty()
+    {
+        return Ok(false);
     }
 
     // Fallback: user-scoped endpoint (offline projects / no board context)
@@ -207,4 +265,53 @@ pub async fn persist_notification(
     }
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_notification_link, notification_api_origin};
+
+    #[test]
+    fn prefixes_reserved_user_query_keys() {
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?id=xyz")),
+            "/use?id=app1&route=%2Fmail&_id=xyz"
+        );
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?route=foo&eventId=bar&mailid=42")),
+            "/use?id=app1&route=%2Fmail&_route=foo&_eventId=bar&mailid=42"
+        );
+    }
+
+    #[test]
+    fn passes_through_non_reserved_query_keys() {
+        assert_eq!(
+            build_notification_link("app1", Some("/mail?mailid=xyz&from=abc")),
+            "/use?id=app1&route=%2Fmail&mailid=xyz&from=abc"
+        );
+    }
+
+    #[test]
+    fn normalizes_bare_hub_domains() {
+        assert_eq!(
+            notification_api_origin("api.flow-like.com", true).as_deref(),
+            Some("https://api.flow-like.com")
+        );
+        assert_eq!(
+            notification_api_origin("localhost:8080/", false).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn preserves_absolute_hub_urls() {
+        assert_eq!(
+            notification_api_origin("https://api.flow-like.com/", false).as_deref(),
+            Some("https://api.flow-like.com")
+        );
+        assert_eq!(
+            notification_api_origin("http://localhost:8080", true).as_deref(),
+            Some("http://localhost:8080")
+        );
+    }
 }

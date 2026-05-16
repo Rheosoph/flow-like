@@ -82,7 +82,7 @@ runs:
         targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
     - name: Install frontend dependencies
-      run: bun install
+      run: bun install --frozen-lockfile
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.repo-token }}

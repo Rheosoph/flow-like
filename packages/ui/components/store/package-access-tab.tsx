@@ -3,9 +3,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Users, X } from "lucide-react";
 import { toast } from "sonner";
-import type { AccessRequest } from "../../lib/schema/wasm";
 import { useInvoke } from "../../hooks/use-invoke";
+import type { AccessRequest } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
+import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
 	Badge,
 	Button,
@@ -15,7 +16,6 @@ import {
 	CardTitle,
 	RelativeTime,
 } from "../ui";
-import type { GenericFetcher } from "../pages/store/store-package-detail";
 
 export interface PackageAccessTabProps {
 	packageId: string;
@@ -96,9 +96,7 @@ export function PackageAccessTab({
 	return (
 		<Card>
 			<CardHeader className="flex flex-row items-center justify-between pb-4">
-				<CardTitle className="text-base font-medium">
-					Access Requests
-				</CardTitle>
+				<CardTitle className="text-base font-medium">Access Requests</CardTitle>
 				<Badge variant="secondary">{requests.length} pending</Badge>
 			</CardHeader>
 

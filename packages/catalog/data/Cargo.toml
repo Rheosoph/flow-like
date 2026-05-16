@@ -42,6 +42,9 @@ duckdb = ["datafusion-table-providers/duckdb"]
 clickhouse = ["datafusion-table-providers/clickhouse"]
 flight = ["datafusion-table-providers/flight"]
 odbc = ["datafusion-table-providers/odbc"]
+# BigQuery provider uses gcp-bigquery-client directly (datafusion-table-providers has no BigQuery backend yet).
+# Results are fetched via the REST query API and registered as an in-memory table in the DataFusion session.
+bigquery = ["dep:gcp-bigquery-client"]
 # Federation support - enables query push-down to remote databases
 federation = ["datafusion-table-providers/federation", "flow-like-storage/federation"]
 postgres-federation = ["postgres", "datafusion-table-providers/postgres-rustls-federation", "federation"]
@@ -52,7 +55,7 @@ clickhouse-federation = ["clickhouse", "datafusion-table-providers/clickhouse-fe
 odbc-federation = ["odbc", "datafusion-table-providers/odbc-federation", "federation"]
 # Feature bundles
 all-lakes = ["delta", "iceberg"]
-all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "odbc"]
+all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "odbc", "bigquery"]
 all-databases-federation = ["postgres-federation", "mysql-federation", "sqlite-federation", "duckdb-federation", "clickhouse-federation", "odbc-federation"]
 full = ["all-lakes", "all-databases", "federation"]
 # Full with execution (for executors and desktop)
@@ -99,8 +102,11 @@ tempfile = { version = "3", optional = true }
 # Includes ODBC support with proper arrow version alignment
 datafusion-table-providers = { git = "https://github.com/TM9657/datafusion-table-providers.git", branch = "main", default-features = false, optional = true }
 
+# Google BigQuery client for the BigQuery provider node (no BigQuery backend in datafusion-table-providers yet).
+gcp-bigquery-client = { version = "0.28", default-features = false, features = ["rust-tls", "ring"], optional = true }
+
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 uuid = { version = "1.11", features = ["v4"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sqlite"] }

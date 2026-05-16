@@ -2,12 +2,11 @@
 
 import {
 	Card,
-	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
 } from "@tm9657/flow-like-ui";
-import { BarChart3, MonitorIcon } from "lucide-react";
+import { MonitorIcon } from "lucide-react";
 
 export default function StatisticsPage() {
 	return (
@@ -25,9 +24,7 @@ export default function StatisticsPage() {
 						<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted">
 							<MonitorIcon className="h-6 w-6 text-muted-foreground" />
 						</div>
-						<CardTitle className="text-lg">
-							Desktop Feature
-						</CardTitle>
+						<CardTitle className="text-lg">Desktop Feature</CardTitle>
 						<CardDescription>
 							Board Statistics requires the desktop app to scan your local
 							boards for node usage, patterns, and analytics. This feature is

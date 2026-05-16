@@ -1,0 +1,221 @@
+{
+	"name": "Customer Support Pipeline",
+	"active": true,
+	"nodes": [
+		{
+			"id": "webhook-1",
+			"name": "Webhook Receiver",
+			"type": "n8n-nodes-base.webhook",
+			"typeVersion": 2,
+			"position": [200, 300],
+			"parameters": {
+				"httpMethod": "POST",
+				"path": "support-ticket",
+				"responseMode": "responseNode"
+			}
+		},
+		{
+			"id": "set-1",
+			"name": "Normalize Data",
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [420, 300],
+			"parameters": {
+				"assignments": {
+					"assignments": [
+						{ "name": "ticket_id", "value": "={{$json.id}}", "type": "string" },
+						{
+							"name": "priority",
+							"value": "={{$json.priority}}",
+							"type": "number"
+						},
+						{ "name": "resolved", "value": false, "type": "boolean" }
+					]
+				}
+			}
+		},
+		{
+			"id": "if-1",
+			"name": "Check Priority",
+			"type": "n8n-nodes-base.if",
+			"typeVersion": 2,
+			"position": [640, 300],
+			"parameters": {
+				"conditions": {
+					"number": [
+						{
+							"value1": "={{$json.priority}}",
+							"operation": "largerEqual",
+							"value2": 3
+						}
+					]
+				}
+			}
+		},
+		{
+			"id": "http-1",
+			"name": "Fetch Customer Data",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [860, 200],
+			"parameters": {
+				"url": "https://api.example.com/customers/{{$json.customer_id}}",
+				"method": "GET",
+				"authentication": "genericCredentialType"
+			},
+			"credentials": {
+				"httpHeaderAuth": {
+					"id": "cred-abc123",
+					"name": "API Key Auth"
+				}
+			}
+		},
+		{
+			"id": "gmail-1",
+			"name": "Send Email Alert",
+			"type": "n8n-nodes-base.gmail",
+			"typeVersion": 2.1,
+			"position": [1080, 200],
+			"parameters": {
+				"sendTo": "support-lead@example.com",
+				"subject": "High Priority Ticket: {{$json.ticket_id}}",
+				"message": "A high-priority ticket needs attention."
+			},
+			"credentials": {
+				"gmailOAuth2": {
+					"id": "cred-gmail-1",
+					"name": "Support Gmail"
+				}
+			}
+		},
+		{
+			"id": "code-1",
+			"name": "Format Response",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [860, 400],
+			"parameters": {
+				"jsCode": "return items.map(item => ({ json: { status: 'queued', ticket: item.json.ticket_id } }));"
+			}
+		},
+		{
+			"id": "respond-1",
+			"name": "Send Response",
+			"type": "n8n-nodes-base.respondToWebhook",
+			"typeVersion": 1.1,
+			"position": [1080, 400],
+			"parameters": {
+				"respondWith": "json",
+				"responseBody": "={{ $json }}"
+			}
+		},
+		{
+			"id": "disabled-1",
+			"name": "Debug Logger",
+			"type": "n8n-nodes-base.code",
+			"typeVersion": 2,
+			"position": [640, 600],
+			"disabled": true,
+			"parameters": {
+				"jsCode": "console.log(JSON.stringify(items));"
+			}
+		},
+		{
+			"id": "slack-1",
+			"name": "Notify Slack",
+			"type": "n8n-nodes-base.slack",
+			"typeVersion": 2.2,
+			"position": [1300, 200],
+			"parameters": {
+				"channel": "#support-alerts",
+				"text": "New high-priority ticket assigned"
+			},
+			"credentials": {
+				"slackApi": {
+					"id": "cred-slack-1",
+					"name": "Support Slack Bot"
+				}
+			}
+		}
+	],
+	"connections": {
+		"Webhook Receiver": {
+			"main": [
+				[
+					{
+						"node": "Normalize Data",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Normalize Data": {
+			"main": [
+				[
+					{
+						"node": "Check Priority",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Check Priority": {
+			"main": [
+				[
+					{
+						"node": "Fetch Customer Data",
+						"type": "main",
+						"index": 0
+					}
+				],
+				[
+					{
+						"node": "Format Response",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Fetch Customer Data": {
+			"main": [
+				[
+					{
+						"node": "Send Email Alert",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Send Email Alert": {
+			"main": [
+				[
+					{
+						"node": "Notify Slack",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Format Response": {
+			"main": [
+				[
+					{
+						"node": "Send Response",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1",
+		"timezone": "America/New_York",
+		"saveExecutionProgress": true
+	}
+}

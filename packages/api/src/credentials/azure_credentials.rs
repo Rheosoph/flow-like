@@ -233,6 +233,56 @@ impl AzureRuntimeCredentials {
                     None,
                 )
             }
+            CredentialsAccess::ReadAppContent => {
+                // Content-only — boards/events/widgets/templates/pages
+                // live in the meta container and may carry secrets,
+                // so the desktop never gets a meta-side SAS. Source
+                // app's content (metadata/, upload/, storage/) is
+                // safe to expose for fork pulls.
+                let content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}", app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    Some(content_sas),
+                    None,
+                    None,
+                    Some(format!("apps/{}", app_id)),
+                    None,
+                )
+            }
+            CredentialsAccess::EditAppContent => {
+                // Content-only write. Used for client-handed upload
+                // credentials (presign-data-access, fork-online-begin
+                // bundle uploads). Boards / events / templates /
+                // widgets / pages must be written through the API
+                // so role-permission gates and per-resource
+                // validation run; we never hand out a meta-container
+                // SAS to a client.
+                let content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}", app_id),
+                    "rwdl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    Some(content_sas),
+                    None,
+                    None,
+                    Some(format!("apps/{}", app_id)),
+                    None,
+                )
+            }
             CredentialsAccess::EditUser => {
                 let user_content_sas = generate_directory_sas(
                     &self.account_name,
@@ -460,6 +510,8 @@ impl AzureRuntimeCredentials {
         let permissions = match mode {
             CredentialsAccess::EditApp => "racwdl",
             CredentialsAccess::ReadApp => "rl",
+            CredentialsAccess::ReadAppContent => "rl",
+            CredentialsAccess::EditAppContent => "racwdl",
             CredentialsAccess::EditUser => "racwdl",
             CredentialsAccess::ReadUser => "rl",
             CredentialsAccess::InvokeNone => "racwdl",
@@ -478,9 +530,10 @@ impl AzureRuntimeCredentials {
         // InvokeRead/InvokeWrite/InvokeNone: both app and user paths
         // ReadLogs: logs/{app_id}
         let (app_directory, user_directory) = match mode {
-            CredentialsAccess::EditApp | CredentialsAccess::ReadApp => {
-                (Some(format!("apps/{}", app_id)), None)
-            }
+            CredentialsAccess::EditApp
+            | CredentialsAccess::ReadApp
+            | CredentialsAccess::ReadAppContent
+            | CredentialsAccess::EditAppContent => (Some(format!("apps/{}", app_id)), None),
             CredentialsAccess::EditUser | CredentialsAccess::ReadUser => {
                 (None, Some(format!("users/{}/apps/{}", sub, app_id)))
             }

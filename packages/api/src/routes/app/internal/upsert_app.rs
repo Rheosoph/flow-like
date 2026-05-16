@@ -99,6 +99,17 @@ pub async fn upsert_app(
             bucket_app.updated_at = SystemTime::now();
             bucket_app.status = app_updates.status.clone();
             bucket_app.version = app_updates.version.clone();
+            bucket_app.bits = app_updates.bits.clone();
+            bucket_app.execution_mode = app_updates.execution_mode.clone();
+            bucket_app.frontend = app_updates.frontend.clone();
+            bucket_app.boards = app_updates.boards.clone();
+            bucket_app.events = app_updates.events.clone();
+            bucket_app.templates = app_updates.templates.clone();
+            bucket_app.widget_ids = app_updates.widget_ids.clone();
+            bucket_app.page_ids = app_updates.page_ids.clone();
+            bucket_app.allow_forking = app_updates.allow_forking;
+            bucket_app.forked_from = app_updates.forked_from.clone();
+            bucket_app.forked_at = app_updates.forked_at;
             bucket_app.save().await?;
         }
 
@@ -111,6 +122,11 @@ pub async fn upsert_app(
         app.secondary_category = sea_orm::ActiveValue::Set(app_updates.secondary_category);
         app.price = sea_orm::ActiveValue::Set(app_updates.price);
         app.version = sea_orm::ActiveValue::Set(app_updates.version);
+        app.bits = sea_orm::ActiveValue::Set(app_updates.bits);
+        app.execution_mode = sea_orm::ActiveValue::Set(app_updates.execution_mode);
+        app.allow_forking = sea_orm::ActiveValue::Set(app_updates.allow_forking);
+        app.forked_from = sea_orm::ActiveValue::Set(app_updates.forked_from);
+        app.forked_at = sea_orm::ActiveValue::Set(app_updates.forked_at);
         app.updated_at = sea_orm::ActiveValue::Set(now);
         let app: app::Model = app.save(&state.db).await?.try_into()?;
         audit_branch!(

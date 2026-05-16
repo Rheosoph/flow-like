@@ -46,7 +46,10 @@ interface FlowNodeToolbarProps {
 	onInfo: () => void;
 	onHandleError: () => void;
 	onCollapse: (x: number, y: number) => void;
-	onAlign: (type: "align" | "justify", dir: "start" | "end" | "center" | "distribute") => void;
+	onAlign: (
+		type: "align" | "justify",
+		dir: "start" | "end" | "center" | "distribute",
+	) => void;
 	onExplain: () => void;
 }
 

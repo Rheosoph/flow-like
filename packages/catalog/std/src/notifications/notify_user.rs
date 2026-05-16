@@ -1,4 +1,7 @@
-use super::persist::{PersistNotificationParams, build_notification_link, persist_notification};
+use super::{
+    icon::{add_notification_icon_pin, migrate_notification_icon_pin, resolve_notification_icon},
+    persist::{PersistNotificationParams, build_notification_link, persist_notification},
+};
 use flow_like::{
     flow::{
         board::Board,
@@ -9,7 +12,6 @@ use flow_like::{
     state::NotificationEvent,
 };
 use flow_like_types::async_trait;
-use std::sync::Arc;
 
 /// Node to notify the user who executed the workflow.
 /// Sends an InterCom notification event that can be displayed locally
@@ -48,13 +50,7 @@ impl NodeLogic for NotifyUserNode {
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
 
-        node.add_input_pin(
-            "icon",
-            "Icon",
-            "Icon URL or path (optional)",
-            VariableType::String,
-        )
-        .set_default_value(Some(flow_like_types::json::json!("")));
+        add_notification_icon_pin(&mut node);
 
         node.add_input_pin(
             "link",
@@ -94,7 +90,7 @@ impl NodeLogic for NotifyUserNode {
 
         let title = context.evaluate_pin::<String>("title").await?;
         let description = context.evaluate_pin::<String>("description").await?;
-        let icon = context.evaluate_pin::<String>("icon").await?;
+        let icon = resolve_notification_icon(context).await;
         let link = context.evaluate_pin::<String>("link").await?;
         let show_desktop = context.evaluate_pin::<bool>("show_desktop").await?;
 
@@ -104,10 +100,8 @@ impl NodeLogic for NotifyUserNode {
             .as_ref()
             .map(|c| c.app_id.as_str())
             .unwrap_or("");
-        let resolved_link = build_notification_link(
-            app_id,
-            if link.is_empty() { None } else { Some(&link) },
-        );
+        let resolved_link =
+            build_notification_link(app_id, if link.is_empty() { None } else { Some(&link) });
 
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(show_desktop)
@@ -121,11 +115,10 @@ impl NodeLogic for NotifyUserNode {
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
-        if !icon.is_empty() {
-            notification = notification.with_icon(&icon);
-        }
+        notification = notification.with_icon(&icon);
 
-        // Send notification via InterCom stream (local display / SSE forwarding)
+        // Send notification via InterCom stream for local display / event history.
+        // Remote persistence happens below through the dedicated notification API.
         context
             .stream_response("flow_notification", notification)
             .await?;
@@ -136,7 +129,7 @@ impl NodeLogic for NotifyUserNode {
             PersistNotificationParams {
                 title,
                 description: (!description.is_empty()).then_some(description),
-                icon: (!icon.is_empty()).then_some(icon),
+                icon: Some(icon),
                 link: Some(resolved_link),
                 target_user_sub: None,
             },
@@ -161,7 +154,7 @@ impl NodeLogic for NotifyUserNode {
         Ok(())
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: &Board) {
-        // No type matching needed
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        migrate_notification_icon_pin(node);
     }
 }

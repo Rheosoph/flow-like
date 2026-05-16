@@ -83,13 +83,20 @@ export default function AddProfilePage() {
 				IBitTypes.Embedding,
 				IBitTypes.ImageEmbedding,
 				IBitTypes.Llm,
+				IBitTypes.Stt,
+				IBitTypes.Tts,
 				IBitTypes.Vlm,
 			],
 		},
 		true,
 	);
 
-	const templates = useApi<IProfile[]>("GET", "info/profiles", undefined, isEditing);
+	const templates = useApi<IProfile[]>(
+		"GET",
+		"info/profiles",
+		undefined,
+		isEditing,
+	);
 
 	useEffect(() => {
 		if (!templateId || !templates.data) return;
@@ -198,8 +205,14 @@ export default function AddProfilePage() {
 
 		try {
 			const targetId = templateId ?? profile.id;
-			await backend.apiState.put(authProfile.data, `admin/profiles/${targetId}`, profile);
-			toast.success(isEditing ? "Profile template updated" : "Profile template created");
+			await backend.apiState.put(
+				authProfile.data,
+				`admin/profiles/${targetId}`,
+				profile,
+			);
+			toast.success(
+				isEditing ? "Profile template updated" : "Profile template created",
+			);
 			if (isEditing) {
 				router.push("/admin/user/edit");
 				return;
@@ -209,7 +222,14 @@ export default function AddProfilePage() {
 			const message = error instanceof Error ? error.message : "Unknown error";
 			toast.error(`Failed to save template: ${message}`);
 		}
-	}, [authProfile.data, backend.apiState, isEditing, profile, router, templateId]);
+	}, [
+		authProfile.data,
+		backend.apiState,
+		isEditing,
+		profile,
+		router,
+		templateId,
+	]);
 
 	const handleImageUpload = useCallback(
 		async (
@@ -262,7 +282,8 @@ export default function AddProfilePage() {
 					{isEditing ? "Edit Profile Template" : "Create New Profile Template"}
 				</h1>
 				<p className="text-muted-foreground">
-					Configure reusable profile templates, including default bits, hubs, and metadata.
+					Configure reusable profile templates, including default bits, hubs,
+					and metadata.
 				</p>
 			</div>
 
@@ -674,7 +695,10 @@ export default function AddProfilePage() {
 
 			{/* Actions */}
 			<div className="flex justify-end gap-2">
-				<Button variant="outline" onClick={() => router.push("/admin/user/edit")}>
+				<Button
+					variant="outline"
+					onClick={() => router.push("/admin/user/edit")}
+				>
 					Cancel
 				</Button>
 				<Button onClick={handleSave} className="flex items-center gap-2">

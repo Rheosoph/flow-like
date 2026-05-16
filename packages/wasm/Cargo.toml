@@ -45,7 +45,7 @@ parking_lot = "0.12"
 dashmap.workspace = true
 
 # HTTP Client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest.workspace = true
 
 # WebSocket Client
 tokio-tungstenite.workspace = true

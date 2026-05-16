@@ -48,4 +48,7 @@ export class EmptyBitState implements IBitState {
 	getProfileBits(): Promise<IBit[]> {
 		throw new Error("Method not implemented.");
 	}
+	repairTtsBitAssets(bit: IBit, force?: boolean): Promise<IBitPack> {
+		throw new Error("Method not implemented.");
+	}
 }

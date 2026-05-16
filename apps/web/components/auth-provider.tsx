@@ -21,6 +21,7 @@ import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
 const PUBLIC_PATHS = [
+	"/callback",
 	"/thirdparty/callback",
 	"/store",
 	"/store/explore",
@@ -230,10 +231,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 					break;
 				} catch (error) {
 					if (attempt === MAX_RETRIES) {
-						console.error(
-							"Failed to ensure user exists after retries:",
-							error,
-						);
+						console.error("Failed to ensure user exists after retries:", error);
 					} else {
 						const delay = BASE_DELAY * 2 ** attempt;
 						await new Promise((r) => setTimeout(r, delay));

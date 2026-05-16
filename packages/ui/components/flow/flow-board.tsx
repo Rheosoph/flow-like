@@ -98,17 +98,17 @@ import {
 } from "../../components/ui/resizable";
 import { useCommandExecution } from "../../hooks/use-command-execution";
 import { useCopilotCommands } from "../../hooks/use-copilot-commands";
+import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import { useFlowPanels } from "../../hooks/use-flow-panels";
+import { useFollowMode } from "../../hooks/use-follow-mode";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useKeyboardShortcuts } from "../../hooks/use-keyboard-shortcuts";
 import { useLayerNavigation } from "../../hooks/use-layer-navigation";
 import { useMediaUpload } from "../../hooks/use-media-upload";
 import { usePeerUserInfo } from "../../hooks/use-peer-users";
+import { useRealtimeChat } from "../../hooks/use-realtime-chat";
 import { useRealtimeCollaboration } from "../../hooks/use-realtime-collaboration";
 import { useViewportManager } from "../../hooks/use-viewport-manager";
-import { useFollowMode } from "../../hooks/use-follow-mode";
-import { useRealtimeChat } from "../../hooks/use-realtime-chat";
-import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import {
 	type IGenericCommand,
 	type ILogMetadata,
@@ -117,16 +117,22 @@ import {
 	connectPinsCommand,
 	disconnectPinsCommand,
 	moveNodeCommand,
+	removeCommentCommand,
+	removeLayerCommand,
+	removeNodeCommand,
 	updateNodeCommand,
 	upsertCommentCommand,
 	upsertVariableCommand,
 } from "../../lib";
+import { computeFlowLayout } from "../../lib/flow-auto-layout";
 import {
 	handleConnection,
 	handleEdgesChange,
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
+	getFunctionReferenceNodeIdsFromEdge,
+	removeFunctionReferenceCommandForEdge,
 } from "../../lib/flow-board-helpers";
 import {
 	handleCopy,
@@ -155,30 +161,26 @@ import {
 	type RuntimeVariableValue,
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
+import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
 import { BoardMeta } from "./board-meta";
+import { CallFunctionNode } from "./call-function-node";
+import { FlowChat } from "./flow-chat";
 import { FlowCopilot, type Suggestion } from "./flow-copilot";
 import { FlowCursors } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
-import { FlowPresenceBar } from "./flow-presence-bar";
-import { FlowChat } from "./flow-chat";
 import { PinEditModal } from "./flow-pin/edit-modal";
+import { FlowPresenceBar } from "./flow-presence-bar";
 import { FlowRuns } from "./flow-runs";
 import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
-import { CallFunctionNode } from "./call-function-node";
 import { LayerNode } from "./layer-node";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
-import {
-	AutoLayoutDialog,
-	type LayoutStyle,
-} from "./auto-layout-dialog";
-import { computeFlowLayout } from "../../lib/flow-auto-layout";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
@@ -281,6 +283,7 @@ export function FlowBoard({
 		payload?: object;
 		isRemote: boolean;
 	} | null>(null);
+	const deleteSelectionInFlightRef = useRef(false);
 	const [existingRuntimeVars, setExistingRuntimeVars] = useState<
 		Map<string, RuntimeVariableValue>
 	>(new Map());
@@ -405,7 +408,13 @@ export function FlowBoard({
 			left,
 			right,
 		});
-	}, [currentMetadata, currentLayer, parentRegister.boardParents, boardId, updateHeader]);
+	}, [
+		currentMetadata,
+		currentLayer,
+		parentRegister.boardParents,
+		boardId,
+		updateHeader,
+	]);
 
 	const pinToNode = useCallback(
 		(pinId: string) => {
@@ -446,28 +455,31 @@ export function FlowBoard({
 	});
 
 	// Realtime collaboration
-	const { awareness, connectionStatus, peerStates, reconnect, broadcastActiveNode } =
-		useRealtimeCollaboration({
-			appId,
-			boardId,
-			board,
-			version,
-			backend,
-			sub,
-			hub,
-			mousePositionRef,
-			layerPath,
-			screenToFlowPosition,
-			commandAwarenessRef,
-			setNodes,
-		});
+	const {
+		awareness,
+		connectionStatus,
+		peerStates,
+		reconnect,
+		broadcastActiveNode,
+	} = useRealtimeCollaboration({
+		appId,
+		boardId,
+		board,
+		version,
+		backend,
+		sub,
+		hub,
+		mousePositionRef,
+		layerPath,
+		screenToFlowPosition,
+		commandAwarenessRef,
+		setNodes,
+	});
 
 	// Cache peer user info to avoid repeated API calls
 	const peerSubs = useMemo(
 		() => [
-			...new Set(
-				peerStates.map((p) => p.sub).filter((s): s is string => !!s),
-			),
+			...new Set(peerStates.map((p) => p.sub).filter((s): s is string => !!s)),
 		],
 		[peerStates],
 	);
@@ -531,10 +543,7 @@ export function FlowBoard({
 			// Snap to peer's viewport
 			const vp = state?.viewport;
 			if (vp) {
-				setViewport(
-					{ x: vp.x, y: vp.y, zoom: vp.zoom },
-					{ duration: 500 },
-				);
+				setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: 500 });
 			} else if (state?.cursor) {
 				// Fall back to centering on peer's cursor
 				const cursor = state.cursor;
@@ -551,7 +560,14 @@ export function FlowBoard({
 				);
 			}
 		},
-		[awareness, layerPath, setViewport, getViewport, setLayerPath, setCurrentLayer],
+		[
+			awareness,
+			layerPath,
+			setViewport,
+			getViewport,
+			setLayerPath,
+			setCurrentLayer,
+		],
 	);
 
 	// Jump to a specific layer path
@@ -976,6 +992,26 @@ export function FlowBoard({
 					return;
 				}
 
+				const rpaPermissionError = error as Error & {
+					isRpaPermissionError?: boolean;
+					permissions?: unknown;
+				};
+				if (rpaPermissionError.isRpaPermissionError) {
+					window.dispatchEvent(
+						new CustomEvent("flow:rpa-permissions-required", {
+							detail: {
+								appId,
+								boardId,
+								nodeId: node.id,
+								payload,
+								permissions: rpaPermissionError.permissions,
+								skipConsentCheck,
+							},
+						}),
+					);
+					return;
+				}
+
 				const errorMessage =
 					error instanceof Error ? error.message : String(error);
 				toastError(
@@ -1245,6 +1281,46 @@ export function FlowBoard({
 		};
 	}, [appId, boardId, nodes, executeBoard]);
 
+	useEffect(() => {
+		const handleRpaPermissionsRetry = (event: Event) => {
+			const retryEvent = event as CustomEvent<{
+				appId: string;
+				boardId: string;
+				nodeId: string;
+				payload?: object;
+				skipConsentCheck?: boolean;
+			}>;
+
+			const {
+				appId: eventAppId,
+				boardId: eventBoardId,
+				nodeId,
+				payload,
+				skipConsentCheck,
+			} = retryEvent.detail;
+
+			if (eventAppId !== appId || eventBoardId !== boardId) return;
+
+			const node = nodes.find((n) => n.id === nodeId);
+			if (node?.data?.node) {
+				executeBoard(node.data.node as INode, payload, skipConsentCheck);
+			} else {
+				console.warn("[FlowBoard] Node not found for RPA retry:", nodeId);
+			}
+		};
+
+		window.addEventListener(
+			"flow:rpa-permissions-retry",
+			handleRpaPermissionsRetry,
+		);
+		return () => {
+			window.removeEventListener(
+				"flow:rpa-permissions-retry",
+				handleRpaPermissionsRetry,
+			);
+		};
+	}, [appId, boardId, nodes, executeBoard]);
+
 	// Listen for external refetch requests (e.g., after recording insertion)
 	useEffect(() => {
 		const handleRefetchBoard = () => {
@@ -1282,6 +1358,7 @@ export function FlowBoard({
 				boardId,
 				executeCommand,
 				currentLayer,
+				catalog.data ?? undefined,
 			);
 		},
 		[
@@ -1290,6 +1367,7 @@ export function FlowBoard({
 			currentLayer,
 			version,
 			handleMediaPaste,
+			catalog.data,
 		],
 	);
 
@@ -1409,6 +1487,138 @@ export function FlowBoard({
 		],
 	);
 
+	const deleteSelectedElements = useCallback(async () => {
+		if (
+			deleteSelectionInFlightRef.current ||
+			typeof version !== "undefined" ||
+			!board.data
+		) {
+			return;
+		}
+
+		const selectedNodeIds = new Set(
+			getNodes()
+				.filter((node) => node.selected)
+				.map((node) => node.id),
+		);
+		const selectedEdgeIds = new Set(
+			edges.filter((edge) => edge.selected).map((edge) => edge.id),
+		);
+
+		if (selectedNodeIds.size === 0 && selectedEdgeIds.size === 0) {
+			return;
+		}
+
+		const isHandleOwnedBySelectedNode = (handleId: string | undefined) => {
+			if (!handleId) {
+				return false;
+			}
+
+			if (handleId.startsWith("ref_in_")) {
+				return selectedNodeIds.has(handleId.replace("ref_in_", ""));
+			}
+
+			if (handleId.startsWith("ref_out_")) {
+				return selectedNodeIds.has(handleId.replace("ref_out_", ""));
+			}
+
+			const [, pinOwner] = pinCache.get(handleId) || [];
+			return pinOwner ? selectedNodeIds.has(pinOwner.id) : false;
+		};
+
+		const commands: IGenericCommand[] = [];
+
+		for (const node of getNodes().filter(
+			(currentNode) => currentNode.selected,
+		)) {
+			if (node.data?.node) {
+				commands.push(
+					removeNodeCommand({
+						node: node.data.node as INode,
+						connected_nodes: [],
+					}),
+				);
+				continue;
+			}
+
+			if (node.data?.comment) {
+				commands.push(
+					removeCommentCommand({
+						comment: node.data.comment as IComment,
+					}),
+				);
+				continue;
+			}
+
+			if (node.type === "layerNode" && node.data?.layer) {
+				commands.push(
+					removeLayerCommand({
+						child_layers: [],
+						layer: node.data.layer as ILayer,
+						layer_nodes: [],
+						layers: [],
+						nodes: [],
+						preserve_nodes: false,
+					}),
+				);
+			}
+		}
+
+		for (const edge of edges.filter((currentEdge) => currentEdge.selected)) {
+			const functionReferenceNodeIds = getFunctionReferenceNodeIdsFromEdge(edge);
+			if (functionReferenceNodeIds) {
+				if (
+					selectedNodeIds.has(functionReferenceNodeIds.refOutNodeId) ||
+					selectedNodeIds.has(functionReferenceNodeIds.refInNodeId)
+				) {
+					continue;
+				}
+
+				const command = removeFunctionReferenceCommandForEdge({
+					edge,
+					boardNodes: board.data.nodes,
+				});
+				if (command) commands.push(command);
+				continue;
+			}
+
+			if (
+				isHandleOwnedBySelectedNode(edge.sourceHandle) ||
+				isHandleOwnedBySelectedNode(edge.targetHandle)
+			) {
+				continue;
+			}
+
+			const [fromPin, fromNode] = pinCache.get(edge.sourceHandle ?? "") || [];
+			const [toPin, toNode] = pinCache.get(edge.targetHandle ?? "") || [];
+
+			if (!fromPin || !fromNode || !toPin || !toNode) {
+				continue;
+			}
+
+			commands.push(
+				disconnectPinsCommand({
+					from_node: fromNode.id,
+					from_pin: fromPin.id,
+					to_node: toNode.id,
+					to_pin: toPin.id,
+				}),
+			);
+		}
+
+		if (commands.length === 0) {
+			return;
+		}
+
+		deleteSelectionInFlightRef.current = true;
+		try {
+			selected.current.clear();
+			await executeCommands(commands);
+		} finally {
+			deleteSelectionInFlightRef.current = false;
+		}
+	}, [board.data, edges, executeCommands, getNodes, pinCache, version]);
+
 	useKeyboardShortcuts({
 		board,
 		catalog,
@@ -1416,6 +1626,7 @@ export function FlowBoard({
 		appId,
 		boardId,
 		mousePositionRef,
+		onDeleteSelection: deleteSelectedElements,
 		placeNode,
 		undo,
 		redo,
@@ -1424,12 +1635,9 @@ export function FlowBoard({
 	});
 
 	useEffect(() => {
-		const handleRemoteBoardApplied = async (
-			event: Event,
-		): Promise<void> => {
-			const detail = (
-				event as CustomEvent<{ appId: string; boardId: string }>
-			).detail;
+		const handleRemoteBoardApplied = async (event: Event): Promise<void> => {
+			const detail = (event as CustomEvent<{ appId: string; boardId: string }>)
+				.detail;
 
 			if (!detail || detail.appId !== appId || detail.boardId !== boardId) {
 				return;
@@ -1602,7 +1810,10 @@ export function FlowBoard({
 
 	const handleFilterLogs = useCallback((nodeId: string) => {
 		setLogNodeIdFilter(nodeId);
-		if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+		if (
+			typeof window !== "undefined" &&
+			window.matchMedia("(max-width: 767px)").matches
+		) {
 			setLogsOpen(true);
 			return;
 		}
@@ -1615,7 +1826,8 @@ export function FlowBoard({
 	handleFilterLogsRef.current = handleFilterLogs;
 
 	// Extract stable primitives from complex objects to avoid re-parsing on unrelated changes
-	const connectionMode = currentProfile.data?.settings?.connection_mode ?? "default";
+	const connectionMode =
+		currentProfile.data?.settings?.connection_mode ?? "default";
 	const isOffline = app.data?.visibility === IAppVisibility.Offline;
 	const hasRemoteExecution = !!backend.boardState.executeBoardRemote;
 
@@ -1628,8 +1840,10 @@ export function FlowBoard({
 			appId,
 			handleCopyCB,
 			(...args: Parameters<typeof pushLayer>) => pushLayerRef.current(...args),
-			(...args: Parameters<typeof executeBoard>) => executeBoardRef.current(...args),
-			(...args: Parameters<typeof executeCommand>) => executeCommandRef.current(...args),
+			(...args: Parameters<typeof executeBoard>) =>
+				executeBoardRef.current(...args),
+			(...args: Parameters<typeof executeCommand>) =>
+				executeCommandRef.current(...args),
 			selected.current,
 			connectionMode,
 			nodes,
@@ -1643,7 +1857,8 @@ export function FlowBoard({
 			hasRemoteExecution
 				? {
 						isOffline,
-						onRemoteExecute: (node: INode, payload?: object) => executeBoardRemoteRef.current(node, payload),
+						onRemoteExecute: (node: INode, payload?: object) =>
+							executeBoardRemoteRef.current(node, payload),
 					}
 				: undefined,
 			catalogLookup,
@@ -1668,7 +1883,8 @@ export function FlowBoard({
 		const prev = remoteExecRef.current;
 		const next = remoteExecutingNodeIds;
 		// Check if anything actually changed
-		if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
+		if (prev.size === next.size && [...next].every((id) => prev.has(id)))
+			return;
 		remoteExecRef.current = next;
 
 		setNodes((nds: any) => {
@@ -2168,6 +2384,17 @@ export function FlowBoard({
 
 			if (!edgeReconnectSuccessful.current) {
 				const { source, target, sourceHandle, targetHandle } = edge;
+				const functionReferenceCommand = removeFunctionReferenceCommandForEdge({
+					edge: { id: edge.id, source, sourceHandle, target, targetHandle },
+					boardNodes: board.data?.nodes,
+				});
+				if (functionReferenceCommand) {
+					await executeCommand(functionReferenceCommand);
+					setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+					edgeReconnectSuccessful.current = true;
+					return;
+				}
+
 				const from_node = pinToNode(sourceHandle);
 				const to_node = pinToNode(targetHandle);
 				if (!from_node || !to_node) return;
@@ -2183,7 +2410,7 @@ export function FlowBoard({
 
 			edgeReconnectSuccessful.current = true;
 		},
-		[setEdges, pinToNode, version, executeCommand],
+		[setEdges, pinToNode, version, executeCommand, board.data?.nodes],
 	);
 
 	const onContextMenuCB = useCallback((event: any) => {
@@ -2334,73 +2561,83 @@ export function FlowBoard({
 
 	const [autoLayoutDialogOpen, setAutoLayoutDialogOpen] = useState(false);
 
-	const autoLayout = useCallback(async (style: LayoutStyle = "compact") => {
-		if (typeof version !== "undefined") {
-			toastError("Cannot modify old version", <XIcon />);
-			return;
-		}
-		const boardData = board.data;
-		if (!boardData) return;
-
-		const layerNodes: INode[] = [];
-		for (const node of Object.values(boardData.nodes)) {
-			const nodeLayer = (node.layer ?? "") === "" ? undefined : node.layer;
-			if (nodeLayer === currentLayer) {
-				layerNodes.push(node);
+	const autoLayout = useCallback(
+		async (style: LayoutStyle = "compact") => {
+			if (typeof version !== "undefined") {
+				toastError("Cannot modify old version", <XIcon />);
+				return;
 			}
-		}
+			const boardData = board.data;
+			if (!boardData) return;
 
-		const layerEntities: { id: string; coordinates: number[] }[] = [];
-		if (boardData.layers) {
-			for (const layer of Object.values(boardData.layers)) {
-				if (layer.type === "Function" && layer.id !== currentLayer) continue;
-				const parentLayer = (layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
-				if (parentLayer === currentLayer && layer.id !== currentLayer) {
-					layerEntities.push({ id: layer.id, coordinates: [...layer.coordinates] });
+			const layerNodes: INode[] = [];
+			for (const node of Object.values(boardData.nodes)) {
+				const nodeLayer = (node.layer ?? "") === "" ? undefined : node.layer;
+				if (nodeLayer === currentLayer) {
+					layerNodes.push(node);
 				}
 			}
-		}
 
-		if (layerNodes.length === 0 && layerEntities.length === 0) return;
+			const layerEntities: { id: string; coordinates: number[] }[] = [];
+			if (boardData.layers) {
+				for (const layer of Object.values(boardData.layers)) {
+					if (layer.type === "Function" && layer.id !== currentLayer) continue;
+					const parentLayer =
+						(layer.parent_id ?? "") === "" ? undefined : layer.parent_id;
+					if (parentLayer === currentLayer && layer.id !== currentLayer) {
+						layerEntities.push({
+							id: layer.id,
+							coordinates: [...layer.coordinates],
+						});
+					}
+				}
+			}
 
-		const newPositions = computeFlowLayout({
-			layerNodes,
-			layerEntities,
-			boardLayers: boardData.layers,
-			currentLayer,
-		}, style);
+			if (layerNodes.length === 0 && layerEntities.length === 0) return;
 
-		const commands: IGenericCommand[] = [];
-		for (const node of layerNodes) {
-			const pos = newPositions.get(node.id);
-			if (!pos) continue;
-			commands.push(
-				moveNodeCommand({
-					node_id: node.id,
-					from_coordinates: node.coordinates ?? [0, 0, 0],
-					to_coordinates: [pos[0], pos[1], 0],
-					current_layer: currentLayer,
-				}),
+			const newPositions = computeFlowLayout(
+				{
+					layerNodes,
+					layerEntities,
+					boardLayers: boardData.layers,
+					currentLayer,
+				},
+				style,
 			);
-		}
-		for (const entity of layerEntities) {
-			const pos = newPositions.get(entity.id);
-			if (!pos) continue;
-			commands.push(
-				moveNodeCommand({
-					node_id: entity.id,
-					from_coordinates: entity.coordinates,
-					to_coordinates: [pos[0], pos[1], 0],
-					current_layer: currentLayer,
-				}),
-			);
-		}
 
-		if (commands.length === 0) return;
-		await executeCommands(commands);
+			const commands: IGenericCommand[] = [];
+			for (const node of layerNodes) {
+				const pos = newPositions.get(node.id);
+				if (!pos) continue;
+				commands.push(
+					moveNodeCommand({
+						node_id: node.id,
+						from_coordinates: node.coordinates ?? [0, 0, 0],
+						to_coordinates: [pos[0], pos[1], 0],
+						current_layer: currentLayer,
+					}),
+				);
+			}
+			for (const entity of layerEntities) {
+				const pos = newPositions.get(entity.id);
+				if (!pos) continue;
+				commands.push(
+					moveNodeCommand({
+						node_id: entity.id,
+						from_coordinates: entity.coordinates,
+						to_coordinates: [pos[0], pos[1], 0],
+						current_layer: currentLayer,
+					}),
+				);
+			}
 
-		setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
-	}, [board.data, currentLayer, executeCommands, fitView, version]);
+			if (commands.length === 0) return;
+			await executeCommands(commands);
+
+			setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
+		},
+		[board.data, currentLayer, executeCommands, fitView, version],
+	);
 
 	const [ghostNodes, setGhostNodes] = useState<
 		{
@@ -2689,7 +2926,13 @@ export function FlowBoard({
 					ref={varPanelRef}
 				>
 					{board.data && (
-						<VariablesMenu board={board.data} executeCommand={executeCommand} currentLayerId={currentLayer} pushLayer={pushLayer} boardRef={boardRef} />
+						<VariablesMenu
+							board={board.data}
+							executeCommand={executeCommand}
+							currentLayerId={currentLayer}
+							pushLayer={pushLayer}
+							boardRef={boardRef}
+						/>
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
@@ -2793,6 +3036,7 @@ export function FlowBoard({
 									)}
 									<ReactFlow
 										suppressHydrationWarning
+										deleteKeyCode={null}
 										onContextMenu={onContextMenuCB}
 										nodesDraggable={typeof version === "undefined"}
 										nodesConnectable={typeof version === "undefined"}
@@ -2878,7 +3122,8 @@ export function FlowBoard({
 											<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
 												<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
 												<span className="text-sm font-medium">
-													{board.data?.layers?.[active.data.current.layerId]?.name ?? "Function"}
+													{board.data?.layers?.[active.data.current.layerId]
+														?.name ?? "Function"}
 												</span>
 											</div>
 										) : (active?.data?.current as IVariable)?.id ? (

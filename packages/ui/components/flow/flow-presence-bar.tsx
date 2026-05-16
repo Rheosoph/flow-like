@@ -182,9 +182,7 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 												Following — click to stop
 											</span>
 										) : (
-											<span className="text-foreground">
-												Click to follow
-											</span>
+											<span className="text-foreground">Click to follow</span>
 										)}
 									</div>
 								</TooltipContent>

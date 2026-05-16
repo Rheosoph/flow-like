@@ -5,7 +5,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
-use std::sync::Arc;
 
 /// Gets a value from page-local state by key.
 ///

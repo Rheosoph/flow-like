@@ -31,6 +31,9 @@ impl ToProto<flow_like_types::proto::App> for App {
             page_ids: self.page_ids.clone(),
             route_mappings: std::collections::HashMap::new(),
             packages: self.packages.clone(),
+            allow_forking: Some(self.allow_forking),
+            forked_from: self.forked_from.clone(),
+            forked_at: self.forked_at.map(Timestamp::from),
         }
     }
 }
@@ -69,6 +72,9 @@ impl FromProto<flow_like_types::proto::App> for App {
             widget_ids: proto.widget_ids,
             page_ids: proto.page_ids,
             packages: proto.packages,
+            allow_forking: proto.allow_forking.unwrap_or(false),
+            forked_from: proto.forked_from,
+            forked_at: proto.forked_at.and_then(|t| SystemTime::try_from(t).ok()),
             app_state: None,
             frontend: None,
         }

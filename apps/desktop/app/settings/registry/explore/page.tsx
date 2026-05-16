@@ -69,7 +69,13 @@ function PackageItem({
 	onUninstall: (id: string) => void;
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
-	compileStatus?: "idle" | "downloading" | "compiling" | "ready" | "error" | "stale";
+	compileStatus?:
+		| "idle"
+		| "downloading"
+		| "compiling"
+		| "ready"
+		| "error"
+		| "stale";
 }) {
 	return (
 		<div
@@ -137,7 +143,10 @@ function PackageItem({
 							size="sm"
 							variant="ghost"
 							className="h-7 w-7 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 p-0"
-							onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
+							onClick={(e) => {
+								e.stopPropagation();
+								onUninstall(pkg.id);
+							}}
 							disabled={isLoading}
 						>
 							{isLoading ? (
@@ -152,7 +161,10 @@ function PackageItem({
 						size="sm"
 						variant="ghost"
 						className="h-7 gap-1.5 rounded-full text-xs text-muted-foreground/70 hover:text-foreground/80 hover:bg-muted/30 px-3"
-						onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
+						onClick={(e) => {
+							e.stopPropagation();
+							onInstall(pkg.id);
+						}}
 						disabled={isLoading}
 					>
 						{isLoading ? (
@@ -199,7 +211,9 @@ export default function ExplorePackagesPage() {
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [sortBy, setSortBy] = useState<SortOption>("relevance");
-	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+		null,
+	);
 	const [searchResults, setSearchResults] = useState<SearchResults | null>(
 		null,
 	);
@@ -246,7 +260,13 @@ export default function ExplorePackagesPage() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [backend?.registryState, isInitialized, searchQuery, sortBy, isAuthenticated]);
+	}, [
+		backend?.registryState,
+		isInitialized,
+		searchQuery,
+		sortBy,
+		isAuthenticated,
+	]);
 
 	const fetchInstalled = useCallback(async () => {
 		if (!backend?.registryState || !isInitialized) return;
@@ -328,8 +348,12 @@ export default function ExplorePackagesPage() {
 					toast.success("Package uninstalled");
 					fetchInstalled();
 				}}
-				onInstallError={(error) => toast.error(`Failed to install: ${getErrorMessage(error)}`)}
-				onUninstallError={(error) => toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)}
+				onInstallError={(error) =>
+					toast.error(`Failed to install: ${getErrorMessage(error)}`)
+				}
+				onUninstallError={(error) =>
+					toast.error(`Failed to uninstall: ${getErrorMessage(error)}`)
+				}
 				onDeleteSuccess={() => {
 					setSelectedPackageId(null);
 					fetchInstalled();

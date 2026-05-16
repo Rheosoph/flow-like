@@ -16,10 +16,6 @@ use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
-/// Cached env var for Cloudflare account ID (LazyLock per requirement)
-static CF_ACCOUNT_ID: LazyLock<Option<String>> =
-    LazyLock::new(|| std::env::var("CF_ACCOUNT_ID").ok());
-
 /// Bit cache entry with expiration
 struct CachedBit {
     provider: EmbeddingModelProvider,
@@ -118,18 +114,56 @@ async fn fetch_embedding_provider(
         .try_to_embedding()
         .ok_or_else(|| anyhow!("Bit is not an embedding model"))?;
 
-    let remote_config = embedding_provider
-        .remote
-        .clone()
-        .ok_or_else(|| anyhow!("Bit does not have remote execution config"))?;
+    let mut remote_config = match embedding_provider.remote.clone() {
+        Some(config) => config,
+        None if is_internal_hosted_embedding_provider(
+            &embedding_provider.provider.provider_name,
+        ) =>
+        {
+            RemoteExecutionConfig {
+                implementation: Some(RemoteEmbeddingProvider::Internal),
+                model_id: embedding_provider.provider.model_id.clone(),
+                ..Default::default()
+            }
+        }
+        None => {
+            return Err(ApiError::bad_request(
+                "Bit does not have remote execution config",
+            ));
+        }
+    };
 
     if remote_config.implementation.is_none() {
+        remote_config.implementation = Some(RemoteEmbeddingProvider::Internal);
+    }
+
+    if remote_config
+        .model_id
+        .as_deref()
+        .is_none_or(|model_id| model_id.trim().is_empty())
+    {
+        remote_config.model_id = embedding_provider.provider.model_id.clone();
+    }
+
+    if remote_config
+        .model_id
+        .as_deref()
+        .is_none_or(|model_id| model_id.trim().is_empty())
+    {
         return Err(ApiError::bad_request(
-            "Bit does not have a remote implementation configured",
+            "Bit does not have model_id configured for remote execution",
         ));
     }
 
     Ok((embedding_provider, remote_config))
+}
+
+fn is_internal_hosted_embedding_provider(provider_name: &str) -> bool {
+    let normalized = provider_name.trim().to_ascii_lowercase();
+    normalized == "premium"
+        || normalized == "hosted"
+        || normalized == "internal"
+        || normalized.starts_with("hosted:")
 }
 
 async fn enforce_embedding_tier(
@@ -168,12 +202,6 @@ pub async fn embed_text(
     // 3. Build upstream request based on implementation
     let start = Instant::now();
     let embeddings = match remote_config.implementation {
-        Some(RemoteEmbeddingProvider::HuggingfaceEndpoint) => {
-            call_huggingface(&state, &embedding_provider, &remote_config, &payload).await?
-        }
-        Some(RemoteEmbeddingProvider::CloudflareWorkersAI) => {
-            call_cloudflare(&state, &embedding_provider, &remote_config, &payload).await?
-        }
         Some(RemoteEmbeddingProvider::Internal) => {
             call_internal(&state, &embedding_provider, &remote_config, &payload).await?
         }
@@ -265,169 +293,9 @@ async fn track_embedding_usage(
     Ok(())
 }
 
-async fn call_huggingface(
-    state: &AppState,
-    provider: &EmbeddingModelProvider,
-    config: &RemoteExecutionConfig,
-    payload: &EmbedRequest,
-) -> Result<Vec<Vec<f32>>, ApiError> {
-    // Use secret_name from bit config to look up the API key via SecretStore
-    let secret_name = config
-        .secret_name
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = state
-        .secrets
-        .get_secret_string(&SecretRef::new(secret_name.as_str()))
-        .await
-        .map(|s| s.expose_secret().to_string())
-        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
-    let endpoint = config
-        .endpoint
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("Endpoint not configured for Huggingface"))?;
-
-    // Apply prefix based on embed_type
-    let prefixed_input: Vec<String> = payload
-        .input
-        .iter()
-        .map(|text| match payload.embed_type {
-            EmbedType::Query => format!("{}{}", provider.prefix.query, text),
-            EmbedType::Document => format!("{}{}", provider.prefix.paragraph, text),
-        })
-        .collect();
-
-    let client = reqwest::Client::new();
-    let body = serde_json::json!({ "inputs": prefixed_input, "parameters": {} });
-
-    // Retry with exponential backoff for 503 (scale-to-zero cold start)
-    const MAX_RETRIES: u32 = 6;
-    const INITIAL_BACKOFF_MS: u64 = 2000;
-
-    let mut attempt = 0;
-    loop {
-        let response = client
-            .post(endpoint)
-            .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to call Huggingface: {}", e)))?;
-
-        let status = response.status();
-
-        if status.is_success() {
-            let embeddings: Vec<Vec<f32>> = response.json().await.map_err(|e| {
-                ApiError::internal(format!("Failed to parse Huggingface response: {}", e))
-            })?;
-            return Ok(embeddings);
-        }
-
-        // Handle 503 Service Unavailable (endpoint scaling from zero)
-        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE && attempt < MAX_RETRIES {
-            attempt += 1;
-            let backoff_ms = INITIAL_BACKOFF_MS * (1 << (attempt - 1)); // 2s, 4s, 8s, 16s, 32s, 64s
-            tracing::info!(
-                attempt = attempt,
-                backoff_ms = backoff_ms,
-                "Huggingface endpoint cold start, backing off"
-            );
-            flow_like_types::tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            continue;
-        }
-
-        let error = response.text().await.unwrap_or_default();
-        tracing::error!(status = %status, error = %error, "Huggingface upstream error");
-        return Err(ApiError::internal(format!(
-            "Huggingface error ({}): {}",
-            status, error
-        )));
-    }
-}
-
-async fn call_cloudflare(
-    state: &AppState,
-    provider: &EmbeddingModelProvider,
-    config: &RemoteExecutionConfig,
-    payload: &EmbedRequest,
-) -> Result<Vec<Vec<f32>>, ApiError> {
-    let account_id = CF_ACCOUNT_ID
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("CF_ACCOUNT_ID not configured"))?;
-
-    // Use secret_name from bit config to look up the API key via SecretStore
-    let secret_name = config
-        .secret_name
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("secret_name not configured in bit"))?;
-    let api_key = state
-        .secrets
-        .get_secret_string(&SecretRef::new(secret_name.as_str()))
-        .await
-        .map(|s| s.expose_secret().to_string())
-        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))?;
-
-    let endpoint = config
-        .endpoint
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("Endpoint not configured for Cloudflare"))?
-        .replace("{ACCOUNT_ID}", account_id);
-
-    // Apply prefix
-    let prefixed_input: Vec<String> = payload
-        .input
-        .iter()
-        .map(|text| match payload.embed_type {
-            EmbedType::Query => format!("{}{}", provider.prefix.query, text),
-            EmbedType::Document => format!("{}{}", provider.prefix.paragraph, text),
-        })
-        .collect();
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&serde_json::json!({ "text": prefixed_input }))
-        .send()
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to call Cloudflare: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error = response.text().await.unwrap_or_default();
-        tracing::error!(status = %status, error = %error, "Cloudflare upstream error");
-        return Err(ApiError::internal(format!(
-            "Cloudflare error ({}): {}",
-            status, error
-        )));
-    }
-
-    // Cloudflare Workers AI response format:
-    // { "result": { "shape": [n, dim], "data": [[...], [...]] }, "success": true }
-    #[derive(Deserialize)]
-    struct CfResponse {
-        result: CfResult,
-        #[allow(dead_code)]
-        success: Option<bool>,
-    }
-    #[derive(Deserialize)]
-    struct CfResult {
-        #[allow(dead_code)]
-        shape: Option<Vec<usize>>,
-        data: Vec<Vec<f32>>,
-    }
-
-    let cf_response: CfResponse = response
-        .json()
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to parse Cloudflare response: {}", e)))?;
-    Ok(cf_response.result.data)
-}
-
-/// Secret name used for the internal embedding gateway
-const INTERNAL_EMBEDDING_SECRET: &str = "INTERNAL_EMBEDDING_SECRET";
+/// Secret names used for the shared internal embedding gateway.
+const INTERNAL_EMBEDDING_ENDPOINT_SECRET: &str = "INTERNAL_EMBEDDING_ENDPOINT";
+const INTERNAL_EMBEDDING_API_KEY_SECRET: &str = "INTERNAL_EMBEDDING_SECRET";
 
 /// Maximum batch size accepted by the internal gateway
 const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
@@ -435,30 +303,38 @@ const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
 /// Maximum character length per text item
 const INTERNAL_MAX_TEXT_LEN: usize = 100_000;
 
+/// Internal deployments can take up to 80s to cold-start.
+const INTERNAL_REQUEST_TIMEOUT_SECS: u64 = 120;
+const INTERNAL_MAX_RETRIES: u32 = 6;
+const INTERNAL_INITIAL_BACKOFF_MS: u64 = 2000;
+
+async fn get_secret_string(state: &AppState, secret_name: &str) -> Result<String, ApiError> {
+    state
+        .secrets
+        .get_secret_string(&SecretRef::new(secret_name))
+        .await
+        .map(|s| s.expose_secret().to_string())
+        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))
+}
+
 async fn call_internal(
     state: &AppState,
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
 ) -> Result<Vec<Vec<f32>>, ApiError> {
-    let endpoint = config
-        .endpoint
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("Endpoint not configured for Internal"))?;
-
+    let endpoint = get_secret_string(state, INTERNAL_EMBEDDING_ENDPOINT_SECRET).await?;
     let model_id = config
         .model_id
-        .as_ref()
+        .as_deref()
+        .filter(|model_id| !model_id.trim().is_empty())
         .ok_or_else(|| ApiError::internal("model_id not configured for Internal"))?;
-
-    let api_key = state
-        .secrets
-        .get_secret_string(&SecretRef::new(INTERNAL_EMBEDDING_SECRET))
-        .await
-        .map(|s| s.expose_secret().to_string())
-        .map_err(|_| {
-            ApiError::internal(format!("Secret '{}' not found", INTERNAL_EMBEDDING_SECRET))
-        })?;
+    let api_key_secret = config
+        .secret_name
+        .as_deref()
+        .filter(|secret_name| !secret_name.trim().is_empty())
+        .unwrap_or(INTERNAL_EMBEDDING_API_KEY_SECRET);
+    let api_key = get_secret_string(state, api_key_secret).await?;
 
     // Apply prefix based on embed_type
     let prefixed_input: Vec<String> = payload
@@ -490,27 +366,50 @@ async fn call_internal(
     }
 
     let url = format!("{}/v1/embeddings", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(INTERNAL_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| ApiError::internal(format!("Failed to create HTTP client: {}", e)))?;
     let body = serde_json::json!({
         "model": model_id,
         "input": prefixed_input,
     });
 
-    // Retry with exponential backoff for transient errors (429, 503, 5xx)
-    // Max cold start is ~75s, so total backoff budget: 2+4+8+16+32+64 = 126s
-    const MAX_RETRIES: u32 = 6;
-    const INITIAL_BACKOFF_MS: u64 = 2000;
+    // Retry with exponential backoff for transient errors. The request timeout
+    // is deliberately above the 80s cold-start ceiling, while the backoff budget
+    // handles gateways that return 429/503/5xx before the model is ready.
 
     let mut attempt = 0;
     loop {
-        let response = client
+        let response_result = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to call Internal gateway: {}", e)))?;
+            .await;
+
+        let response = match response_result {
+            Ok(response) => response,
+            Err(error) if error.is_timeout() && attempt < INTERNAL_MAX_RETRIES => {
+                attempt += 1;
+                let backoff_ms = INTERNAL_INITIAL_BACKOFF_MS * (1 << (attempt - 1));
+                tracing::info!(
+                    attempt = attempt,
+                    backoff_ms = backoff_ms,
+                    timeout_secs = INTERNAL_REQUEST_TIMEOUT_SECS,
+                    "Internal gateway request timed out, backing off"
+                );
+                flow_like_types::tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(ApiError::internal(format!(
+                    "Failed to call Internal gateway: {}",
+                    error
+                )));
+            }
+        };
 
         let status = response.status();
 
@@ -542,9 +441,9 @@ async fn call_internal(
             || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
             || status.is_server_error();
 
-        if retryable && attempt < MAX_RETRIES {
+        if retryable && attempt < INTERNAL_MAX_RETRIES {
             attempt += 1;
-            let backoff_ms = INITIAL_BACKOFF_MS * (1 << (attempt - 1)); // 500ms, 1s, 2s, 4s, 8s
+            let backoff_ms = INTERNAL_INITIAL_BACKOFF_MS * (1 << (attempt - 1));
             tracing::info!(
                 attempt = attempt,
                 backoff_ms = backoff_ms,

@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
-import { useExecuteAction } from "../ActionHandler";
+import { useExecuteAction, useIsComponentTriggering } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -65,7 +65,9 @@ export function A2UIButton({
 	const keyboardActivationAtRef = useRef(0);
 	const label = useResolved<string>(component.label) ?? "";
 	const disabled = useResolved<boolean>(component.disabled);
-	const loading = useResolved<boolean>(component.loading);
+	const explicitLoading = useResolved<boolean>(component.loading);
+	const isTriggering = useIsComponentTriggering(componentId);
+	const loading = explicitLoading || isTriggering;
 	const variantValue = useResolved<string>(component.variant);
 	const sizeValue = useResolved<string>(component.size);
 	const icon = useResolved<string>(component.icon);
@@ -81,9 +83,12 @@ export function A2UIButton({
 		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
 
 		if (!hasPointerIntent && !hasKeyboardIntent) {
-			console.log("[A2UI Button] Ignoring click without local activation intent:", {
-				componentId,
-			});
+			console.log(
+				"[A2UI Button] Ignoring click without local activation intent:",
+				{
+					componentId,
+				},
+			);
 			return;
 		}
 
@@ -91,9 +96,14 @@ export function A2UIButton({
 		keyboardActivationAtRef.current = 0;
 
 		const action = component.actions?.[0];
-		console.log("[A2UI Button] handleClick:", { componentId, action, hasActions: !!component.actions, actionsLength: component.actions?.length });
+		console.log("[A2UI Button] handleClick:", {
+			componentId,
+			action,
+			hasActions: !!component.actions,
+			actionsLength: component.actions?.length,
+		});
 		if (action) {
-			executeAction(action);
+			executeAction(action, componentId);
 		} else if (onAction) {
 			onAction({
 				type: "userAction",

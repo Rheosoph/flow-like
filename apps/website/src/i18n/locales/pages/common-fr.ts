@@ -1,6 +1,5 @@
 export const frCommon = {
 	// Header
-	"header.24h": "Solution 24h",
 	"header.compare": "Comparer",
 	"header.blog": "Blog",
 	"header.docs": "Documentation",
@@ -25,7 +24,6 @@ export const frCommon = {
 	"footer.link.download": "Télécharger",
 	"footer.link.compare": "Comparer",
 	"footer.link.modernBi": "BI Moderne",
-	"footer.link.24h": "Solution 24h",
 	"footer.link.gettingStarted": "Premiers Pas",
 	"footer.link.whatIs": "Qu'est-ce que Flow-Like ?",
 	"footer.link.selfHosting": "Auto-Hébergement",
@@ -211,7 +209,6 @@ export const frCommon = {
 	"pricing.ctaSection.title": "Besoin d'une solution personnalisée ?",
 	"pricing.ctaSection.description":
 		"Obtenez une solution d'automatisation entièrement personnalisée pour votre entreprise en seulement 24 heures. Nous concevrons, construirons et déploierons un workflow prêt pour la production adapté à vos besoins exacts.",
-	"pricing.ctaSection.24h": "Solution 24 heures",
 	"pricing.ctaSection.enterprise": "Contacter les ventes entreprise",
 	"pricing.ctaSection.startingAt":
 		"À partir de 1 999 € · Propriété complète du code · Déployez n'importe où",

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+	AudioLines,
 	Brain,
 	Code2,
 	Cpu,
@@ -14,6 +15,7 @@ import {
 	Lightbulb,
 	type LucideIcon,
 	MessageSquare,
+	Mic,
 	PackageCheck,
 	Search,
 	Shield,
@@ -65,8 +67,8 @@ type SortOption =
 	| "reasoning"
 	| "coding";
 type ViewMode = "grid" | "list";
-type InputModality = "text" | "image";
-type OutputModality = "text" | "embedding";
+type InputModality = "text" | "image" | "speech";
+type OutputModality = "text" | "embedding" | "speech";
 
 function getBitModality(type: IBitTypes): {
 	input: InputModality;
@@ -77,6 +79,10 @@ function getBitModality(type: IBitTypes): {
 			return { input: "text", output: "text" };
 		case IBitTypes.Vlm:
 			return { input: "image", output: "text" };
+		case IBitTypes.Tts:
+			return { input: "text", output: "speech" };
+		case IBitTypes.Stt:
+			return { input: "speech", output: "text" };
 		case IBitTypes.Embedding:
 			return { input: "text", output: "embedding" };
 		case IBitTypes.ImageEmbedding:
@@ -118,7 +124,10 @@ const capabilityIcons: Record<string, CapabilityInfo> = {
 const LLM_LIKE_TYPES = new Set([IBitTypes.Llm, IBitTypes.Vlm]);
 
 function isHostedModel(bit: IBit): boolean {
-	return (bit.size ?? 0) === 0 || !bit.download_link;
+	return (
+		(bit.dependencies?.length ?? 0) === 0 &&
+		((bit.size ?? 0) === 0 || !bit.download_link)
+	);
 }
 
 interface AIModelPageProps {
@@ -147,10 +156,10 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	const [showDownloadedOnly, setShowDownloadedOnly] = useState(false);
 	const [selectedModel, setSelectedModel] = useState<IBit | null>(null);
 	const [inputModalities, setInputModalities] = useState<Set<InputModality>>(
-		new Set(["text", "image"]),
+		new Set(["text", "image", "speech"]),
 	);
 	const [outputModalities, setOutputModalities] = useState<Set<OutputModality>>(
-		new Set(["text", "embedding"]),
+		new Set(["text", "embedding", "speech"]),
 	);
 	const [capabilityFilters, setCapabilityFilters] = useState<
 		Record<string, number>
@@ -183,6 +192,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				bit_types: [
 					IBitTypes.Llm,
 					IBitTypes.Vlm,
+					IBitTypes.Tts,
+					IBitTypes.Stt,
 					IBitTypes.Embedding,
 					IBitTypes.ImageEmbedding,
 				],
@@ -309,7 +320,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			});
 		}
 
-		if (inputModalities.size < 2 || outputModalities.size < 2) {
+		if (inputModalities.size < 3 || outputModalities.size < 3) {
 			models = models.filter((m) => {
 				const bitModality = getBitModality(m.type);
 				const inputMatch =
@@ -415,7 +426,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	]);
 
 	const modalityCounts = useMemo(() => {
-		const counts = { text: 0, image: 0, embedding: 0, total: 0 };
+		const counts = { text: 0, image: 0, embedding: 0, speech: 0, total: 0 };
 		if (!foundBits.data) return counts;
 		const validBits = foundBits.data.filter((bit) => !blacklist.has(bit.id));
 		counts.total = validBits.length;
@@ -423,7 +434,9 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			const modality = getBitModality(bit.type);
 			if (modality.input === "text") counts.text++;
 			if (modality.input === "image") counts.image++;
+			if (modality.input === "speech") counts.speech++;
 			if (modality.output === "embedding") counts.embedding++;
+			if (modality.output === "speech") counts.speech++;
 		}
 		return counts;
 	}, [foundBits.data, blacklist]);
@@ -436,7 +449,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		if (contextLengthFilter[0] > 0 || contextLengthFilter[1] < maxContextLength)
 			count++;
 		if (inputModalities.size < 2) count++;
-		if (outputModalities.size < 2) count++;
+		if (outputModalities.size < 3) count++;
 		if (Object.values(capabilityFilters).some((v) => v > 0)) count++;
 		return count;
 	}, [
@@ -473,8 +486,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		setShowInProfileOnly(false);
 		setShowDownloadedOnly(false);
 		setContextLengthFilter([0, maxContextLength]);
-		setInputModalities(new Set(["text", "image"]));
-		setOutputModalities(new Set(["text", "embedding"]));
+		setInputModalities(new Set(["text", "image", "speech"]));
+		setOutputModalities(new Set(["text", "embedding", "speech"]));
 		setCapabilityFilters({
 			reasoning: 0,
 			coding: 0,
@@ -728,6 +741,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						icon={ImageIcon}
 						label="Image"
 					/>
+					<ModalityChip
+						active={inputModalities.has("speech")}
+						onClick={() => toggleInputModality("speech")}
+						icon={Mic}
+						label="Audio"
+					/>
 					<span className="w-px h-4 bg-border/20 mx-0.5" />
 					<ModalityChip
 						active={outputModalities.has("text")}
@@ -740,6 +759,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						onClick={() => toggleOutputModality("embedding")}
 						icon={FileSearchIcon}
 						label="Embedding"
+					/>
+					<ModalityChip
+						active={outputModalities.has("speech")}
+						onClick={() => toggleOutputModality("speech")}
+						icon={AudioLines}
+						label="Speech"
 					/>
 
 					<span className="text-xs text-muted-foreground/30 ml-auto">

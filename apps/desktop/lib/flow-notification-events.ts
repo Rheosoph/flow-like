@@ -4,16 +4,13 @@ export const FLOW_NOTIFICATION_EVENT = "flow-like:flow-notification";
 
 export interface FlowNotificationBatchDetail {
 	events: IIntercomEvent[];
-	persistViaApi: boolean;
 	appId?: string;
-	boardId?: string;
 }
 
+// UI-only fanout. Notification nodes own remote persistence.
 export function dispatchFlowNotificationEvents(
 	events: IIntercomEvent[],
-	persistViaApi: boolean,
 	appId?: string,
-	boardId?: string,
 ): void {
 	if (typeof window === "undefined") {
 		return;
@@ -31,9 +28,7 @@ export function dispatchFlowNotificationEvents(
 		new CustomEvent<FlowNotificationBatchDetail>(FLOW_NOTIFICATION_EVENT, {
 			detail: {
 				events: notificationEvents,
-				persistViaApi,
 				appId,
-				boardId,
 			},
 		}),
 	);
@@ -41,9 +36,7 @@ export function dispatchFlowNotificationEvents(
 
 export function dispatchFlowNotificationEvent(
 	event: IIntercomEvent,
-	persistViaApi: boolean,
 	appId?: string,
-	boardId?: string,
 ): void {
-	dispatchFlowNotificationEvents([event], persistViaApi, appId, boardId);
+	dispatchFlowNotificationEvents([event], appId);
 }

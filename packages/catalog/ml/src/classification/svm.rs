@@ -31,7 +31,6 @@ use linfa::{prelude::Pr, traits::Fit};
 use linfa_svm::Svm;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
-use std::sync::Arc;
 
 #[cfg(feature = "execute")]
 const GAUSSIAN_KERNEL_EPS: f64 = 30.0;

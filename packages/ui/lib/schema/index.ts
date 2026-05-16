@@ -15,6 +15,15 @@ export type {
 	IBitModelClassification,
 	IModelProvider,
 } from "./bit/bit/llm-parameters";
+export type {
+	ITtsAssetRef,
+	ITtsModelParameters,
+} from "./bit/bit/tts-parameters";
+export {
+	ITtsDTypePreference,
+	ITtsModelType,
+	ITtsRuntimePreference,
+} from "./bit/bit/tts-parameters";
 export type { IVlmParameters } from "./bit/bit/vlm-parameters";
 export type { IProvider } from "./bit/bit/provider";
 export * from "./storage/storage-item";
@@ -29,6 +38,8 @@ export {
 	ICommentType,
 	IExecutionStage,
 	IExecutionMode,
+	type ILayer,
+	ILayerType,
 	ILogLevel,
 	type ISystemTime,
 } from "./flow/board";
@@ -38,6 +49,7 @@ export type {
 	ICanaryEvent,
 	IReleaseNotes,
 } from "./flow/event";
+export { IEventExecutionMode } from "./flow/event";
 export type { IEventPayload } from "./flow/event-payload";
 export type { IEventPayloadMail } from "./flow/event-payload-mail";
 export type { IEventPayloadChat } from "./flow/event-payload-chat";
@@ -89,6 +101,7 @@ export type {
 
 export * from "./profile/profile";
 export * from "./app/app";
+export * from "./app/fork";
 export * from "./solution/solution";
 export * from "./sink";
 

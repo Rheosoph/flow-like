@@ -1,73 +1,100 @@
 export const jaIntegrations = {
 	"integrations.meta.title": "インテグレーション＆コネクタ | Flow-Like",
-	"integrations.meta.description": "Flow-Likeを100以上のサービスに接続。データベース、API、クラウドストレージ、AIモデルなどの構築済みコネクタ。WASMを通じて任意の言語でカスタムノードを構築。",
+	"integrations.meta.description":
+		"Flow-Likeを100以上のサービスに接続。データベース、API、クラウドストレージ、AIモデルなどの構築済みコネクタ。WASMを通じて任意の言語でカスタムノードを構築。",
 	"integrations.hero.tagline": "インテグレーションエコシステム",
 	"integrations.hero.headline": "すべてに",
 	"integrations.hero.headline.highlight": "接続",
-	"integrations.hero.description": "すでにお使いのツール向けの構築済みコネクタ。その他すべてにはカスタムノード。TypeScript、Python、Rust、GoまたはWASM互換の任意の言語でインテグレーションを提供。",
+	"integrations.hero.description":
+		"すでにお使いのツール向けの構築済みコネクタ。その他すべてにはカスタムノード。TypeScript、Python、Rust、GoまたはWASM互換の任意の言語でインテグレーションを提供。",
 	"integrations.hero.cta": "コネクタを閲覧",
 	"integrations.hero.cta.custom": "独自に構築",
 	"integrations.featured.tagline": "すぐに使える",
 	"integrations.featured.headline": "構築済みインテグレーション",
-	"integrations.featured.description": "お気に入りのツールに即座に接続。コード不要、設定不要——ドラッグ、ドロップ、実行するだけ。",
+	"integrations.featured.description":
+		"お気に入りのツールに即座に接続。コード不要、設定不要——ドラッグ、ドロップ、実行するだけ。",
 	"integrations.featured.microsoft.name": "Microsoft",
-	"integrations.featured.microsoft.desc": "Office 365、SharePoint、Teams、Outlook、複雑なAIエージェントと堅牢なパイプラインのためのCopilot。",
+	"integrations.featured.microsoft.desc":
+		"Office 365、SharePoint、Teams、Outlook、複雑なAIエージェントと堅牢なパイプラインのためのCopilot。",
 	"integrations.featured.google.name": "Google",
-	"integrations.featured.google.desc": "Google Workspace、Gmail、Drive、Sheets、CalendarおよびCloud Platformサービス。",
+	"integrations.featured.google.desc":
+		"Google Workspace、Gmail、Drive、Sheets、CalendarおよびCloud Platformサービス。",
 	"integrations.featured.databricks.name": "Databricks",
-	"integrations.featured.databricks.desc": "大規模データエンジニアリングとMLワークフローのためのLakehouseプラットフォーム統合。",
+	"integrations.featured.databricks.desc":
+		"大規模データエンジニアリングとMLワークフローのためのLakehouseプラットフォーム統合。",
 	"integrations.featured.snowflake.name": "Snowflake",
-	"integrations.featured.snowflake.desc": "クラウドデータウェアハウスクエリ、データ共有、Snowpark統合。",
+	"integrations.featured.snowflake.desc":
+		"クラウドデータウェアハウスクエリ、データ共有、Snowpark統合。",
 	"integrations.featured.notion.name": "Notion",
-	"integrations.featured.notion.desc": "データベース、ページ、ナレッジベースの読み取り、書き込み、同期。",
+	"integrations.featured.notion.desc":
+		"データベース、ページ、ナレッジベースの読み取り、書き込み、同期。",
 	"integrations.featured.confluence.name": "Confluence",
-	"integrations.featured.confluence.desc": "スペース、ページ、エンタープライズドキュメントのアクセスと管理。",
+	"integrations.featured.confluence.desc":
+		"スペース、ページ、エンタープライズドキュメントのアクセスと管理。",
 	"integrations.featured.jira.name": "Jira",
-	"integrations.featured.jira.desc": "課題追跡、プロジェクト管理、スプリント自動化。",
+	"integrations.featured.jira.desc":
+		"課題追跡、プロジェクト管理、スプリント自動化。",
 	"integrations.featured.github.name": "GitHub",
-	"integrations.featured.github.desc": "リポジトリ、Issues、PR、Actions、CI/CDパイプライン統合。",
+	"integrations.featured.github.desc":
+		"リポジトリ、Issues、PR、Actions、CI/CDパイプライン統合。",
 	"integrations.featured.discord.name": "Discord",
-	"integrations.featured.discord.desc": "ボットコマンド、Webhooks、チャンネルメッセージング、コミュニティ自動化。",
+	"integrations.featured.discord.desc":
+		"ボットコマンド、Webhooks、チャンネルメッセージング、コミュニティ自動化。",
 	"integrations.featured.more": "+ さらに多くのコネクタが利用可能",
 	"integrations.cat.title": "インテグレーションカテゴリ",
-	"integrations.cat.description": "データベースからAIモデルまで——技術スタック全体を接続。",
+	"integrations.cat.description":
+		"データベースからAIモデルまで——技術スタック全体を接続。",
 	"integrations.cat.data.title": "データベースとストレージ",
-	"integrations.cat.data.desc": "PostgreSQL、MySQL、SQLite、MongoDB、Redis、S3、Azure Blob、Google Cloud Storageなど。",
+	"integrations.cat.data.desc":
+		"PostgreSQL、MySQL、SQLite、MongoDB、Redis、S3、Azure Blob、Google Cloud Storageなど。",
 	"integrations.cat.data.count": "15以上のコネクタ",
 	"integrations.cat.api.title": "RESTおよびGraphQL API",
-	"integrations.cat.api.desc": "認証プリセット、リクエストビルダー、レスポンス解析、リトライロジック内蔵の汎用HTTPクライアント。",
+	"integrations.cat.api.desc":
+		"認証プリセット、リクエストビルダー、レスポンス解析、リトライロジック内蔵の汎用HTTPクライアント。",
 	"integrations.cat.api.count": "ユニバーサルコネクタ",
 	"integrations.cat.ai.title": "AIおよびMLモデル",
-	"integrations.cat.ai.desc": "OpenAI、Anthropic、Google AI、Ollama、およびOpenAI互換の任意のエンドポイント。Embeddings、Completions、Vision。",
+	"integrations.cat.ai.desc":
+		"OpenAI、Anthropic、Google AI、Ollama、およびOpenAI互換の任意のエンドポイント。Embeddings、Completions、Vision。",
 	"integrations.cat.ai.count": "8以上のプロバイダー",
 	"integrations.cat.messaging.title": "メッセージングと通知",
-	"integrations.cat.messaging.desc": "Slack、Discord、メール（SMTP/IMAP）、Webhooks、リアルタイムイベントストリームのためのWebSocket接続。",
+	"integrations.cat.messaging.desc":
+		"Slack、Discord、メール（SMTP/IMAP）、Webhooks、リアルタイムイベントストリームのためのWebSocket接続。",
 	"integrations.cat.messaging.count": "10以上のチャンネル",
 	"integrations.cat.cloud.title": "クラウドとインフラストラクチャ",
-	"integrations.cat.cloud.desc": "AWS、Azure、GCPサービス統合。Docker、Kubernetesおよびインフラストラクチャ自動化のためのTerraform。",
+	"integrations.cat.cloud.desc":
+		"AWS、Azure、GCPサービス統合。Docker、Kubernetesおよびインフラストラクチャ自動化のためのTerraform。",
 	"integrations.cat.cloud.count": "20以上のサービス",
 	"integrations.cat.productivity.title": "生産性とSaaS",
-	"integrations.cat.productivity.desc": "GitHub、Jira、Linear、Notion、Google Workspace、Microsoft 365、AirtableおよびTrello。",
+	"integrations.cat.productivity.desc":
+		"GitHub、Jira、Linear、Notion、Google Workspace、Microsoft 365、AirtableおよびTrello。",
 	"integrations.cat.productivity.count": "12以上のアプリ",
 	"integrations.cat.iot.title": "IoTとプロトコル",
-	"integrations.cat.iot.desc": "MQTT、OPC-UA、Modbusおよびシリアル通信。現場デバイスと産業用センサーを接続。",
+	"integrations.cat.iot.desc":
+		"MQTT、OPC-UA、Modbusおよびシリアル通信。現場デバイスと産業用センサーを接続。",
 	"integrations.cat.iot.count": "6以上のプロトコル",
 	"integrations.cat.files.title": "ファイルとドキュメント処理",
-	"integrations.cat.files.desc": "PDF解析、Excel/CSV処理、画像操作、OCR、ドキュメント生成。",
+	"integrations.cat.files.desc":
+		"PDF解析、Excel/CSV処理、画像操作、OCR、ドキュメント生成。",
 	"integrations.cat.files.count": "10以上のフォーマット",
 	"integrations.custom.tagline": "任意の言語で拡張",
 	"integrations.custom.headline": "数分でカスタムノードを構築",
-	"integrations.custom.description": "Flow-Likeはカスタムノードをモジュールとして実行——サンドボックス化、ポータブル、高速。お好みの言語で記述し、WASMにコンパイルすれば、Flow-Likeが動作するどこでも機能します。",
+	"integrations.custom.description":
+		"Flow-Likeはカスタムノードをモジュールとして実行——サンドボックス化、ポータブル、高速。お好みの言語で記述し、WASMにコンパイルすれば、Flow-Likeが動作するどこでも機能します。",
 	"integrations.custom.lang.title": "対応言語",
-	"integrations.custom.lang.desc": "TypeScript、Python、Rust、Go、C#、Java、Kotlin、C++、Zigなど——WASMにコンパイルできるあらゆる言語。",
+	"integrations.custom.lang.desc":
+		"TypeScript、Python、Rust、Go、C#、Java、Kotlin、C++、Zigなど——WASMにコンパイルできるあらゆる言語。",
 	"integrations.custom.sandbox.title": "サンドボックス実行",
-	"integrations.custom.sandbox.desc": "すべてのカスタムノードは独自のWASMサンドボックスで実行。デフォルトではファイルシステムアクセスなし、ネットワークなし——オプトイン方式の機能のみ。",
+	"integrations.custom.sandbox.desc":
+		"すべてのカスタムノードは独自のWASMサンドボックスで実行。デフォルトではファイルシステムアクセスなし、ネットワークなし——オプトイン方式の機能のみ。",
 	"integrations.custom.registry.title": "パッケージレジストリ",
-	"integrations.custom.registry.desc": "組織内またはパブリックにカスタムノードを公開・共有。バージョン管理と依存関係解決を含む。",
+	"integrations.custom.registry.desc":
+		"組織内またはパブリックにカスタムノードを公開・共有。バージョン管理と依存関係解決を含む。",
 	"integrations.custom.template.title": "スターターテンプレート",
-	"integrations.custom.template.desc": "CLIを使って数秒で新しいノードをスキャフォールド。CI/CDパイプライン付きの各対応言語用テンプレート。",
+	"integrations.custom.template.desc":
+		"CLIを使って数秒で新しいノードをスキャフォールド。CI/CDパイプライン付きの各対応言語用テンプレート。",
 	"integrations.cta.headline": "お探しのインテグレーションが見つかりませんか？",
-	"integrations.cta.description": "WASM互換の任意の言語でカスタムコネクタを構築するか、コミュニティに新しいインテグレーションをリクエストしてください。",
+	"integrations.cta.description":
+		"WASM互換の任意の言語でカスタムコネクタを構築するか、コミュニティに新しいインテグレーションをリクエストしてください。",
 	"integrations.cta.button": "インテグレーションドキュメントを見る",
 	"integrations.cta.github": "GitHubでリクエスト",
 } as const;

@@ -13,7 +13,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::profile::{ProfileApp, Settings};
-use flow_like_types::{Value, create_id};
+use flow_like_types::Value;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -71,6 +71,10 @@ pub async fn upsert_profile(
     Json(profile_body): Json<ProfileBody>,
 ) -> Result<Json<UpsertProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    if profile_id.trim().is_empty() {
+        return Err(ApiError::bad_request("Profile ID is required"));
+    }
+
     ensure_user_exists(&state, &sub).await?;
     let found_profile = profile::Entity::find()
         .filter(
@@ -82,6 +86,10 @@ pub async fn upsert_profile(
         .await?;
 
     if let Some(found_profile) = found_profile {
+        if found_profile.deleted_at.is_some() {
+            return Err(ApiError::gone("Profile has been deleted"));
+        }
+
         let mut active_model: profile::ActiveModel = found_profile.clone().into();
 
         if let Some(name) = profile_body.name {
@@ -149,9 +157,6 @@ pub async fn upsert_profile(
         }));
     }
 
-    // Create new profile
-    let id = create_id();
-
     let apps = if let Some(apps) = profile_body.apps {
         let apps: Vec<Value> = apps.iter().map(|v| to_value(v).unwrap()).collect();
         Some(apps)
@@ -189,7 +194,7 @@ pub async fn upsert_profile(
     };
 
     let new_profile = profile::ActiveModel {
-        id: Set(id),
+        id: Set(profile_id),
         user_id: Set(sub),
         name: Set(profile_body.name.unwrap_or_default()),
         description: Set(profile_body.description),

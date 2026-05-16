@@ -6,8 +6,7 @@ import {
 	type DragEndEvent,
 	type DragOverEvent,
 	type DragStartEvent,
-	MouseSensor,
-	TouchSensor,
+	PointerSensor,
 	pointerWithin,
 	rectIntersection,
 	useSensor,
@@ -145,20 +144,13 @@ export function BuilderDndProvider({
 	const { components, addComponent, updateComponent, addWidgetRef } =
 		useBuilder();
 
-	const mouseSensor = useSensor(MouseSensor, {
+	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
 			distance: 8,
 		},
 	});
 
-	const touchSensor = useSensor(TouchSensor, {
-		activationConstraint: {
-			delay: 150,
-			tolerance: 8,
-		},
-	});
-
-	const sensors = useSensors(mouseSensor, touchSensor);
+	const sensors = useSensors(pointerSensor);
 
 	const handleDragStart = useCallback(
 		(event: DragStartEvent) => {

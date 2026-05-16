@@ -4,17 +4,25 @@
 //! to the Copilot SDK's tool system. The core logic is reused from
 //! `flow_like::flow::copilot::tools`.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolResultObject};
 use flow_like::flow::copilot::{BoardCommand, GraphContext};
+use flow_like::flow::pin::PinType;
 use flow_like_catalog::get_catalog;
 use serde_json::{Value, json};
 
 /// Create all Copilot SDK tools for board context
 pub fn create_board_tools(graph_context: Option<Arc<GraphContext>>) -> Vec<(Tool, ToolHandler)> {
-    let mut tools = vec![create_catalog_search_tool(), create_emit_commands_tool()];
+    let mut tools = vec![
+        create_catalog_search_tool(),
+        create_validate_commands_tool(graph_context.clone()),
+        create_emit_commands_tool(graph_context.clone()),
+    ];
 
     if let Some(ctx) = graph_context.clone() {
         tools.push(create_get_node_details_tool(ctx));
@@ -238,11 +246,94 @@ EXAMPLE USE:
     (tool, handler)
 }
 
+const MAX_EMIT_COMMANDS: usize = 20;
+
+#[derive(Clone, Default)]
+struct KnownPins {
+    inputs: HashSet<String>,
+    outputs: HashSet<String>,
+}
+
+fn create_validate_commands_tool(graph_context: Option<Arc<GraphContext>>) -> (Tool, ToolHandler) {
+    let tool = Tool::new("validate_commands")
+        .description(
+            r#"Validate a planned workflow command batch without queueing it for the user.
+
+Use this immediately before emit_commands when building or modifying workflows. If validation
+returns errors, fix the batch and validate again before calling emit_commands."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "commands": {
+                    "type": "array",
+                    "maxItems": MAX_EMIT_COMMANDS,
+                    "description": "Array of workflow commands in the same format used by emit_commands.",
+                    "items": { "type": "object" }
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Brief description of what these commands accomplish"
+                }
+            },
+            "required": ["commands", "explanation"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let commands = args.get("commands").cloned().unwrap_or(json!([]));
+        let explanation = args
+            .get("explanation")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Command validation");
+
+        let parsed_commands: Vec<BoardCommand> = match serde_json::from_value(commands.clone()) {
+            Ok(cmds) => cmds,
+            Err(e) => {
+                let result = json!({
+                    "status": "validation_errors",
+                    "errors": [format!("Error parsing commands: {}", e)],
+                    "commands": commands,
+                    "explanation": explanation
+                });
+                return ToolResultObject::text(
+                    serde_json::to_string_pretty(&result).unwrap_or_default(),
+                );
+            }
+        };
+
+        let validation_errors =
+            validate_sdk_emit_commands(&parsed_commands, graph_context.as_deref());
+        let result = if validation_errors.is_empty() {
+            json!({
+                "status": "valid",
+                "commands": commands,
+                "explanation": explanation,
+                "message": "Command batch is valid. Call emit_commands with the same batch to queue it for review."
+            })
+        } else {
+            json!({
+                "status": "validation_errors",
+                "errors": validation_errors,
+                "commands": commands,
+                "explanation": explanation,
+                "message": "Command batch is invalid. Fix the listed errors and call validate_commands again."
+            })
+        };
+
+        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+    });
+
+    (tool, handler)
+}
+
 /// Emit commands tool - execute graph modifications
-fn create_emit_commands_tool() -> (Tool, ToolHandler) {
+fn create_emit_commands_tool(graph_context: Option<Arc<GraphContext>>) -> (Tool, ToolHandler) {
     let tool = Tool::new("emit_commands")
         .description(
             r#"Execute graph modifications. Commands are batched and applied atomically.
+
+Prefer calling validate_commands first for non-trivial batches. emit_commands also validates
+and will not queue invalid commands.
 
 CRITICAL ORDER:
 1. AddNode commands FIRST (create nodes)
@@ -312,6 +403,24 @@ EXAMPLE - HTTP request with JSON parsing:
             }
         };
 
+        let validation_errors =
+            validate_sdk_emit_commands(&parsed_commands, graph_context.as_deref());
+        if !validation_errors.is_empty() {
+            let result = json!({
+                "status": "validation_errors",
+                "errors": validation_errors,
+                "commands": commands,
+                "explanation": explanation,
+                "message": format!(
+                    "Validation failed. Fix these issues and call emit_commands again:\n- {}",
+                    validation_errors.join("\n- ")
+                )
+            });
+            return ToolResultObject::text(
+                serde_json::to_string_pretty(&result).unwrap_or_default(),
+            );
+        }
+
         // Build summary
         let mut summary_lines: Vec<String> = Vec::new();
         summary_lines.push(format!("✓ Queued {} commands:", parsed_commands.len()));
@@ -376,6 +485,374 @@ EXAMPLE - HTTP request with JSON parsing:
     });
 
     (tool, handler)
+}
+
+fn validate_sdk_emit_commands(
+    commands: &[BoardCommand],
+    graph_context: Option<&GraphContext>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if commands.is_empty() {
+        errors.push("emit_commands requires at least one command".to_string());
+        return errors;
+    }
+    if commands.len() > MAX_EMIT_COMMANDS {
+        errors.push(format!(
+            "emit_commands is limited to {MAX_EMIT_COMMANDS} commands per turn"
+        ));
+    }
+
+    let mut known_entities: HashMap<String, KnownPins> = HashMap::new();
+    let mut known_layers: HashSet<String> = HashSet::new();
+    let mut proposed_connections: HashSet<(String, String, String, String)> = HashSet::new();
+    if let Some(ctx) = graph_context {
+        for node in &ctx.nodes {
+            known_entities.insert(
+                node.id.clone(),
+                KnownPins {
+                    inputs: node.inputs.iter().map(|pin| pin.name.clone()).collect(),
+                    outputs: node.outputs.iter().map(|pin| pin.name.clone()).collect(),
+                },
+            );
+        }
+        for layer in &ctx.layers {
+            known_layers.insert(layer.id.clone());
+            known_entities.insert(
+                layer.id.clone(),
+                KnownPins {
+                    inputs: layer.inputs.iter().map(|pin| pin.name.clone()).collect(),
+                    outputs: layer.outputs.iter().map(|pin| pin.name.clone()).collect(),
+                },
+            );
+        }
+        proposed_connections.extend(ctx.edges.iter().map(|edge| {
+            (
+                edge.from_node_id.clone(),
+                edge.from_pin_name.clone(),
+                edge.to_node_id.clone(),
+                edge.to_pin_name.clone(),
+            )
+        }));
+    }
+
+    let catalog = get_catalog();
+    let mut catalog_nodes = HashMap::new();
+    for logic in &catalog {
+        let node = logic.get_node();
+        catalog_nodes.insert(node.name.clone(), node);
+    }
+
+    for (index, command) in commands.iter().enumerate() {
+        match command {
+            BoardCommand::AddNode {
+                node_type,
+                ref_id,
+                position,
+                target_layer,
+                ..
+            } => {
+                if position.is_none() {
+                    errors.push(format!("Command {index}: AddNode requires a position"));
+                }
+                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
+                    errors.push(format!(
+                        "Command {index}: AddNode requires a ref_id like '$0'"
+                    ));
+                }
+                if let Some(layer_id) = target_layer
+                    && !known_layers.contains(layer_id)
+                {
+                    errors.push(format!(
+                        "Command {index}: target_layer '{layer_id}' is unknown"
+                    ));
+                }
+                let Some(node) = catalog_nodes.get(node_type) else {
+                    errors.push(format!(
+                        "Command {index}: node type '{node_type}' was not found in the catalog"
+                    ));
+                    continue;
+                };
+                if let Some(ref_id) = ref_id {
+                    if known_entities.contains_key(ref_id) {
+                        errors.push(format!(
+                            "Command {index}: ref_id '{ref_id}' is already in use"
+                        ));
+                    } else {
+                        known_entities.insert(
+                            ref_id.clone(),
+                            KnownPins {
+                                inputs: node
+                                    .pins
+                                    .values()
+                                    .filter(|pin| pin.pin_type == PinType::Input)
+                                    .map(|pin| pin.name.clone())
+                                    .collect(),
+                                outputs: node
+                                    .pins
+                                    .values()
+                                    .filter(|pin| pin.pin_type == PinType::Output)
+                                    .map(|pin| pin.name.clone())
+                                    .collect(),
+                            },
+                        );
+                    }
+                }
+            }
+            BoardCommand::AddPlaceholder {
+                ref_id,
+                pins,
+                position,
+                target_layer,
+                ..
+            } => {
+                if position.is_none() {
+                    errors.push(format!(
+                        "Command {index}: AddPlaceholder requires a position"
+                    ));
+                }
+                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
+                    errors.push(format!(
+                        "Command {index}: AddPlaceholder requires a ref_id like '$0'"
+                    ));
+                }
+                if let Some(layer_id) = target_layer
+                    && !known_layers.contains(layer_id)
+                {
+                    errors.push(format!(
+                        "Command {index}: target_layer '{layer_id}' is unknown"
+                    ));
+                }
+                if let Some(ref_id) = ref_id {
+                    if known_entities.contains_key(ref_id) {
+                        errors.push(format!(
+                            "Command {index}: ref_id '{ref_id}' is already in use"
+                        ));
+                    } else {
+                        let mut entity = KnownPins {
+                            inputs: HashSet::from(["exec_in".to_string()]),
+                            outputs: HashSet::from(["exec_out".to_string()]),
+                        };
+                        let mut seen_pins = HashSet::new();
+                        for pin in pins.as_deref().unwrap_or(&[]) {
+                            if pin.name.trim().is_empty() {
+                                errors.push(format!(
+                                    "Command {index}: placeholder pin names cannot be empty"
+                                ));
+                                continue;
+                            }
+                            if !seen_pins.insert(pin.name.clone()) {
+                                errors.push(format!(
+                                    "Command {index}: duplicate placeholder pin '{}'",
+                                    pin.name
+                                ));
+                            }
+                            if pin.pin_type.eq_ignore_ascii_case("input") {
+                                entity.inputs.insert(pin.name.clone());
+                            } else if pin.pin_type.eq_ignore_ascii_case("output") {
+                                entity.outputs.insert(pin.name.clone());
+                            } else {
+                                errors.push(format!(
+                                    "Command {index}: placeholder pin '{}' has invalid pin_type '{}'",
+                                    pin.name, pin.pin_type
+                                ));
+                            }
+                        }
+                        known_entities.insert(ref_id.clone(), entity);
+                        known_layers.insert(ref_id.clone());
+                    }
+                }
+            }
+            BoardCommand::ConnectPins {
+                from_node,
+                from_pin,
+                to_node,
+                to_pin,
+                ..
+            } => {
+                if from_node == to_node {
+                    errors.push(format!(
+                        "Command {index}: cannot connect node '{from_node}' to itself"
+                    ));
+                }
+                match known_entities.get(from_node) {
+                    Some(entity) if entity.outputs.contains(from_pin) => {}
+                    Some(entity) => errors.push(pin_lookup_error(
+                        index,
+                        from_node,
+                        from_pin,
+                        &entity.outputs,
+                        "source output",
+                    )),
+                    None => errors.push(format!(
+                        "Command {index}: source node '{from_node}' is unknown"
+                    )),
+                }
+                match known_entities.get(to_node) {
+                    Some(entity) if entity.inputs.contains(to_pin) => {}
+                    Some(entity) => errors.push(pin_lookup_error(
+                        index,
+                        to_node,
+                        to_pin,
+                        &entity.inputs,
+                        "target input",
+                    )),
+                    None => errors.push(format!(
+                        "Command {index}: target node '{to_node}' is unknown"
+                    )),
+                }
+                let connection_key = (
+                    from_node.clone(),
+                    from_pin.clone(),
+                    to_node.clone(),
+                    to_pin.clone(),
+                );
+                if !proposed_connections.insert(connection_key) {
+                    errors.push(format!(
+                        "Command {index}: duplicate connection '{from_node}.{from_pin}' -> '{to_node}.{to_pin}'"
+                    ));
+                }
+            }
+            BoardCommand::DisconnectPins {
+                from_node, to_node, ..
+            } => {
+                if !known_entities.contains_key(from_node) {
+                    errors.push(format!("Command {index}: node '{from_node}' is unknown"));
+                }
+                if !known_entities.contains_key(to_node) {
+                    errors.push(format!("Command {index}: node '{to_node}' is unknown"));
+                }
+            }
+            BoardCommand::MoveNode {
+                node_id,
+                target_layer,
+                ..
+            } => {
+                if !known_entities.contains_key(node_id) {
+                    errors.push(format!("Command {index}: node '{node_id}' is unknown"));
+                }
+                if let Some(layer_id) = target_layer
+                    && !known_layers.contains(layer_id)
+                {
+                    errors.push(format!(
+                        "Command {index}: target_layer '{layer_id}' is unknown"
+                    ));
+                }
+            }
+            BoardCommand::UpdateNodePin {
+                node_id, pin_id, ..
+            } => match known_entities.get(node_id) {
+                Some(entity) if entity.inputs.contains(pin_id) => {}
+                Some(entity) => errors.push(pin_lookup_error(
+                    index,
+                    node_id,
+                    pin_id,
+                    &entity.inputs,
+                    "input",
+                )),
+                None => errors.push(format!("Command {index}: node '{node_id}' is unknown")),
+            },
+            BoardCommand::RemoveNode { node_id, .. } => {
+                if !known_entities.contains_key(node_id) {
+                    errors.push(format!("Command {index}: node '{node_id}' is unknown"));
+                }
+            }
+            BoardCommand::CreateLayer {
+                node_ids,
+                position,
+                target_layer,
+                ..
+            } => {
+                if node_ids.is_empty() && position.is_none() {
+                    errors.push(format!(
+                        "Command {index}: CreateLayer needs node_ids or a position"
+                    ));
+                }
+                for node_id in node_ids {
+                    if !known_entities.contains_key(node_id) {
+                        errors.push(format!(
+                            "Command {index}: layer references unknown node '{node_id}'"
+                        ));
+                    }
+                }
+                if let Some(layer_id) = target_layer
+                    && !known_layers.contains(layer_id)
+                {
+                    errors.push(format!(
+                        "Command {index}: target_layer '{layer_id}' is unknown"
+                    ));
+                }
+            }
+            BoardCommand::RemoveLayer { layer_id, .. } => {
+                if !known_layers.contains(layer_id) {
+                    errors.push(format!("Command {index}: layer '{layer_id}' is unknown"));
+                }
+            }
+            BoardCommand::CreateVariable {
+                name,
+                data_type,
+                value_type,
+                ..
+            } => {
+                if name.trim().is_empty()
+                    || data_type.trim().is_empty()
+                    || value_type.trim().is_empty()
+                {
+                    errors.push(format!(
+                        "Command {index}: CreateVariable requires name, data_type, and value_type"
+                    ));
+                }
+            }
+            BoardCommand::AddComment {
+                content,
+                target_layer,
+                ..
+            } => {
+                if content.trim().is_empty() {
+                    errors.push(format!(
+                        "Command {index}: CreateComment requires non-empty content"
+                    ));
+                }
+                if let Some(layer_id) = target_layer
+                    && !known_layers.contains(layer_id)
+                {
+                    errors.push(format!(
+                        "Command {index}: target_layer '{layer_id}' is unknown"
+                    ));
+                }
+            }
+            BoardCommand::RemoveVariable { .. } | BoardCommand::RemoveComment { .. } => {}
+        }
+    }
+
+    errors
+}
+
+fn pin_lookup_error(
+    command_index: usize,
+    node_id: &str,
+    requested_pin: &str,
+    available_pins: &HashSet<String>,
+    role: &str,
+) -> String {
+    if let Some(exact_pin) = available_pins
+        .iter()
+        .find(|pin| pin.eq_ignore_ascii_case(requested_pin))
+    {
+        return format!(
+            "Command {command_index}: {role} pin '{node_id}.{requested_pin}' is not exact. Pin names are case-sensitive; use '{exact_pin}'"
+        );
+    }
+
+    let mut available: Vec<_> = available_pins.iter().map(String::as_str).collect();
+    available.sort_unstable();
+    if available.is_empty() {
+        format!("Command {command_index}: {role} pin '{node_id}.{requested_pin}' is unknown")
+    } else {
+        format!(
+            "Command {command_index}: {role} pin '{node_id}.{requested_pin}' is unknown. Available pins: {}",
+            available.join(", ")
+        )
+    }
 }
 
 /// Get unconfigured nodes - find nodes with empty/unconnected required inputs
@@ -523,7 +1000,78 @@ WORKFLOW:
 
 /// Create all Copilot SDK tools for frontend/A2UI context
 pub fn create_frontend_tools() -> Vec<(Tool, ToolHandler)> {
-    vec![create_emit_ui_tool(), create_get_component_schema_tool()]
+    vec![
+        create_get_component_schema_tool(),
+        create_validate_ui_tool(),
+        create_emit_ui_tool(),
+    ]
+}
+
+fn emit_ui_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "rootComponentId": {
+                "type": "string",
+                "description": "ID of the root component"
+            },
+            "canvasSettings": {
+                "type": "object",
+                "description": "Canvas settings (backgroundColor, padding, customCss)"
+            },
+            "components": {
+                "type": "array",
+                "description": "Array of SurfaceComponent objects",
+                "items": { "type": "object" }
+            }
+        },
+        "required": ["rootComponentId", "components"]
+    })
+}
+
+fn create_validate_ui_tool() -> (Tool, ToolHandler) {
+    let tool = Tool::new("validate_ui")
+        .description(
+            r#"Validate an A2UI component tree without rendering it.
+
+Use this immediately before emit_ui for non-trivial interfaces. If validation returns errors,
+repair the full component tree and validate again before calling emit_ui."#,
+        )
+        .schema(emit_ui_schema());
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let root_id = args
+            .get("rootComponentId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("root");
+        let canvas = args.get("canvasSettings").cloned().unwrap_or(json!({}));
+        let components = args.get("components").cloned().unwrap_or(json!([]));
+        let (validated_components, validation_errors) =
+            validate_ui_components(root_id, &canvas, &components);
+
+        let result = if validation_errors.is_empty() {
+            json!({
+                "status": "valid",
+                "rootComponentId": root_id,
+                "canvasSettings": canvas,
+                "components": validated_components,
+                "message": "UI tree is valid. Call emit_ui with the same tree to render it."
+            })
+        } else {
+            json!({
+                "status": "validation_errors",
+                "errors": validation_errors,
+                "rootComponentId": root_id,
+                "canvasSettings": canvas,
+                "components": validated_components,
+                "message": "UI tree is invalid. Fix the listed errors and call validate_ui again."
+            })
+        };
+
+        ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
+    });
+
+    (tool, handler)
 }
 
 /// Emit UI tool - output A2UI JSON components
@@ -531,6 +1079,9 @@ fn create_emit_ui_tool() -> (Tool, ToolHandler) {
     let tool = Tool::new("emit_ui")
         .description(
             r#"Output A2UI components to render in the interface. This is NOT file editing - it generates JSON that renders directly in the app.
+
+Prefer calling validate_ui first for non-trivial component trees. emit_ui also validates
+and will not render invalid component trees.
 
 OUTPUT FORMAT:
 {
@@ -602,25 +1153,7 @@ EXAMPLE - Simple card:
   ]
 }"#,
         )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "rootComponentId": {
-                    "type": "string",
-                    "description": "ID of the root component"
-                },
-                "canvasSettings": {
-                    "type": "object",
-                    "description": "Canvas settings (backgroundColor, padding, customCss)"
-                },
-                "components": {
-                    "type": "array",
-                    "description": "Array of SurfaceComponent objects",
-                    "items": { "type": "object" }
-                }
-            },
-            "required": ["rootComponentId", "components"]
-        }));
+        .schema(emit_ui_schema());
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let root_id = args
@@ -631,7 +1164,8 @@ EXAMPLE - Simple card:
         let components = args.get("components").cloned().unwrap_or(json!([]));
 
         // Validate components and collect errors
-        let (validated_components, validation_errors) = validate_ui_components(&components);
+        let (validated_components, validation_errors) =
+            validate_ui_components(root_id, &canvas, &components);
 
         if !validation_errors.is_empty() {
             let error_list = validation_errors.join("\n- ");
@@ -823,7 +1357,18 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "motionConfig",
             "style",
         ]),
-        "filePreview" => Some(&["url", "mimeType", "width", "height"]),
+        "filePreview" => Some(&[
+            "src",
+            "url",
+            "filename",
+            "mimeType",
+            "fileType",
+            "width",
+            "height",
+            "fit",
+            "showControls",
+            "fallbackText",
+        ]),
         "boundingBoxOverlay" => Some(&[
             "src",
             "boxes",
@@ -1107,10 +1652,20 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
 }
 
 const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions"];
+const MAX_UI_COMPONENTS: usize = 120;
+const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
+const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
+const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
+const MAX_UI_ACTIONS: usize = 20;
 
 /// Validate an array of components and return (validated_components, errors)
-fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
+fn validate_ui_components(
+    root_id: &str,
+    canvas: &Value,
+    components: &Value,
+) -> (Value, Vec<String>) {
     let mut errors = Vec::new();
+    validate_canvas_settings(canvas, &mut errors);
 
     let arr = match components.as_array() {
         Some(a) => a,
@@ -1120,12 +1675,33 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
         }
     };
 
-    let all_ids: std::collections::HashSet<String> = arr
-        .iter()
-        .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        .collect();
+    if arr.len() > MAX_UI_COMPONENTS {
+        errors.push(format!(
+            "'components' is limited to {MAX_UI_COMPONENTS} components per response"
+        ));
+    }
+
+    let mut all_ids = HashSet::new();
+    let mut duplicate_ids = HashSet::new();
+    for comp in arr {
+        if let Some(id) = comp.get("id").and_then(|v| v.as_str())
+            && !all_ids.insert(id.to_string())
+        {
+            duplicate_ids.insert(id.to_string());
+        }
+    }
+    for id in &duplicate_ids {
+        errors.push(format!("Duplicate component id '{}'", id));
+    }
+    if !root_id.is_empty() && !all_ids.contains(root_id) {
+        errors.push(format!(
+            "rootComponentId '{}' does not exist in the components array",
+            root_id
+        ));
+    }
 
     let mut validated = Vec::new();
+    let mut child_graph: HashMap<String, Vec<String>> = HashMap::new();
 
     for comp in arr {
         let id = match comp.get("id").and_then(|v| v.as_str()) {
@@ -1137,6 +1713,17 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
                 continue;
             }
         };
+        if id.trim().is_empty() {
+            errors.push("Component ids cannot be empty".to_string());
+            continue;
+        }
+        if id.chars().count() > MAX_UI_COMPONENT_ID_CHARS {
+            errors.push(format!(
+                "{}: component id is too long; maximum is {MAX_UI_COMPONENT_ID_CHARS} characters",
+                id
+            ));
+            continue;
+        }
 
         let component = match comp.get("component") {
             Some(c) if c.is_object() => c,
@@ -1154,7 +1741,6 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
             }
         };
 
-        // Check if component type is known
         let known = known_props_for_type(comp_type);
         if known.is_none() {
             errors.push(format!(
@@ -1165,7 +1751,35 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
         }
         let known_set = known.unwrap();
 
-        // Check for unknown props
+        if comp_type == "markdown"
+            && component
+                .get("allowHtml")
+                .and_then(|value| value.get("literalBool"))
+                .and_then(|value| value.as_bool())
+                == Some(true)
+        {
+            errors.push(format!(
+                "{}: markdown.allowHtml must be false for generated UI",
+                id
+            ));
+        }
+
+        if comp_type == "iframe"
+            && let Some(sandbox) = component
+                .get("sandbox")
+                .and_then(|value| value.get("literalString"))
+                .and_then(|value| value.as_str())
+        {
+            for token in ["allow-same-origin", "allow-popups-to-escape-sandbox"] {
+                if sandbox.split_whitespace().any(|part| part == token) {
+                    errors.push(format!(
+                        "{}: iframe sandbox token '{}' is not allowed in generated UI",
+                        id, token
+                    ));
+                }
+            }
+        }
+
         if let Some(obj) = component.as_object() {
             for key in obj.keys() {
                 let k = key.as_str();
@@ -1178,7 +1792,6 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
             }
         }
 
-        // Check required props
         for required in required_props_for_type(comp_type) {
             if component.get(*required).is_none() {
                 errors.push(format!(
@@ -1188,14 +1801,12 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
             }
         }
 
-        // Validate BoundValue format for non-structural props
         if let Some(obj) = component.as_object() {
             for (key, value) in obj {
                 let k = key.as_str();
-                if BASE_PROPS.contains(&k) || k == "type" {
+                if BASE_PROPS.contains(&k) {
                     continue;
                 }
-                // Structural props (arrays/objects holding non-BoundValue data) - skip
                 if matches!(
                     k,
                     "tabs"
@@ -1210,7 +1821,6 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
                 ) {
                     continue;
                 }
-                // Check if value should be BoundValue but is a bare primitive
                 if (value.is_string() || value.is_number() || value.is_boolean())
                     && known_set.contains(&k)
                     && k != "type"
@@ -1226,26 +1836,449 @@ fn validate_ui_components(components: &Value) -> (Value, Vec<String>) {
             }
         }
 
-        // Validate children references
-        if let Some(children) = component.get("children")
-            && let Some(explicit_list) = children.get("explicitList").and_then(|v| v.as_array())
+        if let Some(style) = comp.get("style") {
+            validate_style_value(id, "style", style, &mut errors);
+        }
+        if let Some(style) = component.get("style") {
+            validate_style_value(id, "component.style", style, &mut errors);
+        }
+        if let Some(actions) = component.get("actions") {
+            validate_actions_value(id, actions, &mut errors);
+        }
+
+        let mut component_refs = Vec::new();
+        if let Some(children) = component.get("children") {
+            component_refs.extend(collect_child_refs(id, children, &all_ids, &mut errors));
+        }
+
+        if let Some(content_component_id) = component
+            .get("contentComponentId")
+            .and_then(bound_or_plain_string)
         {
-            for child_ref in explicit_list {
-                if let Some(child_id) = child_ref.as_str()
-                    && !all_ids.contains(child_id)
+            push_component_ref(
+                id,
+                content_component_id,
+                "contentComponentId",
+                &all_ids,
+                &mut errors,
+                &mut component_refs,
+            );
+        }
+
+        if let Some(base_component_id) = component
+            .get("baseComponentId")
+            .and_then(bound_or_plain_string)
+        {
+            push_component_ref(
+                id,
+                base_component_id,
+                "baseComponentId",
+                &all_ids,
+                &mut errors,
+                &mut component_refs,
+            );
+        }
+
+        if let Some(overlays) = component.get("overlays").and_then(|value| value.as_array()) {
+            for overlay in overlays {
+                if let Some(overlay_id) = overlay
+                    .get("componentId")
+                    .or_else(|| overlay.get("id"))
+                    .and_then(bound_or_plain_string)
                 {
-                    errors.push(format!(
-                        "{}: children references '{}' which doesn't exist in the components array",
-                        id, child_id
-                    ));
+                    push_component_ref(
+                        id,
+                        overlay_id,
+                        "overlays[].componentId",
+                        &all_ids,
+                        &mut errors,
+                        &mut component_refs,
+                    );
                 }
             }
+        }
+
+        for (array_prop, ref_prop) in [
+            ("tabs", "contentComponentId"),
+            ("items", "contentComponentId"),
+        ] {
+            if let Some(items) = component.get(array_prop).and_then(|value| value.as_array()) {
+                for item in items {
+                    if let Some(content_component_id) =
+                        item.get(ref_prop).and_then(bound_or_plain_string)
+                    {
+                        push_component_ref(
+                            id,
+                            content_component_id,
+                            &format!("{array_prop}[].{ref_prop}"),
+                            &all_ids,
+                            &mut errors,
+                            &mut component_refs,
+                        );
+                    }
+                }
+            }
+        }
+
+        if !component_refs.is_empty() {
+            child_graph.insert(id.to_string(), component_refs);
         }
 
         validated.push(comp.clone());
     }
 
+    if let Some(cycle) = find_child_cycle(&child_graph) {
+        errors.push(format!(
+            "Component references contain a cycle: {}",
+            cycle.join(" -> ")
+        ));
+    }
+
     (json!(validated), errors)
+}
+
+fn bound_or_plain_string(value: &Value) -> Option<&str> {
+    value
+        .get("literalString")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+}
+
+fn push_component_ref(
+    parent_id: &str,
+    target_id: &str,
+    field: &str,
+    all_ids: &HashSet<String>,
+    errors: &mut Vec<String>,
+    refs: &mut Vec<String>,
+) {
+    if target_id == parent_id {
+        errors.push(format!("{}: {} cannot reference itself", parent_id, field));
+    }
+    if !all_ids.contains(target_id) {
+        errors.push(format!(
+            "{}: {} references '{}' which doesn't exist",
+            parent_id, field, target_id
+        ));
+    }
+    refs.push(target_id.to_string());
+}
+
+fn is_known_style_prop(key: &str) -> bool {
+    matches!(
+        key,
+        "className"
+            | "background"
+            | "border"
+            | "shadow"
+            | "position"
+            | "transform"
+            | "overflow"
+            | "responsiveOverrides"
+            | "margin"
+            | "padding"
+            | "gap"
+            | "width"
+            | "height"
+            | "minWidth"
+            | "minHeight"
+            | "maxWidth"
+            | "maxHeight"
+            | "flex"
+            | "flexGrow"
+            | "flexShrink"
+            | "flexBasis"
+            | "alignSelf"
+            | "gridColumn"
+            | "gridRow"
+            | "gridArea"
+            | "justifySelf"
+            | "color"
+            | "fontSize"
+            | "fontWeight"
+            | "fontFamily"
+            | "lineHeight"
+            | "letterSpacing"
+            | "textAlign"
+            | "textDecoration"
+            | "textTransform"
+            | "whiteSpace"
+            | "wordBreak"
+            | "opacity"
+            | "visibility"
+            | "cursor"
+            | "userSelect"
+            | "pointerEvents"
+            | "zIndex"
+            | "transition"
+            | "animation"
+            | "display"
+            | "outline"
+            | "outlineOffset"
+            | "filter"
+            | "backdropFilter"
+            | "aspectRatio"
+    )
+}
+
+fn validate_style_value(component_id: &str, path: &str, style: &Value, errors: &mut Vec<String>) {
+    let Some(style_obj) = style.as_object() else {
+        errors.push(format!("{}: {} must be an object", component_id, path));
+        return;
+    };
+
+    for (key, value) in style_obj {
+        if !is_known_style_prop(key) {
+            errors.push(format!(
+                "{}: unknown style prop '{}.{}'",
+                component_id, path, key
+            ));
+        }
+        validate_style_strings(component_id, &format!("{path}.{key}"), value, errors);
+    }
+}
+
+fn validate_style_strings(component_id: &str, path: &str, value: &Value, errors: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if text.len() > MAX_UI_STYLE_STRING_CHARS {
+                errors.push(format!(
+                    "{}: {} is too long; maximum is {MAX_UI_STYLE_STRING_CHARS} bytes",
+                    component_id, path
+                ));
+            }
+
+            let lowered = text.to_ascii_lowercase();
+            let compact: String = lowered.chars().filter(|ch| !ch.is_whitespace()).collect();
+            if compact.contains("javascript:")
+                || compact.contains("vbscript:")
+                || compact.contains("data:text/html")
+                || compact.contains("-moz-binding")
+            {
+                errors.push(format!(
+                    "{}: {} contains an unsafe CSS value",
+                    component_id, path
+                ));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                validate_style_strings(component_id, &format!("{path}[{index}]"), item, errors);
+            }
+        }
+        Value::Object(obj) => {
+            for (key, item) in obj {
+                validate_style_strings(component_id, &format!("{path}.{key}"), item, errors);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<String>) {
+    let Some(actions) = actions.as_array() else {
+        errors.push(format!("{}: actions must be an array", component_id));
+        return;
+    };
+
+    if actions.len() > MAX_UI_ACTIONS {
+        errors.push(format!(
+            "{}: actions is limited to {MAX_UI_ACTIONS} entries",
+            component_id
+        ));
+    }
+
+    for (index, action) in actions.iter().enumerate() {
+        let Some(action_obj) = action.as_object() else {
+            errors.push(format!(
+                "{}: actions[{index}] must be an object",
+                component_id
+            ));
+            continue;
+        };
+
+        for key in action_obj.keys() {
+            if !matches!(key.as_str(), "name" | "context") {
+                errors.push(format!(
+                    "{}: unknown action prop 'actions[{index}].{}'",
+                    component_id, key
+                ));
+            }
+        }
+
+        match action_obj.get("name").and_then(Value::as_str) {
+            Some(name) if !name.trim().is_empty() => {}
+            _ => errors.push(format!(
+                "{}: actions[{index}].name must be a non-empty string",
+                component_id
+            )),
+        }
+
+        match action_obj.get("context") {
+            Some(Value::Object(_)) => {}
+            Some(_) => errors.push(format!(
+                "{}: actions[{index}].context must be an object",
+                component_id
+            )),
+            None => errors.push(format!(
+                "{}: actions[{index}].context is required",
+                component_id
+            )),
+        }
+    }
+}
+
+fn validate_canvas_settings(canvas: &Value, errors: &mut Vec<String>) {
+    if !canvas.is_object() {
+        if !canvas.is_null() {
+            errors.push("canvasSettings must be an object".to_string());
+        }
+        return;
+    }
+    if let Some(custom_css) = canvas.get("customCss").and_then(|value| value.as_str())
+        && custom_css.len() > MAX_UI_CUSTOM_CSS_CHARS
+    {
+        errors.push(format!(
+            "canvasSettings.customCss is too large; maximum is {MAX_UI_CUSTOM_CSS_CHARS} bytes"
+        ));
+    }
+    if let Some(background_image) = canvas
+        .get("backgroundImage")
+        .and_then(|value| value.as_str())
+    {
+        let allowed = background_image.starts_with("http://")
+            || background_image.starts_with("https://")
+            || background_image.starts_with("data:image/png;base64,")
+            || background_image.starts_with("data:image/jpeg;base64,")
+            || background_image.starts_with("data:image/webp;base64,")
+            || background_image.starts_with("data:image/gif;base64,");
+        if !allowed {
+            errors.push(
+                "canvasSettings.backgroundImage must be http(s) or a safe data:image URL"
+                    .to_string(),
+            );
+        }
+    }
+}
+
+fn collect_child_refs(
+    parent_id: &str,
+    children: &Value,
+    all_ids: &HashSet<String>,
+    errors: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(children_obj) = children.as_object() else {
+        errors.push(format!("{}: children must be an object", parent_id));
+        return Vec::new();
+    };
+
+    if let Some(explicit_list) = children_obj.get("explicitList") {
+        let Some(explicit_list) = explicit_list.as_array() else {
+            errors.push(format!(
+                "{}: children.explicitList must be an array of component ids",
+                parent_id
+            ));
+            return Vec::new();
+        };
+
+        let mut refs = Vec::new();
+        for child_ref in explicit_list {
+            let Some(child_id) = child_ref.as_str() else {
+                errors.push(format!(
+                    "{}: children.explicitList can only contain strings",
+                    parent_id
+                ));
+                continue;
+            };
+            if child_id == parent_id {
+                errors.push(format!("{}: component cannot be its own child", parent_id));
+            }
+            if !all_ids.contains(child_id) {
+                errors.push(format!(
+                    "{}: children references '{}' which doesn't exist in the components array",
+                    parent_id, child_id
+                ));
+            }
+            refs.push(child_id.to_string());
+        }
+        return refs;
+    }
+
+    if let Some(template) = children_obj.get("template") {
+        let template_component_id = template
+            .get("templateComponentId")
+            .and_then(|value| value.as_str());
+        let data_path = template.get("dataPath").and_then(|value| value.as_str());
+        match (template_component_id, data_path) {
+            (Some(component_id), Some(_)) if all_ids.contains(component_id) => {
+                return vec![component_id.to_string()];
+            }
+            (Some(component_id), Some(_)) => {
+                errors.push(format!(
+                    "{}: templateComponentId '{}' does not exist",
+                    parent_id, component_id
+                ));
+            }
+            _ => {
+                errors.push(format!(
+                    "{}: children.template requires templateComponentId and dataPath",
+                    parent_id
+                ));
+            }
+        }
+        return Vec::new();
+    }
+
+    errors.push(format!(
+        "{}: children must contain explicitList or template",
+        parent_id
+    ));
+    Vec::new()
+}
+
+fn find_child_cycle(graph: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
+    fn visit(
+        node: &str,
+        graph: &HashMap<String, Vec<String>>,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        stack: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        if visited.contains(node) {
+            return None;
+        }
+        if !visiting.insert(node.to_string()) {
+            if let Some(start) = stack.iter().position(|item| item == node) {
+                let mut cycle = stack[start..].to_vec();
+                cycle.push(node.to_string());
+                return Some(cycle);
+            }
+            return Some(vec![node.to_string(), node.to_string()]);
+        }
+
+        stack.push(node.to_string());
+        if let Some(children) = graph.get(node) {
+            for child in children {
+                if let Some(cycle) = visit(child, graph, visiting, visited, stack) {
+                    return Some(cycle);
+                }
+            }
+        }
+        stack.pop();
+        visiting.remove(node);
+        visited.insert(node.to_string());
+        None
+    }
+
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut stack = Vec::new();
+    for node in graph.keys() {
+        if let Some(cycle) = visit(node, graph, &mut visiting, &mut visited, &mut stack) {
+            return Some(cycle);
+        }
+    }
+    None
 }
 
 /// Get detailed schema documentation for a component type

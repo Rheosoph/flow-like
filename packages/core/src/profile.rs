@@ -13,6 +13,15 @@ use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+fn split_profile_bit_reference(reference: &str) -> Option<(&str, &str)> {
+    let (hub, bit_id) = reference.rsplit_once(':')?;
+    if hub.trim().is_empty() || bit_id.trim().is_empty() {
+        return None;
+    }
+
+    Some((hub, bit_id))
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Hash, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionMode {
@@ -136,6 +145,10 @@ impl Default for Profile {
 impl Profile {
     /// Check if a bit is a local model (requires local hosting capabilities)
     fn is_local_model(bit: &Bit) -> bool {
+        if bit.bit_type == crate::bit::BitTypes::Tts {
+            return true;
+        }
+
         if let Ok(llm_params) =
             flow_like_types::json::from_value::<crate::bit::LLMParameters>(bit.parameters.clone())
         {
@@ -203,13 +216,8 @@ impl Profile {
         let mut best_bit = (0.0, None);
 
         if !remote {
-            for bit in &self.bits {
-                let (hub, bit_id) = bit
-                    .split_once(':')
-                    .ok_or_else(|| anyhow!("Invalid bit format: {}", bit))?;
-
-                let hub = Hub::new(hub, http_client.clone()).await?;
-                let bit = hub.get_bit(bit_id).await?;
+            for bit_ref in &self.bits {
+                let bit = self.get_profile_bit(bit_ref, http_client.clone()).await?;
 
                 // Skip local models if only_hosted is true
                 if only_hosted && Self::is_local_model(&bit) {
@@ -330,14 +338,33 @@ impl Profile {
         Err(flow_like_types::anyhow!("Bit not found"))
     }
 
+    async fn get_profile_bit(&self, bit_ref: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
+        if bit_ref.trim().is_empty() {
+            return Err(anyhow!("Invalid bit format: {}", bit_ref));
+        }
+
+        if let Some((hub, bit_id)) = split_profile_bit_reference(bit_ref) {
+            let hub = Hub::new(hub, http_client).await?;
+            return hub.get_bit(bit_id).await;
+        }
+
+        self.find_bit(bit_ref, http_client).await
+    }
+
     pub async fn get_available_hubs(&self, http_client: Arc<HTTPClient>) -> Result<Vec<Hub>> {
         let mut hubs = HashSet::new();
+        if !self.hub.trim().is_empty() {
+            hubs.insert(self.hub.clone());
+        }
+
         for hub in &self.hubs {
-            hubs.insert(hub.clone());
+            if !hub.trim().is_empty() {
+                hubs.insert(hub.clone());
+            }
         }
 
         self.bits.iter().for_each(|id| {
-            if let Some((hub, _bit_id)) = id.split_once(':') {
+            if let Some((hub, _bit_id)) = split_profile_bit_reference(id) {
                 hubs.insert(hub.to_string());
             }
         });
@@ -363,7 +390,10 @@ impl Profile {
 
     pub async fn add_bit(&mut self, bit: &Bit) {
         let bit_id = format!("{}:{}", bit.hub, bit.id);
-        let bit_exists = self.bits.iter().any(|reference| reference == &bit_id);
+        let bit_exists = self
+            .bits
+            .iter()
+            .any(|reference| reference.split(':').next_back() == Some(bit.id.as_str()));
         if bit_exists {
             return;
         }
@@ -371,7 +401,50 @@ impl Profile {
     }
 
     pub fn remove_bit(&mut self, bit: &Bit) {
-        let bit_id = format!("{}:{}", bit.hub, bit.id);
-        self.bits.retain(|reference| reference != &bit_id);
+        self.bits
+            .retain(|reference| reference.split(':').next_back() != Some(bit.id.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Profile, split_profile_bit_reference};
+    use flow_like_types::tokio;
+
+    #[test]
+    fn split_profile_bit_reference_handles_hub_urls() {
+        assert_eq!(
+            split_profile_bit_reference("https://api.flow-like.com:s14lujkm2gut2mwg0zo3imxv"),
+            Some(("https://api.flow-like.com", "s14lujkm2gut2mwg0zo3imxv"))
+        );
+        assert_eq!(
+            split_profile_bit_reference("api.flow-like.com:s14lujkm2gut2mwg0zo3imxv"),
+            Some(("api.flow-like.com", "s14lujkm2gut2mwg0zo3imxv"))
+        );
+    }
+
+    #[test]
+    fn split_profile_bit_reference_allows_bare_bit_ids() {
+        assert_eq!(
+            split_profile_bit_reference("s14lujkm2gut2mwg0zo3imxv"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_add_bit_deduplicates_bare_and_hub_references() {
+        let mut profile = Profile {
+            bits: vec!["s14lujkm2gut2mwg0zo3imxv".to_string()],
+            ..Profile::default()
+        };
+        let bit = crate::bit::Bit {
+            id: "s14lujkm2gut2mwg0zo3imxv".to_string(),
+            hub: "https://api.flow-like.com".to_string(),
+            ..crate::bit::Bit::default()
+        };
+        profile.add_bit(&bit).await;
+
+        assert_eq!(bit.id, "s14lujkm2gut2mwg0zo3imxv");
+        assert_eq!(profile.bits, vec!["s14lujkm2gut2mwg0zo3imxv"]);
     }
 }

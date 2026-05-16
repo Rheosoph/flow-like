@@ -34,6 +34,34 @@ pub enum ReleaseNotes {
     URL(String),
 }
 
+/// Where a single event runs. Unlike `Board::ExecutionMode`, events are never
+/// Hybrid — an event is always bound to exactly one environment so its
+/// configuration (URLs, credentials, tutorials) can be unambiguous.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EventExecutionMode {
+    /// Runs on the user's device (desktop app / synced into local sqlite).
+    #[default]
+    Local,
+    /// Runs on the server (cloud endpoint, cron worker, sink service).
+    Remote,
+}
+
+impl EventExecutionMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventExecutionMode::Local => "Local",
+            EventExecutionMode::Remote => "Remote",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "Remote" | "remote" | "REMOTE" => EventExecutionMode::Remote,
+            _ => EventExecutionMode::Local,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct CanaryEvent {
     pub weight: f32,
@@ -80,6 +108,11 @@ pub struct Event {
     /// Whether this is the default event/route for the app (shown at "/")
     #[serde(default)]
     pub is_default: bool,
+
+    /// Where this event runs (Local/offline vs Remote/server). Inherited from
+    /// the board's `execution_mode` when that mode is not Hybrid.
+    #[serde(default)]
+    pub execution_mode: EventExecutionMode,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -198,6 +231,8 @@ impl Event {
             self.validate_event_references(app).await?;
         }
 
+        self.reconcile_execution_mode_with_board(app).await?;
+
         // Populate inputs from the board before saving
         if let Err(e) = self.populate_inputs(app).await {
             tracing::warn!("Failed to populate event inputs during upsert: {}", e);
@@ -278,6 +313,46 @@ impl Event {
         }
 
         Ok(versions)
+    }
+
+    /// Force the event's `execution_mode` to match the board when the board
+    /// is locked to `Local` or `Remote`. Events are never Hybrid — when the
+    /// board allows either, whatever the caller supplied is kept.
+    pub async fn reconcile_execution_mode_with_board(
+        &mut self,
+        app: &App,
+    ) -> flow_like_types::Result<()> {
+        if self.default_page_id.is_some() {
+            return Ok(());
+        }
+        if self.board_id.is_empty() {
+            return Ok(());
+        }
+
+        let board = match app
+            .open_board(self.board_id.clone(), Some(false), self.board_version)
+            .await
+        {
+            Ok(b) => b,
+            Err(_) => return Ok(()),
+        };
+        let board_mode = board.lock().await.execution_mode.clone();
+
+        match board_mode {
+            super::board::ExecutionMode::Local => {
+                if self.execution_mode != EventExecutionMode::Local {
+                    self.execution_mode = EventExecutionMode::Local;
+                }
+            }
+            super::board::ExecutionMode::Remote => {
+                if self.execution_mode != EventExecutionMode::Remote {
+                    self.execution_mode = EventExecutionMode::Remote;
+                }
+            }
+            super::board::ExecutionMode::Hybrid => {}
+        }
+
+        Ok(())
     }
 
     pub async fn validate_event_references(&self, app: &App) -> flow_like_types::Result<()> {

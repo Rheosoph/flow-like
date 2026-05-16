@@ -18,6 +18,7 @@ import {
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
+	type IGraphState,
 	type IHelperState,
 	type IPageState,
 	type IProfile,
@@ -33,6 +34,7 @@ import {
 	type IWidgetState,
 	LoadingScreen,
 	type QueryClient,
+	isAzureBlobStorageUrl,
 	offlineSyncDB,
 	useBackend,
 	useBackendStore,
@@ -57,6 +59,7 @@ import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { DatabaseState } from "./tauri-provider/db-state";
 import { EventState } from "./tauri-provider/event-state";
+import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
 import { PageState } from "./tauri-provider/page-state";
 import { RegistryState } from "./tauri-provider/registry-state";
@@ -95,6 +98,7 @@ export class TauriBackend implements IBackendState {
 	userState: IUserState;
 	aiState: IAIState;
 	dbState: IDatabaseState;
+	graphState: IGraphState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -127,6 +131,7 @@ export class TauriBackend implements IBackendState {
 		this.userState = new UserState(this);
 		this.aiState = new AiState(this);
 		this.dbState = new DatabaseState(this);
+		this.graphState = new GraphState(this);
 		this.widgetState = new WidgetState(this);
 		this.pageState = new PageState(this);
 		this.registryState = new RegistryState(this);
@@ -155,9 +160,11 @@ export class TauriBackend implements IBackendState {
 		this.auth = auth;
 		this._apiState.setAuth(auth);
 		const token = auth.user?.access_token ?? null;
-		this.registryState.setAuthToken?.(token)?.catch((e) =>
-			console.warn("[RegistryAuth] Failed to set auth token:", e),
-		);
+		this.registryState
+			.setAuthToken?.(token)
+			?.catch((e) =>
+				console.warn("[RegistryAuth] Failed to set auth token:", e),
+			);
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
@@ -262,7 +269,7 @@ export class TauriBackend implements IBackendState {
 			);
 
 			// Azure Blob Storage requires x-ms-blob-type header
-			if (signedUrl.includes(".blob.core.windows.net")) {
+			if (isAzureBlobStorageUrl(signedUrl)) {
 				xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 			}
 
@@ -595,9 +602,9 @@ export function ProfileSyncer({
 		const deleteProfileLocally = async (
 			profileId: string,
 		): Promise<boolean> => {
-			const currentId = await invoke<string>(
-				"get_current_profile_id",
-			).catch(() => null);
+			const currentId = await invoke<string>("get_current_profile_id").catch(
+				() => null,
+			);
 			let wasCurrentProfile = false;
 
 			if (currentId === profileId) {
@@ -674,8 +681,11 @@ export function ProfileSyncer({
 						});
 
 						if (pullResponse.ok) {
-							const serverProfiles =
+							const allServerProfiles =
 								(await pullResponse.json()) as OnlineProfile[];
+							const serverProfiles = allServerProfiles.filter(
+								(p) => !p.deleted_at,
+							);
 
 							if (serverProfiles.length > 0) {
 								console.log(
@@ -886,6 +896,7 @@ export function ProfileSyncer({
 						response.statusText,
 						errorBody,
 					);
+					return;
 				} else {
 					result = (await response.json()) as SyncResult;
 					console.log(
@@ -1004,16 +1015,12 @@ export function ProfileSyncer({
 						return;
 					}
 
-const allOnlineProfiles =
-							(await profilesResponse.json()) as OnlineProfile[];
-						const tombstoneIds = new Set(
-							allOnlineProfiles
-								.filter((p) => p.deleted_at)
-								.map((p) => p.id),
-						);
-						const onlineProfiles = allOnlineProfiles.filter(
-							(p) => !p.deleted_at,
-						);
+					const allOnlineProfiles =
+						(await profilesResponse.json()) as OnlineProfile[];
+					const tombstoneIds = new Set(
+						allOnlineProfiles.filter((p) => p.deleted_at).map((p) => p.id),
+					);
+					const onlineProfiles = allOnlineProfiles.filter((p) => !p.deleted_at);
 					const onlineProfilesById = new Map(
 						onlineProfiles.map((p) => [p.id, p]),
 					);
@@ -1096,8 +1103,7 @@ const allOnlineProfiles =
 									isTombstoned ? "(tombstoned)" : "(stale)",
 								);
 								try {
-									const wasCurrent =
-										await deleteProfileLocally(localProfileId);
+									const wasCurrent = await deleteProfileLocally(localProfileId);
 									if (wasCurrent) deletedCurrentProfile = true;
 								} catch (error) {
 									console.error(
@@ -1319,13 +1325,10 @@ const allOnlineProfiles =
 
 		syncProfiles();
 
-		const interval = setInterval(
-			() => {
-				if (syncingRef.current) return;
-				syncProfiles();
-			},
-			5 * 60_000,
-		);
+		const interval = setInterval(() => {
+			if (syncingRef.current) return;
+			syncProfiles();
+		}, 5 * 60_000);
 		return () => clearInterval(interval);
 	}, [backend, isAuthenticated, accessToken, hubUrl]);
 

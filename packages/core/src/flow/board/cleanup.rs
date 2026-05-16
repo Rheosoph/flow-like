@@ -6,6 +6,7 @@ use crate::flow::{
         cleanup::{
             bridge_layers::BridgeLayersCleanup, fix_pin_connections::FixPinsCleanup,
             fix_refs::FixRefsCleanup, order_pin_indices::PinIndicesCleanup,
+            sync_known_schemas::SyncKnownSchemasCleanup,
         },
     },
     node::Node,
@@ -18,6 +19,7 @@ pub mod fix_initial_coordinates;
 pub mod fix_pin_connections;
 pub mod fix_refs;
 pub mod order_pin_indices;
+pub mod sync_known_schemas;
 pub mod sync_node_schema;
 
 pub type PinLookup = HashMap<String, (Arc<Pin>, NodeOrLayer)>;
@@ -81,6 +83,7 @@ impl Board {
     pub fn cleanup(&mut self) {
         let mut bridge_layers = BridgeLayersCleanup::init(self);
         let mut fix_pin_connections = FixPinsCleanup::init(self);
+        let mut sync_known_schemas = SyncKnownSchemasCleanup::init(self);
         let mut fix_refs = FixRefsCleanup::init(self);
         let mut order_pin_indices = PinIndicesCleanup::init(self);
         let mut fix_initial_coordinates =
@@ -91,6 +94,7 @@ impl Board {
 
         let mut steps: Vec<&mut dyn BoardCleanupLogic> = vec![
             &mut fix_initial_coordinates,
+            &mut sync_known_schemas,
             &mut fix_refs,
             &mut fix_pin_connections,
             &mut bridge_layers,

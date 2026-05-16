@@ -1,13 +1,10 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, HashSet};
 
 use flow_like::flow::{
     board::{Board, Layer, LayerType},
     execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
     node::{Node, NodeLogic},
-    pin::PinType,
+    pin::{Pin, PinType},
     utils::evaluate_pin_value,
     variable::VariableType,
 };
@@ -20,6 +17,17 @@ pub struct CallFunctionNode {}
 impl CallFunctionNode {
     pub fn new() -> Self {
         CallFunctionNode {}
+    }
+
+    fn sync_mirrored_pin(mirrored_pin: &mut Pin, function_pin: &Pin, index: u16) {
+        mirrored_pin.friendly_name = function_pin.friendly_name.clone();
+        mirrored_pin.description = function_pin.description.clone();
+        mirrored_pin.pin_type = function_pin.pin_type.clone();
+        mirrored_pin.data_type = function_pin.data_type.clone();
+        mirrored_pin.value_type = function_pin.value_type.clone();
+        mirrored_pin.schema = function_pin.schema.clone();
+        mirrored_pin.options = function_pin.options.clone();
+        mirrored_pin.index = index;
     }
 
     async fn read_outputs(
@@ -424,16 +432,23 @@ impl NodeLogic for CallFunctionNode {
             .collect();
         output_pins.sort_by(|a, b| a.index.cmp(&b.index));
 
-        let mut relevant_pin_names = HashSet::new();
-        relevant_pin_names.insert("function_layer_id".to_string());
+        let mut relevant_input_pin_names = HashSet::new();
+        relevant_input_pin_names.insert("function_layer_id".to_string());
+        let mut relevant_output_pin_names = HashSet::new();
 
-        for pin in &input_pins {
-            relevant_pin_names.insert(pin.name.clone());
-            if node
+        for (index, pin) in input_pins.iter().enumerate() {
+            if pin.name == "function_layer_id" {
+                continue;
+            }
+
+            relevant_input_pin_names.insert(pin.name.clone());
+            let mirrored_index = index as u16 + 2;
+            if let Some(existing_pin) = node
                 .pins
-                .iter()
-                .any(|(_, p)| p.name == pin.name && p.pin_type == PinType::Input)
+                .values_mut()
+                .find(|p| p.name == pin.name && p.pin_type == PinType::Input)
             {
+                Self::sync_mirrored_pin(existing_pin, pin, mirrored_index);
                 continue;
             }
             let new_pin = node.add_input_pin(
@@ -442,18 +457,18 @@ impl NodeLogic for CallFunctionNode {
                 &pin.description,
                 pin.data_type.clone(),
             );
-            new_pin.value_type = pin.value_type.clone();
-            new_pin.schema = pin.schema.clone();
-            new_pin.options = pin.options.clone();
+            Self::sync_mirrored_pin(new_pin, pin, mirrored_index);
         }
 
-        for pin in &output_pins {
-            relevant_pin_names.insert(pin.name.clone());
-            if node
+        for (index, pin) in output_pins.iter().enumerate() {
+            relevant_output_pin_names.insert(pin.name.clone());
+            let mirrored_index = index as u16 + 1;
+            if let Some(existing_pin) = node
                 .pins
-                .iter()
-                .any(|(_, p)| p.name == pin.name && p.pin_type == PinType::Output)
+                .values_mut()
+                .find(|p| p.name == pin.name && p.pin_type == PinType::Output)
             {
+                Self::sync_mirrored_pin(existing_pin, pin, mirrored_index);
                 continue;
             }
             let new_pin = node.add_output_pin(
@@ -462,13 +477,145 @@ impl NodeLogic for CallFunctionNode {
                 &pin.description,
                 pin.data_type.clone(),
             );
-            new_pin.value_type = pin.value_type.clone();
-            new_pin.schema = pin.schema.clone();
-            new_pin.options = pin.options.clone();
+            Self::sync_mirrored_pin(new_pin, pin, mirrored_index);
         }
 
         // Remove stale pins (only keep function_layer_id + mirrored pins)
-        node.pins
-            .retain(|_, p| relevant_pin_names.contains(&p.name));
+        node.pins.retain(|_, p| {
+            if p.pin_type == PinType::Input {
+                relevant_input_pin_names.contains(&p.name)
+            } else {
+                relevant_output_pin_names.contains(&p.name)
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::{
+        board::{ExecutionMode, ExecutionStage},
+        execution::LogLevel,
+        pin::ValueType,
+    };
+    use flow_like_types::json::json;
+    use std::{collections::BTreeSet, time::SystemTime};
+
+    fn pin(name: &str, pin_type: PinType, data_type: VariableType, index: u16) -> Pin {
+        Pin {
+            id: format!("{name}_id"),
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            pin_type,
+            data_type,
+            schema: None,
+            value_type: ValueType::Normal,
+            depends_on: BTreeSet::new(),
+            connected_to: BTreeSet::new(),
+            default_value: None,
+            index,
+            options: None,
+            value: None,
+        }
+    }
+
+    fn board_with_layer(layer: Layer) -> Board {
+        let mut layers = std::collections::HashMap::new();
+        layers.insert(layer.id.clone(), layer);
+
+        Board {
+            id: "board".to_string(),
+            name: "Board".to_string(),
+            description: String::new(),
+            nodes: std::collections::HashMap::new(),
+            variables: std::collections::HashMap::new(),
+            comments: std::collections::HashMap::new(),
+            viewport: (0.0, 0.0, 0.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: std::collections::HashMap::new(),
+            layers,
+            page_ids: Vec::new(),
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: Default::default(),
+            logic_nodes: std::collections::HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    fn ordered_pin_names(node: &Node, pin_type: PinType) -> Vec<String> {
+        let mut pins = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == pin_type)
+            .collect::<Vec<_>>();
+        pins.sort_by_key(|pin| pin.index);
+        pins.into_iter().map(|pin| pin.name.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn on_update_reorders_existing_mirrored_function_pins() {
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Example Function".to_string(),
+            LayerType::Function,
+        );
+        layer.pins.insert(
+            "first_id".to_string(),
+            pin("first", PinType::Input, VariableType::String, 1),
+        );
+        layer.pins.insert(
+            "second_id".to_string(),
+            pin("second", PinType::Input, VariableType::Integer, 2),
+        );
+        layer.pins.insert(
+            "out_first_id".to_string(),
+            pin("out_first", PinType::Output, VariableType::Boolean, 1),
+        );
+        layer.pins.insert(
+            "out_second_id".to_string(),
+            pin("out_second", PinType::Output, VariableType::Float, 2),
+        );
+
+        let mut board = board_with_layer(layer);
+        let logic = CallFunctionNode::new();
+        let mut node = logic.get_node();
+        node.get_pin_mut_by_name("function_layer_id")
+            .unwrap()
+            .set_default_value(Some(json!("function-layer")));
+
+        logic.on_update(&mut node, &board).await;
+
+        assert_eq!(
+            ordered_pin_names(&node, PinType::Input),
+            vec!["function_layer_id", "first", "second"]
+        );
+        assert_eq!(
+            ordered_pin_names(&node, PinType::Output),
+            vec!["out_first", "out_second"]
+        );
+
+        let layer = board.layers.get_mut("function-layer").unwrap();
+        layer.pins.get_mut("first_id").unwrap().index = 2;
+        layer.pins.get_mut("second_id").unwrap().index = 1;
+        layer.pins.get_mut("out_first_id").unwrap().index = 2;
+        layer.pins.get_mut("out_second_id").unwrap().index = 1;
+
+        logic.on_update(&mut node, &board).await;
+
+        assert_eq!(
+            ordered_pin_names(&node, PinType::Input),
+            vec!["function_layer_id", "second", "first"]
+        );
+        assert_eq!(
+            ordered_pin_names(&node, PinType::Output),
+            vec!["out_second", "out_first"]
+        );
     }
 }

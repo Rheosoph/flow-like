@@ -312,14 +312,22 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 	}
 
 	const ChartComponent = chartModule;
+	const title = input.config.title;
 
 	return (
-		<div
-			ref={containerRef}
-			className="w-full overflow-hidden rounded-md"
-			style={{ height: input.config.height || height }}
-		>
-			{ChartComponent && <ChartComponent {...chartProps} />}
+		<div className="w-full">
+			{title ? (
+				<div className="px-1 pb-2 text-center text-sm font-medium text-foreground">
+					{title}
+				</div>
+			) : null}
+			<div
+				ref={containerRef}
+				className="w-full overflow-hidden rounded-md"
+				style={{ height: input.config.height || height }}
+			>
+				{ChartComponent && <ChartComponent {...chartProps} />}
+			</div>
 		</div>
 	);
 }

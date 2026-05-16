@@ -1,9 +1,12 @@
 export * from "./utils";
+export * from "./api-url";
 export * from "./save-parse";
 export * from "./persister";
 export * from "./idb-storage";
 export * from "./messages";
 export * from "./flow-board-utils";
+export * from "./learn/board-bridge";
+export * from "./learn/types";
 export * from "./date";
 export * from "./app-category";
 export * from "./llm/history";
@@ -13,11 +16,13 @@ export * from "./runtime-vars-utils";
 
 export * from "./bit/bit";
 export * from "./bit/bit-pack";
+export * from "./bit/tts-asset-repair";
 
 export * from "./schema/index";
 export * from "./command/generic-command";
 export * from "./permission/global-permission";
 export * from "./permission/role-permission";
+export * from "./importer/index";
 export * from "./time/now";
 export * from "./set-query-params";
 export * from "./theme";
@@ -28,5 +33,7 @@ export * from "./oauth";
 export * from "./builder/KeyboardShortcuts";
 export * from "./flowpilot/index";
 export * from "./presign-assets";
+export * from "./storage-url";
+export * from "./temporary-upload-cache";
 export * from "./css-utils";
 export * from "./idb-cleanup";

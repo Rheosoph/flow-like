@@ -16,6 +16,12 @@ WORKDIR /app
 
 COPY . .
 
+# packages/api embeds flow-like.config.json at compile time. Use the
+# docker-compose config by default so self-hosted images do not inherit the
+# repo-root hosted production config.
+ARG FLOW_LIKE_CONFIG=apps/backend/docker-compose/flow-like.config.example.json
+RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
+
 # Remove packages that require edition 2024
 RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
     sed -i '/apps\/backend\/local\/api/d' Cargo.toml && \

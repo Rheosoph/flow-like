@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useTauriInvoke } from "../../../components/useInvoke";
+import { appsDB } from "../../../lib/apps-db";
 import AMBER_MINIMAL from "./themes/amber-minimal.json";
 import AMETHYST_HAZE from "./themes/amethyst-haze.json";
 import BOLD_TECH from "./themes/bold-tech.json";
@@ -211,13 +212,15 @@ export default function SettingsProfilesPage() {
 					},
 				);
 				if (!response.ok && response.status !== 404) {
-					console.warn(
-						"[ProfileDelete] Server delete failed:",
-						response.status,
-					);
+					const message = await response.text().catch(() => "");
+					console.warn("[ProfileDelete] Server delete failed:", response.status);
+					toast.error(message || "Failed to delete profile on the server");
+					return;
 				}
 			} catch (err) {
 				console.warn("[ProfileDelete] Server delete error:", err);
+				toast.error("Failed to delete profile on the server");
+				return;
 			}
 		}
 
@@ -231,7 +234,13 @@ export default function SettingsProfilesPage() {
 		}
 
 		// Delete locally
-		await invoke("delete_profile", { profileId });
+		try {
+			await invoke("delete_profile", { profileId });
+			await appsDB.shortcuts.where("profileId").equals(profileId).delete();
+		} catch (err) {
+			toast.error(`${err}`);
+			return;
+		}
 
 		toast.success("Profile deleted");
 

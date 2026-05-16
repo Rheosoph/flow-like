@@ -3,7 +3,6 @@ import {
 	type IBoard,
 	type IEvent,
 	type IEventState,
-	IExecutionMode,
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
@@ -29,6 +28,10 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import {
+	ensureRpaSystemPermissions,
+	requestRpaAutomationConsent,
+} from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
@@ -61,6 +64,47 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 
 export class EventState implements IEventState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async ensureRpaApprovalForEvent(
+		appId: string,
+		event: IEvent,
+		board: IBoard,
+		context: "execution" | "event_registration",
+	): Promise<void> {
+		if (event.execution_mode === "Remote") return;
+		if (context === "event_registration" && event.active === false) return;
+
+		const { requires_local_execution } =
+			extractOAuthRequirementsFromBoard(board);
+		if (!requires_local_execution) return;
+
+		const approved = await requestRpaAutomationConsent({
+			appId,
+			boardId: event.board_id,
+			context,
+			eventId: event.id,
+		});
+		if (!approved) {
+			const error = new Error(
+				"Computer automation was not approved for this event.",
+			) as Error & { isRpaConsentError?: boolean };
+			error.isRpaConsentError = true;
+			throw error;
+		}
+
+		const permissionsGranted = await ensureRpaSystemPermissions({
+			appId,
+			boardId: event.board_id,
+			eventId: event.id,
+		});
+		if (!permissionsGranted) {
+			const error = new Error(
+				"RPA system permissions were not granted.",
+			) as Error & { isRpaPermissionDeclined?: boolean };
+			error.isRpaPermissionDeclined = true;
+			throw error;
+		}
+	}
 
 	async getEvent(
 		appId: string,
@@ -193,7 +237,10 @@ export class EventState implements IEventState {
 				return remoteData;
 			} catch (error) {
 				if (events.length === 0) throw error;
-				console.warn("[EventSync] Forced event fetch failed, falling back to local events:", error);
+				console.warn(
+					"[EventSync] Forced event fetch failed, falling back to local events:",
+					error,
+				);
 				return events;
 			}
 		}
@@ -275,6 +322,21 @@ export class EventState implements IEventState {
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 	): Promise<IEvent> {
+		if (event.board_id && event.execution_mode !== "Remote") {
+			const board = await this.backend.boardState.getBoard(
+				appId,
+				event.board_id,
+				event.board_version as [number, number, number] | undefined,
+				true,
+			);
+			await this.ensureRpaApprovalForEvent(
+				appId,
+				event,
+				board,
+				"event_registration",
+			);
+		}
+
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
 			return await invoke("upsert_event", {
@@ -323,36 +385,37 @@ export class EventState implements IEventState {
 	}
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
+
+		if (!isOffline) {
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				throw new Error(
+					"Profile, auth or query client not set. Cannot delete event.",
+				);
+			}
+
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/events/${eventId}`,
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		}
+
+		try {
 			await invoke("delete_event", {
 				appId: appId,
 				eventId: eventId,
 			});
-			return;
+		} catch (e) {
+			if (isOffline) throw e;
+			console.warn("[EventState] Local event deletion failed (non-fatal):", e);
 		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			throw new Error(
-				"Profile, auth or query client not set. Cannot delete event.",
-			);
-		}
-
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}/events/${eventId}`,
-			{
-				method: "DELETE",
-			},
-			this.backend.auth,
-		);
-		await invoke("delete_event", {
-			appId: appId,
-			eventId: eventId,
-		});
 	}
 	async validateEvent(
 		appId: string,
@@ -510,6 +573,7 @@ export class EventState implements IEventState {
 			(event.board_version as [number, number, number]) ?? undefined,
 			true,
 		);
+		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
@@ -566,7 +630,7 @@ export class EventState implements IEventState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -658,7 +722,7 @@ export class EventState implements IEventState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				if (event.event_type === "completed") {
@@ -830,18 +894,18 @@ export class EventState implements IEventState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/events/${eventId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/events/${eventId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunEventResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunEventResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

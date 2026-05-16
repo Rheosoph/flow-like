@@ -1,194 +1,325 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "Bit",
-	"type": "object",
-	"required": [
-		"authors",
-		"created",
-		"dependencies",
-		"dependency_tree_hash",
-		"hash",
-		"hub",
-		"id",
-		"meta",
-		"parameters",
-		"type",
-		"updated"
-	],
-	"properties": {
-		"id": {
-			"type": "string"
-		},
-		"type": {
-			"$ref": "#/definitions/BitTypes"
-		},
-		"meta": {
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/definitions/Metadata"
-			}
-		},
-		"authors": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"repository": {
-			"type": ["string", "null"]
-		},
-		"download_link": {
-			"type": ["string", "null"]
-		},
-		"file_name": {
-			"type": ["string", "null"]
-		},
-		"hash": {
-			"type": "string"
-		},
-		"size": {
-			"type": ["integer", "null"],
-			"format": "uint64",
-			"minimum": 0.0
-		},
-		"hub": {
-			"type": "string"
-		},
-		"parameters": true,
-		"version": {
-			"type": ["string", "null"]
-		},
-		"license": {
-			"type": ["string", "null"]
-		},
-		"dependencies": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"dependency_tree_hash": {
-			"type": "string"
-		},
-		"created": {
-			"type": "string"
-		},
-		"updated": {
-			"type": "string"
-		}
-	},
-	"definitions": {
-		"BitTypes": {
-			"type": "string",
-			"enum": [
-				"Llm",
-				"Vlm",
-				"Embedding",
-				"ImageEmbedding",
-				"File",
-				"Media",
-				"Template",
-				"Tokenizer",
-				"TokenizerConfig",
-				"SpecialTokensMap",
-				"Config",
-				"Course",
-				"PreprocessorConfig",
-				"Projection",
-				"Project",
-				"Board",
-				"Other",
-				"ObjectDetection"
-			]
-		},
-		"Metadata": {
-			"type": "object",
-			"required": [
-				"created_at",
-				"description",
-				"name",
-				"preview_media",
-				"tags",
-				"updated_at"
-			],
-			"properties": {
-				"name": {
-					"type": "string"
-				},
-				"description": {
-					"type": "string"
-				},
-				"long_description": {
-					"type": ["string", "null"]
-				},
-				"release_notes": {
-					"type": ["string", "null"]
-				},
-				"tags": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"use_case": {
-					"type": ["string", "null"]
-				},
-				"icon": {
-					"type": ["string", "null"]
-				},
-				"thumbnail": {
-					"type": ["string", "null"]
-				},
-				"preview_media": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"age_rating": {
-					"type": ["integer", "null"],
-					"format": "int32"
-				},
-				"website": {
-					"type": ["string", "null"]
-				},
-				"support_url": {
-					"type": ["string", "null"]
-				},
-				"docs_url": {
-					"type": ["string", "null"]
-				},
-				"organization_specific_values": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "integer",
-						"format": "uint8",
-						"minimum": 0.0
-					}
-				},
-				"created_at": {
-					"$ref": "#/definitions/SystemTime"
-				},
-				"updated_at": {
-					"$ref": "#/definitions/SystemTime"
-				}
-			}
-		},
-		"SystemTime": {
-			"type": "object",
-			"required": ["nanos_since_epoch", "secs_since_epoch"],
-			"properties": {
-				"secs_since_epoch": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0.0
-				},
-				"nanos_since_epoch": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bit",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "default": ""
+    },
+    "type": {
+      "$ref": "#/$defs/BitTypes",
+      "default": "Other"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Metadata"
+      },
+      "default": {}
+    },
+    "authors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "repository": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "download_link": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "file_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "hash": {
+      "type": "string",
+      "default": ""
+    },
+    "size": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "default": null
+    },
+    "hub": {
+      "type": "string",
+      "default": ""
+    },
+    "parameters": {
+      "default": null
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "license": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "dependency_tree_hash": {
+      "type": "string",
+      "default": ""
+    },
+    "created": {
+      "type": "string",
+      "default": ""
+    },
+    "updated": {
+      "type": "string",
+      "default": ""
+    },
+    "model_slug": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "model_evaluation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LlmModelEvaluation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "$defs": {
+    "BitTypes": {
+      "type": "string",
+      "enum": [
+        "Llm",
+        "Vlm",
+        "Tts",
+        "Stt",
+        "Embedding",
+        "ImageEmbedding",
+        "File",
+        "Media",
+        "ImageGeneration",
+        "VideoGeneration",
+        "Template",
+        "Tokenizer",
+        "TokenizerConfig",
+        "SpecialTokensMap",
+        "Config",
+        "Course",
+        "PreprocessorConfig",
+        "Projection",
+        "Project",
+        "Board",
+        "Other",
+        "ObjectDetection"
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "long_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "use_case": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview_media": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "age_rating": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "website": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "support_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "docs_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "organization_specific_values": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "created_at": {
+          "$ref": "#/$defs/SystemTime"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/SystemTime"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "tags",
+        "preview_media",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "SystemTime": {
+      "type": "object",
+      "properties": {
+        "secs_since_epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nanos_since_epoch": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "secs_since_epoch",
+        "nanos_since_epoch"
+      ]
+    },
+    "LlmModelEvaluation": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "release_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "creator_name": {
+          "type": "string"
+        },
+        "creator_slug": {
+          "type": "string"
+        },
+        "evaluations": true,
+        "pricing": true,
+        "median_output_tokens_per_second": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "median_time_to_first_token_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "median_time_to_first_answer_token": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "slug",
+        "name",
+        "creator_name",
+        "creator_slug"
+      ]
+    }
+  }
 }

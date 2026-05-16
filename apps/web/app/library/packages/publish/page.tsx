@@ -362,7 +362,9 @@ export default function PublishPackagePage() {
 				const bumped = bumpPatch(formData.version);
 				setFormData((prev) => ({ ...prev, version: bumped }));
 				setVersionCheckState("bumped");
-				toast.info(`Version ${formData.version} already exists — bumped to ${bumped}`);
+				toast.info(
+					`Version ${formData.version} already exists — bumped to ${bumped}`,
+				);
 			}
 		} catch {
 			setVersionCheckState("idle");
@@ -502,15 +504,25 @@ export default function PublishPackagePage() {
 											/>
 											<Button
 												type="button"
-												variant={versionCheckState === "available" || versionCheckState === "bumped" ? "outline" : "secondary"}
+												variant={
+													versionCheckState === "available" ||
+													versionCheckState === "bumped"
+														? "outline"
+														: "secondary"
+												}
 												size="sm"
-												disabled={!formData.version || !formData.id || versionCheckState === "checking"}
+												disabled={
+													!formData.version ||
+													!formData.id ||
+													versionCheckState === "checking"
+												}
 												onClick={handleCheckVersion}
 												className="shrink-0"
 											>
 												{versionCheckState === "checking" ? (
 													<Loader2 className="h-4 w-4 animate-spin" />
-												) : versionCheckState === "available" || versionCheckState === "bumped" ? (
+												) : versionCheckState === "available" ||
+													versionCheckState === "bumped" ? (
 													<Check className="h-4 w-4 text-green-500" />
 												) : (
 													"Check"
@@ -518,10 +530,14 @@ export default function PublishPackagePage() {
 											</Button>
 										</div>
 										{versionCheckState === "available" && (
-											<p className="text-xs text-green-500">Version is available</p>
+											<p className="text-xs text-green-500">
+												Version is available
+											</p>
 										)}
 										{versionCheckState === "bumped" && (
-											<p className="text-xs text-yellow-500">Auto-bumped to available version</p>
+											<p className="text-xs text-yellow-500">
+												Auto-bumped to available version
+											</p>
 										)}
 									</div>
 								</div>
@@ -670,9 +686,7 @@ export default function PublishPackagePage() {
 												<SelectItem value="very_long">
 													Very Long (10min)
 												</SelectItem>
-												<SelectItem value="maximum">
-													Maximum (30min)
-												</SelectItem>
+												<SelectItem value="maximum">Maximum (30min)</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { applyMediaSourceUpdate } from "./media-source";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -51,6 +52,7 @@ export function useSurfaceManager() {
 						id: message.surfaceId,
 						rootComponentId: message.rootComponentId,
 						components: componentsMap,
+						dataModel: message.dataModel,
 						catalogId: message.catalogId,
 					});
 					break;
@@ -63,9 +65,7 @@ export function useSurfaceManager() {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 
 					next.set(message.surfaceId, {
@@ -101,7 +101,18 @@ export function useSurfaceManager() {
 				}
 
 				case "dataModelUpdate": {
-					// Handle data model updates if needed
+					const existing = next.get(message.surfaceId);
+					if (!existing) break;
+					const entries = new Map(
+						(existing.dataModel ?? []).map((entry) => [entry.path, entry]),
+					);
+					for (const entry of message.contents) {
+						entries.set(entry.path, entry);
+					}
+					next.set(message.surfaceId, {
+						...existing,
+						dataModel: Array.from(entries.values()),
+					});
 					break;
 				}
 
@@ -141,7 +152,8 @@ export function useSurfaceManager() {
 						if (updateValue?.type === "createComponent") {
 							const newComponent: SurfaceComponent = {
 								id: componentId,
-								component: updateValue.component as SurfaceComponent["component"],
+								component:
+									updateValue.component as SurfaceComponent["component"],
 								style: updateValue.style as SurfaceComponent["style"],
 							};
 							next.set(surfaceId, {
@@ -349,8 +361,12 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-									...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+									...(updateValue.layout !== undefined && {
+										layout: { literalJson: JSON.stringify(configOrLayout) },
+									}),
+									...(updateValue.config !== undefined && {
+										config: { literalJson: JSON.stringify(configOrLayout) },
+									}),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;
@@ -371,7 +387,7 @@ export function useSurfaceManager() {
 							break;
 						}
 						case "setImageSrc": {
-							const src = updateValue.src as string;
+							const src = String(updateValue.src ?? updateValue.url ?? "");
 							const alt = updateValue.alt as string | undefined;
 							const componentData = component.component as unknown as Record<
 								string,
@@ -381,10 +397,15 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
+									src: { literalString: src },
 									url: src,
-									alt: alt ?? componentData.alt,
+									...(alt !== undefined && { alt: { literalString: alt } }),
 								} as unknown as SurfaceComponent["component"],
 							};
+							break;
+						}
+						case "setMediaSource": {
+							updatedComponent = applyMediaSourceUpdate(component, updateValue);
 							break;
 						}
 						case "setSpeakerName": {

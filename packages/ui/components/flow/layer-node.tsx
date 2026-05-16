@@ -23,7 +23,12 @@ import PuffLoader from "react-spinners/PuffLoader";
 import { toast } from "sonner";
 import type { IBoard, INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
-import { type ILayer, ILayerType, ILogLevel, IPinType } from "../../lib/schema/flow/board";
+import {
+	type ILayer,
+	ILayerType,
+	ILogLevel,
+	IPinType,
+} from "../../lib/schema/flow/board";
 import { useLogAggregation } from "../../state/log-aggregation-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
 import { AutoResizeText } from "./auto-resize-text";
@@ -280,7 +285,9 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 							)}
 						</div>
 					)}
-					<div className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b ${props.data.layer.type === ILayerType.Function ? "bg-primary/15 text-primary" : "bg-accent text-accent-foreground"} p-1 justify-between rounded-t-md`}>
+					<div
+						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b ${props.data.layer.type === ILayerType.Function ? "bg-primary/15 text-primary" : "bg-accent text-accent-foreground"} p-1 justify-between rounded-t-md`}
+					>
 						<div className="flex flex-row items-center gap-1 min-w-0">
 							{props.data.layer.type === ILayerType.Function ? (
 								<SquareFunctionIcon className="w-2 h-2 shrink-0" />

@@ -3,11 +3,12 @@
 import { File, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import type { ITemporaryFlowPath } from "../../../state/backend-state";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
-import { useOnAction } from "../ActionHandler";
+import { useActionContext, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -18,7 +19,9 @@ interface FileData {
 	size: number;
 	type: string;
 	dataUrl?: string;
+	url?: string;
 	backendUrl?: string;
+	flowPath?: ITemporaryFlowPath;
 	uploading?: boolean;
 	uploadError?: string;
 }
@@ -35,6 +38,39 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fileNameFromUrl(url: string): string {
+	try {
+		const parsed = new URL(url, window.location.href);
+		const filename = parsed.searchParams.get("filename");
+		if (filename) return filename;
+	} catch {}
+
+	return url.split("?")[0].split("/").pop() || "file";
+}
+
+function normalizeFileValue(value: unknown): FileData[] {
+	const values = Array.isArray(value) ? value : value ? [value] : [];
+	return values
+		.map((item): FileData | null => {
+			if (typeof item === "string") {
+				return {
+					name: fileNameFromUrl(item),
+					size: 0,
+					type: "",
+					url: item,
+					backendUrl: item,
+				};
+			}
+
+			if (item && typeof item === "object") {
+				return item as FileData;
+			}
+
+			return null;
+		})
+		.filter((item): item is FileData => item !== null);
+}
+
 export function A2UIFileInput({
 	component,
 	style,
@@ -44,6 +80,7 @@ export function A2UIFileInput({
 	const onAction = useOnAction();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const { appId } = useActionContext();
 	const value = useResolved<FileData | FileData[]>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const error = useResolved<boolean>(component.error);
@@ -60,7 +97,7 @@ export function A2UIFileInput({
 	const [localFiles, setLocalFiles] = useState<FileData[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
 
-	const files: FileData[] = Array.isArray(value) ? value : value ? [value] : [];
+	const files = normalizeFileValue(value);
 	const displayFiles = localFiles.length > 0 ? localFiles : files;
 
 	const clearFiles = useCallback(() => {
@@ -116,13 +153,22 @@ export function A2UIFileInput({
 			});
 
 			try {
-				const backendUrl = await backend.helperState.fileToUrl(file, false);
+				const temporaryFile =
+					(await backend.helperState.fileToTemporaryFile?.(
+						file,
+						false,
+						appId,
+					)) ?? {
+						url: await backend.helperState.fileToUrl(file, false, appId),
+					};
 
 				const uploadedFile: FileData = {
 					name: file.name,
 					size: file.size,
 					type: file.type,
-					backendUrl,
+					url: temporaryFile.url,
+					backendUrl: temporaryFile.url,
+					flowPath: temporaryFile.flowPath,
 					uploading: false,
 				};
 				uploadedFiles.push(uploadedFile);
@@ -161,10 +207,7 @@ export function A2UIFileInput({
 				setByPath(component.value.path, newValue);
 			}
 
-			const urls = successfulUploads.map((f) => f.backendUrl as string);
-			const actionValue = multiple
-				? urls
-				: urls[0];
+			const urls = successfulUploads.map((f) => (f.url ?? f.backendUrl) as string);
 
 			onAction?.({
 				type: "userAction",
@@ -172,7 +215,10 @@ export function A2UIFileInput({
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: { value: actionValue },
+				context: {
+					value: newValue,
+					signedUrls: multiple ? urls : urls[0],
+				},
 			});
 		}
 
@@ -189,9 +235,7 @@ export function A2UIFileInput({
 			setByPath(component.value.path, newValue);
 		}
 
-		const urls = multiple
-			? newFiles.map((f) => f.backendUrl).filter(Boolean)
-			: null;
+		const urls = newFiles.map((f) => f.url ?? f.backendUrl).filter(Boolean);
 
 		onAction?.({
 			type: "userAction",
@@ -199,7 +243,10 @@ export function A2UIFileInput({
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: urls },
+			context: {
+				value: newValue,
+				signedUrls: multiple ? urls : (urls[0] ?? null),
+			},
 		});
 	};
 

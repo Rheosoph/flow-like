@@ -11,7 +11,7 @@ export type BoundValue =
 	| { literalBool: boolean }
 	| { literalOptions: SelectOption[] }
 	| { literalJson: string }
-	| { path: string; defaultValue?: string | number | boolean };
+	| { path: string; defaultValue?: unknown };
 
 export interface Action {
 	name: string;
@@ -26,6 +26,13 @@ export interface ChildrenTemplate {
 	dataPath: string;
 	itemIdPath?: string;
 	templateComponentId: string;
+}
+
+export interface DataScope {
+	dataPath?: string;
+	index?: number;
+	item?: unknown;
+	itemId?: string;
 }
 
 export interface Style {
@@ -969,10 +976,16 @@ export interface PlotlyChartComponent extends ComponentBase {
 // FilePreview - Generic file preview component
 export interface FilePreviewComponent extends ComponentBase {
 	type: "filePreview";
-	src: BoundValue;
+	src?: BoundValue;
+	url?: BoundValue;
+	filename?: BoundValue;
+	mimeType?: BoundValue;
+	fileType?: BoundValue; // "pdf" | "image" | "video" | "audio" | "code" | "text"
 	showControls?: BoundValue;
 	fit?: BoundValue; // "contain" | "cover" | "fill" | "none" | "scaleDown"
 	fallbackText?: BoundValue;
+	height?: BoundValue;
+	showDownload?: BoundValue;
 }
 
 // NivoChart - Nivo chart library component
@@ -1465,6 +1478,7 @@ export interface Surface {
 	id: string;
 	rootComponentId: string;
 	components: Record<string, SurfaceComponent>;
+	dataModel?: DataEntry[];
 	canvasSettings?: CanvasSettings;
 	catalogId?: string;
 }
@@ -1503,6 +1517,9 @@ export type A2UIServerMessage =
 	| {
 			type: "requestElements";
 			elementIds: string[];
+	  }
+	| {
+			type: "showScreen";
 	  }
 	| {
 			type: "upsertElement";

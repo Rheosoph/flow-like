@@ -11,6 +11,10 @@ import {
 	type IEmbeddingModelParameters,
 	type ILlmParameters,
 	IPooling,
+	ITtsDTypePreference,
+	type ITtsModelParameters,
+	ITtsModelType,
+	ITtsRuntimePreference,
 	Input,
 	Progress,
 	Separator,
@@ -43,6 +47,12 @@ import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
+import {
+	TTSConfiguration,
+	type TtsAssetDraft,
+	applyTtsModelPreset,
+	defaultTtsAssetLayout,
+} from "./tts";
 
 const DEFAULT_LLM_PARAMETERS: ILlmParameters = {
 	context_length: 2048,
@@ -79,6 +89,22 @@ const DEFAULT_EMBEDDING_PARAMETERS: IEmbeddingModelParameters = {
 		query: "",
 	},
 	vector_length: 1024,
+};
+
+const DEFAULT_TTS_PARAMETERS: ITtsModelParameters = {
+	assets: [],
+	default_language: null,
+	default_voice: null,
+	dtype: ITtsDTypePreference.Auto,
+	languages: [],
+	model_type: ITtsModelType.Kokoro,
+	provider: {
+		provider_name: "local:any-tts",
+		model_id: null,
+		version: null,
+	},
+	runtime: ITtsRuntimePreference.Auto,
+	voices: [],
 };
 
 const DEFAULT_BIT: IBit = {
@@ -150,6 +176,7 @@ export default function Page() {
 	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<
 		IBit | undefined
 	>(undefined);
+	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
 	const [progress, setProgress] = useState<number>(0);
 
 	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
@@ -168,6 +195,15 @@ export default function Page() {
 			id: createId(),
 			parameters: {},
 			type: type,
+		};
+	}
+
+	function getDefaultTtsAssetBit(): IBit {
+		return {
+			...getDefaultBit(IBitTypes.File),
+			download_link: "",
+			file_name: "",
+			parameters: {},
 		};
 	}
 
@@ -303,6 +339,18 @@ export default function Page() {
 			return;
 		}
 
+		if (type === IBitTypes.Tts) {
+			setProjection(undefined);
+			setTokenizer(undefined);
+			setTokenizerConfig(undefined);
+			setSpecialTokensMap(undefined);
+			setConfig(undefined);
+			setImageEmbeddingPreprocessor(undefined);
+			setImageEmbeddingConfig(undefined);
+			setTextEmbeddingModel(undefined);
+			return;
+		}
+
 		setProjection(undefined);
 		setTokenizer(undefined);
 		setTokenizerConfig(undefined);
@@ -311,13 +359,16 @@ export default function Page() {
 		setImageEmbeddingPreprocessor(undefined);
 		setImageEmbeddingConfig(undefined);
 		setTextEmbeddingModel(undefined);
+		setTtsAssets([]);
 	}
 
 	const prefillLLM = useCallback(async () => {
 		if (
 			!bit.download_link ||
 			bit.download_link === "" ||
-			(bit.type !== IBitTypes.Llm && bit.type !== IBitTypes.Vlm)
+			(bit.type !== IBitTypes.Llm &&
+				bit.type !== IBitTypes.Vlm &&
+				bit.type !== IBitTypes.Stt)
 		)
 			return;
 		setLoading(true);
@@ -482,7 +533,11 @@ export default function Page() {
 	}, [bit, textEmbeddingModel]);
 
 	useEffect(() => {
-		if (type === IBitTypes.Llm || type === IBitTypes.Vlm) {
+		if (
+			type === IBitTypes.Llm ||
+			type === IBitTypes.Vlm ||
+			type === IBitTypes.Stt
+		) {
 			setBit((old) => ({
 				...old,
 				type,
@@ -505,11 +560,34 @@ export default function Page() {
 			prefillEmbeddingModel();
 		}
 
+		if (type === IBitTypes.Tts) {
+			const assets = defaultTtsAssetLayout(
+				DEFAULT_TTS_PARAMETERS.model_type,
+				getDefaultTtsAssetBit,
+			);
+			setTtsAssets(assets);
+			setBit((old) =>
+				applyTtsModelPreset(
+					{
+						...old,
+						type,
+						parameters: DEFAULT_TTS_PARAMETERS,
+					},
+					DEFAULT_TTS_PARAMETERS.model_type,
+					assets,
+				),
+			);
+		}
+
 		setDefaultDependencies(type);
 	}, [type]);
 
 	useEffect(() => {
-		if (bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) {
+		if (
+			bit.type === IBitTypes.Llm ||
+			bit.type === IBitTypes.Vlm ||
+			bit.type === IBitTypes.Stt
+		) {
 			prefillLLM();
 		}
 		if (
@@ -543,6 +621,18 @@ export default function Page() {
 						VLM
 					</button>
 					<button
+						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Tts ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+						onClick={() => setType(IBitTypes.Tts)}
+					>
+						TTS
+					</button>
+					<button
+						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Stt ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+						onClick={() => setType(IBitTypes.Stt)}
+					>
+						STT
+					</button>
+					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Embedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.Embedding)}
 					>
@@ -562,25 +652,31 @@ export default function Page() {
 					</button>
 				</div>
 				<br />
-				<div className="max-w-screen-lg flex flex-row items-center gap-2 w-full">
-					{loading ? (
-						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
-					) : null}
-					<Input
-						disabled={loading}
-						className="max-w-screen-md"
-						value={bit.download_link ?? ""}
-						onChange={(e) =>
-							setBit((old) => ({
-								...old,
-								download_link: e.target.value.trim(),
-							}))
-						}
-						placeholder="File URL (ONNX)"
-					/>
-				</div>
-				<br />
-				{bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm ? (
+				{bit.type !== IBitTypes.Tts ? (
+					<>
+						<div className="max-w-screen-lg flex flex-row items-center gap-2 w-full">
+							{loading ? (
+								<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
+							) : null}
+							<Input
+								disabled={loading}
+								className="max-w-screen-md"
+								value={bit.download_link ?? ""}
+								onChange={(e) =>
+									setBit((old) => ({
+										...old,
+										download_link: e.target.value.trim(),
+									}))
+								}
+								placeholder="File URL (ONNX/GGUF/Safetensors)"
+							/>
+						</div>
+						<br />
+					</>
+				) : null}
+				{bit.type === IBitTypes.Llm ||
+				bit.type === IBitTypes.Vlm ||
+				bit.type === IBitTypes.Stt ? (
 					<>
 						<LLMConfiguration bit={bit} setBit={setBit} />
 						<Separator className="my-4" />
@@ -593,6 +689,18 @@ export default function Page() {
 							name="Projection"
 							bit={projection}
 							setBit={setProjection}
+						/>
+						<Separator className="my-4" />
+					</>
+				) : null}
+				{bit.type === IBitTypes.Tts ? (
+					<>
+						<TTSConfiguration
+							bit={bit}
+							setBit={setBit}
+							assetBits={ttsAssets}
+							setAssetBits={setTtsAssets}
+							createAssetBit={getDefaultTtsAssetBit}
 						/>
 						<Separator className="my-4" />
 					</>
@@ -815,7 +923,61 @@ export default function Page() {
 								dependencies.push(projectionRegistration);
 							}
 
-							if (bit.type === IBitTypes.Vlm || bit.type === IBitTypes.Llm) {
+							if (bit.type === IBitTypes.Tts) {
+								if (ttsAssets.length === 0) {
+									throw new Error("TTS models require at least one asset");
+								}
+
+								const registeredAssets = [];
+								for (const asset of ttsAssets) {
+									if (!asset.relativePath) {
+										throw new Error(
+											"Every TTS asset needs a model-relative path",
+										);
+									}
+									if (asset.required && !asset.bit.download_link) {
+										throw new Error(
+											`Missing download link for required TTS asset ${asset.relativePath}`,
+										);
+									}
+									if (!asset.required && !asset.bit.download_link) continue;
+
+									const registered = await uploadBit(
+										mergeTtsAssetParameters(asset.bit, bit),
+									);
+									dependencies.push(registered);
+									registeredAssets.push({
+										bit: `${registered.hub}:${registered.id}`,
+										relative_path: asset.relativePath,
+										required: asset.required,
+									});
+								}
+
+								const response: IBit = await uploadBit({
+									...bit,
+									download_link: bit.download_link || null,
+									file_name: bit.file_name || null,
+									size: bit.download_link ? bit.size : 0,
+									dependencies: dependencies.map(
+										(dep) => `${dep.hub}:${dep.id}`,
+									),
+									parameters: {
+										...bit.parameters,
+										assets: registeredAssets,
+									},
+								});
+								const metaUpload = await backend.apiState.put(
+									profile.data,
+									`admin/bit/${response.id}/en`,
+									bit.meta.en,
+								);
+							}
+
+							if (
+								bit.type === IBitTypes.Vlm ||
+								bit.type === IBitTypes.Llm ||
+								bit.type === IBitTypes.Stt
+							) {
 								const response: IBit = await uploadBit({
 									...bit,
 									dependencies: dependencies.map(
@@ -838,6 +1000,7 @@ export default function Page() {
 							setImageEmbeddingPreprocessor(undefined);
 							setImageEmbeddingConfig(undefined);
 							setTextEmbeddingModel(undefined);
+							setTtsAssets([]);
 							setType(IBitTypes.Llm);
 						} catch (error: any) {
 							toast.error(`Failed to add bit: ${error.message || error}`);
@@ -862,6 +1025,15 @@ function mergeBitParameters(bit: IBit, parent: IBit): IBit {
 		license: parent.license,
 		authors: parent.authors,
 		repository: parent.repository,
+	};
+}
+
+function mergeTtsAssetParameters(bit: IBit, parent: IBit): IBit {
+	return {
+		...bit,
+		license: bit.license || parent.license,
+		authors: bit.authors?.length ? bit.authors : parent.authors,
+		repository: bit.repository || parent.repository,
 	};
 }
 

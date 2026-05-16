@@ -130,10 +130,14 @@ impl Metadata {
 pub enum BitTypes {
     Llm,
     Vlm,
+    Tts,
+    Stt,
     Embedding,
     ImageEmbedding,
     File,
     Media,
+    ImageGeneration,
+    VideoGeneration,
     Template,
     Tokenizer,
     TokenizerConfig,
@@ -390,6 +394,83 @@ pub struct VLMParameters {
     pub model_classification: BitModelClassification,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsModelType {
+    #[default]
+    Kokoro,
+    OmniVoice,
+    Qwen3Tts,
+    VibeVoice,
+    VibeVoiceRealtime,
+    Voxtral,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsRuntimePreference {
+    #[default]
+    Auto,
+    Cpu,
+    Metal,
+    Cuda,
+    Accelerate,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TtsDTypePreference {
+    #[default]
+    Auto,
+    F32,
+    F16,
+    BF16,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct TtsAssetRef {
+    pub bit: String,
+    pub relative_path: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct TtsModelParameters {
+    pub model_type: TtsModelType,
+    pub provider: ModelProvider,
+    pub default_language: Option<String>,
+    pub languages: Vec<String>,
+    pub default_voice: Option<String>,
+    pub voices: Vec<String>,
+    pub runtime: Option<TtsRuntimePreference>,
+    pub dtype: Option<TtsDTypePreference>,
+    pub assets: Vec<TtsAssetRef>,
+}
+
+impl Default for TtsModelParameters {
+    fn default() -> Self {
+        Self {
+            model_type: TtsModelType::default(),
+            provider: ModelProvider {
+                provider_name: "local:any-tts".to_string(),
+                model_id: None,
+                version: None,
+                params: None,
+            },
+            default_language: None,
+            languages: Vec::new(),
+            default_voice: None,
+            voices: Vec::new(),
+            runtime: Some(TtsRuntimePreference::Auto),
+            dtype: Some(TtsDTypePreference::Auto),
+            assets: Vec::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BitPack {
     pub bits: Vec<Bit>,
@@ -407,6 +488,10 @@ async fn collect_dependencies(
 }
 
 impl BitPack {
+    fn is_virtual_bit(bit: &Bit) -> bool {
+        bit.download_link.is_none()
+    }
+
     pub async fn get_installed(
         &self,
         state: Arc<FlowLikeState>,
@@ -415,6 +500,11 @@ impl BitPack {
 
         let mut installed_bits = vec![];
         for bit in self.bits.iter() {
+            if Self::is_virtual_bit(bit) {
+                installed_bits.push(bit.clone());
+                continue;
+            }
+
             let file_name = match bit.file_name.clone() {
                 Some(file_name) => Some(file_name),
                 None => continue,
@@ -446,7 +536,7 @@ impl BitPack {
             // If there is no download link we treat it as a virtual / proxied bit.
             // These should count as a successful "download" operation from a UX perspective
             // so we simply don't schedule a download but DO include it in the returned list.
-            if bit.download_link.is_none() {
+            if Self::is_virtual_bit(bit) {
                 println!("Skipping network download for bit {}: no download link (proxied or empty model)", bit.id);
                 // Do not attempt any download but keep it in the final success vector
                 return;
@@ -480,7 +570,7 @@ impl BitPack {
             let filtered: Vec<Bit> = self
                 .bits
                 .iter()
-                .filter(|b| b.download_link.is_none() && b.size.unwrap_or(0) > 0)
+                .filter(|b| Self::is_virtual_bit(b))
                 .cloned()
                 .collect();
             return Ok(filtered);
@@ -514,7 +604,7 @@ impl BitPack {
         let mut result = self
             .bits
             .iter()
-            .filter(|b| b.download_link.is_none() && b.size.unwrap_or(0) > 0)
+            .filter(|b| Self::is_virtual_bit(b))
             .cloned()
             .collect::<Vec<_>>();
         result.extend(deduplicated_bits);
@@ -540,6 +630,10 @@ impl BitPack {
         let bits_store = FlowLikeState::bit_store(&state).await?.as_generic();
         let mut installed = true;
         for bit in self.bits.iter() {
+            if Self::is_virtual_bit(bit) {
+                continue;
+            }
+
             let file_name = match bit.file_name.clone() {
                 Some(file_name) => file_name,
                 None => {
@@ -589,6 +683,27 @@ impl Bit {
         None
     }
 
+    pub fn try_to_tts(&self) -> Option<TtsModelParameters> {
+        if self.bit_type == BitTypes::Tts {
+            let parameters =
+                flow_like_types::json::from_value::<TtsModelParameters>(self.parameters.clone());
+            if parameters.is_err() {
+                return None;
+            }
+            return Some(parameters.unwrap());
+        }
+        None
+    }
+
+    pub fn try_to_stt_provider(&self) -> Option<ModelProvider> {
+        if self.bit_type == BitTypes::Stt {
+            let parameters =
+                flow_like_types::json::from_value::<LLMParameters>(self.parameters.clone()).ok()?;
+            return Some(parameters.provider);
+        }
+        None
+    }
+
     pub fn score(&self, preference: &BitModelPreference) -> flow_like_types::Result<f32> {
         if let Some(parameters) = self.try_to_llm() {
             return Ok(parameters.model_classification.score(preference, self));
@@ -634,6 +749,10 @@ impl Bit {
 
         if let Some(parameters) = self.try_to_vlm() {
             return Some(parameters.provider);
+        }
+
+        if let Some(provider) = self.try_to_stt_provider() {
+            return Some(provider);
         }
 
         None

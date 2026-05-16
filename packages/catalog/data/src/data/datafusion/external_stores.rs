@@ -1,6 +1,9 @@
 use crate::data::path::FlowPath;
+use crate::data::providers::aws::AwsProvider;
+use crate::data::providers::azure::AzureProvider;
+use crate::data::providers::cloudflare::CloudflareProvider;
+use crate::data::providers::gcp::GcpProvider;
 use flow_like::flow::{
-    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
@@ -10,19 +13,13 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::{
     aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder,
 };
-use flow_like_types::{Cacheable, Value, async_trait, json::json};
+use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
 
-/// Helper to get string value from a pin's default value
-fn get_pin_string_value(node: &Node, name: &str) -> String {
-    node.get_pin_by_name(name)
-        .and_then(|pin| pin.default_value.clone())
-        .and_then(|bytes| flow_like_types::json::from_slice::<Value>(&bytes).ok())
-        .and_then(|json| json.as_str().map(ToOwned::to_owned))
-        .unwrap_or_default()
-}
+// =============================================================================
+// AWS S3 -> FlowPath
+// =============================================================================
 
-/// Create an S3 store from connection details
 #[crate::register_node]
 #[derive(Default)]
 pub struct S3StoreNode {}
@@ -38,8 +35,8 @@ impl NodeLogic for S3StoreNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "external_s3_store",
-            "S3 Directory",
-            "Create an S3/S3-compatible store from connection details. Works with AWS S3, MinIO, Cloudflare R2, etc. Supports explicit credentials, environment variables, or AWS profiles.",
+            "S3 Bucket",
+            "Turn an S3 bucket (or any S3-compatible endpoint) into a FlowPath. Takes an AwsProvider for authentication. Use a CloudflareProvider + R2 node for Cloudflare R2 — it's specialised.",
             "Data/Files/External",
         );
         node.add_icon("/flow/icons/cloud.svg");
@@ -50,80 +47,34 @@ impl NodeLogic for S3StoreNode {
             "Trigger execution",
             VariableType::Execution,
         );
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "AWS provider (from the AWS Provider node)",
+            VariableType::Struct,
+        )
+        .set_schema::<AwsProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_input_pin("bucket", "Bucket", "S3 bucket name", VariableType::String);
-
-        node.add_input_pin(
-            "region",
-            "Region",
-            "AWS region (e.g., us-east-1). Leave empty for auto-detect or S3-compatible services.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("us-east-1")));
-
-        node.add_input_pin(
-            "credential_mode",
-            "Credential Mode",
-            "How to authenticate: 'explicit' (access keys), 'environment' (env vars/Lambda IAM role/profile via AWS_PROFILE env var)",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["explicit".to_string(), "environment".to_string()])
-                .build(),
-        )
-        .set_default_value(Some(json!("explicit")));
-
-        node.add_input_pin(
-            "access_key_id",
-            "Access Key ID",
-            "AWS access key ID (only used when credential_mode is 'explicit')",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "secret_access_key",
-            "Secret Access Key",
-            "AWS secret access key (only used when credential_mode is 'explicit')",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "session_token",
-            "Session Token",
-            "Optional AWS session token for temporary credentials",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "endpoint",
-            "Endpoint",
-            "Custom endpoint URL for S3-compatible services (MinIO, R2, etc.). Leave empty for AWS S3.",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "path_style",
-            "Path Style",
-            "Use path-style URLs (required for some S3-compatible services)",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(false)));
 
         node.add_input_pin(
             "prefix",
             "Prefix",
             "Optional path prefix within the bucket",
             VariableType::String,
-        );
+        )
+        .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created successfully",
-            VariableType::Execution,
-        );
+        node.add_input_pin(
+            "path_style",
+            "Path Style",
+            "Use path-style URLs (required for some S3-compatible services, e.g. MinIO)",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -140,419 +91,51 @@ impl NodeLogic for S3StoreNode {
             reliability: 9,
             cost: 5,
         });
-
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
+        let provider: AwsProvider = context.evaluate_pin("provider").await?;
         let bucket: String = context.evaluate_pin("bucket").await?;
-        let region: String = context.evaluate_pin("region").await.unwrap_or_default();
-        let credential_mode: String = context
-            .evaluate_pin("credential_mode")
-            .await
-            .unwrap_or_else(|_| "explicit".to_string());
-        let access_key_id: Option<String> = context.evaluate_pin("access_key_id").await.ok();
-        let secret_access_key: Option<String> =
-            context.evaluate_pin("secret_access_key").await.ok();
-        let session_token: Option<String> = context.evaluate_pin("session_token").await.ok();
-        let endpoint: Option<String> = context.evaluate_pin("endpoint").await.ok();
-        let path_style: bool = context.evaluate_pin("path_style").await.unwrap_or(false);
         let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+        let path_style: bool = context.evaluate_pin("path_style").await.unwrap_or(false);
 
-        let mut builder = match credential_mode.as_str() {
-            "environment" => {
-                // Use from_env() to automatically pick up credentials from:
-                // - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
-                // - IAM role (when running in Lambda/EC2)
-                // - AWS credentials file (~/.aws/credentials with AWS_PROFILE)
-
-                AmazonS3Builder::from_env().with_bucket_name(&bucket)
-            }
-            _ => {
-                // Explicit credentials mode (default)
-                let key = access_key_id.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "access_key_id is required when credential_mode is 'explicit'"
-                    )
-                })?;
-                let secret = secret_access_key.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "secret_access_key is required when credential_mode is 'explicit'"
-                    )
-                })?;
-
-                let mut b = AmazonS3Builder::new()
-                    .with_bucket_name(&bucket)
-                    .with_access_key_id(&key)
-                    .with_secret_access_key(&secret);
-
-                if let Some(token) = &session_token
-                    && !token.is_empty()
-                {
-                    b = b.with_token(token);
-                }
-                b
-            }
-        };
-
-        if !region.is_empty() {
-            builder = builder.with_region(&region);
+        if bucket.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("S3 bucket name is required"));
         }
 
-        if let Some(ep) = endpoint
-            && !ep.is_empty()
-        {
-            builder = builder
-                .with_endpoint(&ep)
-                .with_allow_http(ep.starts_with("http://"));
-        }
-
+        let mut builder = provider.apply_to_s3_builder(AmazonS3Builder::new());
+        builder = builder.with_bucket_name(&bucket);
         if path_style {
             builder = builder.with_virtual_hosted_style_request(false);
         }
 
-        let store = builder.build()?;
+        let store = builder
+            .build()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build S3 store: {}", e))?;
         let store = FlowLikeStore::AWS(Arc::new(store));
 
-        let cache_key = format!(
-            "s3_store_{}_{}",
-            bucket,
-            flow_like::utils::hash::hash_string_non_cryptographic(&format!(
-                "{}_{}",
-                credential_mode, prefix
-            ))
-        );
-
-        let cacheable: Arc<dyn Cacheable> = Arc::new(store);
-        context
-            .cache
-            .write()
-            .await
-            .insert(cache_key.clone(), cacheable);
-
-        let path = FlowPath::new(prefix, cache_key, None);
-        context.set_pin_value("path", json!(path)).await?;
-
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
-        let credential_mode = get_pin_string_value(node, "credential_mode");
-
-        let has_access_key = node.get_pin_by_name("access_key_id").is_some();
-        let has_secret_key = node.get_pin_by_name("secret_access_key").is_some();
-        let has_session_token = node.get_pin_by_name("session_token").is_some();
-
-        match credential_mode.as_str() {
-            "environment" => {
-                // Remove explicit credential pins when in environment mode
-                if has_access_key && let Some(pin) = node.get_pin_by_name("access_key_id") {
-                    node.pins.remove(&pin.id.clone());
-                }
-                if has_secret_key && let Some(pin) = node.get_pin_by_name("secret_access_key") {
-                    node.pins.remove(&pin.id.clone());
-                }
-                if has_session_token && let Some(pin) = node.get_pin_by_name("session_token") {
-                    node.pins.remove(&pin.id.clone());
-                }
-            }
-            _ => {
-                // Add explicit credential pins when in explicit mode (default)
-                if !has_access_key {
-                    node.add_input_pin(
-                        "access_key_id",
-                        "Access Key ID",
-                        "AWS access key ID (only used when credential_mode is 'explicit')",
-                        VariableType::String,
-                    );
-                }
-                if !has_secret_key {
-                    node.add_input_pin(
-                        "secret_access_key",
-                        "Secret Access Key",
-                        "AWS secret access key (only used when credential_mode is 'explicit')",
-                        VariableType::String,
-                    );
-                }
-                if !has_session_token {
-                    node.add_input_pin(
-                        "session_token",
-                        "Session Token",
-                        "Optional AWS session token for temporary credentials",
-                        VariableType::String,
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Create an Azure Blob store from connection details
-#[crate::register_node]
-#[derive(Default)]
-pub struct AzureBlobStoreNode {}
-
-impl AzureBlobStoreNode {
-    pub fn new() -> Self {
-        AzureBlobStoreNode {}
-    }
-}
-
-#[async_trait]
-impl NodeLogic for AzureBlobStoreNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "external_azure_blob_store",
-            "Azure Blob Directory",
-            "Create an Azure Blob Storage store from connection details",
-            "Data/Files/External",
-        );
-        node.add_icon("/flow/icons/cloud.svg");
-
-        node.add_input_pin(
-            "exec_in",
-            "Input",
-            "Trigger execution",
-            VariableType::Execution,
-        );
-
-        node.add_input_pin(
-            "account",
-            "Account",
-            "Azure storage account name",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "container",
-            "Container",
-            "Azure blob container name",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "access_key",
-            "Access Key",
-            "Azure storage access key (use this OR SAS token)",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "sas_token",
-            "SAS Token",
-            "Shared Access Signature token (use this OR access key)",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "prefix",
-            "Prefix",
-            "Optional path prefix within the container",
-            VariableType::String,
-        );
-
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created successfully",
-            VariableType::Execution,
-        );
-
-        node.add_output_pin(
-            "path",
-            "Path",
-            "FlowPath pointing to the Azure Blob location",
-            VariableType::Struct,
+        let path = cache_and_wrap(
+            context,
+            "s3_store",
+            &bucket,
+            &prefix,
+            &provider.auth_mode,
+            store,
         )
-        .set_schema::<FlowPath>();
-
-        node.scores = Some(NodeScores {
-            privacy: 6,
-            security: 7,
-            performance: 8,
-            governance: 7,
-            reliability: 9,
-            cost: 5,
-        });
-
-        node
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-
-        let account: String = context.evaluate_pin("account").await?;
-        let container: String = context.evaluate_pin("container").await?;
-        let access_key: Option<String> = context.evaluate_pin("access_key").await.ok();
-        let sas_token: Option<String> = context.evaluate_pin("sas_token").await.ok();
-        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
-
-        let mut builder = MicrosoftAzureBuilder::new()
-            .with_account(&account)
-            .with_container_name(&container);
-
-        if let Some(key) = access_key
-            && !key.is_empty()
-        {
-            builder = builder.with_access_key(&key);
-        }
-
-        if let Some(sas) = sas_token
-            && !sas.is_empty()
-        {
-            // Parse SAS token query string into key-value pairs
-            let sas_str = sas.trim_start_matches('?');
-            let query_pairs: Vec<(String, String)> = sas_str
-                .split('&')
-                .filter_map(|pair| {
-                    let mut parts = pair.splitn(2, '=');
-                    match (parts.next(), parts.next()) {
-                        (Some(key), Some(value)) => Some((key.to_string(), value.to_string())),
-                        _ => None,
-                    }
-                })
-                .collect();
-            builder = builder.with_sas_authorization(query_pairs);
-        }
-
-        let store = builder.build()?;
-        let store = FlowLikeStore::Azure(Arc::new(store));
-
-        let cache_key = format!(
-            "azure_store_{}_{}",
-            container,
-            flow_like::utils::hash::hash_string_non_cryptographic(&format!(
-                "{}{}",
-                account, prefix
-            ))
-        );
-
-        let cacheable: Arc<dyn Cacheable> = Arc::new(store);
-        context
-            .cache
-            .write()
-            .await
-            .insert(cache_key.clone(), cacheable);
-
-        let path = FlowPath::new(prefix, cache_key, None);
+        .await;
         context.set_pin_value("path", json!(path)).await?;
-
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
 }
 
-/// Create a GCP Cloud Storage store from connection details
-#[crate::register_node]
-#[derive(Default)]
-pub struct GcpStorageStoreNode {}
+// =============================================================================
+// AWS S3 Express One Zone -> FlowPath
+// =============================================================================
 
-impl GcpStorageStoreNode {
-    pub fn new() -> Self {
-        GcpStorageStoreNode {}
-    }
-}
-
-#[async_trait]
-impl NodeLogic for GcpStorageStoreNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "external_gcp_storage_store",
-            "GCP Storage Directory",
-            "Create a Google Cloud Storage store from connection details",
-            "Data/Files/External",
-        );
-        node.add_icon("/flow/icons/cloud.svg");
-
-        node.add_input_pin(
-            "exec_in",
-            "Input",
-            "Trigger execution",
-            VariableType::Execution,
-        );
-
-        node.add_input_pin("bucket", "Bucket", "GCS bucket name", VariableType::String);
-
-        node.add_input_pin(
-            "service_account_key",
-            "Service Account Key",
-            "Service account JSON key (the entire JSON content)",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "prefix",
-            "Prefix",
-            "Optional path prefix within the bucket",
-            VariableType::String,
-        );
-
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created successfully",
-            VariableType::Execution,
-        );
-
-        node.add_output_pin(
-            "path",
-            "Path",
-            "FlowPath pointing to the GCS location",
-            VariableType::Struct,
-        )
-        .set_schema::<FlowPath>();
-
-        node.scores = Some(NodeScores {
-            privacy: 6,
-            security: 7,
-            performance: 8,
-            governance: 7,
-            reliability: 9,
-            cost: 5,
-        });
-
-        node
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
-
-        let bucket: String = context.evaluate_pin("bucket").await?;
-        let service_account_key: String = context.evaluate_pin("service_account_key").await?;
-        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
-
-        let builder = GoogleCloudStorageBuilder::new()
-            .with_bucket_name(&bucket)
-            .with_service_account_key(&service_account_key);
-
-        let store = builder.build()?;
-        let store = FlowLikeStore::Google(Arc::new(store));
-
-        let cache_key = format!(
-            "gcs_store_{}_{}",
-            bucket,
-            flow_like::utils::hash::hash_string_non_cryptographic(&prefix)
-        );
-
-        let cacheable: Arc<dyn Cacheable> = Arc::new(store);
-        context
-            .cache
-            .write()
-            .await
-            .insert(cache_key.clone(), cacheable);
-
-        let path = FlowPath::new(prefix, cache_key, None);
-        context.set_pin_value("path", json!(path)).await?;
-
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-}
-
-/// Create an S3 Express One Zone store
 #[crate::register_node]
 #[derive(Default)]
 pub struct S3ExpressStoreNode {}
@@ -568,8 +151,8 @@ impl NodeLogic for S3ExpressStoreNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "external_s3_express_store",
-            "S3 Express Directory",
-            "Create an S3 Express One Zone store for ultra-low latency access. Supports explicit credentials or environment variables (including Lambda IAM roles).",
+            "S3 Express Bucket",
+            "Turn an S3 Express One Zone bucket into a FlowPath. Ultra-low latency single-AZ storage. Takes an AwsProvider.",
             "Data/Files/External",
         );
         node.add_icon("/flow/icons/cloud.svg");
@@ -580,6 +163,14 @@ impl NodeLogic for S3ExpressStoreNode {
             "Trigger execution",
             VariableType::Execution,
         );
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "AWS provider (from the AWS Provider node)",
+            VariableType::Struct,
+        )
+        .set_schema::<AwsProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_input_pin(
             "bucket",
@@ -587,63 +178,15 @@ impl NodeLogic for S3ExpressStoreNode {
             "S3 Express bucket name (must end with --azid--x-s3)",
             VariableType::String,
         );
-
-        node.add_input_pin(
-            "region",
-            "Region",
-            "AWS region where the bucket is located",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("us-east-1")));
-
-        node.add_input_pin(
-            "credential_mode",
-            "Credential Mode",
-            "How to authenticate: 'explicit' (access keys), 'environment' (env vars/Lambda IAM role/profile via AWS_PROFILE env var)",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["explicit".to_string(), "environment".to_string()])
-                .build(),
-        )
-        .set_default_value(Some(json!("explicit")));
-
-        node.add_input_pin(
-            "access_key_id",
-            "Access Key ID",
-            "AWS access key ID (only used when credential_mode is 'explicit')",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "secret_access_key",
-            "Secret Access Key",
-            "AWS secret access key (only used when credential_mode is 'explicit')",
-            VariableType::String,
-        );
-
-        node.add_input_pin(
-            "session_token",
-            "Session Token",
-            "Optional AWS session token for temporary credentials",
-            VariableType::String,
-        );
-
         node.add_input_pin(
             "prefix",
             "Prefix",
             "Optional path prefix within the bucket",
             VariableType::String,
-        );
+        )
+        .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "exec_out",
-            "Done",
-            "Store created successfully",
-            VariableType::Execution,
-        );
-
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
         node.add_output_pin(
             "path",
             "Path",
@@ -660,132 +203,477 @@ impl NodeLogic for S3ExpressStoreNode {
             reliability: 9,
             cost: 4,
         });
-
         node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
+        let provider: AwsProvider = context.evaluate_pin("provider").await?;
         let bucket: String = context.evaluate_pin("bucket").await?;
-        let region: String = context.evaluate_pin("region").await?;
-        let credential_mode: String = context
-            .evaluate_pin("credential_mode")
-            .await
-            .unwrap_or_else(|_| "explicit".to_string());
-        let access_key_id: Option<String> = context.evaluate_pin("access_key_id").await.ok();
-        let secret_access_key: Option<String> =
-            context.evaluate_pin("secret_access_key").await.ok();
-        let session_token: Option<String> = context.evaluate_pin("session_token").await.ok();
         let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
 
-        let builder = match credential_mode.as_str() {
-            "environment" => {
-                // Use from_env() for automatic credential discovery
-                AmazonS3Builder::from_env()
-                    .with_bucket_name(&bucket)
-                    .with_region(&region)
-                    .with_s3_express(true)
-            }
-            _ => {
-                let key = access_key_id.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "access_key_id is required when credential_mode is 'explicit'"
-                    )
-                })?;
-                let secret = secret_access_key.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "secret_access_key is required when credential_mode is 'explicit'"
-                    )
-                })?;
+        if bucket.trim().is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "S3 Express bucket name is required"
+            ));
+        }
 
-                let mut b = AmazonS3Builder::new()
-                    .with_bucket_name(&bucket)
-                    .with_region(&region)
-                    .with_access_key_id(&key)
-                    .with_secret_access_key(&secret)
-                    .with_s3_express(true);
+        let mut builder = provider.apply_to_s3_builder(AmazonS3Builder::new());
+        builder = builder.with_bucket_name(&bucket).with_s3_express(true);
 
-                if let Some(token) = &session_token
-                    && !token.is_empty()
-                {
-                    b = b.with_token(token);
-                }
-                b
-            }
-        };
-
-        let store = builder.build()?;
+        let store = builder
+            .build()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build S3 Express store: {}", e))?;
         let store = FlowLikeStore::AWS(Arc::new(store));
 
-        let cache_key = format!(
-            "s3_express_store_{}_{}",
-            bucket,
-            flow_like::utils::hash::hash_string_non_cryptographic(&format!(
-                "{}_{}",
-                credential_mode, prefix
-            ))
-        );
-
-        let cacheable: Arc<dyn Cacheable> = Arc::new(store);
-        context
-            .cache
-            .write()
-            .await
-            .insert(cache_key.clone(), cacheable);
-
-        let path = FlowPath::new(prefix, cache_key, None);
+        let path = cache_and_wrap(
+            context,
+            "s3_express_store",
+            &bucket,
+            &prefix,
+            &provider.auth_mode,
+            store,
+        )
+        .await;
         context.set_pin_value("path", json!(path)).await?;
-
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+}
 
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
-        let credential_mode = get_pin_string_value(node, "credential_mode");
+// =============================================================================
+// Azure Blob Container -> FlowPath
+// =============================================================================
 
-        let has_access_key = node.get_pin_by_name("access_key_id").is_some();
-        let has_secret_key = node.get_pin_by_name("secret_access_key").is_some();
-        let has_session_token = node.get_pin_by_name("session_token").is_some();
+#[crate::register_node]
+#[derive(Default)]
+pub struct AzureBlobStoreNode {}
 
-        match credential_mode.as_str() {
-            "environment" => {
-                if has_access_key && let Some(pin) = node.get_pin_by_name("access_key_id") {
-                    node.pins.remove(&pin.id.clone());
-                }
-                if has_secret_key && let Some(pin) = node.get_pin_by_name("secret_access_key") {
-                    node.pins.remove(&pin.id.clone());
-                }
-                if has_session_token && let Some(pin) = node.get_pin_by_name("session_token") {
-                    node.pins.remove(&pin.id.clone());
-                }
-            }
-            _ => {
-                if !has_access_key {
-                    node.add_input_pin(
-                        "access_key_id",
-                        "Access Key ID",
-                        "AWS access key ID (only used when credential_mode is 'explicit')",
-                        VariableType::String,
-                    );
-                }
-                if !has_secret_key {
-                    node.add_input_pin(
-                        "secret_access_key",
-                        "Secret Access Key",
-                        "AWS secret access key (only used when credential_mode is 'explicit')",
-                        VariableType::String,
-                    );
-                }
-                if !has_session_token {
-                    node.add_input_pin(
-                        "session_token",
-                        "Session Token",
-                        "Optional AWS session token for temporary credentials",
-                        VariableType::String,
-                    );
-                }
-            }
+impl AzureBlobStoreNode {
+    pub fn new() -> Self {
+        AzureBlobStoreNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for AzureBlobStoreNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "external_azure_blob_store",
+            "Azure Blob Container",
+            "Turn an Azure Blob Storage container into a FlowPath. Takes an AzureProvider.",
+            "Data/Files/External",
+        );
+        node.add_icon("/flow/icons/cloud.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "Azure provider (from the Azure Provider node)",
+            VariableType::Struct,
+        )
+        .set_schema::<AzureProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin(
+            "container",
+            "Container",
+            "Azure blob container name",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "prefix",
+            "Prefix",
+            "Optional path prefix within the container",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
+        node.add_output_pin(
+            "path",
+            "Path",
+            "FlowPath pointing to the Azure Blob location",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+
+        node.scores = Some(NodeScores {
+            privacy: 6,
+            security: 7,
+            performance: 8,
+            governance: 7,
+            reliability: 9,
+            cost: 5,
+        });
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let provider: AzureProvider = context.evaluate_pin("provider").await?;
+        let container: String = context.evaluate_pin("container").await?;
+        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+
+        if container.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("Azure container name is required"));
+        }
+
+        let builder = MicrosoftAzureBuilder::new().with_container_name(&container);
+        let builder = provider.apply_to_azure_builder(builder)?;
+
+        let store = builder
+            .build()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build Azure Blob store: {}", e))?;
+        let store = FlowLikeStore::Azure(Arc::new(store));
+
+        let path = cache_and_wrap(
+            context,
+            "azure_store",
+            &container,
+            &prefix,
+            &provider.auth_mode,
+            store,
+        )
+        .await;
+        context.set_pin_value("path", json!(path)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+}
+
+// =============================================================================
+// GCS Bucket -> FlowPath
+// =============================================================================
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct GcpStorageStoreNode {}
+
+impl GcpStorageStoreNode {
+    pub fn new() -> Self {
+        GcpStorageStoreNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for GcpStorageStoreNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "external_gcp_storage_store",
+            "GCS Bucket",
+            "Turn a Google Cloud Storage bucket into a FlowPath. Takes a GcpProvider.",
+            "Data/Files/External",
+        );
+        node.add_icon("/flow/icons/cloud.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "GCP provider (from the GCP Provider node)",
+            VariableType::Struct,
+        )
+        .set_schema::<GcpProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin("bucket", "Bucket", "GCS bucket name", VariableType::String);
+        node.add_input_pin(
+            "prefix",
+            "Prefix",
+            "Optional path prefix within the bucket",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
+        node.add_output_pin(
+            "path",
+            "Path",
+            "FlowPath pointing to the GCS location",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+
+        node.scores = Some(NodeScores {
+            privacy: 6,
+            security: 7,
+            performance: 8,
+            governance: 7,
+            reliability: 9,
+            cost: 5,
+        });
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let provider: GcpProvider = context.evaluate_pin("provider").await?;
+        let bucket: String = context.evaluate_pin("bucket").await?;
+        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+
+        if bucket.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("GCS bucket name is required"));
+        }
+
+        let builder = GoogleCloudStorageBuilder::new().with_bucket_name(&bucket);
+        let builder = provider.apply_to_gcs_builder(context, builder).await?;
+        let builder = builder.with_bucket_name(&bucket);
+
+        let store = builder
+            .build()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build GCS store: {}", e))?;
+        let store = FlowLikeStore::Google(Arc::new(store));
+
+        let path = cache_and_wrap(
+            context,
+            "gcs_store",
+            &bucket,
+            &prefix,
+            &provider.auth_mode,
+            store,
+        )
+        .await;
+        context.set_pin_value("path", json!(path)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+}
+
+// =============================================================================
+// Cloudflare R2 Bucket -> FlowPath
+// =============================================================================
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct CloudflareR2StoreNode {}
+
+impl CloudflareR2StoreNode {
+    pub fn new() -> Self {
+        CloudflareR2StoreNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for CloudflareR2StoreNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "external_r2_store",
+            "R2 Bucket",
+            "Turn a Cloudflare R2 bucket into a FlowPath. Takes a CloudflareProvider in 'r2' auth mode (account_id + R2 access key/secret).",
+            "Data/Files/External",
+        );
+        node.add_icon("/flow/icons/cloud.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "Cloudflare provider (from the Cloudflare Provider node, auth_mode='r2')",
+            VariableType::Struct,
+        )
+        .set_schema::<CloudflareProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin("bucket", "Bucket", "R2 bucket name", VariableType::String);
+        node.add_input_pin(
+            "prefix",
+            "Prefix",
+            "Optional path prefix within the bucket",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
+        node.add_output_pin(
+            "path",
+            "Path",
+            "FlowPath pointing to the R2 location",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+
+        node.scores = Some(NodeScores {
+            privacy: 7,
+            security: 7,
+            performance: 8,
+            governance: 7,
+            reliability: 9,
+            cost: 7,
+        });
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let provider: CloudflareProvider = context.evaluate_pin("provider").await?;
+        let bucket: String = context.evaluate_pin("bucket").await?;
+        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+
+        if bucket.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("R2 bucket name is required"));
+        }
+
+        let builder = AmazonS3Builder::new().with_bucket_name(&bucket);
+        let builder = provider.apply_to_s3_builder_for_r2(builder)?;
+
+        let store = builder
+            .build()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build R2 store: {}", e))?;
+        let store = FlowLikeStore::AWS(Arc::new(store));
+
+        let auth_key = provider
+            .account_id
+            .as_deref()
+            .unwrap_or("no_account")
+            .to_string();
+        let path = cache_and_wrap(context, "r2_store", &bucket, &prefix, &auth_key, store).await;
+        context.set_pin_value("path", json!(path)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+}
+
+// =============================================================================
+// Shared cache + FlowPath wrapping
+// =============================================================================
+
+async fn cache_and_wrap(
+    context: &mut ExecutionContext,
+    kind: &str,
+    bucket_or_container: &str,
+    prefix: &str,
+    auth_key: &str,
+    store: FlowLikeStore,
+) -> FlowPath {
+    let cache_key = format!(
+        "{}_{}_{}",
+        kind,
+        bucket_or_container,
+        flow_like::utils::hash::hash_string_non_cryptographic(&format!("{}_{}", auth_key, prefix))
+    );
+    let cacheable: Arc<dyn Cacheable> = Arc::new(store);
+    context
+        .cache
+        .write()
+        .await
+        .insert(cache_key.clone(), cacheable);
+    FlowPath::new(prefix.to_string(), cache_key, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::pin::PinType;
+
+    fn find_pin<'a>(
+        node: &'a Node,
+        name: &str,
+        pin_type: PinType,
+    ) -> Option<&'a flow_like::flow::pin::Pin> {
+        node.pins
+            .values()
+            .find(|p| p.name == name && p.pin_type == pin_type)
+    }
+
+    #[test]
+    fn test_s3_node_takes_aws_provider() {
+        let node = S3StoreNode::new().get_node();
+        assert_eq!(node.name, "external_s3_store");
+        let provider = find_pin(&node, "provider", PinType::Input).expect("provider input");
+        assert_eq!(provider.data_type, VariableType::Struct);
+        assert!(provider.schema.is_some());
+    }
+
+    #[test]
+    fn test_s3_node_has_no_raw_credential_pins() {
+        let node = S3StoreNode::new().get_node();
+        assert!(find_pin(&node, "access_key_id", PinType::Input).is_none());
+        assert!(find_pin(&node, "secret_access_key", PinType::Input).is_none());
+        assert!(find_pin(&node, "session_token", PinType::Input).is_none());
+        assert!(find_pin(&node, "credential_mode", PinType::Input).is_none());
+        assert!(find_pin(&node, "region", PinType::Input).is_none());
+        assert!(find_pin(&node, "endpoint", PinType::Input).is_none());
+    }
+
+    #[test]
+    fn test_s3_express_node_takes_aws_provider() {
+        let node = S3ExpressStoreNode::new().get_node();
+        assert_eq!(node.name, "external_s3_express_store");
+        let provider = find_pin(&node, "provider", PinType::Input).expect("provider input");
+        assert_eq!(provider.data_type, VariableType::Struct);
+        assert!(provider.schema.is_some());
+    }
+
+    #[test]
+    fn test_azure_blob_node_takes_azure_provider() {
+        let node = AzureBlobStoreNode::new().get_node();
+        assert_eq!(node.name, "external_azure_blob_store");
+        let provider = find_pin(&node, "provider", PinType::Input).expect("provider input");
+        assert_eq!(provider.data_type, VariableType::Struct);
+        assert!(provider.schema.is_some());
+        // Raw credentials must not be modelled here any more.
+        assert!(find_pin(&node, "access_key", PinType::Input).is_none());
+        assert!(find_pin(&node, "sas_token", PinType::Input).is_none());
+        assert!(find_pin(&node, "account", PinType::Input).is_none());
+    }
+
+    #[test]
+    fn test_gcs_node_takes_gcp_provider() {
+        let node = GcpStorageStoreNode::new().get_node();
+        assert_eq!(node.name, "external_gcp_storage_store");
+        let provider = find_pin(&node, "provider", PinType::Input).expect("provider input");
+        assert_eq!(provider.data_type, VariableType::Struct);
+        assert!(provider.schema.is_some());
+        assert!(find_pin(&node, "service_account_key", PinType::Input).is_none());
+    }
+
+    #[test]
+    fn test_r2_node_takes_cloudflare_provider() {
+        let node = CloudflareR2StoreNode::new().get_node();
+        assert_eq!(node.name, "external_r2_store");
+        assert_eq!(node.friendly_name, "R2 Bucket");
+        let provider = find_pin(&node, "provider", PinType::Input).expect("provider input");
+        assert_eq!(provider.data_type, VariableType::Struct);
+        assert!(provider.schema.is_some());
+    }
+
+    #[test]
+    fn test_all_bucket_nodes_emit_flowpath() {
+        for node in [
+            S3StoreNode::new().get_node(),
+            S3ExpressStoreNode::new().get_node(),
+            AzureBlobStoreNode::new().get_node(),
+            GcpStorageStoreNode::new().get_node(),
+            CloudflareR2StoreNode::new().get_node(),
+        ] {
+            let path = find_pin(&node, "path", PinType::Output).expect("path output");
+            assert_eq!(path.data_type, VariableType::Struct);
+            assert!(
+                path.schema.is_some(),
+                "{} path output must be schema-typed FlowPath",
+                node.name
+            );
         }
     }
 }

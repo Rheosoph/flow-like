@@ -564,9 +564,9 @@ COMMAND TYPES:
 - ConnectPins: Connect two pins (use pin NAME, not ID)
 - UpdateNodePin: Set a pin's value
 - RemoveNode: Delete a node
-- CreateVariable/UpdateVariable/DeleteVariable
-- CreateComment/UpdateComment/DeleteComment
-- CreateLayer/AddNodesToLayer/RemoveNodesFromLayer
+- CreateVariable/DeleteVariable
+- CreateComment/DeleteComment
+- CreateLayer/RemoveLayer
 
 REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
             parameters: json!({
@@ -591,7 +591,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                         "target_layer": { "type": "string", "description": "Layer ID for placement. Omit for root layer." },
                                         "summary": { "type": "string", "description": "Brief description, e.g. 'Add HTTP GET node'" }
                                     },
-                                    "required": ["command_type", "node_type", "ref_id", "summary"]
+                                    "required": ["command_type", "node_type", "ref_id", "position", "summary"]
                                 },
                                 {
                                     "properties": {
@@ -621,7 +621,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                         "target_layer": { "type": "string", "description": "Layer ID to place the placeholder in. Use layer ID from context. Omit for root/current layer." },
                                         "summary": { "type": "string", "description": "Human-readable summary, e.g. 'Add placeholder for order processing'" }
                                     },
-                                    "required": ["command_type", "name", "ref_id", "summary"]
+                                    "required": ["command_type", "name", "ref_id", "position", "summary"]
                                 },
                                 {
                                     "properties": {
@@ -687,16 +687,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                         "description": { "type": "string", "description": "Optional description" },
                                         "summary": { "type": "string", "description": "Human-readable summary" }
                                     },
-                                    "required": ["command_type", "name", "data_type", "summary"]
-                                },
-                                {
-                                    "properties": {
-                                        "command_type": { "const": "UpdateVariable" },
-                                        "variable_id": { "type": "string", "description": "Variable ID from context" },
-                                        "value": { "description": "New value for the variable" },
-                                        "summary": { "type": "string", "description": "Human-readable summary" }
-                                    },
-                                    "required": ["command_type", "variable_id", "value", "summary"]
+                                    "required": ["command_type", "name", "data_type", "value_type", "summary"]
                                 },
                                 {
                                     "properties": {
@@ -720,17 +711,7 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                         "target_layer": { "type": "string", "description": "Layer ID to place the comment in. Use layer ID from context. Omit for root/current layer." },
                                         "summary": { "type": "string", "description": "Human-readable summary" }
                                     },
-                                    "required": ["command_type", "content", "summary"]
-                                },
-                                {
-                                    "properties": {
-                                        "command_type": { "const": "UpdateComment" },
-                                        "comment_id": { "type": "string", "description": "Comment ID from context" },
-                                        "content": { "type": "string", "description": "New content" },
-                                        "color": { "type": "string", "description": "New color" },
-                                        "summary": { "type": "string", "description": "Human-readable summary" }
-                                    },
-                                    "required": ["command_type", "comment_id", "summary"]
+                                    "required": ["command_type", "content", "position", "summary"]
                                 },
                                 {
                                     "properties": {
@@ -746,28 +727,22 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                         "name": { "type": "string", "description": "Layer name" },
                                         "color": { "type": "string", "description": "Optional layer color" },
                                         "node_ids": { "type": "array", "items": { "type": "string" }, "description": "Node IDs to include" },
+                                        "position": {
+                                            "type": "object",
+                                            "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+                                        },
                                         "target_layer": { "type": "string", "description": "Parent layer ID for nesting. Use layer ID from context. Omit for root layer." },
                                         "summary": { "type": "string", "description": "Human-readable summary" }
                                     },
-                                    "required": ["command_type", "name", "summary"]
+                                    "required": ["command_type", "name", "node_ids", "summary"]
                                 },
                                 {
                                     "properties": {
-                                        "command_type": { "const": "AddNodesToLayer" },
+                                        "command_type": { "const": "RemoveLayer" },
                                         "layer_id": { "type": "string", "description": "Layer ID from context" },
-                                        "node_ids": { "type": "array", "items": { "type": "string" }, "description": "Node IDs to add" },
                                         "summary": { "type": "string", "description": "Human-readable summary" }
                                     },
-                                    "required": ["command_type", "layer_id", "node_ids", "summary"]
-                                },
-                                {
-                                    "properties": {
-                                        "command_type": { "const": "RemoveNodesFromLayer" },
-                                        "layer_id": { "type": "string", "description": "Layer ID from context" },
-                                        "node_ids": { "type": "array", "items": { "type": "string" }, "description": "Node IDs to remove" },
-                                        "summary": { "type": "string", "description": "Human-readable summary" }
-                                    },
-                                    "required": ["command_type", "layer_id", "node_ids", "summary"]
+                                    "required": ["command_type", "layer_id", "summary"]
                                 }
                             ]
                         }

@@ -63,9 +63,12 @@ export function A2UILink({
 
 		if (!hasPointerIntent && !hasKeyboardIntent) {
 			e.preventDefault();
-			console.log("[A2UI Link] Ignoring click without local activation intent:", {
-				componentId,
-			});
+			console.log(
+				"[A2UI Link] Ignoring click without local activation intent:",
+				{
+					componentId,
+				},
+			);
 			return;
 		}
 
@@ -74,7 +77,7 @@ export function A2UILink({
 
 		if (action) {
 			e.preventDefault();
-			executeAction(action);
+			executeAction(action, componentId);
 			return;
 		}
 		if (onAction) {

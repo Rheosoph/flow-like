@@ -7,7 +7,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
-use std::sync::Arc;
 
 use super::schema_utils::set_component_schema_by_type;
 

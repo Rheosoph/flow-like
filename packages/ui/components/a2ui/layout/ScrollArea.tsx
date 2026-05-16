@@ -4,6 +4,7 @@ import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import { ScrollArea } from "../../ui/scroll-area";
 import type { ComponentProps } from "../ComponentRegistry";
+import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, ScrollAreaComponent } from "../types";
@@ -20,10 +21,10 @@ export function A2UIScrollArea({
 	renderChild,
 }: ComponentProps<ScrollAreaComponent>) {
 	const { resolve } = useData();
-	const children = resolveChildren(component, resolve);
+	const children = resolveChildSpecs(component.children, resolve);
 	const direction = useResolved<string>(component.direction);
 
-	const scrollClass =
+	const viewportClass =
 		direction === "horizontal"
 			? "overflow-x-auto overflow-y-hidden"
 			: direction === "both"
@@ -32,32 +33,20 @@ export function A2UIScrollArea({
 
 	return (
 		<ScrollArea
-			className={cn("h-full w-full", scrollClass, resolveStyle(style))}
+			className={cn("h-full w-full", resolveStyle(style))}
+			viewportClassName={viewportClass}
+			orientation={
+				direction === "horizontal" || direction === "both"
+					? direction
+					: "vertical"
+			}
 			style={resolveInlineStyle(style)}
 		>
-			{children.map((childId) => (
-				<Fragment key={childId}>{renderChild(childId)}</Fragment>
+			{children.map((child) => (
+				<Fragment key={child.key}>
+					{renderChild(child.id, child.scope)}
+				</Fragment>
 			))}
 		</ScrollArea>
 	);
-}
-
-function resolveChildren(
-	component: ScrollAreaComponent,
-	resolve: (boundValue: BoundValue) => unknown,
-): string[] {
-	if (!component.children) return [];
-
-	if ("explicitList" in component.children) {
-		return component.children.explicitList;
-	}
-
-	if ("template" in component.children) {
-		const { template } = component.children;
-		const items = resolve({ path: template.dataPath }) as unknown[];
-		if (!Array.isArray(items)) return [];
-		return items.map((_, i) => `${template.templateComponentId}[${i}]`);
-	}
-
-	return [];
 }

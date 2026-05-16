@@ -1,9 +1,12 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AudioPreview } from "./audio-preview";
 import { MonacoFileEditor } from "./monaco-file-editor";
 import { TextEditor } from "./text-editor";
 
-function rawFileName(url: string) {
+function rawFileName(url: string, filename?: string) {
+	if (filename) return filename;
+
 	if (url.startsWith("data:")) {
 		const mediaType = url.split(";")[0].split(":")[1];
 		if (mediaType) {
@@ -18,61 +21,69 @@ function rawFileName(url: string) {
 	return url.split("?")[0].split("/").pop() ?? "";
 }
 
-export function isPdf(file: string) {
-	return /\.(pdf)$/i.test(rawFileName(file));
+export function isPdf(file: string, filename?: string) {
+	return /\.(pdf)$/i.test(rawFileName(file, filename));
 }
 
-export function isImage(file: string) {
-	return /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(rawFileName(file));
-}
-
-export function isVideo(file: string) {
-	return /\.(mp4|mkv|webm|ogg|avi|mov)$/i.test(rawFileName(file));
-}
-
-export function isAudio(file: string) {
-	return /\.(mp3|wav|ogg|flac|aac)$/i.test(rawFileName(file));
-}
-
-export function isCode(file: string) {
-	return /\.(json|xml|css|js|jsx|ts|tsx|py|java|c|cpp|h|hpp|cs|go|rb|php|swift|kt|rs|html|yml|yaml|toml|sql|sh|bash|scss|sass|less|vue|svelte)$/i.test(
-		rawFileName(file),
+export function isImage(file: string, filename?: string) {
+	return /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(
+		rawFileName(file, filename),
 	);
 }
 
-export function getCodeLanguage(file: string) {
+export function isVideo(file: string, filename?: string) {
+	return /\.(mp4|mkv|webm|ogv|avi|mov)$/i.test(rawFileName(file, filename));
+}
+
+export function isAudio(file: string, filename?: string) {
+	return /\.(mp3|wav|ogg|oga|opus|flac|aac|m4a|aif|aiff)$/i.test(
+		rawFileName(file, filename),
+	);
+}
+
+export function isCode(file: string, filename?: string) {
+	return /\.(json|xml|css|js|jsx|ts|tsx|py|java|c|cpp|h|hpp|cs|go|rb|php|swift|kt|rs|html|yml|yaml|toml|sql|sh|bash|scss|sass|less|vue|svelte)$/i.test(
+		rawFileName(file, filename),
+	);
+}
+
+export function getCodeLanguage(file: string, filename?: string) {
 	return (
 		/\.(json|xml|css|js|jsx|ts|tsx|py|java|c|cpp|h|hpp|cs|go|rb|php|swift|kt|rs|html|yml|yaml|toml|sql|sh|bash|scss|sass|less|vue|svelte)$/i
-			.exec(rawFileName(file))?.[0]
+			.exec(rawFileName(file, filename))?.[0]
 			?.replaceAll(".", "") ?? "text"
 	);
 }
 
-export function isText(file: string) {
-	if (isCode(file)) return true;
+export function isText(file: string, filename?: string) {
+	if (isCode(file, filename)) return true;
 	return /\.(txt|csv|html|md|mdx|ini|conf|cfg|log|env)$/i.test(
-		rawFileName(file),
+		rawFileName(file, filename),
 	);
 }
 
-export function canPreview(file: string) {
+export function canPreview(file: string, filename?: string) {
 	return (
-		isPdf(file) ||
-		isImage(file) ||
-		isVideo(file) ||
-		isAudio(file) ||
-		isText(file)
+		isPdf(file, filename) ||
+		isImage(file, filename) ||
+		isVideo(file, filename) ||
+		isAudio(file, filename) ||
+		isText(file, filename)
 	);
 }
 
 export function FilePreviewer({
 	url,
 	page,
+	filename,
+	mimeType,
 	editable = false,
 	onSave,
 }: Readonly<{
 	url: string;
 	page?: number;
+	filename?: string;
+	mimeType?: string;
 	editable?: boolean;
 	onSave?: (content: string) => Promise<void>;
 }>) {
@@ -89,13 +100,13 @@ export function FilePreviewer({
 	}, [url]);
 
 	useEffect(() => {
-		if (isText(url)) {
+		if (isText(url, filename)) {
 			previewContent();
 		}
-	}, [url]);
+	}, [filename, previewContent, url]);
 
 	useEffect(() => {
-		if (isPdf(url) && containerRef.current) {
+		if (isPdf(url, filename) && containerRef.current) {
 			const observer = new ResizeObserver(() => {
 				// Force rerender of the PDF iframe when size changes
 				setPdfKey((prev) => prev + 1);
@@ -107,15 +118,15 @@ export function FilePreviewer({
 				observer.disconnect();
 			};
 		}
-	}, [url]);
+	}, [url, filename]);
 
-	if (!canPreview(url)) {
+	if (!canPreview(url, filename)) {
 		return (
 			<div className="text-red-500">File type not supported for preview</div>
 		);
 	}
 
-	if (isPdf(url)) {
+	if (isPdf(url, filename)) {
 		const pageUrl = page
 			? `#page=${page}&#toolbar=1&#view=FitH`
 			: "#toolbar=1&#view=FitH";
@@ -125,7 +136,7 @@ export function FilePreviewer({
 					key={pdfKey}
 					src={`${url}${pageUrl}`}
 					className="w-full h-full border-0 max-h-full max-w-full"
-					title={`PDF Preview: ${rawFileName(url)}`}
+					title={`PDF Preview: ${rawFileName(url, filename)}`}
 				>
 					<p>
 						Your browser cannot display the PDF.{" "}
@@ -139,17 +150,17 @@ export function FilePreviewer({
 		);
 	}
 
-	if (isImage(url)) {
+	if (isImage(url, filename)) {
 		return (
 			<img
 				src={url}
-				alt={rawFileName(url)}
+				alt={rawFileName(url, filename)}
 				className="w-full h-full object-contain"
 			/>
 		);
 	}
 
-	if (isVideo(url)) {
+	if (isVideo(url, filename)) {
 		return (
 			<video src={url} controls className="w-full h-full object-contain">
 				<track
@@ -164,26 +175,22 @@ export function FilePreviewer({
 		);
 	}
 
-	if (isAudio(url)) {
+	if (isAudio(url, filename)) {
 		return (
-			<audio src={url} controls className="w-full h-full object-contain">
-				<track
-					kind="captions"
-					label="English captions"
-					srcLang="en"
-					src=""
-					default={false}
-				/>
-				Your browser does not support the audio tag.
-			</audio>
+			<AudioPreview
+				src={url}
+				title={rawFileName(url, filename)}
+				mimeType={mimeType}
+				showDownload={true}
+			/>
 		);
 	}
 
-	if (isCode(url)) {
+	if (isCode(url, filename)) {
 		if (editable && onSave) {
 			return (
 				<MonacoFileEditor
-					fileName={rawFileName(url)}
+					fileName={rawFileName(url, filename)}
 					initialContent={content}
 					editable={true}
 					onSave={onSave}
@@ -192,18 +199,21 @@ export function FilePreviewer({
 		}
 		return (
 			<TextEditor
-				initialContent={`\n\`\`\`${getCodeLanguage(url)}\n${content}\n\`\`\`\n`}
+				initialContent={`\n\`\`\`${getCodeLanguage(
+					url,
+					filename,
+				)}\n${content}\n\`\`\`\n`}
 				isMarkdown={true}
 				editable={false}
 			/>
 		);
 	}
 
-	if (isText(url)) {
+	if (isText(url, filename)) {
 		if (editable && onSave) {
 			return (
 				<MonacoFileEditor
-					fileName={rawFileName(url)}
+					fileName={rawFileName(url, filename)}
 					initialContent={content}
 					editable={true}
 					onSave={onSave}

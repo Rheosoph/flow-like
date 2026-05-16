@@ -1,8 +1,5 @@
 use crate::{
-    entity::{
-        invitation, notification,
-        sea_orm_active_enums::NotificationType,
-    },
+    entity::{invitation, notification, sea_orm_active_enums::NotificationType},
     error::ApiError,
     middleware::jwt::AppUser,
     push_notifications::{DispatchNotificationInput, dispatch_notification},

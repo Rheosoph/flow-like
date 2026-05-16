@@ -59,6 +59,13 @@ pub use types::bounding_box::BoundingBox;
 pub use types::class_prediction::ClassPrediction;
 pub use types::db_connection::{CachedDB, NodeDBConnection};
 pub use types::flow_path::{FlowPath, FlowPathRuntime, FlowPathStore};
+pub use types::graph_overlay::{
+    DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,
+    DEFAULT_GRAPH_SAMPLE_SIZE, EdgeLabelMapping, GRAPH_OVERLAYS_TABLE, GraphLabelInfo,
+    GraphOverlay, GraphPropertyInfo, GraphSchema, LabelStyle, NodeGraphConnection,
+    NodeLabelMapping, NodeSize, PropertyColumn, RESERVED_TABLE_PREFIX, RESERVED_TABLE_SUFFIX,
+    SubgraphEdge, SubgraphNode, SubgraphPayload, is_reserved_table,
+};
 pub use types::keypoint::{
     COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, PoseDetection, SkeletonConnection,
 };

@@ -137,7 +137,8 @@ export default function WidgetsPage() {
 				<div className="space-y-1">
 					<h1 className="text-2xl font-bold">Widgets</h1>
 					<p className="text-muted-foreground text-sm">
-						Build reusable UI blocks that users interact with when using your app
+						Build reusable UI blocks that users interact with when using your
+						app
 					</p>
 				</div>
 				<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -344,7 +345,10 @@ export default function WidgetsPage() {
 							: "Widgets are the visual building blocks of your app — forms, dashboards, chat interfaces, and more. Create one to start designing."}
 					</p>
 					{!searchTerm && (
-						<Button onClick={() => setIsCreateDialogOpen(true)} className="mt-2">
+						<Button
+							onClick={() => setIsCreateDialogOpen(true)}
+							className="mt-2"
+						>
 							<Plus className="w-4 h-4 mr-2" />
 							Create Your First Widget
 						</Button>

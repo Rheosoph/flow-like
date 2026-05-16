@@ -1,62 +1,79 @@
 export const enWhitelabel = {
-  "whitelabel.meta.title": "White-Label & OEM | Flow-Like",
-  "whitelabel.meta.description": "Ship Flow-Like under your brand. Full theming, embed/headless/hybrid deployment modes, SSO, usage metering, and SDK access for OEM partners.",
+	"whitelabel.meta.title": "White-Label & OEM | Flow-Like",
+	"whitelabel.meta.description":
+		"Ship Flow-Like under your brand. Full theming, embed/headless/hybrid deployment modes, SSO, usage metering, and SDK access for OEM partners.",
 
-  "whitelabel.hero.tagline": "White-Label & OEM",
-  "whitelabel.hero.headline": "Your Brand.",
-  "whitelabel.hero.headline.highlight": "Our Engine.",
-  "whitelabel.hero.description": "Embed workflow automation, AI agents, and dashboards into your product — fully branded. From design tokens to deployment mode, every surface is yours to control.",
-  "whitelabel.hero.cta": "Talk to Sales",
-  "whitelabel.hero.cta.docs": "Read the Docs",
+	"whitelabel.hero.tagline": "White-Label & OEM",
+	"whitelabel.hero.headline": "Your Brand.",
+	"whitelabel.hero.headline.highlight": "Our Engine.",
+	"whitelabel.hero.description":
+		"Embed workflow automation, AI agents, and dashboards into your product — fully branded. From design tokens to deployment mode, every surface is yours to control.",
+	"whitelabel.hero.cta": "Talk to Sales",
+	"whitelabel.hero.cta.docs": "Read the Docs",
 
-  "whitelabel.modes.tagline": "Deployment Modes",
-  "whitelabel.modes.headline": "Choose How You Ship",
-  "whitelabel.modes.description": "Three deployment architectures to match your product strategy. Mix and match per customer.",
+	"whitelabel.modes.tagline": "Deployment Modes",
+	"whitelabel.modes.headline": "Choose How You Ship",
+	"whitelabel.modes.description":
+		"Three deployment architectures to match your product strategy. Mix and match per customer.",
 
-  "whitelabel.modes.embed.title": "Embedded",
-  "whitelabel.modes.embed.desc": "Drop Flow-Like into your existing app as an iframe or web component. Your users never leave your interface.",
-  "whitelabel.modes.embed.feat1": "iframe & Web Component SDKs",
-  "whitelabel.modes.embed.feat2": "Session passthrough authentication",
-  "whitelabel.modes.embed.feat3": "Event bus for parent ↔ child communication",
+	"whitelabel.modes.embed.title": "Embedded",
+	"whitelabel.modes.embed.desc":
+		"Drop Flow-Like into your existing app as an iframe or web component. Your users never leave your interface.",
+	"whitelabel.modes.embed.feat1": "iframe & Web Component SDKs",
+	"whitelabel.modes.embed.feat2": "Session passthrough authentication",
+	"whitelabel.modes.embed.feat3": "Event bus for parent ↔ child communication",
 
-  "whitelabel.modes.headless.title": "Headless",
-  "whitelabel.modes.headless.desc": "Use the engine API directly. Build your own UI or run automations with zero visible frontend.",
-  "whitelabel.modes.headless.feat1": "Full REST + WebSocket API",
-  "whitelabel.modes.headless.feat2": "SDKs for TypeScript, Python, Rust",
-  "whitelabel.modes.headless.feat3": "Trigger workflows from any system",
+	"whitelabel.modes.headless.title": "Headless",
+	"whitelabel.modes.headless.desc":
+		"Use the engine API directly. Build your own UI or run automations with zero visible frontend.",
+	"whitelabel.modes.headless.feat1": "Full REST + WebSocket API",
+	"whitelabel.modes.headless.feat2": "SDKs for TypeScript, Python, Rust",
+	"whitelabel.modes.headless.feat3": "Trigger workflows from any system",
 
-  "whitelabel.modes.hybrid.title": "Hybrid",
-  "whitelabel.modes.hybrid.desc": "Use our polished UI for workflow design. Headless API for execution and custom dashboards.",
-  "whitelabel.modes.hybrid.feat1": "Visual editor with your branding",
-  "whitelabel.modes.hybrid.feat2": "API-driven execution pipeline",
-  "whitelabel.modes.hybrid.feat3": "Best of both worlds",
+	"whitelabel.modes.hybrid.title": "Hybrid",
+	"whitelabel.modes.hybrid.desc":
+		"Use our polished UI for workflow design. Headless API for execution and custom dashboards.",
+	"whitelabel.modes.hybrid.feat1": "Visual editor with your branding",
+	"whitelabel.modes.hybrid.feat2": "API-driven execution pipeline",
+	"whitelabel.modes.hybrid.feat3": "Best of both worlds",
 
-  "whitelabel.theming.tagline": "Full Theming Control",
-  "whitelabel.theming.headline": "Every Pixel, Your Brand",
-  "whitelabel.theming.description": "Design tokens propagate through every component. Swap colors, typography, border radii, and spacing with a single config file — or use the visual theme editor.",
-  "whitelabel.theming.tokens.title": "Design Tokens",
-  "whitelabel.theming.tokens.desc": "Colors, spacing, typography, radii — all configurable via CSS custom properties or the theme API.",
-  "whitelabel.theming.logo.title": "Logo & Assets",
-  "whitelabel.theming.logo.desc": "Replace logos, favicons, and splash screens across desktop, web, and embedded deployments.",
-  "whitelabel.theming.domains.title": "Custom Domains",
-  "whitelabel.theming.domains.desc": "Serve the platform from your own domain with automatic TLS provisioning and DNS verification.",
-  "whitelabel.theming.email.title": "Email & Notifications",
-  "whitelabel.theming.email.desc": "Branded transactional emails, in-app notifications, and webhook payloads with your identity.",
+	"whitelabel.theming.tagline": "Full Theming Control",
+	"whitelabel.theming.headline": "Every Pixel, Your Brand",
+	"whitelabel.theming.description":
+		"Design tokens propagate through every component. Swap colors, typography, border radii, and spacing with a single config file — or use the visual theme editor.",
+	"whitelabel.theming.tokens.title": "Design Tokens",
+	"whitelabel.theming.tokens.desc":
+		"Colors, spacing, typography, radii — all configurable via CSS custom properties or the theme API.",
+	"whitelabel.theming.logo.title": "Logo & Assets",
+	"whitelabel.theming.logo.desc":
+		"Replace logos, favicons, and splash screens across desktop, web, and embedded deployments.",
+	"whitelabel.theming.domains.title": "Custom Domains",
+	"whitelabel.theming.domains.desc":
+		"Serve the platform from your own domain with automatic TLS provisioning and DNS verification.",
+	"whitelabel.theming.email.title": "Email & Notifications",
+	"whitelabel.theming.email.desc":
+		"Branded transactional emails, in-app notifications, and webhook payloads with your identity.",
 
-  "whitelabel.oem.tagline": "Built for OEM Partners",
-  "whitelabel.oem.headline": "Enterprise-Grade OEM Tooling",
-  "whitelabel.oem.description": "Everything you need to ship automation as a feature inside your own product.",
-  "whitelabel.oem.sso.title": "SSO & Auth Passthrough",
-  "whitelabel.oem.sso.desc": "SAML, OIDC, and JWT-based auth delegation. Your users authenticate through your identity provider — Flow-Like trusts the token.",
-  "whitelabel.oem.metering.title": "Usage Metering",
-  "whitelabel.oem.metering.desc": "Per-tenant execution counts, API calls, and storage usage — exposed via API for your billing system.",
-  "whitelabel.oem.isolation.title": "Tenant Isolation",
-  "whitelabel.oem.isolation.desc": "Hard namespace boundaries between tenants. Separate storage, execution queues, and access policies.",
-  "whitelabel.oem.sdk.title": "SDK & API Access",
-  "whitelabel.oem.sdk.desc": "TypeScript, Python, and Rust SDKs with typed interfaces. OpenAPI spec available for code generation.",
+	"whitelabel.oem.tagline": "Built for OEM Partners",
+	"whitelabel.oem.headline": "Enterprise-Grade OEM Tooling",
+	"whitelabel.oem.description":
+		"Everything you need to ship automation as a feature inside your own product.",
+	"whitelabel.oem.sso.title": "SSO & Auth Passthrough",
+	"whitelabel.oem.sso.desc":
+		"SAML, OIDC, and JWT-based auth delegation. Your users authenticate through your identity provider — Flow-Like trusts the token.",
+	"whitelabel.oem.metering.title": "Usage Metering",
+	"whitelabel.oem.metering.desc":
+		"Per-tenant execution counts, API calls, and storage usage — exposed via API for your billing system.",
+	"whitelabel.oem.isolation.title": "Tenant Isolation",
+	"whitelabel.oem.isolation.desc":
+		"Hard namespace boundaries between tenants. Separate storage, execution queues, and access policies.",
+	"whitelabel.oem.sdk.title": "SDK & API Access",
+	"whitelabel.oem.sdk.desc":
+		"TypeScript, Python, and Rust SDKs with typed interfaces. OpenAPI spec available for code generation.",
 
-  "whitelabel.cta.headline": "Ready to Ship Under Your Brand?",
-  "whitelabel.cta.description": "Get in touch with our partnerships team to discuss OEM licensing, volume pricing, and white-glove onboarding.",
-  "whitelabel.cta.button": "Contact Partnerships",
-  "whitelabel.cta.docs": "Explore the SDK Docs",
+	"whitelabel.cta.headline": "Ready to Ship Under Your Brand?",
+	"whitelabel.cta.description":
+		"Get in touch with our partnerships team to discuss OEM licensing, volume pricing, and white-glove onboarding.",
+	"whitelabel.cta.button": "Contact Partnerships",
+	"whitelabel.cta.docs": "Explore the SDK Docs",
 } as const;

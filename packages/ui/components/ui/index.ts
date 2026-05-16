@@ -3,6 +3,7 @@ export * from "./accordion";
 export * from "./alert";
 export * from "./alert-dialog";
 export * from "./app-card";
+export * from "./audio-preview";
 export * from "./avatar";
 export * from "./badge";
 export * from "./bento-grid";
@@ -28,6 +29,10 @@ export * from "./event-card";
 export * from "./event-form";
 export * from "./file-previewer";
 export * from "./flow-background";
+// graph components use sigma.js (WebGL) — import from ./graph directly with ssr:false
+export * from "./graph/overlay-builder";
+export * from "./graph/icons";
+export * from "./graph/presets";
 export * from "./hover-card";
 export * from "./input";
 export * from "./label";

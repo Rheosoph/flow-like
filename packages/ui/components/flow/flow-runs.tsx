@@ -47,7 +47,9 @@ import {
 	SelectValue,
 } from "../ui";
 
-function parseVersion(versionStr: string): [number, number, number] | undefined {
+function parseVersion(
+	versionStr: string,
+): [number, number, number] | undefined {
 	const normalized = versionStr.trim().replace(/^v/i, "");
 	const delimiter = normalized.includes("-") ? "-" : ".";
 	const parts = normalized.split(delimiter).map(Number);
@@ -68,10 +70,16 @@ function isCurrentBoardVersion(
 }
 
 function toMicros(time: ILog["start"]) {
-	return time.secs_since_epoch * 1_000_000 + Math.floor(time.nanos_since_epoch / 1_000);
+	return (
+		time.secs_since_epoch * 1_000_000 +
+		Math.floor(time.nanos_since_epoch / 1_000)
+	);
 }
 
-function hydrateMetadataFromLogs(run: ILogMetadata, logs: ILog[]): ILogMetadata {
+function hydrateMetadataFromLogs(
+	run: ILogMetadata,
+	logs: ILog[],
+): ILogMetadata {
 	const nodes = new Map<string, number>();
 	let earliest = Number.POSITIVE_INFINITY;
 	let latest = 0;
@@ -208,7 +216,12 @@ const FlowRunsComponent = ({
 				let offset = 0;
 
 				while (true) {
-					const batch = await backend.boardState.queryRun(run, "", offset, pageSize);
+					const batch = await backend.boardState.queryRun(
+						run,
+						"",
+						offset,
+						pageSize,
+					);
 					if (batch.length === 0) {
 						break;
 					}
@@ -222,11 +235,15 @@ const FlowRunsComponent = ({
 					offset += batch.length;
 				}
 
-				if (useLogAggregation.getState().currentMetadata?.run_id === run.run_id) {
+				if (
+					useLogAggregation.getState().currentMetadata?.run_id === run.run_id
+				) {
 					setCurrentMetadata(hydrateMetadataFromLogs(run, logs));
 				}
 			} catch {
-				if (useLogAggregation.getState().currentMetadata?.run_id === run.run_id) {
+				if (
+					useLogAggregation.getState().currentMetadata?.run_id === run.run_id
+				) {
 					setCurrentMetadata(run);
 				}
 			} finally {

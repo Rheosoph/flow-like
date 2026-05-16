@@ -306,8 +306,8 @@ impl UnifiedCopilot {
             components: response.components,
             suggestions: vec![],
             active_scope: CopilotScope::Frontend,
-            canvas_settings: None,
-            root_component_id: None,
+            canvas_settings: response.canvas_settings,
+            root_component_id: response.root_component_id,
         })
     }
 

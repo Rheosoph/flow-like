@@ -1,6 +1,5 @@
 export const zhCommon = {
 	// Header
-	"header.24h": "24小时解决方案",
 	"header.compare": "比较",
 	"header.blog": "博客",
 	"header.docs": "文档",
@@ -24,7 +23,6 @@ export const zhCommon = {
 	"footer.link.download": "下载",
 	"footer.link.compare": "比较",
 	"footer.link.modernBi": "现代BI",
-	"footer.link.24h": "24小时解决方案",
 	"footer.link.gettingStarted": "快速开始",
 	"footer.link.whatIs": "什么是Flow-Like？",
 	"footer.link.selfHosting": "自托管",
@@ -198,7 +196,6 @@ export const zhCommon = {
 	"pricing.ctaSection.title": "需要定制解决方案？",
 	"pricing.ctaSection.description":
 		"在24小时内为您的业务获得完全定制的自动化解决方案。我们将设计、构建并部署一个适合您确切需求的生产就绪工作流。",
-	"pricing.ctaSection.24h": "24小时解决方案",
 	"pricing.ctaSection.enterprise": "联系企业销售",
 	"pricing.ctaSection.startingAt": "起价 €1,999 · 完整源代码所有权 · 随处部署",
 

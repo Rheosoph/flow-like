@@ -153,7 +153,10 @@ const GlobalAnchorHandler = () => {
 			if (anchor?.href) {
 				return {
 					href: anchor.href,
-					title: anchor.textContent?.trim() ?? anchor.getAttribute("title") ?? undefined,
+					title:
+						anchor.textContent?.trim() ??
+						anchor.getAttribute("title") ??
+						undefined,
 					element: anchor,
 					isAnchor: true,
 				};
@@ -164,7 +167,10 @@ const GlobalAnchorHandler = () => {
 				if (dataHref) {
 					return {
 						href: dataHref,
-						title: el.getAttribute("data-title") ?? el.textContent?.trim() ?? undefined,
+						title:
+							el.getAttribute("data-title") ??
+							el.textContent?.trim() ??
+							undefined,
 						element: el,
 						isAnchor: false,
 					};

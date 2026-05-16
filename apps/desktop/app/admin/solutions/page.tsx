@@ -1,16 +1,16 @@
 "use client";
 
 import {
-	type ISolutionListResponse,
-	type ISolutionLogPayload,
-	type ISolutionRequest,
-	type ISolutionUpdatePayload,
-	type SolutionStatus,
 	Card,
 	CardContent,
 	CardHeader,
 	CardTitle,
+	type ISolutionListResponse,
+	type ISolutionLogPayload,
+	type ISolutionRequest,
+	type ISolutionUpdatePayload,
 	Skeleton,
+	type SolutionStatus,
 	SolutionsPage,
 	useBackend,
 	useInvoke,
@@ -177,44 +177,58 @@ export default function AdminSolutionsPage() {
 					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-								<CardTitle className="text-sm font-medium">Total Requests</CardTitle>
+								<CardTitle className="text-sm font-medium">
+									Total Requests
+								</CardTitle>
 								<Inbox className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
 							<CardContent>
 								{solutions.isLoading ? (
 									<Skeleton className="h-8 w-16" />
 								) : (
-									<div className="text-2xl font-bold">{solutions.data?.total ?? 0}</div>
+									<div className="text-2xl font-bold">
+										{solutions.data?.total ?? 0}
+									</div>
 								)}
 							</CardContent>
 						</Card>
-						<Card className={
-							(openCount.data?.total ?? 0) > 0
-								? "border-yellow-500/50 bg-yellow-500/5"
-								: ""
-						}>
+						<Card
+							className={
+								(openCount.data?.total ?? 0) > 0
+									? "border-yellow-500/50 bg-yellow-500/5"
+									: ""
+							}
+						>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-								<CardTitle className="text-sm font-medium">Pending Review</CardTitle>
+								<CardTitle className="text-sm font-medium">
+									Pending Review
+								</CardTitle>
 								<Clock className="h-4 w-4 text-yellow-500" />
 							</CardHeader>
 							<CardContent>
 								{openCount.isLoading ? (
 									<Skeleton className="h-8 w-16" />
 								) : (
-									<div className="text-2xl font-bold">{openCount.data?.total ?? 0}</div>
+									<div className="text-2xl font-bold">
+										{openCount.data?.total ?? 0}
+									</div>
 								)}
 							</CardContent>
 						</Card>
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-								<CardTitle className="text-sm font-medium">In Progress</CardTitle>
+								<CardTitle className="text-sm font-medium">
+									In Progress
+								</CardTitle>
 								<AlertCircle className="h-4 w-4 text-blue-500" />
 							</CardHeader>
 							<CardContent>
 								{inProgressCount.isLoading ? (
 									<Skeleton className="h-8 w-16" />
 								) : (
-									<div className="text-2xl font-bold">{inProgressCount.data?.total ?? 0}</div>
+									<div className="text-2xl font-bold">
+										{inProgressCount.data?.total ?? 0}
+									</div>
 								)}
 							</CardContent>
 						</Card>
@@ -227,29 +241,31 @@ export default function AdminSolutionsPage() {
 								{solutions.isLoading ? (
 									<Skeleton className="h-8 w-16" />
 								) : (
-									<div className="text-2xl font-bold">{solutions.data?.solutions.length ?? 0}</div>
+									<div className="text-2xl font-bold">
+										{solutions.data?.solutions.length ?? 0}
+									</div>
 								)}
 							</CardContent>
 						</Card>
 					</div>
 
 					<SolutionsPage
-				data={solutions.data}
-				isLoading={solutions.isLoading}
-				error={solutions.error}
-				page={page}
-				limit={limit}
-				statusFilter={statusFilter}
-				searchQuery={searchQuery}
-				onPageChange={handlePageChange}
-				onLimitChange={handleLimitChange}
-				onStatusFilterChange={handleStatusFilterChange}
-				onSearchChange={handleSearchChange}
-				onRefresh={handleRefresh}
-				onUpdateSolution={handleUpdateSolution}
-				onFetchSolution={handleFetchSolution}
-				onAddLog={handleAddLog}
-				trackingBaseUrl="https://www.flow-like.com"
+						data={solutions.data}
+						isLoading={solutions.isLoading}
+						error={solutions.error}
+						page={page}
+						limit={limit}
+						statusFilter={statusFilter}
+						searchQuery={searchQuery}
+						onPageChange={handlePageChange}
+						onLimitChange={handleLimitChange}
+						onStatusFilterChange={handleStatusFilterChange}
+						onSearchChange={handleSearchChange}
+						onRefresh={handleRefresh}
+						onUpdateSolution={handleUpdateSolution}
+						onFetchSolution={handleFetchSolution}
+						onAddLog={handleAddLog}
+						trackingBaseUrl="https://www.flow-like.com"
 					/>
 				</div>
 			</div>

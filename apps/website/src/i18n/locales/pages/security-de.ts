@@ -1,49 +1,68 @@
 export const deSecurity = {
 	"security.meta.title": "Sicherheit & Compliance | Flow-Like",
-	"security.meta.description": "Basierend auf Rust mit Speichersicherheit, RBAC, vollständigen Audit-Trails, Datensouveränität und Open-Source-Transparenz. Enterprise-Sicherheit ohne Enterprise-Komplexität.",
+	"security.meta.description":
+		"Basierend auf Rust mit Speichersicherheit, RBAC, vollständigen Audit-Trails, Datensouveränität und Open-Source-Transparenz. Enterprise-Sicherheit ohne Enterprise-Komplexität.",
 	"security.hero.tagline": "Sicherheit zuerst",
 	"security.hero.headline": "Sicherheit, die Sie",
 	"security.hero.headline.highlight": "überprüfen können",
-	"security.hero.description": "Flow-Like ist Open Source. Jede Zeile Code ist überprüfbar. Kombinieren Sie speichersichere Rust-Interna mit rollenbasierter Zugriffskontrolle, Verschlüsselung im Ruhezustand und vollständigen Audit-Trails.",
+	"security.hero.description":
+		"Flow-Like ist Open Source. Jede Zeile Code ist überprüfbar. Kombinieren Sie speichersichere Rust-Interna mit rollenbasierter Zugriffskontrolle, Verschlüsselung im Ruhezustand und vollständigen Audit-Trails.",
 	"security.hero.cta": "Quellcode ansehen",
 	"security.hero.cta.report": "Sicherheitslücke melden",
 	"security.arch.tagline": "Sicherheitsarchitektur",
 	"security.arch.headline": "Verteidigung in der Tiefe",
-	"security.arch.description": "Mehrere Sicherheitsebenen — von der Sprach-Laufzeit bis zur Deployment-Grenze.",
+	"security.arch.description":
+		"Mehrere Sicherheitsebenen — von der Sprach-Laufzeit bis zur Deployment-Grenze.",
 	"security.arch.rust.title": "Speichersichere Laufzeit",
-	"security.arch.rust.desc": "Die gesamte Ausführungs-Engine ist in Rust geschrieben — Buffer Overflows, Use-after-free und Data Races werden zur Kompilierzeit eliminiert. Keine Garbage-Collector-Pausen, keine Laufzeit-Überraschungen.",
+	"security.arch.rust.desc":
+		"Die gesamte Ausführungs-Engine ist in Rust geschrieben — Buffer Overflows, Use-after-free und Data Races werden zur Kompilierzeit eliminiert. Keine Garbage-Collector-Pausen, keine Laufzeit-Überraschungen.",
 	"security.arch.wasm.title": "Sandboxed Extensions",
-	"security.arch.wasm.desc": "Benutzerdefinierte Nodes laufen in WASM-Sandboxen mit Capability-basierter Sicherheit. Kein Dateisystem- oder Netzwerkzugriff, es sei denn, er wird explizit gewährt. Schädlicher Code kann die Sandbox nicht verlassen.",
+	"security.arch.wasm.desc":
+		"Benutzerdefinierte Nodes laufen in WASM-Sandboxen mit Capability-basierter Sicherheit. Kein Dateisystem- oder Netzwerkzugriff, es sei denn, er wird explizit gewährt. Schädlicher Code kann die Sandbox nicht verlassen.",
 	"security.arch.rbac.title": "Rollenbasierte Zugriffskontrolle",
-	"security.arch.rbac.desc": "Granulare Berechtigungen für Workflows, Nodes, Geheimnisse und Deployments. Rollen auf Organisations-, Team- oder Projektebene zuweisen. Least-Privilege standardmäßig durchsetzen.",
+	"security.arch.rbac.desc":
+		"Granulare Berechtigungen für Workflows, Nodes, Geheimnisse und Deployments. Rollen auf Organisations-, Team- oder Projektebene zuweisen. Least-Privilege standardmäßig durchsetzen.",
 	"security.arch.encryption.title": "Durchgängige Verschlüsselung",
-	"security.arch.encryption.desc": "TLS 1.3 für Daten während der Übertragung. AES-256-Verschlüsselung im Ruhezustand für Geheimnisse, Anmeldedaten und sensible Workflow-Daten. Schlüsselverwaltung über Ihr KMS oder unseres.",
+	"security.arch.encryption.desc":
+		"TLS 1.3 für Daten während der Übertragung. AES-256-Verschlüsselung im Ruhezustand für Geheimnisse, Anmeldedaten und sensible Workflow-Daten. Schlüsselverwaltung über Ihr KMS oder unseres.",
 	"security.arch.audit.title": "Vollständiger Audit-Trail",
-	"security.arch.audit.desc": "Jede Workflow-Ausführung, Konfigurationsänderung und jedes Zugriffsereignis wird mit Zeitstempeln, Benutzeridentität und vollständigem Kontext protokolliert. Export in Ihr SIEM oder Compliance-Tooling.",
+	"security.arch.audit.desc":
+		"Jede Workflow-Ausführung, Konfigurationsänderung und jedes Zugriffsereignis wird mit Zeitstempeln, Benutzeridentität und vollständigem Kontext protokolliert. Export in Ihr SIEM oder Compliance-Tooling.",
 	"security.arch.supply.title": "Lieferkettensicherheit",
-	"security.arch.supply.desc": "Alle Abhängigkeiten werden mit SBOMs verfolgt. Drittanbieter-Lizenzen werden kontinuierlich geprüft. Abhängigkeits-Updates werden vor der Veröffentlichung in der CI getestet.",
+	"security.arch.supply.desc":
+		"Alle Abhängigkeiten werden mit SBOMs verfolgt. Drittanbieter-Lizenzen werden kontinuierlich geprüft. Abhängigkeits-Updates werden vor der Veröffentlichung in der CI getestet.",
 	"security.data.tagline": "Datensouveränität",
 	"security.data.headline": "Ihre Daten, Ihre Regeln",
-	"security.data.description": "Flow-Like erfordert niemals, dass Ihre Daten Ihre Infrastruktur verlassen. Betreiben Sie es On-Premise, in Ihrer VPC oder auf dem Desktop — ohne Telemetrie, es sei denn, Sie stimmen zu.",
+	"security.data.description":
+		"Flow-Like erfordert niemals, dass Ihre Daten Ihre Infrastruktur verlassen. Betreiben Sie es On-Premise, in Ihrer VPC oder auf dem Desktop — ohne Telemetrie, es sei denn, Sie stimmen zu.",
 	"security.data.local.title": "Local-First-Architektur",
-	"security.data.local.desc": "Die Desktop-App funktioniert vollständig offline. Keine Cloud-Abhängigkeit erforderlich. Ihre Workflows, Daten und Geheimnisse bleiben auf Ihrem Rechner.",
+	"security.data.local.desc":
+		"Die Desktop-App funktioniert vollständig offline. Keine Cloud-Abhängigkeit erforderlich. Ihre Workflows, Daten und Geheimnisse bleiben auf Ihrem Rechner.",
 	"security.data.selfhost.title": "Selbst gehostetes Deployment",
-	"security.data.selfhost.desc": "Deployen Sie Flow-Like in Ihrer eigenen Cloud oder On-Premise-Infrastruktur. Docker, Kubernetes und Bare-Metal werden unterstützt.",
+	"security.data.selfhost.desc":
+		"Deployen Sie Flow-Like in Ihrer eigenen Cloud oder On-Premise-Infrastruktur. Docker, Kubernetes und Bare-Metal werden unterstützt.",
 	"security.data.residency.title": "Datenresidenz-Kontrollen",
-	"security.data.residency.desc": "Wählen Sie, wo Ihre Daten verarbeitet und gespeichert werden. Erfüllen Sie DSGVO-, CCPA- und regulatorische Anforderungen mit Deployment-Level-Kontrollen.",
+	"security.data.residency.desc":
+		"Wählen Sie, wo Ihre Daten verarbeitet und gespeichert werden. Erfüllen Sie DSGVO-, CCPA- und regulatorische Anforderungen mit Deployment-Level-Kontrollen.",
 	"security.compliance.tagline": "Compliance & Transparenz",
 	"security.compliance.headline": "Entwickelt für regulierte Branchen",
-	"security.compliance.description": "Von Gesundheitswesen über Finanzen bis zur öffentlichen Verwaltung — Flow-Like bietet die Kontrollen, die regulierte Umgebungen erfordern.",
+	"security.compliance.description":
+		"Von Gesundheitswesen über Finanzen bis zur öffentlichen Verwaltung — Flow-Like bietet die Kontrollen, die regulierte Umgebungen erfordern.",
 	"security.compliance.gdpr.title": "DSGVO-bereit",
-	"security.compliance.gdpr.desc": "Datenlöschungs-Workflows, Einwilligungsverwaltung und Verarbeitungsprotokolle. Fordern Sie jederzeit eine Datenlöschung an.",
+	"security.compliance.gdpr.desc":
+		"Datenlöschungs-Workflows, Einwilligungsverwaltung und Verarbeitungsprotokolle. Fordern Sie jederzeit eine Datenlöschung an.",
 	"security.compliance.soc.title": "SOC-2-Kontrollen",
-	"security.compliance.soc.desc": "Zugriffskontrollen, Änderungsmanagement und Überwachung ausgerichtet an den SOC-2-Trust-Service-Kriterien.",
+	"security.compliance.soc.desc":
+		"Zugriffskontrollen, Änderungsmanagement und Überwachung ausgerichtet an den SOC-2-Trust-Service-Kriterien.",
 	"security.compliance.open.title": "Open-Source-Transparenz",
-	"security.compliance.open.desc": "Jede Abhängigkeit, jede Lizenz, jede Zeile Code — öffentlich überprüfbar. Sehen Sie den vollständigen Drittanbieter-Hinweis ein.",
+	"security.compliance.open.desc":
+		"Jede Abhängigkeit, jede Lizenz, jede Zeile Code — öffentlich überprüfbar. Sehen Sie den vollständigen Drittanbieter-Hinweis ein.",
 	"security.compliance.sbom.title": "SBOM verfügbar",
-	"security.compliance.sbom.desc": "Software Bill of Materials wird für jedes Release generiert. Vollständiger Abhängigkeitsbaum mit Lizenz- und Schwachstellendaten.",
+	"security.compliance.sbom.desc":
+		"Software Bill of Materials wird für jedes Release generiert. Vollständiger Abhängigkeitsbaum mit Lizenz- und Schwachstellendaten.",
 	"security.cta.headline": "Fragen zur Sicherheit?",
-	"security.cta.description": "Unser Sicherheitsteam steht bereit, Ihre Anforderungen zu besprechen. Für Schwachstellenberichte nutzen Sie bitte unseren verantwortungsvollen Offenlegungsprozess.",
+	"security.cta.description":
+		"Unser Sicherheitsteam steht bereit, Ihre Anforderungen zu besprechen. Für Schwachstellenberichte nutzen Sie bitte unseren verantwortungsvollen Offenlegungsprozess.",
 	"security.cta.button": "Sicherheitsteam kontaktieren",
 	"security.cta.thirdparty": "Drittanbieter-Hinweise ansehen",
 } as const;

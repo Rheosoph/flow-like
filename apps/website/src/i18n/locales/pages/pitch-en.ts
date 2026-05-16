@@ -98,7 +98,8 @@ export const enPitch: Record<string, string> = {
 	"pitch.roi.act1.total.label": "Total enterprise spend",
 	"pitch.roi.act1.total.old": "€1M–4.5M/yr",
 	"pitch.roi.act1.total.new": "One platform. A fraction of the cost.",
-	"pitch.roi.act1.total.sub": "All capabilities included — no per-seat, per-connector, or per-bot fees",
+	"pitch.roi.act1.total.sub":
+		"All capabilities included — no per-seat, per-connector, or per-bot fees",
 
 	// ROI — Transition
 	"pitch.roi.transition.save": "Consolidation saves you money.",

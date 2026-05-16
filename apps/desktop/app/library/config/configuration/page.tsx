@@ -59,15 +59,20 @@ export default function ConfigurationPage() {
 					<div className="w-16 h-16 mx-auto bg-emerald-500/10 rounded-full flex items-center justify-center">
 						<SettingsIcon className="w-8 h-8 text-emerald-500" />
 					</div>
-					<h3 className="text-xl font-semibold">
-						No Configuration Needed
-					</h3>
+					<h3 className="text-xl font-semibold">No Configuration Needed</h3>
 					<p className="text-muted-foreground">
 						Your app doesn&apos;t have any configurable parameters yet.
 					</p>
 					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground text-left space-y-2">
-						<p className="font-medium text-foreground">What are configurable parameters?</p>
-						<p>When you build Flows, you can mark variables as &quot;Exposed&quot; and &quot;Editable&quot;. These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.</p>
+						<p className="font-medium text-foreground">
+							What are configurable parameters?
+						</p>
+						<p>
+							When you build Flows, you can mark variables as
+							&quot;Exposed&quot; and &quot;Editable&quot;. These show up here
+							so app users can customize behavior without editing the flow
+							itself — like API keys, thresholds, or toggle switches.
+						</p>
 					</div>
 				</div>
 			</main>
@@ -86,12 +91,14 @@ export default function ConfigurationPage() {
 					<div className="space-y-1">
 						<h2 className="text-2xl font-bold">Configuration</h2>
 						<p className="text-sm text-muted-foreground">
-							Adjust exposed parameters across your flows — no code changes needed.
+							Adjust exposed parameters across your flows — no code changes
+							needed.
 						</p>
 					</div>
 					<Badge variant="secondary" className="gap-1">
 						<SettingsIcon className="w-3 h-3" />
-						{totalVariables} across {configurableBoards.length} flow{configurableBoards.length !== 1 ? "s" : ""}
+						{totalVariables} across {configurableBoards.length} flow
+						{configurableBoards.length !== 1 ? "s" : ""}
 					</Badge>
 				</div>
 			</div>

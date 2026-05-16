@@ -6,8 +6,8 @@ import { Download, HardDrive, Package, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import {
-	PackageStatus,
 	type InstalledPackage,
+	PackageStatus,
 	type PackageSummary,
 	type SearchResults,
 } from "../../lib/schema/wasm";
@@ -99,7 +99,10 @@ export function PackageSearchDialog({
 
 		const localSummaries = (localPackages.data ?? []).map(installedToSummary);
 		const remoteIds = new Set(remote.map((p) => p.id));
-		const merged = [...remote, ...localSummaries.filter((p) => !remoteIds.has(p.id))];
+		const merged = [
+			...remote,
+			...localSummaries.filter((p) => !remoteIds.has(p.id)),
+		];
 
 		if (!debouncedSearch) return merged;
 		const q = debouncedSearch.toLowerCase();

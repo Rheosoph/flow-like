@@ -95,7 +95,7 @@ sea-orm = { version = "1.1.17", features = ["sqlx-postgres", "runtime-tokio-rust
 tower = "0.5.2"
 tracing-subscriber = "0.3.22"
 dotenv = "0.15.0"
-jsonwebtoken = "9.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 hyper = {version = "1.5.2", features = ["full", "client"]}
 hyper-util = {version = "0.1.10", features = ["full"]}
 tracing = "0.1.41"
@@ -134,6 +134,8 @@ ndarray = "0.16.1"
 dirs-next = "2.0.0"
 regex = "1.11.3"
 rig-core = {version="0.34.0", default-features = false, features = ["rmcp", "rustls"]}
+rig-vertexai = { version = "=0.3.3" }
+google-cloud-auth = "1.0"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 rumqttc = "0.24"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
@@ -143,8 +145,8 @@ rmcp = { version = "0.16.0", features = ["auth", "client", "client-side-sse", "m
 thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.17", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
-reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "3add2c0", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "2e2e7fd", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"
@@ -157,9 +159,9 @@ dashmap = "6"
 
 rdev = { git = "https://github.com/TM9657/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "43", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "43"
-wasmtime-wasi-http = "43"
+wasmtime = { version = "43.0.1", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "43.0.1"
+wasmtime-wasi-http = "43.0.1"
 
 # Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)

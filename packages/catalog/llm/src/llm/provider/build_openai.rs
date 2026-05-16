@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use flow_like::{
     bit::{Bit, BitModelClassification, VLMParameters},
@@ -36,7 +36,7 @@ impl NodeLogic for BuildOpenAiNode {
             "AI/Generative/Provider",
         );
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(2);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

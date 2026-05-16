@@ -1,49 +1,68 @@
 export const koSecurity = {
 	"security.meta.title": "보안 및 컴플라이언스 | Flow-Like",
-	"security.meta.description": "Rust 기반의 메모리 안전성, RBAC, 완전한 감사 추적, 데이터 주권, 오픈소스 투명성을 제공합니다. 복잡함 없는 엔터프라이즈 보안.",
+	"security.meta.description":
+		"Rust 기반의 메모리 안전성, RBAC, 완전한 감사 추적, 데이터 주권, 오픈소스 투명성을 제공합니다. 복잡함 없는 엔터프라이즈 보안.",
 	"security.hero.tagline": "보안 최우선",
 	"security.hero.headline": "직접 검증할 수 있는",
 	"security.hero.headline.highlight": "보안",
-	"security.hero.description": "Flow-Like는 오픈소스입니다. 모든 코드를 감사할 수 있습니다. 메모리 안전한 Rust 내부 구조에 역할 기반 접근 제어, 저장 시 암호화, 완전한 감사 추적을 결합했습니다.",
+	"security.hero.description":
+		"Flow-Like는 오픈소스입니다. 모든 코드를 감사할 수 있습니다. 메모리 안전한 Rust 내부 구조에 역할 기반 접근 제어, 저장 시 암호화, 완전한 감사 추적을 결합했습니다.",
 	"security.hero.cta": "소스 코드 보기",
 	"security.hero.cta.report": "취약점 신고",
 	"security.arch.tagline": "보안 아키텍처",
 	"security.arch.headline": "심층 방어",
-	"security.arch.description": "언어 런타임부터 배포 환경까지 — 다층 보안 구조입니다.",
+	"security.arch.description":
+		"언어 런타임부터 배포 환경까지 — 다층 보안 구조입니다.",
 	"security.arch.rust.title": "메모리 안전 런타임",
-	"security.arch.rust.desc": "전체 실행 엔진이 Rust로 작성되어 버퍼 오버플로, use-after-free, 데이터 레이스를 컴파일 시점에 제거합니다. 가비지 컬렉터 일시정지도 런타임 예외도 없습니다.",
+	"security.arch.rust.desc":
+		"전체 실행 엔진이 Rust로 작성되어 버퍼 오버플로, use-after-free, 데이터 레이스를 컴파일 시점에 제거합니다. 가비지 컬렉터 일시정지도 런타임 예외도 없습니다.",
 	"security.arch.wasm.title": "샌드박스 확장",
-	"security.arch.wasm.desc": "커스텀 노드는 능력 기반 보안이 적용된 WASM 샌드박스에서 실행됩니다. 명시적으로 권한이 부여되지 않으면 파일 시스템이나 네트워크에 접근할 수 없습니다. 악성 코드가 샌드박스를 벗어날 수 없습니다.",
+	"security.arch.wasm.desc":
+		"커스텀 노드는 능력 기반 보안이 적용된 WASM 샌드박스에서 실행됩니다. 명시적으로 권한이 부여되지 않으면 파일 시스템이나 네트워크에 접근할 수 없습니다. 악성 코드가 샌드박스를 벗어날 수 없습니다.",
 	"security.arch.rbac.title": "역할 기반 접근 제어",
-	"security.arch.rbac.desc": "워크플로, 노드, 시크릿, 배포에 대한 세분화된 권한 설정. 조직, 팀, 프로젝트 수준에서 역할을 할당하고 기본적으로 최소 권한 원칙을 적용합니다.",
+	"security.arch.rbac.desc":
+		"워크플로, 노드, 시크릿, 배포에 대한 세분화된 권한 설정. 조직, 팀, 프로젝트 수준에서 역할을 할당하고 기본적으로 최소 권한 원칙을 적용합니다.",
 	"security.arch.encryption.title": "전방위 암호화",
-	"security.arch.encryption.desc": "전송 중 데이터에 TLS 1.3 적용. 시크릿, 자격 증명, 민감한 워크플로 데이터에 AES-256 저장 암호화. 귀사의 KMS 또는 당사의 KMS로 키를 관리합니다.",
+	"security.arch.encryption.desc":
+		"전송 중 데이터에 TLS 1.3 적용. 시크릿, 자격 증명, 민감한 워크플로 데이터에 AES-256 저장 암호화. 귀사의 KMS 또는 당사의 KMS로 키를 관리합니다.",
 	"security.arch.audit.title": "완전한 감사 추적",
-	"security.arch.audit.desc": "모든 워크플로 실행, 구성 변경, 접근 이벤트가 타임스탬프, 사용자 신원, 전체 컨텍스트와 함께 기록됩니다. SIEM 또는 컴플라이언스 도구로 내보낼 수 있습니다.",
+	"security.arch.audit.desc":
+		"모든 워크플로 실행, 구성 변경, 접근 이벤트가 타임스탬프, 사용자 신원, 전체 컨텍스트와 함께 기록됩니다. SIEM 또는 컴플라이언스 도구로 내보낼 수 있습니다.",
 	"security.arch.supply.title": "공급망 보안",
-	"security.arch.supply.desc": "모든 의존성이 SBOM으로 추적됩니다. 서드파티 라이선스가 지속적으로 감사됩니다. 의존성 업데이트는 릴리스 전 CI에서 테스트됩니다.",
+	"security.arch.supply.desc":
+		"모든 의존성이 SBOM으로 추적됩니다. 서드파티 라이선스가 지속적으로 감사됩니다. 의존성 업데이트는 릴리스 전 CI에서 테스트됩니다.",
 	"security.data.tagline": "데이터 주권",
 	"security.data.headline": "당신의 데이터, 당신의 규칙",
-	"security.data.description": "Flow-Like는 데이터가 귀사의 인프라를 벗어나도록 요구하지 않습니다. 온프레미스, VPC, 또는 데스크톱에서 실행하세요 — 동의하지 않는 한 텔레메트리는 제로입니다.",
+	"security.data.description":
+		"Flow-Like는 데이터가 귀사의 인프라를 벗어나도록 요구하지 않습니다. 온프레미스, VPC, 또는 데스크톱에서 실행하세요 — 동의하지 않는 한 텔레메트리는 제로입니다.",
 	"security.data.local.title": "로컬 우선 아키텍처",
-	"security.data.local.desc": "데스크톱 앱은 완전히 오프라인으로 작동합니다. 클라우드 의존성이 필요 없습니다. 워크플로, 데이터, 시크릿이 귀하의 장치에 머무릅니다.",
+	"security.data.local.desc":
+		"데스크톱 앱은 완전히 오프라인으로 작동합니다. 클라우드 의존성이 필요 없습니다. 워크플로, 데이터, 시크릿이 귀하의 장치에 머무릅니다.",
 	"security.data.selfhost.title": "자체 호스팅 배포",
-	"security.data.selfhost.desc": "귀사의 클라우드 또는 온프레미스 인프라에 Flow-Like를 배포하세요. Docker, Kubernetes, 베어메탈을 지원합니다.",
+	"security.data.selfhost.desc":
+		"귀사의 클라우드 또는 온프레미스 인프라에 Flow-Like를 배포하세요. Docker, Kubernetes, 베어메탈을 지원합니다.",
 	"security.data.residency.title": "데이터 거주지 제어",
-	"security.data.residency.desc": "데이터 처리 및 저장 위치를 선택하세요. 배포 수준 제어로 GDPR, CCPA 및 규제 요구 사항을 충족합니다.",
+	"security.data.residency.desc":
+		"데이터 처리 및 저장 위치를 선택하세요. 배포 수준 제어로 GDPR, CCPA 및 규제 요구 사항을 충족합니다.",
 	"security.compliance.tagline": "컴플라이언스 및 투명성",
 	"security.compliance.headline": "규제 산업을 위한 설계",
-	"security.compliance.description": "의료에서 금융, 정부까지 — Flow-Like는 규제 환경이 요구하는 제어 기능을 제공합니다.",
+	"security.compliance.description":
+		"의료에서 금융, 정부까지 — Flow-Like는 규제 환경이 요구하는 제어 기능을 제공합니다.",
 	"security.compliance.gdpr.title": "GDPR 준비 완료",
-	"security.compliance.gdpr.desc": "데이터 삭제 워크플로, 동의 관리, 처리 기록. 언제든지 데이터 삭제를 요청할 수 있습니다.",
+	"security.compliance.gdpr.desc":
+		"데이터 삭제 워크플로, 동의 관리, 처리 기록. 언제든지 데이터 삭제를 요청할 수 있습니다.",
 	"security.compliance.soc.title": "SOC 2 제어",
-	"security.compliance.soc.desc": "SOC 2 Trust Service Criteria에 부합하는 접근 제어, 변경 관리, 모니터링.",
+	"security.compliance.soc.desc":
+		"SOC 2 Trust Service Criteria에 부합하는 접근 제어, 변경 관리, 모니터링.",
 	"security.compliance.open.title": "오픈소스 투명성",
-	"security.compliance.open.desc": "모든 의존성, 모든 라이선스, 모든 코드 — 공개적으로 감사 가능합니다. 전체 서드파티 고지를 확인하세요.",
+	"security.compliance.open.desc":
+		"모든 의존성, 모든 라이선스, 모든 코드 — 공개적으로 감사 가능합니다. 전체 서드파티 고지를 확인하세요.",
 	"security.compliance.sbom.title": "SBOM 제공",
-	"security.compliance.sbom.desc": "모든 릴리스에 대해 소프트웨어 부품 명세서(SBOM)가 생성됩니다. 라이선스 및 취약점 데이터가 포함된 전체 의존성 트리.",
+	"security.compliance.sbom.desc":
+		"모든 릴리스에 대해 소프트웨어 부품 명세서(SBOM)가 생성됩니다. 라이선스 및 취약점 데이터가 포함된 전체 의존성 트리.",
 	"security.cta.headline": "보안에 대해 궁금하신 점이 있으신가요?",
-	"security.cta.description": "보안 팀이 귀사의 요구 사항을 논의할 준비가 되어 있습니다. 취약점 보고는 책임 있는 공개 프로세스를 이용해 주세요.",
+	"security.cta.description":
+		"보안 팀이 귀사의 요구 사항을 논의할 준비가 되어 있습니다. 취약점 보고는 책임 있는 공개 프로세스를 이용해 주세요.",
 	"security.cta.button": "보안 팀에 문의",
 	"security.cta.thirdparty": "서드파티 고지 보기",
 } as const;

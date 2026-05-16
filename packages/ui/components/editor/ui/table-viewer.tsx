@@ -744,9 +744,9 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 					collisionDetection={closestCenter}
 					onDragEnd={handleHeaderDragEnd}
 				>
-				<table className="w-full text-sm border-collapse">
-					{/* Sticky header */}
-					{hasHeader && (
+					<table className="w-full text-sm border-collapse">
+						{/* Sticky header */}
+						{hasHeader && (
 							<thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm border-b border-border">
 								<SortableContext
 									items={visibleColumnIds}
@@ -766,67 +766,70 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 									</tr>
 								</SortableContext>
 							</thead>
-					)}
-					<tbody>
-						{sortedRows.length === 0 ? (
-							<tr>
-								<td
-									colSpan={visibleColumns.length || 1}
-									className="text-center py-8 text-muted-foreground text-sm"
-								>
-									{hasActiveFilters ? "No matching rows" : "No data"}
-								</td>
-							</tr>
-						) : (
-							sortedRows.map((row, rowIdx) => (
-								<tr
-									key={rowIdx}
-									className={cn(
-										"border-b border-border/50 last:border-0",
-										rowIdx % 2 === 1 && "bg-muted/30",
-									)}
-								>
-									{visibleColumns.map((colIdx) => {
-										const cell = row[colIdx] || "";
-										const hasMarkdownContent =
-											cell.includes("![") || cell.includes("](");
-										const isLongText = cell.length > 100 && !hasMarkdownContent;
-										return (
-											<td
-												key={colIdx}
-												className={cn(
-													"px-2 py-1.5 align-top",
-													isLongText
-														? "min-w-[200px] max-w-[400px]"
-														: "max-w-[300px]",
-												)}
-											>
-												<div
-													className={cn(
-														hasMarkdownContent
-															? "flex flex-wrap items-center gap-1"
-															: isLongText
-																? "whitespace-pre-wrap wrap-break-word text-sm leading-relaxed"
-																: "truncate",
-													)}
-													title={
-														isLongText || hasMarkdownContent ? undefined : cell
-													}
-												>
-													{hasMarkdownContent ? (
-														<CellContent content={cell} />
-													) : (
-														cell
-													)}
-												</div>
-											</td>
-										);
-									})}
-								</tr>
-							))
 						)}
-					</tbody>
-				</table>
+						<tbody>
+							{sortedRows.length === 0 ? (
+								<tr>
+									<td
+										colSpan={visibleColumns.length || 1}
+										className="text-center py-8 text-muted-foreground text-sm"
+									>
+										{hasActiveFilters ? "No matching rows" : "No data"}
+									</td>
+								</tr>
+							) : (
+								sortedRows.map((row, rowIdx) => (
+									<tr
+										key={rowIdx}
+										className={cn(
+											"border-b border-border/50 last:border-0",
+											rowIdx % 2 === 1 && "bg-muted/30",
+										)}
+									>
+										{visibleColumns.map((colIdx) => {
+											const cell = row[colIdx] || "";
+											const hasMarkdownContent =
+												cell.includes("![") || cell.includes("](");
+											const isLongText =
+												cell.length > 100 && !hasMarkdownContent;
+											return (
+												<td
+													key={colIdx}
+													className={cn(
+														"px-2 py-1.5 align-top",
+														isLongText
+															? "min-w-[200px] max-w-[400px]"
+															: "max-w-[300px]",
+													)}
+												>
+													<div
+														className={cn(
+															hasMarkdownContent
+																? "flex flex-wrap items-center gap-1"
+																: isLongText
+																	? "whitespace-pre-wrap wrap-break-word text-sm leading-relaxed"
+																	: "truncate",
+														)}
+														title={
+															isLongText || hasMarkdownContent
+																? undefined
+																: cell
+														}
+													>
+														{hasMarkdownContent ? (
+															<CellContent content={cell} />
+														) : (
+															cell
+														)}
+													</div>
+												</td>
+											);
+										})}
+									</tr>
+								))
+							)}
+						</tbody>
+					</table>
 				</DndContext>
 			</div>
 
@@ -842,7 +845,9 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 			)}
 
 			{/* Hidden children for Slate to track elements */}
-			<table className="hidden"><tbody>{children}</tbody></table>
+			<table className="hidden">
+				<tbody>{children}</tbody>
+			</table>
 		</div>
 	);
 }

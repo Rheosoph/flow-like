@@ -1,12 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import * as prod from "react/jsx-runtime";
-import rehypeReact from "rehype-react";
-import remarkParse from "remark-parse";
-import remarkRehype from "remark-rehype";
-import { unified } from "unified";
 import { cn } from "../../../lib/utils";
+import { TextEditor } from "../../ui/text-editor";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -18,23 +13,13 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
-const production = { Fragment: prod.Fragment, jsx: prod.jsx, jsxs: prod.jsxs };
-
 export function A2UIMarkdown({
 	component,
 	style,
 }: ComponentProps<MarkdownComponent>) {
 	const content = useResolved<string>(component.content);
 
-	const rendered = useMemo(() => {
-		if (!content) return null;
-		const result = unified()
-			.use(remarkParse)
-			.use(remarkRehype)
-			.use(rehypeReact, production)
-			.processSync(content);
-		return result.result;
-	}, [content]);
+	if (!content) return null;
 
 	return (
 		<div
@@ -44,7 +29,7 @@ export function A2UIMarkdown({
 			)}
 			style={resolveInlineStyle(style)}
 		>
-			{rendered}
+			<TextEditor initialContent={content} isMarkdown editable={false} />
 		</div>
 	);
 }

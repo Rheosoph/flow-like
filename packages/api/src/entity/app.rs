@@ -48,6 +48,12 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "allowForking")]
+    pub allow_forking: bool,
+    #[sea_orm(column_name = "forkedAt")]
+    pub forked_at: Option<DateTime>,
+    #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]
+    pub forked_from: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -66,8 +72,8 @@ pub enum Relation {
     BoardSync,
     #[sea_orm(has_many = "super::comment::Entity")]
     Comment,
-    #[sea_orm(has_many = "super::course_connection::Entity")]
-    CourseConnection,
+    #[sea_orm(has_many = "super::course_app_link::Entity")]
+    CourseAppLink,
     #[sea_orm(has_many = "super::embedding_usage_tracking::Entity")]
     EmbeddingUsageTracking,
     #[sea_orm(has_many = "super::event::Entity")]
@@ -166,9 +172,9 @@ impl Related<super::comment::Entity> for Entity {
     }
 }
 
-impl Related<super::course_connection::Entity> for Entity {
+impl Related<super::course_app_link::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::CourseConnection.def()
+        Relation::CourseAppLink.def()
     }
 }
 

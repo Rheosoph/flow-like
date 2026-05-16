@@ -18,7 +18,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy
-        run: cargo clippy -- -D clippy::correctness -D clippy::suspicious
+        run: cargo clippy -- -D clippy::correctness -D clippy::suspicious -D unused_mut
 
   fmt:
     name: Format

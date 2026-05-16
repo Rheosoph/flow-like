@@ -1,26 +1,22 @@
 "use client";
 
-import {
-	MoreHorizontal,
-	Shield,
-	Trash2,
-	UserPlus,
-} from "lucide-react";
+import { Shield, Trash2, UserPlus } from "lucide-react";
 import { useCallback, useState } from "react";
-import type {
-	InviteUserRequest,
-	PackageUser,
-	UpdateUserPermissionRequest,
-} from "../../lib/schema/wasm";
 import {
 	PackagePermissionBits,
 	isMaintainer,
 	isOwner,
 	permissionLabel,
 } from "../../lib/permission/wasm-package-permission";
+import type {
+	InviteUserRequest,
+	PackageUser,
+	UpdateUserPermissionRequest,
+} from "../../lib/schema/wasm";
 import {
 	Badge,
 	Button,
+	RelativeTime,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -33,7 +29,6 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-	RelativeTime,
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
@@ -107,7 +102,8 @@ function UserActions({
 	isMutating: boolean;
 }) {
 	const manageable = canManageUser(callerPermission, user.permission);
-	if (!manageable) return <span className="text-xs text-muted-foreground">—</span>;
+	if (!manageable)
+		return <span className="text-xs text-muted-foreground">—</span>;
 
 	const callerIsOwner = isOwner(callerPermission);
 

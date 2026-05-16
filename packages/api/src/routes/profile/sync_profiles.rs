@@ -10,7 +10,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use flow_like::profile::{ProfileApp, ProfileShortcut, Settings};
-use flow_like_types::{Value, create_id};
+use flow_like_types::Value;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -75,7 +75,7 @@ pub struct UpdatedProfile {
 
 /// Sync multiple profiles from desktop to server
 /// For existing profiles (matched by ID), updates if local is newer
-/// For new profiles, creates with a server-generated ID and returns the mapping
+/// For new profiles, creates with the client-provided ID and returns the mapping
 /// Returns signed URLs for direct S3 upload when icon/thumbnail uploads are requested
 #[utoipa::path(
     post,
@@ -113,6 +113,10 @@ pub async fn sync_profiles(
     let mut deleted: Vec<String> = Vec::new();
 
     for profile_req in profiles {
+        if profile_req.id.trim().is_empty() {
+            return Err(ApiError::bad_request("Profile ID is required"));
+        }
+
         // Check if profile exists on server (including soft-deleted)
         let found_profile = profile::Entity::find()
             .filter(
@@ -263,8 +267,9 @@ pub async fn sync_profiles(
                 }
             }
         } else {
-            // Create new profile with SERVER-GENERATED ID
-            let server_id = create_id();
+            // Create new profile with the client-provided ID. This makes sync idempotent
+            // if the client crashes or misses the response before any remap is applied.
+            let server_id = profile_req.id.clone();
             println!(
                 "[ProfileSync] Creating new profile: local_id={}, server_id={}",
                 profile_req.id, server_id

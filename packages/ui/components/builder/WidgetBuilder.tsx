@@ -27,6 +27,7 @@ import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
+import { applyMediaSourceUpdate } from "../a2ui/media-source";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -99,6 +100,10 @@ export const CONTAINER_TYPES = new Set([
 
 // Root component ID constant
 export const ROOT_ID = "root";
+
+function isBackgroundClass(value: string | undefined): value is string {
+	return value?.startsWith("bg-") ?? false;
+}
 
 // Create the default root component
 function createRootComponent(): SurfaceComponent {
@@ -621,6 +626,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 	> | null>(null);
 	const [presignedCanvasSettings, setPresignedCanvasSettings] =
 		useState(canvasSettings);
+	const backgroundClass = isBackgroundClass(
+		presignedCanvasSettings.backgroundColor,
+	)
+		? presignedCanvasSettings.backgroundColor
+		: undefined;
 
 	// Presign assets in components for preview rendering
 	useEffect(() => {
@@ -691,7 +701,12 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 				? { customCss: presignedCanvasSettings.customCss }
 				: undefined,
 		}),
-		[surfaceId, presignedComponents, components, presignedCanvasSettings.customCss],
+		[
+			surfaceId,
+			presignedComponents,
+			components,
+			presignedCanvasSettings.customCss,
+		],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -891,9 +906,14 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			>
 				<div
 					data-canvas-id={canvasId}
-					className="min-h-full rounded-lg border shadow-sm relative"
+					className={cn(
+						"min-h-full rounded-lg border shadow-sm relative",
+						backgroundClass,
+					)}
 					style={{
-						backgroundColor: presignedCanvasSettings.backgroundColor,
+						backgroundColor: backgroundClass
+							? undefined
+							: presignedCanvasSettings.backgroundColor,
 						backgroundImage: presignedCanvasSettings.backgroundImage
 							? `url(${presignedCanvasSettings.backgroundImage})`
 							: undefined,
@@ -949,6 +969,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	> | null>(null);
 	const [presignedCanvasSettings, setPresignedCanvasSettings] =
 		useState(canvasSettings);
+	const backgroundClass = isBackgroundClass(
+		presignedCanvasSettings.backgroundColor,
+	)
+		? presignedCanvasSettings.backgroundColor
+		: undefined;
 	const loadEventExecutedRef = useRef<string | null>(null);
 	// Keep a ref to components to avoid stale closure in handleA2UIMessage
 	const componentsRef = useRef(components);
@@ -1049,9 +1074,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					// Filter null/undefined values to avoid overwriting existing settings
 					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(
-							([, v]) => v != null,
-						),
+						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
 					return { ...prev, ...filtered };
 				});
@@ -1277,6 +1300,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 						};
 						break;
 					}
+					case "setMediaSource": {
+						updatedComponent = applyMediaSourceUpdate(component, updateValue);
+						break;
+					}
 					case "setChartData":
 					case "setNivoData": {
 						const data = updateValue.data;
@@ -1304,8 +1331,12 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							...component,
 							component: {
 								...componentData,
-								...(updateValue.layout !== undefined && { layout: { literalJson: JSON.stringify(configOrLayout) } }),
-								...(updateValue.config !== undefined && { config: { literalJson: JSON.stringify(configOrLayout) } }),
+								...(updateValue.layout !== undefined && {
+									layout: { literalJson: JSON.stringify(configOrLayout) },
+								}),
+								...(updateValue.config !== undefined && {
+									config: { literalJson: JSON.stringify(configOrLayout) },
+								}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
@@ -1464,9 +1495,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	return (
 		<div
 			data-canvas-id={previewCanvasId}
-			className="h-full w-full overflow-auto"
+			className={cn("h-full w-full overflow-auto", backgroundClass)}
 			style={{
-				backgroundColor: presignedCanvasSettings.backgroundColor,
+				backgroundColor: backgroundClass
+					? undefined
+					: presignedCanvasSettings.backgroundColor,
 				backgroundImage: presignedCanvasSettings.backgroundImage
 					? `url(${presignedCanvasSettings.backgroundImage})`
 					: undefined,

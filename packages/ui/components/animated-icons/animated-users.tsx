@@ -15,7 +15,10 @@ export function AnimatedUsersIcon({ className }: { className?: string }) {
 			strokeWidth="2"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			className={cn("group-hover/icon:text-indigo-400 transition-colors duration-150", className)}
+			className={cn(
+				"group-hover/icon:text-indigo-400 transition-colors duration-150",
+				className,
+			)}
 		>
 			{/* Front person head */}
 			<motion.path
@@ -37,7 +40,12 @@ export function AnimatedUsersIcon({ className }: { className?: string }) {
 					hover: {
 						scale: [0.6, 1.1, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.35, type: "spring", stiffness: 300, damping: 14 },
+						transition: {
+							duration: 0.35,
+							type: "spring",
+							stiffness: 300,
+							damping: 14,
+						},
 					},
 				}}
 				style={{ transformOrigin: "9px 7px" }}

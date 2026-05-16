@@ -1036,6 +1036,9 @@ mod tests {
             widget_ids: vec![],
             page_ids: vec![],
             packages: HashMap::new(),
+            allow_forking: false,
+            forked_at: None,
+            forked_from: None,
         }
     }
 

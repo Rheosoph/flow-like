@@ -68,15 +68,24 @@ function hasRemoteProvider(bit: Bit): boolean {
 	const params = bit.parameters as Record<string, unknown> | undefined;
 	if (!params) return false;
 
-	// LLM/VLM pattern: provider_name starts with "hosted"
+	// Hosted/internal pattern: provider metadata identifies server-side models.
 	const provider =
 		(params.provider as Record<string, unknown> | undefined) ?? params;
 	const name = provider?.provider_name as string | undefined;
 	if (name && name.toLowerCase().startsWith("hosted")) return true;
+	if (
+		name &&
+		["premium", "internal"].includes(name.toLowerCase()) &&
+		provider?.model_id
+	) {
+		return true;
+	}
 
-	// Embedding pattern: remote config with endpoint + implementation
+	// Embedding pattern: remote config with implementation + model id.
 	const remote = params.remote as Record<string, unknown> | undefined;
-	if (remote?.endpoint && remote?.implementation) return true;
+	if (remote?.implementation && (remote.model_id || provider?.model_id)) {
+		return true;
+	}
 
 	return false;
 }

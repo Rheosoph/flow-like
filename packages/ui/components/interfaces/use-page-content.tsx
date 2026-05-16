@@ -32,19 +32,32 @@ import { PageInterface } from "./page-interface";
 export interface UsePageContentProps {
 	eventConfig: IEventMapping;
 	notFound?: ReactNode;
+	appId?: string | null;
+	routePath?: string | null;
+	eventId?: string | null;
+	embedded?: boolean;
+	onNavigate?: (next: {
+		routePath?: string | null;
+		eventId?: string | null;
+	}) => void;
 }
 
 export function UsePageContent({
 	eventConfig,
 	notFound,
+	appId: appIdProp,
+	routePath: routePathProp,
+	eventId: eventIdProp,
+	embedded = false,
+	onNavigate,
 }: Readonly<UsePageContentProps>) {
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const router = useRouter();
 
-	const appId = searchParams.get("id");
-	const routePath = searchParams.get("route") ?? "/";
-	const eventId = searchParams.get("eventId");
+	const appId = appIdProp ?? searchParams.get("id");
+	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
+	const eventId = eventIdProp ?? searchParams.get("eventId");
 
 	const headerRef = useRef<IToolBarActions>(
 		null,
@@ -295,11 +308,11 @@ export function UsePageContent({
 
 	const isDirectEventPending = Boolean(
 		!isRoutePending &&
-		appId &&
-		eventId &&
-		!routeMapping &&
-		!resolvedCurrentEvent &&
-		resolvedDirectEventKey !== directEventKey,
+			appId &&
+			eventId &&
+			!routeMapping &&
+			!resolvedCurrentEvent &&
+			resolvedDirectEventKey !== directEventKey,
 	);
 
 	// --- Active event ---
@@ -344,9 +357,13 @@ export function UsePageContent({
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
+			if (embedded) {
+				onNavigate?.({ eventId: newEventId });
+				return;
+			}
 			setQueryParams("eventId", newEventId);
 		},
-		[appId, eventId, setQueryParams],
+		[appId, eventId, embedded, onNavigate, setQueryParams],
 	);
 
 	// --- Config ---
@@ -422,9 +439,13 @@ export function UsePageContent({
 	useEffect(() => {
 		if (!routeMapping) return;
 		if (eventId && eventId !== routeMapping.eventId) {
+			if (embedded) {
+				onNavigate?.({ eventId: null });
+				return;
+			}
 			setQueryParams("eventId", undefined);
 		}
-	}, [routeMapping, eventId, setQueryParams]);
+	}, [routeMapping, eventId, embedded, onNavigate, setQueryParams]);
 
 	useEffect(() => {
 		if (!appId) return;
@@ -436,6 +457,7 @@ export function UsePageContent({
 
 		if (sortedEvents.length === 0) {
 			if (!events.data || queriesPending) return;
+			if (embedded) return;
 			router.replace(`/store?id=${appId}`);
 			return;
 		}
@@ -447,6 +469,7 @@ export function UsePageContent({
 		if (!rerouteEvent) {
 			if (queriesPending) return;
 			if (events.data) {
+				if (embedded) return;
 				router.replace(`/store?id=${appId}`);
 			}
 			return;
@@ -494,10 +517,11 @@ export function UsePageContent({
 		isRoutePending,
 		isDirectEventPending,
 		routes.data,
-		routes.isFetching,
-		router,
-		routeEvent,
-	]);
+			routes.isFetching,
+			router,
+			routeEvent,
+			embedded,
+		]);
 
 	// --- Route navigation ---
 
@@ -507,12 +531,16 @@ export function UsePageContent({
 			if (!appId || !path) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
+			if (embedded) {
+				onNavigate?.({ routePath: path, eventId: null });
+				return;
+			}
 			const params = new URLSearchParams(window.location.search);
 			params.set("route", path);
 			params.delete("eventId");
 			router.push(`?${params.toString()}`);
 		},
-		[appId, router],
+		[appId, embedded, onNavigate, router],
 	);
 
 	// --- Render logic ---
@@ -521,12 +549,7 @@ export function UsePageContent({
 		if (routeLoading || isRoutePending || isDirectEventPending) return false;
 		if (pageEvent?.default_page_id) return false;
 		return true;
-	}, [
-		routeLoading,
-		isRoutePending,
-		isDirectEventPending,
-		pageEvent,
-	]);
+	}, [routeLoading, isRoutePending, isDirectEventPending, pageEvent]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef and sidebarRef are stable refs
 	const inner = useMemo(() => {

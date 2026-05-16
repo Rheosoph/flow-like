@@ -1822,10 +1822,21 @@ const SchemaDialog: React.FC<{
 										onChange={(e) => setNewColumnName(e.target.value)}
 									/>
 									<Input
-										placeholder="SQL expression (e.g., 'default_value' or NULL)"
+										placeholder="SQL expression (e.g. 0, 'text', CAST(NULL AS STRING))"
 										value={newColumnExpression}
 										onChange={(e) => setNewColumnExpression(e.target.value)}
 									/>
+									<div className="text-xs text-muted-foreground">
+										LanceDB needs a typed expression. For NULL columns use{" "}
+										<code className="text-[10px]">CAST(NULL AS STRING)</code>.
+										Supported types:{" "}
+										<code className="text-[10px]">
+											int, bigint, float, double, string, binary, boolean,
+											date, timestamp
+										</code>
+										. Bare <code className="text-[10px]">NULL</code> is
+										rejected.
+									</div>
 									<Button
 										onClick={handleAddColumn}
 										disabled={

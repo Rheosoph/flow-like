@@ -30,10 +30,8 @@ export const esWhitelabel = {
 	"whitelabel.modes.hybrid.title": "Híbrido",
 	"whitelabel.modes.hybrid.desc":
 		"Use nuestra interfaz refinada para el diseño de flujos de trabajo. API headless para ejecución y dashboards personalizados.",
-	"whitelabel.modes.hybrid.feat1":
-		"Editor visual con su marca",
-	"whitelabel.modes.hybrid.feat2":
-		"Pipeline de ejecución basado en API",
+	"whitelabel.modes.hybrid.feat1": "Editor visual con su marca",
+	"whitelabel.modes.hybrid.feat2": "Pipeline de ejecución basado en API",
 	"whitelabel.modes.hybrid.feat3": "Lo mejor de ambos mundos",
 	"whitelabel.theming.tagline": "Control Total del Theming",
 	"whitelabel.theming.headline": "Cada Píxel, Su Marca",

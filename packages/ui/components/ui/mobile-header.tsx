@@ -179,15 +179,16 @@ export const MobileHeader: React.FC = () => {
 		<div ref={ref} className="md:hidden sticky top-0 z-40 px-2 pt-2 pb-1">
 			<div className="rounded-xl bg-card/80 shadow-2xl flex items-center justify-between gap-2 p-2">
 				<div className="flex items-center gap-2 min-w-0">
-					<SidebarTrigger className="size-9 rounded-lg border" aria-label="Open Menu" />
+					<SidebarTrigger
+						className="size-9 rounded-lg border"
+						aria-label="Open Menu"
+					/>
 					{leftNodes}
 				</div>
 				<div className="flex-1 min-w-0 text-center font-medium truncate">
 					{active?.title ?? null}
 				</div>
-				<div className="flex items-center gap-2">
-					{rightNodes}
-				</div>
+				<div className="flex items-center gap-2">{rightNodes}</div>
 			</div>
 		</div>
 	);

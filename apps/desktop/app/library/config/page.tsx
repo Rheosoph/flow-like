@@ -1,9 +1,9 @@
 "use client";
 import {
+	AppReviewsSection,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-	AppReviewsSection,
 	Badge,
 	Button,
 	Card,
@@ -48,6 +48,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@tm9657/flow-like-ui";
+import { AllowForkingCard } from "@tm9657/flow-like-ui/components/settings/forking/allow-forking-card";
 import {
 	hashToGradient,
 	useThemeInfo,
@@ -88,6 +89,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ForkAppButton } from "./fork-app-button";
 import { VisibilityStatusSwitcher } from "./visibility-status-switcher";
 
 export default function DashboardPage() {
@@ -477,9 +479,7 @@ export default function DashboardPage() {
 					<StatCard
 						label="Avg Rating"
 						value={
-							app.data.avg_rating
-								? app.data.avg_rating.toFixed(1)
-								: "\u2014"
+							app.data.avg_rating ? app.data.avg_rating.toFixed(1) : "\u2014"
 						}
 						icon={<TrendingUpIcon className="w-4 h-4" />}
 						color="text-orange-600"
@@ -550,11 +550,7 @@ export default function DashboardPage() {
 										</Badge>
 									</div>
 									<Link href={`/library/config/flows?id=${id}`}>
-										<Button
-											variant="ghost"
-											size="sm"
-											className="gap-1 text-xs"
-										>
+										<Button variant="ghost" size="sm" className="gap-1 text-xs">
 											View all
 											<ArrowRightIcon className="w-3 h-3" />
 										</Button>
@@ -573,11 +569,7 @@ export default function DashboardPage() {
 								) : (
 									<div className="space-y-1">
 										{boards.data?.slice(0, 5).map((board) => (
-											<BoardRow
-												key={board.id}
-												board={board}
-												appId={id!}
-											/>
+											<BoardRow key={board.id} board={board} appId={id!} />
 										))}
 										{(boards.data?.length ?? 0) > 5 && (
 											<p className="text-xs text-muted-foreground text-center pt-2">
@@ -695,10 +687,7 @@ export default function DashboardPage() {
 						</div>
 
 						{/* Team & Roles */}
-						<TeamRolesSection
-							appId={id!}
-							visibility={app.data.visibility}
-						/>
+						<TeamRolesSection appId={id!} visibility={app.data.visibility} />
 					</TabsContent>
 
 					{/* Details Tab */}
@@ -709,6 +698,21 @@ export default function DashboardPage() {
 							refreshApp={async () => {
 								await app.refetch();
 							}}
+						/>
+
+						{app.data.visibility !== IAppVisibility.Offline && (
+							<AllowForkingCard
+								canEdit={canEdit}
+								localApp={app.data}
+								onChanged={async () => {
+									await app.refetch();
+								}}
+							/>
+						)}
+
+						<ForkAppButton
+							localApp={app.data}
+							appName={metadata.data?.name ?? id ?? "this app"}
 						/>
 
 						{/* Visibility promotion hint */}
@@ -773,9 +777,7 @@ export default function DashboardPage() {
 													setLocalApp({
 														...localApp,
 														secondary_category:
-															value === "none"
-																? null
-																: (value as IAppCategory),
+															value === "none" ? null : (value as IAppCategory),
 													});
 											}}
 											disabled={!canEdit}
@@ -959,8 +961,7 @@ export default function DashboardPage() {
 												if (localApp && canEdit)
 													setLocalApp({
 														...localApp,
-														price:
-															Number.parseFloat(e.target.value) || null,
+														price: Number.parseFloat(e.target.value) || null,
 													});
 											}}
 										/>
@@ -1077,8 +1078,7 @@ export default function DashboardPage() {
 											variant="outline"
 											size="sm"
 											onClick={() => {
-												const initial =
-													localMetadata?.long_description || "";
+												const initial = localMetadata?.long_description || "";
 												setLongDescInit(initial);
 												setLongDescDraft(initial);
 												setLongDescEditorOpen(true);
@@ -1202,8 +1202,7 @@ export default function DashboardPage() {
 										editable={canEdit}
 										isMarkdown
 										initialContent={
-											longDescInit ||
-											"*No detailed description available.*"
+											longDescInit || "*No detailed description available.*"
 										}
 										onChange={(content) => setLongDescDraft(content)}
 									/>
@@ -1387,9 +1386,7 @@ function TeamRoleCard({
 										<p className="text-sm font-medium">{title}</p>
 										<LockIcon className="w-3 h-3 text-muted-foreground" />
 									</div>
-									<p className="text-xs text-muted-foreground">
-										{description}
-									</p>
+									<p className="text-xs text-muted-foreground">{description}</p>
 								</div>
 							</div>
 						</CardContent>

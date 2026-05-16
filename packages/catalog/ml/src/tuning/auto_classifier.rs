@@ -40,7 +40,6 @@ use linfa_svm::Svm;
 use linfa_trees::DecisionTree as LinfaDecisionTree;
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 #[cfg(feature = "execute")]
 const GAUSSIAN_KERNEL_EPS: f64 = 30.0;

@@ -70,6 +70,8 @@ export default function AddProfilePage() {
 				IBitTypes.Embedding,
 				IBitTypes.ImageEmbedding,
 				IBitTypes.Llm,
+				IBitTypes.Stt,
+				IBitTypes.Tts,
 				IBitTypes.Vlm,
 			],
 		},

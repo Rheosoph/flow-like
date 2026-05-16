@@ -71,7 +71,7 @@ export interface OAuthServiceConfig {
 	redirectUri?: string;
 	/**
 	 * Function to get the API base URL for the OAuth proxy.
-	 * Required for providers with requires_secret_proxy=true and for all web platform proxy flows.
+	 * Required for providers with requires_secret_proxy=true.
 	 * Should return the base URL like "https://api.example.com"
 	 */
 	getApiBaseUrl?: () => Promise<string | null>;
@@ -92,10 +92,9 @@ export function createOAuthService(config: OAuthServiceConfig) {
 	// The website callback script decides the final destination based on state.
 	const redirectUri =
 		config.redirectUri ?? "https://flow-like.com/thirdparty/callback";
-	const isWebPlatform = platform === "web-dev" || platform === "web-prod";
 
 	function shouldProxyProviderRequests(provider: IOAuthProvider): boolean {
-		return isWebPlatform || provider.requires_secret_proxy;
+		return provider.requires_secret_proxy;
 	}
 
 	async function resolveApiBaseUrl(

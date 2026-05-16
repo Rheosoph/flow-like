@@ -1,5 +1,5 @@
-import react from "@astrojs/react";
 import cloudflare from "@astrojs/cloudflare";
+import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
 import compressor from "astro-compressor";
 import { defineConfig } from "astro/config";
@@ -63,9 +63,7 @@ export default defineConfig({
 				"react-tweet",
 			],
 		},
-		plugins: [
-			tailwindcss(),
-		],
+		plugins: [tailwindcss()],
 	},
 	markdown: {
 		syntaxHighlight: "shiki",

@@ -38,8 +38,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { getErrorMessage } from "../error-utils";
 import { fetcher } from "../../../../lib/api";
+import { getErrorMessage } from "../error-utils";
 
 function InstalledPackageCard({
 	pkg,

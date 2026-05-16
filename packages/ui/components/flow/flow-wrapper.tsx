@@ -1,7 +1,11 @@
-import { DndContext, MouseSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { ReactNode } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useInvoke } from "../../hooks/use-invoke";
+import { snapshotFromBoard } from "../../lib/learn/board-bridge";
 import type { IVariable } from "../../lib/schema/flow/variable";
+import { useBackend } from "../../state/backend-state";
+import { BoardBridgeResponder } from "../learn/board-bridge-responder";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { FlowBoard } from "./flow-board";
@@ -31,7 +35,7 @@ export function FlowWrapper({
 	/** The authenticated user's sub (subject) from the auth token - used for realtime collaboration */
 	sub?: string;
 }>) {
-	const mouseSensor = useSensor(MouseSensor, {
+	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
 			distance: 10,
 		},
@@ -45,7 +49,19 @@ export function FlowWrapper({
 		  }
 	>();
 
-	const sensors = useSensors(mouseSensor);
+	const sensors = useSensors(pointerSensor);
+
+	const backend = useBackend();
+	const board = useInvoke(
+		backend.boardState.getBoard,
+		backend.boardState,
+		[appId, boardId, version],
+		boardId !== "" && appId !== "",
+	);
+	const snapshotFn = useMemo(
+		() => () => (board.data ? snapshotFromBoard(appId, board.data) : null),
+		[board.data, appId],
+	);
 
 	const placeNode = useCallback(
 		async (operation: "set" | "get") => {
@@ -70,15 +86,17 @@ export function FlowWrapper({
 
 				// Function layer dropped on the canvas -> place CallFunction node directly
 				if (data.type === "function-layer" && overId === "flow") {
-					const mouseEvent = event.activatorEvent as MouseEvent;
+					const pointerEvent = event.activatorEvent as
+						| MouseEvent
+						| PointerEvent;
 					document.dispatchEvent(
 						new CustomEvent("flow-drop", {
 							detail: {
 								type: "function-layer",
 								layerId: data.layerId,
 								screenPosition: {
-									x: mouseEvent.screenX + event.delta.x,
-									y: mouseEvent.screenY + event.delta.y,
+									x: pointerEvent.screenX + event.delta.x,
+									y: pointerEvent.screenY + event.delta.y,
 								},
 							},
 						}),
@@ -91,12 +109,14 @@ export function FlowWrapper({
 
 				// Dropped on the canvas -> ask user whether to Get/Set
 				if (overId === "flow") {
-					const mouseEvent: MouseEvent = event.activatorEvent as MouseEvent;
+					const pointerEvent = event.activatorEvent as
+						| MouseEvent
+						| PointerEvent;
 					setDetail({
 						variable,
 						screenPosition: {
-							x: mouseEvent.screenX + event.delta.x,
-							y: mouseEvent.screenY + event.delta.y,
+							x: pointerEvent.screenX + event.delta.x,
+							y: pointerEvent.screenY + event.delta.y,
 						},
 					});
 					return;
@@ -121,6 +141,10 @@ export function FlowWrapper({
 				extraDockItems={extraDockItems}
 				renderOverlay={renderOverlay}
 				sub={sub}
+			/>
+			<BoardBridgeResponder
+				snapshot={snapshotFn}
+				announce={{ appId, boardId }}
 			/>
 			<Dialog
 				open={detail !== undefined}

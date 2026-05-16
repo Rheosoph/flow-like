@@ -1,0 +1,310 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowlike}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowlike_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-flowlike}
+    ports:
+      - target: 5432
+        published: ${POSTGRES_PORT:-5432}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - flowlike
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - target: 6379
+        published: ${REDIS_PORT:-6379}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - flowlike
+
+  db-init:
+    image: ${DB_INIT_IMAGE:-flow-like-db-init:latest}
+    working_dir: /workspace
+    entrypoint: ["/usr/local/bin/export-database-url.sh"]
+    command:
+      - bash
+      - -lc
+      - |
+        wait-for-postgres.sh &&
+        bun install || true &&
+        make-postgres-prisma-mirror.sh &&
+        bunx prisma db push --schema=prisma-postgres-mirror/schema &&
+        echo 'Database schema applied!' &&
+        rm -rf node_modules bun.lockb bun.lock prisma-postgres-mirror &&
+        echo 'Cleanup complete!'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowlike}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowlike_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-flowlike}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+    networks:
+      - flowlike
+
+  api:
+    image: ${API_IMAGE:-flow-like-api:latest}
+    environment:
+      PORT: 8080
+      RUST_LOG: ${RUST_LOG:-info,docker_compose_api=debug}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-flowlike}:${POSTGRES_PASSWORD:-flowlike_dev}@postgres:5432/${POSTGRES_DB:-flowlike}
+      REDIS_URL: redis://redis:6379
+      EXECUTION_STATE_BACKEND: redis
+      EXECUTION_STATE_TTL_SECONDS: ${EXECUTION_STATE_TTL_SECONDS:-86400}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-aws}
+      META_BUCKET: ${META_BUCKET:-flow-like-meta}
+      CONTENT_BUCKET: ${CONTENT_BUCKET:-flow-like-content}
+      LOG_BUCKET: ${LOG_BUCKET:-flow-like-logs}
+      AWS_ENDPOINT: ${AWS_ENDPOINT:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_USE_PATH_STYLE: ${AWS_USE_PATH_STYLE:-true}
+      RUNTIME_ROLE_ARN: ${RUNTIME_ROLE_ARN:-}
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME:-}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY:-}
+      AZURE_META_CONTAINER: ${AZURE_META_CONTAINER:-}
+      AZURE_CONTENT_CONTAINER: ${AZURE_CONTENT_CONTAINER:-}
+      AZURE_LOG_CONTAINER: ${AZURE_LOG_CONTAINER:-}
+      GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS_JSON: ${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}
+      EXECUTION_BACKEND: ${EXECUTION_BACKEND:-http}
+      ASYNC_EXECUTION_BACKEND: ${ASYNC_EXECUTION_BACKEND:-redis}
+      EXECUTOR_URL: http://runtime:9000
+      REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
+      EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
+      COMPILATION_BACKEND: ${COMPILATION_BACKEND:-inline}
+      COMPILER_URL: http://compiler:8081
+      API_BASE_URL: http://api:8080
+      WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
+      BACKEND_KEY: ${BACKEND_KEY:-}
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      SINK_SECRET: ${SINK_SECRET:-}
+      SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      OTEL_SERVICE_NAME: flow-like-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  api-gateway:
+    image: nginx:alpine
+    configs:
+      - source: api_gateway_nginx
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - target: 8080
+        published: ${API_PORT:-8080}
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  runtime:
+    image: ${RUNTIME_IMAGE:-flow-like-runtime:latest}
+    environment:
+      EXECUTOR_SERVER_MODE: "true"
+      PORT: 9000
+      RUST_LOG: ${RUST_LOG:-info,docker_compose_runtime=debug}
+      API_URL: http://api:8080
+      QUEUE_WORKER_ENABLED: ${QUEUE_WORKER_ENABLED:-true}
+      REDIS_URL: redis://redis:6379
+      REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
+      QUEUE_WORKER_CONCURRENCY: ${QUEUE_WORKER_CONCURRENCY:-10}
+      QUEUE_POLL_TIMEOUT_SECS: ${QUEUE_POLL_TIMEOUT_SECS:-30}
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      MAX_CONCURRENT_EXECUTIONS: ${MAX_CONCURRENT_EXECUTIONS:-10}
+      EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
+      OTEL_SERVICE_NAME: flow-like-runtime
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: ${RUNTIME_REPLICAS:-3}
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          cpus: "1"
+          memory: 2G
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  compiler:
+    image: ${COMPILER_IMAGE:-flow-like-compiler:latest}
+    ports:
+      - target: 8081
+        published: ${COMPILER_PORT:-8081}
+        protocol: tcp
+        mode: ingress
+      - target: 9091
+        published: ${COMPILER_METRICS_PORT:-9091}
+        protocol: tcp
+        mode: ingress
+    environment:
+      PORT: 8081
+      METRICS_PORT: 9091
+      RUST_LOG: ${RUST_LOG:-info,k8s_compiler=debug}
+      API_URL: http://api:8080
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      COMPILER_TIMEOUT_SECS: ${COMPILER_TIMEOUT_SECS:-600}
+      COMPILER_CALLBACK_TIMEOUT_MS: ${COMPILER_CALLBACK_TIMEOUT_MS:-10000}
+      COMPILER_CALLBACK_RETRIES: ${COMPILER_CALLBACK_RETRIES:-3}
+      COMPILER_MAX_PARALLEL_TARGETS: ${COMPILER_MAX_PARALLEL_TARGETS:-}
+      OTEL_SERVICE_NAME: flow-like-compiler
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.1}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    networks:
+      - flowlike
+
+  sink-services:
+    image: ${SINK_SERVICES_IMAGE:-flow-like-sink-services:latest}
+    environment:
+      RUST_LOG: ${RUST_LOG:-info,docker_compose_sink_services=debug}
+      API_BASE_URL: http://api:8080
+      REDIS_URL: redis://redis:6379
+      SINK_TRIGGER_JWT: ${SINK_TRIGGER_JWT:-}
+      CONFIG_PATH: /app/flow-like.config.json
+    configs:
+      - source: flowlike_runtime_config
+        target: /app/flow-like.config.json
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  signaling:
+    image: ${SIGNALING_IMAGE:-flow-like-signaling:latest}
+    ports:
+      - target: 4444
+        published: ${SIGNALING_PORT:-4444}
+        protocol: tcp
+        mode: ingress
+    environment:
+      PORT: 4444
+      REDIS_URL: redis://redis:6379
+      SIGNAL_CHANNEL: ${SIGNAL_CHANNEL:-signal:publish}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4444/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+
+  web:
+    image: ${WEB_IMAGE:-flow-like-web:latest}
+    ports:
+      - target: 3001
+        published: ${WEB_PORT:-3001}
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowlike
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  flowlike:
+    driver: overlay
+    attachable: true
+
+configs:
+  api_gateway_nginx:
+    file: ./proxy/nginx.conf
+  flowlike_runtime_config:
+    file: ${FLOW_LIKE_RUNTIME_CONFIG_FILE:-./flow-like.config.example.json}

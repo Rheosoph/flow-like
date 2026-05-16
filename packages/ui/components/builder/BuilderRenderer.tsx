@@ -30,6 +30,7 @@ import type {
 	A2UIClientMessage,
 	A2UIComponent,
 	Children,
+	DataScope,
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
@@ -129,11 +130,11 @@ function ContainerDropZone({
 	const { activeId } = useBuilderDnd();
 	const isDragging = activeId !== null;
 
-	// Track mouse position to calculate nearest drop index
+	// Track pointer position to calculate nearest drop index
 	useEffect(() => {
 		if (!isDragging || !containerRef.current) return;
 
-		const handleMouseMove = (e: MouseEvent) => {
+		const updateNearestIndexFromPoint = (clientX: number, clientY: number) => {
 			const container = containerRef.current;
 			if (!container) return;
 
@@ -154,7 +155,7 @@ function ContainerDropZone({
 			}
 
 			const containerRect = container.getBoundingClientRect();
-			const mousePos = orientation === "horizontal" ? e.clientX : e.clientY;
+			const pointerPos = orientation === "horizontal" ? clientX : clientY;
 			let bestIndex = childIds.length;
 			let bestPosition =
 				orientation === "horizontal"
@@ -171,7 +172,7 @@ function ContainerDropZone({
 				const containerStart =
 					orientation === "horizontal" ? containerRect.left : containerRect.top;
 
-				if (mousePos < childMid) {
+				if (pointerPos < childMid) {
 					// Insert before this child
 					if (
 						i < bestIndex ||
@@ -191,11 +192,31 @@ function ContainerDropZone({
 			setIndicatorPosition(bestPosition);
 		};
 
-		window.addEventListener("mousemove", handleMouseMove);
-		// Initial calculation
-		handleMouseMove(new MouseEvent("mousemove", { clientX: 0, clientY: 0 }));
+		const handlePointerMove = (e: PointerEvent) => {
+			updateNearestIndexFromPoint(e.clientX, e.clientY);
+		};
 
-		return () => window.removeEventListener("mousemove", handleMouseMove);
+		const handleMouseMove = (e: MouseEvent) => {
+			updateNearestIndexFromPoint(e.clientX, e.clientY);
+		};
+
+		const handleTouchMove = (e: TouchEvent) => {
+			const touch = e.touches[0] ?? e.changedTouches[0];
+			if (!touch) return;
+			updateNearestIndexFromPoint(touch.clientX, touch.clientY);
+		};
+
+		window.addEventListener("pointermove", handlePointerMove, {
+			passive: true,
+		});
+		window.addEventListener("mousemove", handleMouseMove, { passive: true });
+		window.addEventListener("touchmove", handleTouchMove, { passive: true });
+
+		return () => {
+			window.removeEventListener("pointermove", handlePointerMove);
+			window.removeEventListener("mousemove", handleMouseMove);
+			window.removeEventListener("touchmove", handleTouchMove);
+		};
 	}, [isDragging, orientation, childIds.length, containerRef]);
 
 	// Register as droppable with the calculated index
@@ -504,7 +525,7 @@ interface BuilderComponentProps {
 	surfaceComponent: SurfaceComponent;
 	surfaceId: string;
 	allComponents: Map<string, SurfaceComponent>;
-	renderChild: (childId: string) => ReactNode;
+	renderChild: (childId: string, dataScope?: DataScope) => ReactNode;
 }
 
 function BuilderComponent({
@@ -661,7 +682,10 @@ function BuilderComponent({
 
 	// Custom renderChild for containers - no inline drop indicators needed
 	// The ContainerDropZone overlay handles cursor-tracking drop position
-	const renderChildForContainer = (childId: string): ReactNode => {
+	const renderChildForContainer = (
+		childId: string,
+		_dataScope?: DataScope,
+	): ReactNode => {
 		const childComp =
 			allComponents.get(childId) ?? builderComponents.get(childId);
 		if (!childComp) return null;
@@ -773,8 +797,6 @@ function BuilderComponent({
 			onMouseLeave={() => setIsHovered(false)}
 			className={cn(
 				"relative min-w-0",
-				// Flex items should grow/shrink properly
-				"flex-1",
 				isThisDragging && "opacity-30",
 				isContainer &&
 					isOverContainer &&
@@ -857,7 +879,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 
 	// Render child function
 	const renderChild = useCallback(
-		(childId: string): ReactNode => {
+		(childId: string, dataScope?: DataScope): ReactNode => {
 			const comp = allComponents.get(childId);
 			if (!comp) return null;
 			return (
@@ -867,7 +889,9 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					surfaceComponent={comp}
 					surfaceId={surface.id}
 					allComponents={allComponents}
-					renderChild={renderChild}
+					renderChild={(id, childScope) =>
+						renderChild(id, childScope ?? dataScope)
+					}
 				/>
 			);
 		},

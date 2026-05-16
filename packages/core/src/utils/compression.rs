@@ -1,5 +1,5 @@
 use flow_like_storage::Path;
-use flow_like_storage::object_store::{ObjectStore, PutPayload};
+use flow_like_storage::object_store::{ObjectMeta, ObjectStore, PutPayload};
 use flow_like_types::Message;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use serde::de::DeserializeOwned;
@@ -51,13 +51,32 @@ pub async fn from_compressed<T>(
 where
     T: Message + Default,
 {
+    Ok(from_compressed_with_meta(store, file_path).await?.0)
+}
+
+/// Same as [`from_compressed`] but also returns the [`ObjectMeta`] from the
+/// underlying GET response — callers caching the deserialized result use the
+/// `e_tag` / `last_modified` to validate freshness with a cheap HEAD.
+#[instrument(
+    name = "from_compressed_with_meta",
+    skip(store, file_path),
+    level = "debug"
+)]
+pub async fn from_compressed_with_meta<T>(
+    store: Arc<dyn ObjectStore>,
+    file_path: Path,
+) -> flow_like_types::Result<(T, ObjectMeta)>
+where
+    T: Message + Default,
+{
     let reader = store.get(&file_path).await?;
+    let meta = reader.meta.clone();
     let bytes = reader.bytes().await?;
 
     let data = decompress_size_prepended(&bytes)?;
     let message = T::decode(&data[..])?;
 
-    Ok(message)
+    Ok((message, meta))
 }
 
 pub async fn from_compressed_json<T>(

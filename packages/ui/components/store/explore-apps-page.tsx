@@ -349,7 +349,8 @@ export function ExploreAppsPage() {
 							<p className="text-xs text-muted-foreground/60">
 								{combinedApps.length} result
 								{combinedApps.length !== 1 ? "s" : ""}
-								{selectedCategory && ` in ${formatAppCategory(selectedCategory)}`}
+								{selectedCategory &&
+									` in ${formatAppCategory(selectedCategory)}`}
 							</p>
 						)}
 

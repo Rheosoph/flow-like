@@ -8,13 +8,13 @@
 
 use crate::{
     entity::{
-        event, event_sink, execution_run,
+        event, event_sink, execution_run, membership, pat,
         sea_orm_active_enums::{RunMode, RunStatus},
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        is_jwt_configured, proxy_sse_response, resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
+        collect_generic_result_bytes, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -22,11 +22,13 @@ use crate::{
 use axum::{
     Json,
     body::Body,
-    extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    extract::{ConnectInfo, FromRequest, Multipart, Path, Query, State},
+    http::{HeaderMap, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use flow_like_types::{Result as FlResult, anyhow, create_id, tokio};
+use flow_like_storage::{Path as StorePath, files::store::FlowLikeStore, object_store::PutPayload};
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
+use flow_like_types::{Bytes, Result as FlResult, anyhow, create_id, tokio};
 use ipnetwork::IpNetwork;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,402 @@ fn merge_payloads(
         // If either is not an object, override wins entirely
         (_, Some(over)) => Some(over),
     }
+}
+
+const HTTP_SINK_BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Default)]
+struct ParsedHttpRequestPayload {
+    payload: Option<serde_json::Value>,
+}
+
+fn authorization_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(normalize_authorization_token)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_authorization_token(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some((scheme, token)) = trimmed.split_once(' ')
+        && scheme.eq_ignore_ascii_case("Bearer")
+    {
+        return token.trim();
+    }
+    trimmed
+}
+
+fn parse_pat_token(value: &str) -> Option<(&str, &str)> {
+    let pat_parts = value.trim().strip_prefix("pat_")?;
+    let (pat_id, secret) = pat_parts.split_once('.')?;
+    if pat_id.is_empty() || secret.is_empty() || secret.contains('.') {
+        return None;
+    }
+    Some((pat_id, secret))
+}
+
+async fn resolve_sink_pat_user_id(
+    state: &AppState,
+    sink: &event_sink::Model,
+    stored_pat: Option<&str>,
+) -> Result<Option<String>, ApiError> {
+    let Some(stored_pat) = stored_pat else {
+        return Ok(None);
+    };
+
+    let Some((pat_id, pat_secret)) = parse_pat_token(stored_pat) else {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            "Stored sink PAT has invalid format; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized("Stored sink PAT has invalid format"));
+    };
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(pat_secret.as_bytes());
+    let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
+
+    let db_pat = pat::Entity::find()
+        .filter(
+            pat::Column::Id
+                .eq(pat_id)
+                .and(pat::Column::Key.eq(secret_hash)),
+        )
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to validate sink PAT: {}", e)))?;
+
+    let Some(db_pat) = db_pat else {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            "Stored sink PAT no longer validates; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized(
+            "Stored sink PAT no longer validates",
+        ));
+    };
+
+    if let Some(valid_until) = db_pat.valid_until
+        && valid_until < chrono::Utc::now().naive_utc()
+    {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            user_id = %db_pat.user_id,
+            "Stored sink PAT is expired; refusing sink execution"
+        );
+        return Err(ApiError::unauthorized("Stored sink PAT is expired"));
+    }
+
+    let user_id = db_pat.user_id;
+    let member = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(sink.app_id.clone()))
+        .filter(membership::Column::UserId.eq(user_id.clone()))
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            ApiError::internal_error(anyhow!("Failed to validate sink PAT membership: {}", e))
+        })?;
+
+    if member.is_none() {
+        tracing::warn!(
+            sink_id = %sink.id,
+            event_id = %sink.event_id,
+            app_id = %sink.app_id,
+            user_id = %user_id,
+            "Stored sink PAT owner is not a project member; refusing sink execution"
+        );
+        return Err(ApiError::forbidden(
+            "Stored sink PAT owner is not a project member",
+        ));
+    }
+
+    Ok(Some(user_id))
+}
+
+fn is_multipart_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/form-data"))
+        })
+        .unwrap_or(false)
+}
+
+fn is_urlencoded_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|value| {
+            value.split(';').next().is_some_and(|mime| {
+                mime.trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn decode_form_component(value: &str) -> String {
+    let value = value.replace('+', " ");
+    urlencoding::decode(&value)
+        .unwrap_or(std::borrow::Cow::Borrowed(value.as_str()))
+        .into_owned()
+}
+
+fn normalize_form_key(raw_key: &str, fallback: &str) -> (String, bool) {
+    let decoded = decode_form_component(raw_key);
+    let trimmed = decoded.trim();
+    let key = if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Some(stripped) = key.strip_suffix("[]") {
+        let stripped = stripped.trim();
+        return (
+            if stripped.is_empty() {
+                fallback.to_string()
+            } else {
+                stripped.to_string()
+            },
+            true,
+        );
+    }
+
+    (key, false)
+}
+
+fn insert_payload_value(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    key: String,
+    value: serde_json::Value,
+    force_array: bool,
+) {
+    match map.get_mut(&key) {
+        Some(serde_json::Value::Array(values)) => values.push(value),
+        Some(existing) => {
+            let previous = std::mem::replace(existing, serde_json::Value::Null);
+            *existing = serde_json::Value::Array(vec![previous, value]);
+        }
+        None if force_array => {
+            map.insert(key, serde_json::Value::Array(vec![value]));
+        }
+        None => {
+            map.insert(key, value);
+        }
+    }
+}
+
+fn parse_form_encoded_payload(input: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    for pair in input.split('&').filter(|pair| !pair.is_empty()) {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, force_array) = normalize_form_key(raw_key, "value");
+        let value = serde_json::Value::String(decode_form_component(raw_value));
+        insert_payload_value(&mut map, key, value, force_array);
+    }
+
+    map
+}
+
+fn merge_query_and_body(
+    query: serde_json::Map<String, serde_json::Value>,
+    body: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (query.is_empty(), body) {
+        (true, None) => None,
+        (false, None) => Some(serde_json::Value::Object(query)),
+        (true, Some(body)) => Some(body),
+        (false, Some(serde_json::Value::Object(mut body_map))) => {
+            let mut merged = query;
+            merged.append(&mut body_map);
+            Some(serde_json::Value::Object(merged))
+        }
+        (false, Some(body)) => {
+            let mut merged = query;
+            merged.insert("_body".to_string(), body);
+            Some(serde_json::Value::Object(merged))
+        }
+    }
+}
+
+fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> String {
+    let raw = filename
+        .and_then(|name| name.rsplit(['/', '\\']).next())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("file");
+
+    let mut sanitized = String::with_capacity(raw.len().min(120));
+    for ch in raw.chars().take(120) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        format!("file-{fallback_index}")
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len().min(80));
+    for ch in value.chars().take(80) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn flow_path_value(path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "path": path,
+        "store_ref": REQUEST_FILES_STORE_REF,
+        "cache_store_ref": null
+    })
+}
+
+async fn parse_multipart_payload(
+    request: Request<Body>,
+    query: serde_json::Map<String, serde_json::Value>,
+    body_limit: usize,
+    file_store: FlowLikeStore,
+    file_path_prefix: String,
+) -> Result<ParsedHttpRequestPayload, ApiError> {
+    let mut multipart = Multipart::from_request(request, &()).await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to parse multipart HTTP sink payload");
+        ApiError::bad_request("Invalid multipart/form-data request")
+    })?;
+
+    let mut body_map = serde_json::Map::new();
+    let mut total_bytes = 0usize;
+    let mut file_count = 0usize;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to read multipart field");
+        ApiError::bad_request("Invalid multipart/form-data field")
+    })? {
+        let raw_name = field.name().unwrap_or("file").to_string();
+        let file_name = field.file_name().map(ToOwned::to_owned);
+        let (key, force_array) = normalize_form_key(&raw_name, "file");
+        let bytes = field.bytes().await.map_err(|e| {
+            tracing::warn!(error = %e, "Failed to read multipart field bytes");
+            ApiError::bad_request("Invalid multipart/form-data field")
+        })?;
+
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        if total_bytes > body_limit {
+            return Err(ApiError::bad_request("Request body exceeds size limit"));
+        }
+
+        if file_name.is_some() {
+            file_count += 1;
+            let file_index = file_count;
+            let sanitized_name = sanitize_request_file_name(file_name.as_deref(), file_index);
+            let path = format!("{file_path_prefix}/{file_index:04}-{sanitized_name}");
+            file_store
+                .as_generic()
+                .put(
+                    &StorePath::from(path.clone()),
+                    PutPayload::from_bytes(Bytes::copy_from_slice(&bytes)),
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, path = %path, "Failed to stage multipart file");
+                    ApiError::internal_error(anyhow!("Failed to stage multipart file"))
+                })?;
+            insert_payload_value(&mut body_map, key, flow_path_value(&path), force_array);
+        } else {
+            let value = serde_json::Value::String(String::from_utf8_lossy(&bytes).to_string());
+            insert_payload_value(&mut body_map, key, value, force_array);
+        }
+    }
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, Some(serde_json::Value::Object(body_map))),
+    })
+}
+
+async fn parse_http_request_payload(
+    request: Request<Body>,
+    body_limit: usize,
+    file_store: Option<FlowLikeStore>,
+    file_path_prefix: Option<String>,
+) -> Result<ParsedHttpRequestPayload, ApiError> {
+    let (parts, body) = request.into_parts();
+    let query = parts
+        .uri
+        .query()
+        .map(parse_form_encoded_payload)
+        .unwrap_or_default();
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+
+    if is_multipart_content_type(content_type.as_deref()) {
+        let file_store = file_store.ok_or_else(|| {
+            ApiError::internal_error(anyhow!("Temporary file store is not configured"))
+        })?;
+        let file_path_prefix = file_path_prefix.ok_or_else(|| {
+            ApiError::internal_error(anyhow!("Temporary file path is not configured"))
+        })?;
+        return parse_multipart_payload(
+            Request::from_parts(parts, body),
+            query,
+            body_limit,
+            file_store,
+            file_path_prefix,
+        )
+        .await;
+    }
+
+    let body_bytes = axum::body::to_bytes(body, body_limit).await.map_err(|e| {
+        tracing::error!("Failed to read body: {}", e);
+        ApiError::bad_request("Failed to read request body")
+    })?;
+
+    let body_payload = if body_bytes.is_empty() {
+        None
+    } else if is_urlencoded_content_type(content_type.as_deref()) {
+        let body_str = std::str::from_utf8(&body_bytes)
+            .map_err(|_| ApiError::bad_request("Invalid form body"))?;
+        Some(serde_json::Value::Object(parse_form_encoded_payload(
+            body_str,
+        )))
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(value) => Some(value),
+            Err(_) => Some(serde_json::Value::String(
+                String::from_utf8_lossy(&body_bytes).to_string(),
+            )),
+        }
+    };
+
+    Ok(ParsedHttpRequestPayload {
+        payload: merge_query_and_body(query, body_payload),
+    })
 }
 
 /// Refresh any expired OAuth tokens in the provided map.
@@ -135,9 +533,7 @@ async fn maybe_refresh_oauth_tokens(
         .await
         {
             Ok(response) => {
-                let new_expires_at = response
-                    .expires_in
-                    .map(|ei| now + ei as u64);
+                let new_expires_at = response.expires_in.map(|ei| now + ei as u64);
 
                 let new_value = serde_json::json!({
                     "access_token": response.access_token,
@@ -167,25 +563,23 @@ async fn maybe_refresh_oauth_tokens(
         }
     }
 
-    if any_refreshed {
-        if let Ok(json_str) = serde_json::to_string(&tokens) {
-            use crate::routes::app::events::db::encrypt_token;
-            let encrypted = encrypt_token(&json_str, &state.encryption_key);
+    if any_refreshed && let Ok(json_str) = serde_json::to_string(&tokens) {
+        use crate::routes::app::events::db::encrypt_token;
+        let encrypted = encrypt_token(&json_str, &state.encryption_key);
 
-            let update = event_sink::ActiveModel {
-                id: Set(sink_id.to_string()),
-                oauth_tokens_encrypted: Set(Some(encrypted)),
-                updated_at: Set(chrono::Utc::now().naive_utc()),
-                ..Default::default()
-            };
+        let update = event_sink::ActiveModel {
+            id: Set(sink_id.to_string()),
+            oauth_tokens_encrypted: Set(Some(encrypted)),
+            updated_at: Set(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        };
 
-            if let Err(err) = update.update(&state.db).await {
-                tracing::error!(
-                    sink = %sink_id,
-                    error = %err,
-                    "Failed to persist refreshed OAuth tokens to EventSink"
-                );
-            }
+        if let Err(err) = update.update(&state.db).await {
+            tracing::error!(
+                sink = %sink_id,
+                error = %err,
+                "Failed to persist refreshed OAuth tokens to EventSink"
+            );
         }
     }
 
@@ -199,8 +593,6 @@ pub struct TriggerEventInput {
     pub event_id: String,
     /// Optional payload to pass to the event
     pub payload: Option<serde_json::Value>,
-    /// User ID for attribution (optional)
-    pub user_id: Option<String>,
 }
 
 /// Response from trigger operations
@@ -224,7 +616,6 @@ pub struct TriggerResponse {
 /// let result = trigger_event(&state, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
-///     user_id: Some("cron_worker".to_string()),
 /// }).await?;
 /// ```
 pub async fn trigger_event(
@@ -252,7 +643,19 @@ pub async fn trigger_event(
     // Create run
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
-    let user_id = input.user_id.unwrap_or_else(|| "system".to_string());
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let pat_actor_user_id = resolve_sink_pat_user_id(state, &sink, token.as_deref()).await?;
+    let actor_user_id = pat_actor_user_id;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+    let actor_event_id = Some(sink.event_id.clone());
+    debug_assert!(actor_user_id.is_some() || actor_event_id.is_some());
 
     let input_payload_len = input
         .payload
@@ -266,8 +669,15 @@ pub async fn trigger_event(
 
     let event_json = serde_json::to_string(&event)?;
 
-    // Get credentials
-    let credentials = state.master_credentials().await?;
+    // Get credentials scoped to the PAT owner when the sink was registered with
+    // a valid PAT. Without a valid PAT this falls back to the sink actor.
+    let credentials = state
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
+        .await?;
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials)?;
 
@@ -276,7 +686,7 @@ pub async fn trigger_event(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: user_id.clone(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -285,12 +695,6 @@ pub async fn trigger_event(
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
     })?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -305,7 +709,7 @@ pub async fn trigger_event(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -316,7 +720,7 @@ pub async fn trigger_event(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload: input.payload,
-        user_id: user_id.clone(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -334,7 +738,7 @@ pub async fn trigger_event(
         id: Set(run_id.clone()),
         board_id: Set(event.board_id.clone()),
         version: Set(None),
-        event_id: Set(Some(sink.event_id.clone())),
+        event_id: Set(actor_event_id),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
@@ -348,7 +752,7 @@ pub async fn trigger_event(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(Some(user_id)),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -392,16 +796,16 @@ pub async fn trigger_event(
         (status = 500, description = "Internal server error")
     )
 )]
-#[tracing::instrument(name = "ANY /sink/trigger/{app_id}/{path}", skip(state, headers, body))]
+#[tracing::instrument(name = "ANY /sink/trigger/{app_id}/{path}", skip(state, request))]
 pub async fn trigger_http(
     State(state): State<AppState>,
     Path((app_id, path)): Path<(String, String)>,
-    method: Method,
-    headers: HeaderMap,
-    body: Body,
+    request: Request<Body>,
 ) -> Result<Response, ApiError> {
     use crate::routes::app::events::db::decrypt_token;
     let encryption_key = &state.encryption_key;
+    let method = request.method().clone();
+    let headers = request.headers().clone();
 
     // Normalize path
     let normalized_path = if path.starts_with('/') {
@@ -417,10 +821,19 @@ pub async fn trigger_http(
         app_id
     );
 
-    // Look up sink by app_id and path
-    let sink = event_sink::Entity::find()
+    // Look up the sink using the unique (appId, path, method) index.
+    // Two targeted queries — exact method match first, then a fallback for
+    // legacy rows whose method column is still NULL from before this
+    // migration landed. Postgres's unique constraint treats NULLs as
+    // distinct, so pre-migration rows can coexist with new ones during
+    // rollout; once they are re-saved through `sync_event_with_sink_tokens`
+    // they'll pick up the explicit method and the fallback becomes a noop.
+    let method_str = method.as_str().to_ascii_uppercase();
+
+    let exact_match = event_sink::Entity::find()
         .filter(event_sink::Column::AppId.eq(&app_id))
         .filter(event_sink::Column::Path.eq(&normalized_path))
+        .filter(event_sink::Column::Method.eq(&method_str))
         .filter(event_sink::Column::Active.eq(true))
         .one(&state.db)
         .await
@@ -429,35 +842,51 @@ pub async fn trigger_http(
             ApiError::internal_error(anyhow!("Database error"))
         })?;
 
-    let sink = match sink {
+    let sink = match exact_match {
         Some(s) => s,
         None => {
-            tracing::warn!(
-                "No active HTTP sink found for {} in app {}",
-                normalized_path,
-                app_id
-            );
-            return Ok((
-                StatusCode::NOT_FOUND,
-                Json(TriggerResponse {
-                    triggered: false,
-                    run_id: None,
-                    message: "Route not found".to_string(),
-                }),
-            )
-                .into_response());
+            let legacy = event_sink::Entity::find()
+                .filter(event_sink::Column::AppId.eq(&app_id))
+                .filter(event_sink::Column::Path.eq(&normalized_path))
+                .filter(event_sink::Column::Method.is_null())
+                .filter(event_sink::Column::Active.eq(true))
+                .one(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Database error: {}", e);
+                    ApiError::internal_error(anyhow!("Database error"))
+                })?;
+
+            match legacy {
+                Some(s) => s,
+                None => {
+                    tracing::warn!(
+                        "No active HTTP sink found for {} {} in app {}",
+                        method_str,
+                        normalized_path,
+                        app_id
+                    );
+                    return Ok((
+                        StatusCode::NOT_FOUND,
+                        Json(TriggerResponse {
+                            triggered: false,
+                            run_id: None,
+                            message: "Route not found".to_string(),
+                        }),
+                    )
+                        .into_response());
+                }
+            }
         }
     };
 
     // Check auth token if set
     if let Some(expected_token) = &sink.auth_token {
-        let provided_token = headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim_start_matches("Bearer ").to_string());
+        let expected_token = normalize_authorization_token(expected_token);
+        let provided_token = authorization_token_from_headers(&headers);
 
         match provided_token {
-            Some(token) if &token == expected_token => {}
+            Some(token) if token == expected_token => {}
             _ => {
                 return Ok((
                     StatusCode::UNAUTHORIZED,
@@ -472,24 +901,45 @@ pub async fn trigger_http(
         }
     }
 
-    // Parse body
-    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024) // 10MB limit
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to read body: {}", e);
-            ApiError::bad_request("Failed to read request body")
-        })?;
+    // Create the run id before parsing so multipart files can be staged under
+    // a stable, per-run temporary object prefix.
+    let run_id = create_id();
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
-    let payload: Option<serde_json::Value> = if !body_bytes.is_empty() {
-        match serde_json::from_slice(&body_bytes) {
-            Ok(v) => Some(v),
-            Err(_) => Some(serde_json::Value::String(
-                String::from_utf8_lossy(&body_bytes).to_string(),
-            )),
-        }
-    } else {
-        None
-    };
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+    let credentials = state
+        .scoped_credentials(
+            &executor_subject,
+            &app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
+    let request_file_store = credentials
+        .to_store(false)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to create file store: {}", e)))?;
+    let request_file_prefix = format!(
+        "tmp/global/apps/{}/runs/{}/request",
+        sanitize_store_path_segment(&app_id, "app"),
+        sanitize_store_path_segment(&run_id, "run")
+    );
+
+    let parsed_payload = parse_http_request_payload(
+        request,
+        HTTP_SINK_BODY_LIMIT_BYTES,
+        Some(request_file_store),
+        Some(request_file_prefix),
+    )
+    .await?;
+    let payload = parsed_payload.payload;
 
     // Get the event from database (config lives in Event)
     let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
@@ -503,8 +953,6 @@ pub async fn trigger_http(
         )));
     }
 
-    // Create run
-    let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = payload
@@ -519,12 +967,6 @@ pub async fn trigger_http(
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Get credentials
-    let credentials = state
-        .master_credentials()
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
-
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize credentials: {}", e)))?;
@@ -534,7 +976,7 @@ pub async fn trigger_http(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "http_sink".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: event.board_id.clone(),
@@ -544,12 +986,6 @@ pub async fn trigger_http(
         ttl_seconds: Some(24 * 60 * 60),
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -564,7 +1000,7 @@ pub async fn trigger_http(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {
@@ -575,7 +1011,7 @@ pub async fn trigger_http(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload,
-        user_id: "http_sink".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -607,7 +1043,7 @@ pub async fn trigger_http(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -615,37 +1051,61 @@ pub async fn trigger_http(
 
     tracing::info!(run_id = %run_id, "Dispatching HTTP sink");
 
-    // Insert run and dispatch
-    let db_clone = state.db.clone();
-    let run_id_clone = run_id.clone();
-    let db_insert_handle = tokio::spawn(async move {
-        run.insert(&db_clone).await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to create run record");
-            e
-        })
-    });
+    // Persist the run record BEFORE dispatch so infrastructure failures
+    // (executor crashes, network drops, timeouts) leave a visible Pending
+    // row that can be reconciled, rather than a silently lost workflow.
+    if let Err(e) = run.insert(&state.db).await {
+        tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
+        return Ok((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(TriggerResponse {
+                triggered: false,
+                run_id: Some(run_id),
+                message: format!("Failed to create run record: {}", e),
+            }),
+        )
+            .into_response());
+    }
 
-    // Determine the streaming dispatch method based on backend configuration
+    // Match the desktop HTTP sink: wait for the first `generic_result`
+    // event and return it as a single JSON response. External callers of
+    // this webhook want a synchronous request/response, not SSE —
+    // invoke_event is the streaming entry point for clients that want
+    // live updates. 120s covers typical LLM-bound flows; longer-running
+    // workloads should invoke via SSE or async.
+    const HTTP_SINK_RESULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
     let backend = state.dispatcher.backend();
 
     match backend {
         ExecutionBackend::LambdaStream => {
-            // Use Lambda SDK streaming
             let dispatch_result = state.dispatcher.dispatch_streaming(request).await;
-
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             match dispatch_result {
                 Ok((_dispatch_response, byte_stream)) => {
-                    tracing::info!(run_id = %run_id, "Got Lambda response, starting stream");
-                    Ok(proxy_lambda_sse_response(
+                    tracing::info!(run_id = %run_id, "Got Lambda response, collecting result");
+                    let db_arc = Arc::new(state.db.clone());
+                    let run_id_owned = run_id.clone();
+                    let generic_result = collect_generic_result_bytes(
                         byte_stream,
-                        run_id,
-                        Some(Arc::new(state.db.clone())),
+                        run_id_owned,
+                        Some(db_arc),
+                        HTTP_SINK_RESULT_TIMEOUT,
                     )
-                    .into_response())
+                    .await;
+
+                    match generic_result {
+                        Some(payload) => Ok((StatusCode::OK, Json(payload)).into_response()),
+                        None => Ok((
+                            StatusCode::OK,
+                            Json(TriggerResponse {
+                                triggered: true,
+                                run_id: Some(run_id),
+                                message: "Event triggered".to_string(),
+                            }),
+                        )
+                            .into_response()),
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming");
@@ -662,22 +1122,33 @@ pub async fn trigger_http(
             }
         }
         _ => {
-            // Use HTTP SSE for all other backends
             let dispatch_result = state.dispatcher.dispatch_http_sse(request).await;
-
-            if let Err(e) = db_insert_handle.await {
-                tracing::error!(run_id = %run_id_clone, error = ?e, "DB insert task failed");
-            }
 
             match dispatch_result {
                 Ok((_dispatch_response, executor_response)) => {
-                    tracing::info!(run_id = %run_id, "Got executor response, starting stream");
-                    Ok(proxy_sse_response(
+                    tracing::info!(run_id = %run_id, "Got executor response, collecting result");
+                    let db_arc = Arc::new(state.db.clone());
+                    let run_id_owned = run_id.clone();
+                    let generic_result = collect_generic_result(
                         executor_response,
-                        run_id,
-                        Some(Arc::new(state.db.clone())),
+                        run_id_owned,
+                        Some(db_arc),
+                        HTTP_SINK_RESULT_TIMEOUT,
                     )
-                    .into_response())
+                    .await;
+
+                    match generic_result {
+                        Some(payload) => Ok((StatusCode::OK, Json(payload)).into_response()),
+                        None => Ok((
+                            StatusCode::OK,
+                            Json(TriggerResponse {
+                                triggered: true,
+                                run_id: Some(run_id),
+                                message: "Event triggered".to_string(),
+                            }),
+                        )
+                            .into_response()),
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch");
@@ -867,9 +1338,23 @@ pub async fn trigger_telegram(
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Get credentials
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+
     let credentials = state
-        .master_credentials()
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
 
@@ -882,7 +1367,7 @@ pub async fn trigger_telegram(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "telegram_webhook".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -892,12 +1377,6 @@ pub async fn trigger_telegram(
         ttl_seconds: Some(24 * 60 * 60),
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -912,7 +1391,7 @@ pub async fn trigger_telegram(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -923,7 +1402,7 @@ pub async fn trigger_telegram(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload,
-        user_id: "telegram_webhook".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -955,7 +1434,7 @@ pub async fn trigger_telegram(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1185,9 +1664,23 @@ pub async fn trigger_discord(
     let event_json = serde_json::to_string(&event)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Get credentials
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let executor_subject = actor_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id));
+
     let credentials = state
-        .master_credentials()
+        .scoped_credentials(
+            &executor_subject,
+            &sink.app_id,
+            crate::credentials::CredentialsAccess::InvokeWrite,
+        )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
 
@@ -1200,7 +1693,7 @@ pub async fn trigger_discord(
 
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: "discord_webhook".to_string(),
+        user_id: executor_subject.clone(),
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1210,12 +1703,6 @@ pub async fn trigger_discord(
         ttl_seconds: Some(24 * 60 * 60),
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
-
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
     // Decrypt OAuth tokens from sink if available
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
@@ -1230,7 +1717,7 @@ pub async fn trigger_discord(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state.db, &state.wasm_registry, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1241,7 +1728,7 @@ pub async fn trigger_discord(
         node_id: event.node_id.clone(),
         event_json: Some(event_json),
         payload: Some(interaction.clone()),
-        user_id: "discord_webhook".to_string(),
+        user_id: executor_subject,
         credentials_json,
         jwt: executor_jwt,
         callback_url,
@@ -1273,7 +1760,7 @@ pub async fn trigger_discord(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(None),
+        user_id: Set(actor_user_id),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1315,17 +1802,17 @@ pub struct SinkTriggerClaims {
     /// Issuer - always "flow-like"
     pub iss: String,
     /// JWT ID - unique identifier for revocation checking
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
     /// Which sink types this token can trigger
     pub sink_types: Vec<String>,
     /// Optional: restrict to specific app IDs
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_ids: Option<Vec<String>>,
     /// Issued at timestamp
     pub iat: usize,
     /// Expiration timestamp (optional - can be very long-lived)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exp: Option<usize>,
 }
 
@@ -1342,7 +1829,7 @@ pub struct ServiceTriggerRequest {
 }
 
 /// Response from service trigger
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ServiceTriggerResponse {
     pub success: bool,
     pub run_id: Option<String>,
@@ -1352,7 +1839,9 @@ pub struct ServiceTriggerResponse {
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
 fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerClaims, ApiError> {
-    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.required_spec_claims.remove("exp");
+    validation.validate_exp = false;
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
 
     let token_data = jsonwebtoken::decode::<SinkTriggerClaims>(token, &key, &validation)
@@ -1366,6 +1855,13 @@ fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerCla
     // Verify issuer
     if token_data.claims.iss != "flow-like" {
         return Err(ApiError::unauthorized("Invalid token issuer"));
+    }
+
+    if let Some(exp) = token_data.claims.exp {
+        let now = chrono::Utc::now().timestamp() as usize;
+        if exp <= now {
+            return Err(ApiError::unauthorized("Sink trigger token has expired"));
+        }
     }
 
     Ok(token_data.claims)
@@ -1411,13 +1907,15 @@ async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result
 ///
 /// If a service is compromised, it can only trigger events of its own type.
 /// Tokens can be individually revoked via /admin/sinks/{jti}.
+///
+/// Idempotency: callers may include an `Idempotency-Key` header. If the same
+/// key is seen within a short TTL (~15 minutes) the cached response is
+/// returned instead of re-dispatching. This shields downstream flows from
+/// EventBridge Scheduler's and Lambda's automatic retries on transient errors.
 #[utoipa::path(
     post,
-    path = "/sink/trigger/service/{event_id}",
+    path = "/sink/trigger/async",
     tag = "sink",
-    params(
-        ("event_id" = String, Path, description = "Event ID")
-    ),
     request_body = ServiceTriggerRequest,
     responses(
         (status = 200, description = "Service trigger response", body = ServiceTriggerResponse),
@@ -1457,6 +1955,25 @@ pub async fn trigger_service(
     {
         tracing::warn!(jti = %jti, "Attempted use of revoked sink token");
         return Err(ApiError::unauthorized("Token has been revoked"));
+    }
+
+    // Look up (or reserve) an idempotency key if provided. The cache stores
+    // the previously-produced ServiceTriggerResponse and short-circuits repeats.
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref key) = idempotency_key
+        && let Some(cached) = state.trigger_idempotency.get(key)
+    {
+        tracing::info!(
+            idempotency_key = %key,
+            event_id = %request.event_id,
+            "Returning cached idempotent trigger response"
+        );
+        return Ok(Json(cached));
     }
 
     // Check if this JWT is allowed to trigger this sink type
@@ -1534,17 +2051,16 @@ pub async fn trigger_service(
     );
 
     // Use the existing trigger_event utility
-    match trigger_event(
+    let response = match trigger_event(
         &state,
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload,
-            user_id: Some(format!("service:{}", request.sink_type)),
         },
     )
     .await
     {
-        Ok(result) => Ok(Json(ServiceTriggerResponse {
+        Ok(result) => ServiceTriggerResponse {
             success: result.triggered,
             run_id: result.run_id,
             error: if result.triggered {
@@ -1552,16 +2068,22 @@ pub async fn trigger_service(
             } else {
                 Some(result.message)
             },
-        })),
+        },
         Err(e) => {
             tracing::error!(error = %e, "Service trigger failed");
-            Ok(Json(ServiceTriggerResponse {
+            ServiceTriggerResponse {
                 success: false,
                 run_id: None,
                 error: Some(e.to_string()),
-            }))
+            }
         }
+    };
+
+    if let Some(key) = idempotency_key {
+        state.trigger_idempotency.insert(key, response.clone());
     }
+
+    Ok(Json(response))
 }
 
 /// GET /sink/schedules
@@ -1570,7 +2092,7 @@ pub async fn trigger_service(
 /// to sync its in-memory scheduler with the database.
 #[utoipa::path(
     get,
-    path = "/sink/cron",
+    path = "/sink/schedules",
     tag = "sink",
     responses(
         (status = 200, description = "List of cron schedules", body = Vec<CronScheduleInfo>),
@@ -1621,9 +2143,16 @@ pub async fn get_cron_sinks(
         .into_iter()
         .filter_map(|s| {
             s.cron_expression.map(|expr| CronScheduleInfo {
+                // The docker-compose cron worker keys its in-memory and Redis
+                // state by this id. Keep it equal to event_id so last-triggered
+                // updates address the same record that schedule sync stores.
+                id: s.event_id.clone(),
                 event_id: s.event_id,
                 cron_expression: expr,
                 app_id: s.app_id,
+                enabled: s.active,
+                last_triggered: None,
+                next_trigger: None,
             })
         })
         .collect();
@@ -1634,9 +2163,13 @@ pub async fn get_cron_sinks(
 /// Cron schedule info returned by list_cron_schedules
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CronScheduleInfo {
+    pub id: String,
     pub event_id: String,
     pub cron_expression: String,
     pub app_id: String,
+    pub enabled: bool,
+    pub last_triggered: Option<chrono::DateTime<chrono::Utc>>,
+    pub next_trigger: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Sink config info returned by list_sink_configs
@@ -1746,129 +2279,50 @@ pub async fn get_sink_configs(
     Ok(Json(configs))
 }
 
-/// Create an SSE stream from a Lambda ByteStream response
-fn proxy_lambda_sse_response(
-    stream: ByteStream,
-    run_id: String,
-    db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
-) -> axum::response::sse::Sse<
-    impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
-> {
-    use axum::response::sse::{Event, KeepAlive, Sse};
-    use futures::StreamExt;
-    use std::time::Duration;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
 
-    let stream = async_stream::stream! {
-        let mut byte_stream = stream;
-        let mut buffer = Vec::new();
+    const TEST_SECRET: &str = "test-sink-secret";
 
-        while let Some(result) = byte_stream.next().await {
-            match result {
-                Ok(bytes) => {
-                    // Append bytes to buffer
-                    buffer.extend_from_slice(&bytes);
+    fn sign_test_sink_claims(exp: Option<usize>) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = SinkTriggerClaims {
+            sub: "sink-trigger".to_string(),
+            iss: "flow-like".to_string(),
+            jti: None,
+            sink_types: vec!["cron".to_string()],
+            app_ids: None,
+            iat: now,
+            exp,
+        };
 
-                    // Try to parse complete SSE events from buffer
-                    while let Some(event) = extract_sse_event(&mut buffer) {
-                        // Check if this is a completed event and update the database
-                        if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
-                                && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
-                                    && event_type == "completed" {
-                                        let log_level = parsed.get("payload")
-                                            .and_then(|p| p.get("log_level"))
-                                            .and_then(|l| l.as_i64())
-                                            .unwrap_or(0) as i32;
-                                        let status = parsed.get("payload")
-                                            .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or("Completed");
-
-                                        let run_status = match status {
-                                            "Failed" => RunStatus::Failed,
-                                            "Cancelled" => RunStatus::Cancelled,
-                                            "Timeout" => RunStatus::Timeout,
-                                            _ => RunStatus::Completed,
-                                        };
-
-                                        let db = db.clone();
-                                        let run_id_clone = run_id.clone();
-                                        tokio::spawn(async move {
-                                            use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
-                                            use crate::entity::prelude::*;
-                                            if let Ok(Some(run)) = ExecutionRun::find_by_id(&run_id_clone).one(db.as_ref()).await {
-                                                let mut run: execution_run::ActiveModel = run.into();
-                                                run.status = Set(run_status);
-                                                run.log_level = Set(log_level);
-                                                run.updated_at = Set(chrono::Utc::now().naive_utc());
-                                                if let Err(e) = run.update(db.as_ref()).await {
-                                                    tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                                }
-                                            }
-                                        });
-                                    }
-
-                        let sse_event = Event::default()
-                            .event(&event.event_type)
-                            .data(event.data);
-                        yield Ok(sse_event);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
-                    let error_event = Event::default()
-                        .event("error")
-                        .data(format!(r#"{{"error":"{}"}}"#, e));
-                    yield Ok(error_event);
-                    break;
-                }
-            }
-        }
-
-        tracing::debug!(run_id = %run_id, "Lambda SSE stream ended");
-    };
-
-    Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .text("keep-alive")
-            .interval(Duration::from_secs(1)),
-    )
-}
-
-/// Parsed SSE event
-struct ParsedSseEvent {
-    event_type: String,
-    data: String,
-}
-
-/// Extract a complete SSE event from the buffer, if available
-fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
-    // Look for double newline which marks end of SSE event
-    let s = String::from_utf8_lossy(buffer);
-    if let Some(end_pos) = s.find("\n\n") {
-        let event_str = &s[..end_pos];
-        let remainder = &s[end_pos + 2..];
-
-        let mut event_type = "message".to_string();
-        let mut data_parts = Vec::new();
-
-        for line in event_str.lines() {
-            if let Some(value) = line.strip_prefix("event:") {
-                event_type = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("data:") {
-                data_parts.push(value.trim_start().to_string());
-            }
-        }
-
-        // Update buffer with remainder
-        *buffer = remainder.as_bytes().to_vec();
-
-        if !data_parts.is_empty() {
-            return Some(ParsedSseEvent {
-                event_type,
-                data: data_parts.join("\n"),
-            });
-        }
+        jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+        )
+        .expect("test sink token should encode")
     }
-    None
+
+    #[test]
+    fn accepts_long_lived_sink_token_without_exp() {
+        let token = sign_test_sink_claims(None);
+        let claims = validate_sink_trigger_jwt(&token, TEST_SECRET)
+            .expect("sink token without exp should validate");
+
+        assert_eq!(claims.sub, "sink-trigger");
+        assert_eq!(claims.iss, "flow-like");
+        assert_eq!(claims.sink_types, vec!["cron".to_string()]);
+        assert_eq!(claims.exp, None);
+    }
+
+    #[test]
+    fn rejects_expired_sink_token_when_exp_is_present() {
+        let expired_at = (chrono::Utc::now() - chrono::Duration::minutes(1)).timestamp() as usize;
+        let token = sign_test_sink_claims(Some(expired_at));
+
+        assert!(validate_sink_trigger_jwt(&token, TEST_SECRET).is_err());
+    }
 }

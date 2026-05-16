@@ -1,7 +1,12 @@
 "use client";
 
 import type { ComponentType } from "react";
-import type { A2UIClientMessage, A2UIComponent, Style } from "./types";
+import type {
+	A2UIClientMessage,
+	A2UIComponent,
+	DataScope,
+	Style,
+} from "./types";
 
 // Layout components
 import {
@@ -88,12 +93,17 @@ import {
 	A2UISprite,
 } from "./game";
 
-export type RenderChildFn = (childId: string) => React.ReactNode;
+export type RenderChildFn = (
+	childId: string,
+	dataScope?: DataScope,
+) => React.ReactNode;
 
 export interface ComponentProps<T extends A2UIComponent = A2UIComponent> {
 	component: T;
 	componentId: string;
 	surfaceId: string;
+	appId?: string;
+	boardId?: string;
 	style?: Style;
 	onAction?: (message: A2UIClientMessage) => void;
 	renderChild: RenderChildFn;

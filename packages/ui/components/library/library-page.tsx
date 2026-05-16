@@ -80,10 +80,7 @@ export function LibraryPage({
 		[onAppClickProp, queryClient, router],
 	);
 
-	const appHref = useCallback(
-		(appId: string) => `/use?id=${appId}`,
-		[],
-	);
+	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
 
 	const handleSettingsClick = useCallback(
 		(appId: string) => router.push(`/library/config?id=${appId}`),

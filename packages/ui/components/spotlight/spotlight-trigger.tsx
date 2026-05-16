@@ -101,7 +101,10 @@ export function SpotlightTrigger({
 					initial="initial"
 					whileHover="hover"
 				>
-					<motion.div variants={iconVariants} className="flex items-center justify-center h-4 w-4 rounded-sm bg-linear-to-br">
+					<motion.div
+						variants={iconVariants}
+						className="flex items-center justify-center h-4 w-4 rounded-sm bg-linear-to-br"
+					>
 						<SparklesIcon className="h-5 w-5 text-primary-foreground" />
 					</motion.div>
 					{sidebarOpen && (

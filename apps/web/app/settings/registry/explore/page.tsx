@@ -39,8 +39,8 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { getErrorMessage } from "../error-utils";
 import { fetcher } from "../../../../lib/api";
+import { getErrorMessage } from "../error-utils";
 
 type SortOption =
 	| "relevance"
@@ -128,7 +128,10 @@ function PackageCard({
 								<Button
 									size="sm"
 									variant="destructive"
-								onClick={(e) => { e.stopPropagation(); onUninstall(pkg.id); }}
+									onClick={(e) => {
+										e.stopPropagation();
+										onUninstall(pkg.id);
+									}}
 									disabled={isLoading}
 								>
 									{isLoading ? (
@@ -141,7 +144,10 @@ function PackageCard({
 						) : (
 							<Button
 								size="sm"
-							onClick={(e) => { e.stopPropagation(); onInstall(pkg.id); }}
+								onClick={(e) => {
+									e.stopPropagation();
+									onInstall(pkg.id);
+								}}
 								disabled={isLoading}
 							>
 								{isLoading ? (
@@ -192,7 +198,9 @@ export default function ExplorePackagesPage() {
 	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
-	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+	const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+		null,
+	);
 
 	const [searchQuery, setSearchQuery] = useState("");
 	const [sortBy, setSortBy] = useState<SortOption>("relevance");

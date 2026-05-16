@@ -3,6 +3,7 @@ import { createId } from "@paralleldrive/cuid2";
 import * as Sentry from "@sentry/nextjs";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	AlertDialog,
@@ -15,18 +16,18 @@ import {
 	AlertDialogTitle,
 	AnimatedBrainIcon,
 	AnimatedBugIcon,
+	AnimatedCodeIcon,
 	AnimatedDashboardIcon,
-	AnimatedDocsIcon,
+	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
-	AnimatedKeyIcon,
 	AnimatedLibraryIcon,
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
+	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
-	AnimatedExploreAppsIcon,
+	AnimatedStudyHatIcon,
 	AnimatedThemeIcon,
-	AnimatedUsersIcon,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -72,53 +73,47 @@ import {
 	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarRail,
-	SpotlightTrigger,
 	Textarea,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
-	AnimatedSidebarIcon,
-	AnimatedCodeIcon,
 } from "@tm9657/flow-like-ui";
 import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+import { motion } from "framer-motion";
 import {
 	BadgeCheck,
 	BarChart3,
 	BellIcon,
-	BookOpenIcon,
-	BugIcon,
 	Check,
 	ChevronRight,
 	ChevronsUpDown,
-	Code2Icon,
 	CreditCard,
 	Edit3Icon,
-	HomeIcon,
 	KeyIcon,
-
 	LogInIcon,
 	LogOut,
 	type LucideIcon,
-	Moon,
 	Plus,
-	SettingsIcon,
-	SidebarCloseIcon,
 	SidebarOpenIcon,
-	Sun,
 	Trash2Icon,
-	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+	type ComponentType,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { fetcher } from "../lib/api";
+import { appsDB } from "../lib/apps-db";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
@@ -156,6 +151,24 @@ const data = {
 			isActive: false,
 			permission: false,
 			items: [],
+		},
+		{
+			title: "University",
+			url: "/learn",
+			icon: AnimatedStudyHatIcon,
+			isActive: false,
+			permission: false,
+			items: [
+				{
+					title: "Overview",
+					url: "/learn",
+				},
+				{
+					title: "Documentation",
+					url: "https://docs.flow-like.com",
+					external: true,
+				},
+			],
 		},
 		{
 			title: "Admin",
@@ -313,7 +326,6 @@ function InnerSidebar() {
 		<Sidebar collapsible="icon" side="left">
 			<SidebarHeader>
 				<Profiles />
-				<SpotlightTrigger />
 			</SidebarHeader>
 			<SidebarContent>
 				<NavMain items={data.navMain} devItems={data.navDev} />
@@ -435,7 +447,11 @@ function InnerSidebar() {
 					</DropdownMenu>
 
 					<a href="/settings">
-						<MotionSidebarMenuButton tooltip="Settings" initial="initial" whileHover="hover">
+						<MotionSidebarMenuButton
+							tooltip="Settings"
+							initial="initial"
+							whileHover="hover"
+						>
 							<motion.div variants={iconVariants}>
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
@@ -444,21 +460,12 @@ function InnerSidebar() {
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
-					<a
-						href="https://docs.flow-like.com"
-						target="_blank"
-						rel="noopener noreferrer"
+					<MotionSidebarMenuButton
+						tooltip="Toggle Sidebar"
+						onClick={toggleSidebar}
+						initial="initial"
+						whileHover="hover"
 					>
-						<MotionSidebarMenuButton tooltip="Documentation" initial="initial" whileHover="hover">
-							<motion.div variants={iconVariants}>
-								<AnimatedDocsIcon className="size-4" />
-							</motion.div>
-							<span className="w-full flex flex-row items-center justify-between">
-								Documentation{" "}
-							</span>
-						</MotionSidebarMenuButton>
-					</a>
-					<MotionSidebarMenuButton tooltip="Toggle Sidebar" onClick={toggleSidebar} initial="initial" whileHover="hover">
 						<div>
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
@@ -518,6 +525,8 @@ function Profiles() {
 					bit_types: [
 						IBitTypes.Llm,
 						IBitTypes.Vlm,
+						IBitTypes.Tts,
+						IBitTypes.Stt,
 						IBitTypes.Embedding,
 						IBitTypes.ImageEmbedding,
 					],
@@ -569,7 +578,7 @@ function Profiles() {
 						baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
 					).replace(/\/+$/, "");
 
-					await tauriFetch(
+					const response = await tauriFetch(
 						`${apiBase}/api/v1/profile/${encodeURIComponent(deleteTarget.id)}`,
 						{
 							method: "DELETE",
@@ -578,12 +587,23 @@ function Profiles() {
 							},
 						},
 					);
+					if (!response.ok && response.status !== 404) {
+						const message = await response.text().catch(() => "");
+						throw new Error(
+							message || `Failed to delete profile: ${response.status}`,
+						);
+					}
 				} catch (err) {
 					console.warn("[ProfileDelete] Server delete error:", err);
+					throw err;
 				}
 			}
 
 			await invoke("delete_profile", { profileId: deleteTarget.id });
+			await appsDB.shortcuts
+				.where("profileId")
+				.equals(deleteTarget.id)
+				.delete();
 			toast.success("Profile removed");
 			await profiles.refetch();
 			await invalidate(backend.userState.getProfile, []);
@@ -607,7 +627,7 @@ function Profiles() {
 							initial="initial"
 							whileHover="hover"
 						>
-							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+							<div className="flex relative aspect-square size-8 items-center justify-center rounded-lg">
 								<Avatar className="h-8 w-8 rounded-lg">
 									<AvatarImage
 										className="rounded-lg size-8 w-8 h-8"
@@ -662,7 +682,7 @@ function Profiles() {
 										}}
 										className="group gap-2 p-2"
 									>
-										<div className="flex size-6 items-center justify-center rounded-sm border">
+										<div className="flex size-6 items-center justify-center rounded-sm">
 											<Avatar className="h-8 w-8 rounded-sm">
 												<AvatarImage
 													className="rounded-sm w-8 h-8"
@@ -778,6 +798,7 @@ interface INavItem {
 	items?: {
 		title: string;
 		url: string;
+		external?: boolean;
 		permission?: GlobalPermission;
 	}[];
 }
@@ -908,18 +929,28 @@ function NavCollapsible({
 						{item.items?.map((subItem) => (
 							<SidebarMenuSubItem key={subItem.url}>
 								<SidebarMenuSubButton asChild>
-									<Link href={subItem.url}>
-										<span
-											className={
-												pathname === subItem.url ||
-												pathname.startsWith(`${subItem.url}/`)
-													? "font-bold text-primary"
-													: ""
-											}
+									{subItem.external ? (
+										<a
+											href={subItem.url}
+											target="_blank"
+											rel="noopener noreferrer"
 										>
-											{subItem.title}
-										</span>
-									</Link>
+											<span>{subItem.title}</span>
+										</a>
+									) : (
+										<Link href={subItem.url}>
+											<span
+												className={
+													pathname === subItem.url ||
+													pathname.startsWith(`${subItem.url}/`)
+														? "font-bold text-primary"
+														: ""
+												}
+											>
+												{subItem.title}
+											</span>
+										</Link>
+									)}
 								</SidebarMenuSubButton>
 							</SidebarMenuSubItem>
 						))}
@@ -1032,7 +1063,11 @@ function NavMain({
 											variant={pathname === item.url ? "outline" : "default"}
 											tooltip={item.title}
 										>
-											<MotionLink href={item.url} initial="initial" whileHover="hover">
+											<MotionLink
+												href={item.url}
+												initial="initial"
+												whileHover="hover"
+											>
 												{item.icon && (
 													<motion.div variants={iconVariants}>
 														<item.icon className="size-4" />
@@ -1118,7 +1153,7 @@ export function NavUser({
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
-								<div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+								<div className="absolute -top-2 -right-2 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 									{notificationCount > 5 ? "5+" : notificationCount}
 								</div>
 							)}
@@ -1199,7 +1234,7 @@ export function NavUser({
 												<BellIcon className="size-4" />
 												{/* Add notification indicator */}
 												{notificationCount > 0 && (
-													<div className="absolute top-0 left-0 bg-red-500 text-white text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
+													<div className="absolute top-0 left-0 bg-primary text-primary-foreground text-xs rounded-full min-w-4 h-4 flex items-center justify-center px-1">
 														{notificationCount > 5 ? "5+" : notificationCount}
 													</div>
 												)}

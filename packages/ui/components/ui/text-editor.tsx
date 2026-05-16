@@ -3,24 +3,68 @@
 import { remarkMdx, remarkMention } from "@platejs/markdown";
 import { PlateStatic, type Value, createSlateEditor } from "platejs";
 import { Plate, usePlateEditor } from "platejs/react";
-import { memo, useMemo } from "react";
+import {
+	type KeyboardEvent,
+	type MouseEvent,
+	memo,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { EditorKit } from "../editor/editor-kit";
+import {
+	type MentionItem,
+	MentionItemsProvider,
+} from "../editor/mention-items-context";
 import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import { Editor, EditorContainer } from "../editor/ui/editor";
 
+const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
+
 /**
  * A prefix to identify content that is serialized as Plate's native JSON.
  * This allows switching from initial Markdown to JSON after the first edit.
  */
 const PLATE_JSON_PREFIX = "plate_json::";
+
+type PlateLikeNode = {
+	children?: PlateLikeNode[];
+	text?: string;
+	type?: string;
+	url?: string;
+	[key: string]: unknown;
+};
+
+type DeserializingEditor = {
+	api: {
+		deserialize: (data: string) => PlateLikeNode[];
+		markdown: {
+			deserialize: (
+				data: string,
+				options: { remarkPlugins: ReadonlyArray<unknown> },
+			) => PlateLikeNode[];
+		};
+	};
+};
+
+type PluginWithIdentity = {
+	key?: string;
+	name?: string;
+};
+
+const toValue = (nodes: PlateLikeNode[]): Value => nodes as unknown as Value;
+
+const paragraphValue = (text: string): Value =>
+	toValue([{ type: "p", children: [{ text }] }]);
 
 /**
  * Splits a Markdown string into top-level blocks while preserving the integrity of fenced code blocks.
@@ -32,15 +76,16 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 	const blocks: string[] = [];
 	const codeBlockRegex = /(^```[\s\S]*?^```$)|(^~~~[\s\S]*?^~~~$)/gm;
 	let lastIndex = 0;
-	let match;
+	let match: RegExpExecArray | null = codeBlockRegex.exec(markdown);
 
-	while ((match = codeBlockRegex.exec(markdown)) !== null) {
+	while (match !== null) {
 		const precedingText = markdown.substring(lastIndex, match.index);
 		if (precedingText.trim()) {
 			blocks.push(...precedingText.trim().split(/\n{2,}/));
 		}
 		blocks.push(match[0]);
 		lastIndex = codeBlockRegex.lastIndex;
+		match = codeBlockRegex.exec(markdown);
 	}
 
 	const remainingText = markdown.substring(lastIndex);
@@ -54,7 +99,9 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 /**
  * Post-process Plate nodes to convert focus://, invalid://, and user:// links to custom elements
  */
-const transformSpecialLinks = (nodes: any[]): any[] => {
+const transformSpecialLinks = (
+	nodes: ReadonlyArray<PlateLikeNode>,
+): PlateLikeNode[] => {
 	return nodes.map((node) => {
 		// If this is a link with focus:// url, convert to focus_node
 		if (
@@ -65,7 +112,7 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
 			const nodeId = node.url.replace("focus://", "");
 			// Extract text from children
 			const nodeName =
-				node.children?.map((child: any) => child.text || "").join("") || "Node";
+				node.children?.map((child) => child.text || "").join("") || "Node";
 			return {
 				type: "focus_node",
 				nodeId,
@@ -82,8 +129,7 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
 		) {
 			// Extract text from children - this will be the attempted reference
 			const nodeName =
-				node.children?.map((child: any) => child.text || "").join("") ||
-				"Unknown";
+				node.children?.map((child) => child.text || "").join("") || "Unknown";
 			return {
 				type: "focus_node",
 				nodeId: "",
@@ -111,7 +157,9 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
 			typeof node.url === "string" &&
 			node.url.startsWith("spoiler://")
 		) {
-			const spoilerText = decodeURIComponent(node.url.replace("spoiler://", ""));
+			const spoilerText = decodeURIComponent(
+				node.url.replace("spoiler://", ""),
+			);
 			return {
 				type: "inline_spoiler",
 				spoilerText,
@@ -134,25 +182,27 @@ const transformSpecialLinks = (nodes: any[]): any[] => {
  * It handles prefixed native Plate JSON, Markdown, and plain text, with fallbacks.
  */
 export const safeDeserialize = (
-	editor: any,
+	editor: unknown,
 	data: string,
 	isMarkdown: boolean,
-	remarkPlugins: any[],
+	remarkPlugins: ReadonlyArray<unknown>,
 ): Value => {
+	const deserializingEditor = editor as DeserializingEditor;
+
 	// 1. Check for the native JSON prefix first.
 	if (data.startsWith(PLATE_JSON_PREFIX)) {
 		try {
 			const jsonString = data.substring(PLATE_JSON_PREFIX.length);
-			const nodes = JSON.parse(jsonString);
+			const nodes: unknown = JSON.parse(jsonString);
 			if (Array.isArray(nodes) && nodes.length > 0) {
-				return transformSpecialLinks(nodes);
+				return toValue(transformSpecialLinks(nodes as PlateLikeNode[]));
 			}
 		} catch (error) {
 			console.error(
 				"Failed to parse prefixed Plate JSON, falling back.",
 				error,
 			);
-			return [{ type: "p", children: [{ text: data }] }];
+			return paragraphValue(data);
 		}
 	}
 
@@ -160,11 +210,11 @@ export const safeDeserialize = (
 	if (!isMarkdown) {
 		try {
 			// Assuming editor.api.deserialize is a custom function, potentially JSON.parse
-			const nodes = editor.api.deserialize(data);
-			if (nodes.length > 0) return transformSpecialLinks(nodes);
-			return [{ type: "p", children: [{ text: data }] }];
+			const nodes = deserializingEditor.api.deserialize(data);
+			if (nodes.length > 0) return toValue(transformSpecialLinks(nodes));
+			return paragraphValue(data);
 		} catch {
-			return [{ type: "p", children: [{ text: data }] }];
+			return paragraphValue(data);
 		}
 	}
 
@@ -172,9 +222,11 @@ export const safeDeserialize = (
 	// Pre-process directive blocks (:::type ... :::) at text level before parsing.
 	const preprocessed = preprocessDirectiveBlocks(data);
 	try {
-		const nodes = editor.api.markdown.deserialize(preprocessed, { remarkPlugins });
-		if (nodes.length > 0) return transformSpecialLinks(nodes);
-		return [{ type: "p", children: [{ text: "" }] }];
+		const nodes = deserializingEditor.api.markdown.deserialize(preprocessed, {
+			remarkPlugins,
+		});
+		if (nodes.length > 0) return toValue(transformSpecialLinks(nodes));
+		return paragraphValue("");
 	} catch (error) {
 		console.error(
 			"Markdown deserialization failed, attempting fallback:",
@@ -183,16 +235,18 @@ export const safeDeserialize = (
 
 		// 4. Fallback for broken markdown: split into blocks and deserialize individually.
 		const blocks = splitMarkdownPreservingCodeBlocks(preprocessed);
-		const nodes = blocks.flatMap((block) => {
+		const nodes = blocks.flatMap((block): PlateLikeNode[] => {
 			try {
-				return editor.api.markdown.deserialize(block, { remarkPlugins });
+				return deserializingEditor.api.markdown.deserialize(block, {
+					remarkPlugins,
+				});
 			} catch {
-				return { type: "p", children: [{ text: block }] };
+				return [{ type: "p", children: [{ text: block }] }];
 			}
 		});
 
-		if (nodes.length > 0) return transformSpecialLinks(nodes);
-		return [{ type: "p", children: [{ text: data }] }];
+		if (nodes.length > 0) return toValue(transformSpecialLinks(nodes));
+		return paragraphValue(data);
 	}
 };
 
@@ -209,32 +263,38 @@ function TextEditorInner({
 }>) {
 	const remarkPlugins = useMemo(
 		() => [
-			remarkMath,
+			[remarkMath, { singleDollarTextMath: false }],
 			remarkGfm,
 			remarkBreaks,
 			remarkMdx,
 			remarkMention,
-			remarkEmoji as any,
+			remarkEmoji as unknown,
 			remarkFocusNodes,
 			remarkUserMention,
 			remarkInlineSpoiler,
 		],
 		[],
 	);
+	const lastEmittedContentRef = useRef(initialContent);
+	const [editorSeed, setEditorSeed] = useState(initialContent);
+
+	useEffect(() => {
+		if (initialContent === lastEmittedContentRef.current) {
+			return;
+		}
+
+		lastEmittedContentRef.current = initialContent;
+		setEditorSeed(initialContent);
+	}, [initialContent]);
 
 	const editor = usePlateEditor(
 		{
 			id: "rendered-editor",
 			plugins: EditorKit,
 			value: (self) =>
-				safeDeserialize(
-					self,
-					initialContent,
-					isMarkdown ?? false,
-					remarkPlugins,
-				),
+				safeDeserialize(self, editorSeed, isMarkdown ?? false, remarkPlugins),
 		},
-		[initialContent, isMarkdown, remarkPlugins],
+		[editorSeed, isMarkdown, remarkPlugins],
 	);
 
 	return (
@@ -246,9 +306,10 @@ function TextEditorInner({
 					serializedNodes,
 				)}`;
 
-				if (newContent === initialContent) {
+				if (newContent === lastEmittedContentRef.current) {
 					return;
 				}
+				lastEmittedContentRef.current = newContent;
 				onChange(newContent);
 			}}
 		>
@@ -275,14 +336,20 @@ function TextEditorStatic({
 	const remarkPlugins = useMemo(
 		() =>
 			minimal
-				? [remarkGfm, remarkBreaks, remarkFocusNodes, remarkUserMention, remarkInlineSpoiler]
+				? [
+						remarkGfm,
+						remarkBreaks,
+						remarkFocusNodes,
+						remarkUserMention,
+						remarkInlineSpoiler,
+					]
 				: [
-						remarkMath,
+						[remarkMath, { singleDollarTextMath: false }],
 						remarkGfm,
 						remarkBreaks,
 						remarkMdx,
 						remarkMention,
-						remarkEmoji as any,
+						remarkEmoji as unknown,
 						remarkFocusNodes,
 						remarkUserMention,
 						remarkInlineSpoiler,
@@ -297,8 +364,8 @@ function TextEditorStatic({
 				? [
 						...BaseEditorKit.filter((plugin) => {
 							// Only include essential plugins for markdown rendering
-							const pluginId =
-								(plugin as any).key || (plugin as any).name || "";
+							const { key, name } = plugin as unknown as PluginWithIdentity;
+							const pluginId = key || name || "";
 							return (
 								pluginId.includes("paragraph") ||
 								pluginId.includes("heading") ||
@@ -328,8 +395,7 @@ function TextEditorStatic({
 		const MAX_LENGTH = 50000; // ~50KB
 		const contentToRender =
 			initialContent.length > MAX_LENGTH
-				? initialContent.slice(0, MAX_LENGTH) +
-					"\\n\\n... (content truncated for performance)"
+				? `${initialContent.slice(0, MAX_LENGTH)}\\n\\n... (content truncated for performance)`
 				: initialContent;
 
 		const tempEditor = createSlateEditor({ plugins });
@@ -351,30 +417,42 @@ function TextEditorStatic({
 		[plugins, value],
 	);
 
+	const handleStaticInteraction = (
+		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
+	) => {
+		const target = e.target as HTMLElement;
+		const focusSpan = target.closest("[data-focus-node-id]");
+		if (focusSpan && onFocusNode) {
+			e.preventDefault();
+			const nodeId = focusSpan.getAttribute("data-focus-node-id");
+			if (nodeId) {
+				onFocusNode(nodeId);
+			}
+		}
+		const userMentionSpan = target.closest("[data-user-mention-sub]");
+		if (userMentionSpan && onUserMention) {
+			e.preventDefault();
+			const sub = userMentionSpan.getAttribute("data-user-mention-sub");
+			if (sub) {
+				onUserMention(sub);
+			}
+		}
+	};
+
 	return (
 		<div
-			onClick={(e) => {
-				const target = e.target as HTMLElement;
-				const focusSpan = target.closest("[data-focus-node-id]");
-				if (focusSpan && onFocusNode) {
-					e.preventDefault();
-					const nodeId = focusSpan.getAttribute("data-focus-node-id");
-					if (nodeId) {
-						onFocusNode(nodeId);
-					}
-				}
-				const userMentionSpan = target.closest("[data-user-mention-sub]");
-				if (userMentionSpan && onUserMention) {
-					e.preventDefault();
-					const sub = userMentionSpan.getAttribute("data-user-mention-sub");
-					if (sub) {
-						onUserMention(sub);
-					}
+			onClick={handleStaticInteraction}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					handleStaticInteraction(e);
 				}
 			}}
 			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word"
 		>
-			<PlateStatic editor={editor} className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0" />
+			<PlateStatic
+				editor={editor}
+				className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0"
+			/>
 		</div>
 	);
 }
@@ -387,6 +465,7 @@ type TextEditorProps = {
 	minimal?: boolean;
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
+	mentionItems?: ReadonlyArray<MentionItem>;
 };
 
 export const TextEditor = memo(function TextEditor({
@@ -397,26 +476,32 @@ export const TextEditor = memo(function TextEditor({
 	minimal = false,
 	onFocusNode,
 	onUserMention,
+	mentionItems,
 }: Readonly<TextEditorProps>) {
+	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
 	if (editable && onChange) {
 		return (
-			<TextEditorInner
-				initialContent={initialContent}
-				onChange={(content: string) => {
-					onChange(content);
-				}}
-				isMarkdown={isMarkdown}
-				onFocusNode={onFocusNode}
-			/>
+			<MentionItemsProvider value={items}>
+				<TextEditorInner
+					initialContent={initialContent}
+					onChange={(content: string) => {
+						onChange(content);
+					}}
+					isMarkdown={isMarkdown}
+					onFocusNode={onFocusNode}
+				/>
+			</MentionItemsProvider>
 		);
 	}
 	return (
-		<TextEditorStatic
-			initialContent={initialContent}
-			isMarkdown={isMarkdown}
-			minimal={minimal}
-			onFocusNode={onFocusNode}
-			onUserMention={onUserMention}
-		/>
+		<MentionItemsProvider value={items}>
+			<TextEditorStatic
+				initialContent={initialContent}
+				isMarkdown={isMarkdown}
+				minimal={minimal}
+				onFocusNode={onFocusNode}
+				onUserMention={onUserMention}
+			/>
+		</MentionItemsProvider>
 	);
 });

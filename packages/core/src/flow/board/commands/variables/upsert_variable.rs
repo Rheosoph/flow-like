@@ -94,10 +94,10 @@ impl Command for UpsertVariableCommand {
             &mut board.variables
         };
 
-        if let Some(old_variable) = variables.get(&self.variable.id) {
-            if !old_variable.editable {
-                return Err(flow_like_types::anyhow!("Variable is not editable"));
-            }
+        if let Some(old_variable) = variables.get(&self.variable.id)
+            && !old_variable.editable
+        {
+            return Err(flow_like_types::anyhow!("Variable is not editable"));
         }
 
         if let Some(old_variable) =

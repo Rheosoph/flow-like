@@ -135,7 +135,13 @@ const TrayProvider: React.FC = () => {
 				unlistenOpenSpotlight,
 				unlistenQuickCreate,
 				unlistenUpdate,
-			]).catch(() => undefined);
+			])
+				.then((unlisteners) => {
+					for (const unlisten of unlisteners) {
+						unlisten();
+					}
+				})
+				.catch(() => undefined);
 		};
 	}, []);
 

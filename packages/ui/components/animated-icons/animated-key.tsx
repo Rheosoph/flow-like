@@ -41,7 +41,13 @@ export function AnimatedKeyIcon({ className }: { className?: string }) {
 					hover: {
 						scale: [0, 1.2, 1],
 						opacity: [0, 1],
-						transition: { duration: 0.35, delay: 0.4, type: "spring", stiffness: 300, damping: 12 },
+						transition: {
+							duration: 0.35,
+							delay: 0.4,
+							type: "spring",
+							stiffness: 300,
+							damping: 12,
+						},
 					},
 				}}
 				style={{ transformOrigin: "16.5px 7.5px" }}

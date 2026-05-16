@@ -728,8 +728,7 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
     storage
         .func_wrap_async(
             "write-file-finish",
-            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-             (write_id,): (String,)| {
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (write_id,): (String,)| {
                 Box::new(async move {
                     if !store
                         .data()
@@ -753,9 +752,7 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let ctx = match &store.data().host_state.storage_context {
                         Some(c) => c,
                         None => {
-                            tracing::warn!(
-                                "[wasm write-file-finish] rejected: no storage context"
-                            );
+                            tracing::warn!("[wasm write-file-finish] rejected: no storage context");
                             return Ok((false,));
                         }
                     };

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
-use super::db::sync_event_with_sink_tokens;
+use super::db::{sync_event_with_sink_tokens, validate_event_schedule};
 
 #[derive(Deserialize, ToSchema)]
 pub struct EventUpsertBody {
@@ -42,6 +42,7 @@ pub struct EventUpsertBody {
     request_body = EventUpsertBody,
     responses(
         (status = 200, description = "Event saved", body = String, content_type = "application/json"),
+        (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -66,6 +67,18 @@ pub async fn upsert_event(
 
     let mut event = params.event;
     event.id = event_id.clone();
+
+    validate_event_schedule(&state, &event)
+        .await
+        .map_err(|error| match error {
+            flow_like_sinks::SchedulerError::InvalidCronExpression(message) => {
+                ApiError::bad_request(message)
+            }
+            other => ApiError::service_unavailable(format!(
+                "Failed to validate cron schedule: {}",
+                other
+            )),
+        })?;
 
     let mut app = state
         .scoped_app(

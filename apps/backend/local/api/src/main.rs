@@ -5,6 +5,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use dotenv::dotenv;
 use flow_like_api::axum;
 use flow_like_api::construct_router;
+use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_catalog::get_catalog;
 use flow_like_secrets::{
     EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
@@ -92,6 +93,9 @@ async fn main() {
     let state = Arc::new(
         flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
     );
+
+    let _sweeper_handle =
+        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
 
     let app = construct_router(state);
 

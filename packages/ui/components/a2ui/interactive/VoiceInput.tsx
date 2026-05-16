@@ -233,8 +233,7 @@ export function A2UIVoiceInput({
 		useResolved<number>(component.silenceThreshold) ?? 0.01;
 	const silenceDuration =
 		useResolved<number>(component.silenceDuration) ?? 2000;
-	const visualizer =
-		useResolved<string>(component.visualizer) ?? "waveform";
+	const visualizer = useResolved<string>(component.visualizer) ?? "waveform";
 
 	const [isRecording, setIsRecording] = useState(false);
 	const [recordingTime, setRecordingTime] = useState(0);
@@ -268,7 +267,11 @@ export function A2UIVoiceInput({
 			let silentSince: number | null = null;
 
 			const check = () => {
-				if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== "recording") return;
+				if (
+					!mediaRecorderRef.current ||
+					mediaRecorderRef.current.state !== "recording"
+				)
+					return;
 
 				analyser.getFloatTimeDomainData(dataArray);
 				let sumSquares = 0;
@@ -377,11 +380,9 @@ export function A2UIVoiceInput({
 				const audioBlob = new Blob(audioChunksRef.current, {
 					type: "audio/webm",
 				});
-				const audioFile = new File(
-					[audioBlob],
-					`voice-${Date.now()}.webm`,
-					{ type: "audio/webm" },
-				);
+				const audioFile = new File([audioBlob], `voice-${Date.now()}.webm`, {
+					type: "audio/webm",
+				});
 
 				const voiceData: VoiceData = {
 					name: audioFile.name,
@@ -491,9 +492,7 @@ export function A2UIVoiceInput({
 
 	return (
 		<div className={cn("space-y-2", containerStyle)} style={inlineStyle}>
-			{label && (
-				<Label className="text-sm font-medium">{label}</Label>
-			)}
+			{label && <Label className="text-sm font-medium">{label}</Label>}
 
 			<div
 				className={cn(
@@ -522,11 +521,7 @@ export function A2UIVoiceInput({
 
 							{/* Recording controls */}
 							<div className="flex items-center gap-4">
-								<button
-									type="button"
-									onClick={stopRecording}
-									className="group"
-								>
+								<button type="button" onClick={stopRecording} className="group">
 									<RecordingPulseRing duration={recordingTime} />
 								</button>
 							</div>
@@ -552,9 +547,7 @@ export function A2UIVoiceInput({
 									<Mic className="w-5 h-5 text-white" />
 								</div>
 								<div className="flex-1 min-w-0">
-									<p className="text-sm font-medium truncate">
-										{display.name}
-									</p>
+									<p className="text-sm font-medium truncate">{display.name}</p>
 									<p className="text-xs text-muted-foreground">
 										{formatDuration(display.duration)} &middot;{" "}
 										{formatFileSize(display.size)}
@@ -587,8 +580,7 @@ export function A2UIVoiceInput({
 								onClick={startRecording}
 								disabled={
 									disabled ||
-									typeof navigator?.mediaDevices?.getUserMedia !==
-										"function"
+									typeof navigator?.mediaDevices?.getUserMedia !== "function"
 								}
 								className="group focus:outline-none"
 							>

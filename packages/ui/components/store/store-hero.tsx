@@ -37,6 +37,7 @@ export function StoreHero({
 	onSettings,
 	onBuy,
 	onJoinOrRequest,
+	actionsExtra,
 }: Readonly<{
 	appId: string;
 	hasThumbnail: boolean;
@@ -57,6 +58,7 @@ export function StoreHero({
 	onSettings: () => void;
 	onBuy: () => void;
 	onJoinOrRequest: () => Promise<void> | void;
+	actionsExtra?: React.ReactNode;
 }>) {
 	const { primaryHue, isDark } = useThemeInfo();
 
@@ -175,6 +177,7 @@ export function StoreHero({
 									: "Request access"}
 							</Button>
 						)}
+						{actionsExtra}
 						<ShareButton
 							appId={appId}
 							appName={appName}

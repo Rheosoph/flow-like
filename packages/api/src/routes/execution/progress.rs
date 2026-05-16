@@ -7,10 +7,7 @@
 //! Events are stored with TTL and deleted after delivery.
 
 use crate::{
-    entity::{
-        execution_usage_tracking, membership,
-        sea_orm_active_enums::{ExecutionStatus, NotificationType},
-    },
+    entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
     error::ApiError,
     execution::{
         state::{
@@ -19,7 +16,6 @@ use crate::{
         },
         verify_execution_jwt, verify_user_jwt,
     },
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
     state::AppState,
 };
 use axum::{
@@ -27,9 +23,8 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
-use flow_like::state::NotificationEvent;
 use flow_like_types::{anyhow, create_id, tokio};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -202,7 +197,7 @@ pub async fn report_progress(
         let board_id = claims.board_id.clone();
         let event_id = claims.event_id.clone().unwrap_or_default();
         let app_id = claims.app_id.clone();
-        let user_id = claims.sub.clone();
+        let user_id = execution_claim_user_id(&claims.sub).map(ToOwned::to_owned);
         let run_id = claims.run_id.clone();
         tokio::spawn(async move {
             if let Err(e) = track_execution_usage(
@@ -212,7 +207,7 @@ pub async fn report_progress(
                 &run_id,
                 duration_us,
                 exec_status,
-                &user_id,
+                user_id.as_deref(),
                 &app_id,
             )
             .await
@@ -287,63 +282,6 @@ pub async fn push_events(
         .push_events(events)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to push events: {}", e)))?;
-
-    for event in &body.events {
-        if event.event_type != "flow_notification" {
-            continue;
-        }
-
-        let Ok(notification) = serde_json::from_value::<NotificationEvent>(event.payload.clone())
-        else {
-            tracing::warn!(run_id = %claims.run_id, "Ignoring malformed flow_notification payload");
-            continue;
-        };
-
-        let target_user_id = notification
-            .target_user_sub
-            .clone()
-            .unwrap_or_else(|| claims.sub.clone());
-
-        if target_user_id != claims.sub {
-            let membership = membership::Entity::find()
-                .filter(membership::Column::AppId.eq(claims.app_id.clone()))
-                .filter(membership::Column::UserId.eq(target_user_id.clone()))
-                .one(&state.db)
-                .await?;
-
-            if membership.is_none() {
-                tracing::warn!(
-                    run_id = %claims.run_id,
-                    target_user_id = %target_user_id,
-                    app_id = %claims.app_id,
-                    "Skipping flow_notification for non-member target"
-                );
-                continue;
-            }
-        }
-
-        if let Err(error) = dispatch_notification(
-            &state,
-            DispatchNotificationInput {
-                user_id: target_user_id,
-                app_id: Some(claims.app_id.clone()),
-                title: notification.title,
-                description: notification.description,
-                icon: notification.icon,
-                link: notification.link,
-                image: None,
-                notification_type: NotificationType::Workflow,
-                source_run_id: notification
-                    .source_run_id
-                    .or_else(|| Some(claims.run_id.clone())),
-                source_node_id: notification.source_node_id,
-            },
-        )
-        .await
-        {
-            tracing::warn!(error = %error, run_id = %claims.run_id, "Failed to persist flow_notification from execution events");
-        }
-    }
 
     Ok(Json(PushEventsResponse {
         accepted,
@@ -573,7 +511,7 @@ async fn track_execution_usage(
     version: &str,
     microseconds: i64,
     status: ExecutionStatus,
-    user_id: &str,
+    user_id: Option<&str>,
     app_id: &str,
 ) -> Result<(), flow_like_types::Error> {
     let now = chrono::Utc::now().naive_utc();
@@ -586,13 +524,22 @@ async fn track_execution_usage(
         version: Set(version.to_string()),
         microseconds: Set(microseconds),
         status: Set(status),
-        user_id: Set(Some(user_id.to_string())),
+        user_id: Set(user_id.map(ToOwned::to_owned)),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(now),
         updated_at: Set(now),
     };
     record.insert(db).await?;
     Ok(())
+}
+
+fn execution_claim_user_id(subject: &str) -> Option<&str> {
+    let subject = subject.trim();
+    if subject.is_empty() || subject == "local" || subject.starts_with("sink:") {
+        None
+    } else {
+        Some(subject)
+    }
 }
 
 // ============================================================================
@@ -609,7 +556,9 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 }
 
 /// Get or create the execution state store from app state
-async fn get_state_store(state: &AppState) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
+pub(crate) async fn get_state_store(
+    state: &AppState,
+) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
     // Build config with available AppState components
     let mut config =
         crate::execution::state::StateStoreConfig::default().with_db(Arc::new(state.db.clone()));

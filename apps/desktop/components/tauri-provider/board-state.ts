@@ -6,7 +6,7 @@ import {
 	type IBoardState,
 	ICommentType,
 	IConnectionMode,
-	IExecutionMode,
+	type IExecutionMode,
 	type IExecutionStage,
 	type IGenericCommand,
 	type IHub,
@@ -43,6 +43,10 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import {
+	ensureRpaSystemPermissions,
+	requestRpaAutomationConsent,
+} from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
@@ -1145,20 +1149,39 @@ export class BoardState implements IBoardState {
 
 		if (requires_local_execution) {
 			try {
-				const permissions = await invoke<{
-					accessibility: boolean;
-					screen_recording: boolean;
-				}>("check_rpa_permissions");
-				if (!permissions.accessibility || !permissions.screen_recording) {
+				const approved = await requestRpaAutomationConsent({
+					appId,
+					boardId,
+					context: "execution",
+				});
+				if (!approved) {
 					const error = new Error(
-						"This workflow requires RPA permissions (Accessibility and Screen Recording) to run computer automation nodes.",
-					);
-					(error as any).isRpaPermissionError = true;
-					(error as any).permissions = permissions;
+						"Computer automation was not approved for this board.",
+					) as Error & { isRpaConsentError?: boolean };
+					error.isRpaConsentError = true;
+					throw error;
+				}
+
+				const permissionsGranted = await ensureRpaSystemPermissions({
+					appId,
+					boardId,
+				});
+				if (!permissionsGranted) {
+					const error = new Error(
+						"RPA system permissions were not granted.",
+					) as Error & { isRpaPermissionDeclined?: boolean };
+					error.isRpaPermissionDeclined = true;
 					throw error;
 				}
 			} catch (e) {
-				if ((e as any).isRpaPermissionError) throw e;
+				const rpaError = e as {
+					isRpaConsentError?: boolean;
+					isRpaPermissionDeclined?: boolean;
+					isRpaPermissionError?: boolean;
+				};
+				if (rpaError.isRpaPermissionError) throw e;
+				if (rpaError.isRpaConsentError) throw e;
+				if (rpaError.isRpaPermissionDeclined) throw e;
 				console.warn("Failed to check RPA permissions:", e);
 				const error = new Error(
 					"Failed to verify RPA permissions. This workflow cannot run without a successful permission check.",
@@ -1275,7 +1298,7 @@ export class BoardState implements IBoardState {
 				}
 			}
 
-			dispatchFlowNotificationEvents(events, true, appId, boardId);
+			dispatchFlowNotificationEvents(events, appId);
 
 			if (cb) cb(events);
 		};
@@ -1363,7 +1386,7 @@ export class BoardState implements IBoardState {
 				}
 
 				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, false, appId, boardId);
+					dispatchFlowNotificationEvent(event, appId);
 				}
 
 				// Check for terminal events and finish progress toasts
@@ -1930,18 +1953,18 @@ export class BoardState implements IBoardState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
-						let url = `apps/${appId}/board/${boardId}/prerun`;
-						if (version) {
-							url += `?version=${version.join("_")}`;
-						}
+							let url = `apps/${appId}/board/${boardId}/prerun`;
+							if (version) {
+								url += `?version=${version.join("_")}`;
+							}
 
-						return fetcher<IPrerunBoardResponse>(
-							this.backend.profile!,
-							url,
-							{ method: "GET" },
-							this.backend.auth!,
-						);
-					}
+							return fetcher<IPrerunBoardResponse>(
+								this.backend.profile!,
+								url,
+								{ method: "GET" },
+								this.backend.auth!,
+							);
+						}
 					: undefined,
 		});
 	}

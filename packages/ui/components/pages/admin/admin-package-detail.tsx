@@ -5,9 +5,9 @@ import { useCallback } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import type {
 	AdminPackageDetailResponse,
-	PackageReviewer,
 	PackageDetails,
 	PackageReview,
+	PackageReviewer,
 	ReviewRequest,
 } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
@@ -130,7 +130,7 @@ function normalizePackage(pkg: RawPackageDetails): PackageDetails {
 		readme: pkg.readme,
 		submitterId: pkg.submitterId ?? pkg.submitter_id ?? undefined,
 	};
-	}
+}
 
 function normalizeReview(review: RawPackageReview): PackageReview {
 	const reviewer = review.reviewer
@@ -151,10 +151,8 @@ function normalizeReview(review: RawPackageReview): PackageReview {
 		action: review.action as PackageReview["action"],
 		comment: review.comment,
 		securityScore: review.securityScore ?? review.security_score,
-		codeQualityScore:
-			review.codeQualityScore ?? review.code_quality_score,
-		documentationScore:
-			review.documentationScore ?? review.documentation_score,
+		codeQualityScore: review.codeQualityScore ?? review.code_quality_score,
+		documentationScore: review.documentationScore ?? review.documentation_score,
 		createdAt: review.createdAt ?? review.created_at ?? "",
 	};
 }

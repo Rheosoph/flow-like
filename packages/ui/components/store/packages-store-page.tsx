@@ -15,16 +15,20 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { getErrorMessage } from "../../lib/error-message";
-import type {
-	PackageSummary,
-	SearchResults,
-} from "../../lib/schema/wasm";
+import type { PackageSummary, SearchResults } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import {
 	type GenericFetcher,
@@ -74,7 +78,11 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 			{/* Left gradient accent */}
 			<div className="relative w-28 shrink-0 overflow-hidden">
 				{thumbnail ? (
-					<img src={thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" />
+					<img
+						src={thumbnail}
+						alt=""
+						className="absolute inset-0 w-full h-full object-cover"
+					/>
 				) : (
 					<div
 						className="absolute inset-0"
@@ -88,7 +96,11 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Avatar className="w-10 h-10 rounded-lg shadow-md border-2 border-background/20 bg-background/30 backdrop-blur-sm">
 						{icon ? (
-							<AvatarImage src={icon} alt={displayName} className="rounded-lg" />
+							<AvatarImage
+								src={icon}
+								alt={displayName}
+								className="rounded-lg"
+							/>
 						) : null}
 						<AvatarFallback className="rounded-lg text-xs font-mono font-bold bg-background/20 text-white/80">
 							<Package className="h-5 w-5" />
@@ -116,9 +128,13 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 						{pkg.visibility !== "public" && (
 							<span className="inline-flex items-center gap-0.5 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
 								{pkg.visibility === "private" ? (
-									<><Lock className="h-2.5 w-2.5" /> private</>
+									<>
+										<Lock className="h-2.5 w-2.5" /> private
+									</>
 								) : (
-									<><KeyRound className="h-2.5 w-2.5" /> gated</>
+									<>
+										<KeyRound className="h-2.5 w-2.5" /> gated
+									</>
 								)}
 							</span>
 						)}
@@ -150,10 +166,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 					{pkg.keywords.length > 0 && (
 						<span className="inline-flex items-center gap-1 border-l border-border/30 pl-2">
 							{pkg.keywords.slice(0, 2).map((kw) => (
-								<span
-									key={kw}
-									className="rounded bg-muted/30 px-1.5 py-0.5"
-								>
+								<span key={kw} className="rounded bg-muted/30 px-1.5 py-0.5">
 									{kw}
 								</span>
 							))}
@@ -205,7 +218,10 @@ export function PackageDetailWrapper({
 	useEffect(() => {
 		if (!purchaseStatus) return;
 		if (purchaseStatus === "success") {
-			toast.success("Purchase successful! You now have access to this package.", { duration: 5000 });
+			toast.success(
+				"Purchase successful! You now have access to this package.",
+				{ duration: 5000 },
+			);
 		} else if (purchaseStatus === "canceled") {
 			toast.info("Purchase was canceled. You can try again anytime.");
 		}
@@ -246,7 +262,9 @@ function categoryLabel(cat: string): string {
 		.join(" ");
 }
 
-function groupByCategory(packages: PackageSummary[]): Map<string, PackageSummary[]> {
+function groupByCategory(
+	packages: PackageSummary[],
+): Map<string, PackageSummary[]> {
 	const groups = new Map<string, PackageSummary[]>();
 	const seen = new Set<string>();
 
@@ -262,7 +280,10 @@ function groupByCategory(packages: PackageSummary[]): Map<string, PackageSummary
 	return groups;
 }
 
-function Swimlane({ title, packages }: { title: string; packages: PackageSummary[] }) {
+function Swimlane({
+	title,
+	packages,
+}: { title: string; packages: PackageSummary[] }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [canScrollLeft, setCanScrollLeft] = useState(false);
 	const [canScrollRight, setCanScrollRight] = useState(false);
@@ -291,7 +312,10 @@ function Swimlane({ title, packages }: { title: string; packages: PackageSummary
 		const el = scrollRef.current;
 		if (!el) return;
 		const amount = el.clientWidth * 0.8;
-		el.scrollBy({ left: direction === "left" ? -amount : amount, behavior: "smooth" });
+		el.scrollBy({
+			left: direction === "left" ? -amount : amount,
+			behavior: "smooth",
+		});
 	};
 
 	return (
@@ -358,7 +382,14 @@ export function PackageListContent({
 	const isAuthenticated = !!auth?.user?.access_token;
 
 	const searchResults = useQuery({
-		queryKey: ["registry-search", debouncedQuery, sortBy, verifiedOnly, offset, isAuthenticated],
+		queryKey: [
+			"registry-search",
+			debouncedQuery,
+			sortBy,
+			verifiedOnly,
+			offset,
+			isAuthenticated,
+		],
 		queryFn: async () => {
 			if (!profile.data) return null;
 			const params = new URLSearchParams();
@@ -393,115 +424,115 @@ export function PackageListContent({
 	return (
 		<div className="space-y-6 w-full">
 			<div className="flex flex-col sm:flex-row gap-4">
-					<div className="relative flex-1">
-						<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-						<Input
-							placeholder="Search packages..."
-							value={searchQuery}
-							onChange={(e) => {
-								setSearchQuery(e.target.value);
-								setOffset(0);
-							}}
-							className="rounded-full bg-muted/30 border-border/20 pl-10"
-						/>
-					</div>
-
-					<div className="flex gap-2">
-						<Select
-							value={sortBy}
-							onValueChange={(val) => {
-								setSortBy(val as SortOption);
-								setOffset(0);
-							}}
-						>
-							<SelectTrigger className="w-37.5">
-								<SlidersHorizontal className="mr-2 h-4 w-4" />
-								<SelectValue placeholder="Sort by" />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="downloads">Most Downloads</SelectItem>
-								<SelectItem value="relevance">Relevance</SelectItem>
-								<SelectItem value="name">Name</SelectItem>
-								<SelectItem value="updated_at">Recently Updated</SelectItem>
-								<SelectItem value="created_at">Newest</SelectItem>
-							</SelectContent>
-						</Select>
-
-						<button
-							type="button"
-							onClick={() => {
-								setVerifiedOnly(!verifiedOnly);
-								setOffset(0);
-							}}
-							className={`rounded-full text-sm border gap-2 px-4 py-2 flex items-center transition-colors ${
-								verifiedOnly
-									? "bg-primary text-primary-foreground border-primary"
-									: "bg-transparent text-muted-foreground border-border/30 hover:bg-muted/30"
-							}`}
-						>
-							<Shield className="h-4 w-4" />
-							Verified
-						</button>
-					</div>
+				<div className="relative flex-1">
+					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+					<Input
+						placeholder="Search packages..."
+						value={searchQuery}
+						onChange={(e) => {
+							setSearchQuery(e.target.value);
+							setOffset(0);
+						}}
+						className="rounded-full bg-muted/30 border-border/20 pl-10"
+					/>
 				</div>
 
-				{searchResults.data && (
-					<p className="text-xs text-muted-foreground/60">
-						{searchResults.data.totalCount.toLocaleString()} packages found
+				<div className="flex gap-2">
+					<Select
+						value={sortBy}
+						onValueChange={(val) => {
+							setSortBy(val as SortOption);
+							setOffset(0);
+						}}
+					>
+						<SelectTrigger className="w-37.5">
+							<SlidersHorizontal className="mr-2 h-4 w-4" />
+							<SelectValue placeholder="Sort by" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="downloads">Most Downloads</SelectItem>
+							<SelectItem value="relevance">Relevance</SelectItem>
+							<SelectItem value="name">Name</SelectItem>
+							<SelectItem value="updated_at">Recently Updated</SelectItem>
+							<SelectItem value="created_at">Newest</SelectItem>
+						</SelectContent>
+					</Select>
+
+					<button
+						type="button"
+						onClick={() => {
+							setVerifiedOnly(!verifiedOnly);
+							setOffset(0);
+						}}
+						className={`rounded-full text-sm border gap-2 px-4 py-2 flex items-center transition-colors ${
+							verifiedOnly
+								? "bg-primary text-primary-foreground border-primary"
+								: "bg-transparent text-muted-foreground border-border/30 hover:bg-muted/30"
+						}`}
+					>
+						<Shield className="h-4 w-4" />
+						Verified
+					</button>
+				</div>
+			</div>
+
+			{searchResults.data && (
+				<p className="text-xs text-muted-foreground/60">
+					{searchResults.data.totalCount.toLocaleString()} packages found
+				</p>
+			)}
+
+			{searchResults.isLoading ? (
+				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+					{Array.from({ length: 9 }).map((_, i) => (
+						<PackageCardSkeleton key={i} />
+					))}
+				</div>
+			) : searchResults.data?.packages.length === 0 ? (
+				<div className="flex flex-col items-center justify-center py-20 text-center">
+					<Package className="w-12 h-12 text-muted-foreground/30 mb-3" />
+					<h3 className="text-lg font-semibold">No packages found</h3>
+					<p className="text-sm text-muted-foreground mt-1">
+						Try adjusting your search or filters
 					</p>
-				)}
+				</div>
+			) : swimlaneGroups && swimlaneGroups.size > 1 ? (
+				<div className="space-y-6">
+					{Array.from(swimlaneGroups.entries()).map(([category, pkgs]) => (
+						<Swimlane key={category} title={category} packages={pkgs} />
+					))}
+				</div>
+			) : (
+				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+					{searchResults.data?.packages.map((pkg) => (
+						<PackageCard key={pkg.id} pkg={pkg} />
+					))}
+				</div>
+			)}
 
-				{searchResults.isLoading ? (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-						{Array.from({ length: 9 }).map((_, i) => (
-							<PackageCardSkeleton key={i} />
-						))}
-					</div>
-				) : searchResults.data?.packages.length === 0 ? (
-					<div className="flex flex-col items-center justify-center py-20 text-center">
-						<Package className="w-12 h-12 text-muted-foreground/30 mb-3" />
-						<h3 className="text-lg font-semibold">No packages found</h3>
-						<p className="text-sm text-muted-foreground mt-1">
-							Try adjusting your search or filters
-						</p>
-					</div>
-				) : swimlaneGroups && swimlaneGroups.size > 1 ? (
-					<div className="space-y-6">
-						{Array.from(swimlaneGroups.entries()).map(([category, pkgs]) => (
-							<Swimlane key={category} title={category} packages={pkgs} />
-						))}
-					</div>
-				) : (
-					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-						{searchResults.data?.packages.map((pkg) => (
-							<PackageCard key={pkg.id} pkg={pkg} />
-						))}
-					</div>
-				)}
-
-				{totalPages > 1 && (
-					<div className="flex items-center justify-center gap-3">
-						<button
-							type="button"
-							onClick={() => setOffset(Math.max(0, offset - limit))}
-							disabled={offset === 0}
-							className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
-						>
-							Previous
-						</button>
-						<span className="text-xs text-muted-foreground/60">
-							{currentPage} / {totalPages}
-						</span>
-						<button
-							type="button"
-							onClick={() => setOffset(offset + limit)}
-							disabled={currentPage >= totalPages}
-							className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
-						>
-							Next
-						</button>
-					</div>
-				)}
+			{totalPages > 1 && (
+				<div className="flex items-center justify-center gap-3">
+					<button
+						type="button"
+						onClick={() => setOffset(Math.max(0, offset - limit))}
+						disabled={offset === 0}
+						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
+					>
+						Previous
+					</button>
+					<span className="text-xs text-muted-foreground/60">
+						{currentPage} / {totalPages}
+					</span>
+					<button
+						type="button"
+						onClick={() => setOffset(offset + limit)}
+						disabled={currentPage >= totalPages}
+						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
+					>
+						Next
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }

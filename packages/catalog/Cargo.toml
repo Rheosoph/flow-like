@@ -23,6 +23,10 @@ local-ml = [
     "flow-like-catalog-llm/local-ml",
     "flow-like-catalog-processing/local-ml",
 ]
+local-tts = ["flow-like-catalog-media/local-tts"]
+local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
+local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
+local-tts-accelerate = ["local-tts", "flow-like-catalog-media/local-tts-accelerate"]
 remote-ml = [
     "flow-like-catalog-core/remote-ml",
     "flow-like-catalog-llm/remote-ml",

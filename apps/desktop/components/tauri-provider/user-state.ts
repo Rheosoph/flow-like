@@ -61,6 +61,14 @@ function sortNotificationsByCreatedAtDesc(
 export class UserState implements IUserState {
 	constructor(private readonly backend: TauriBackend) {}
 
+	private hasRemoteAccessToken(): boolean {
+		return Boolean(
+			this.backend.profile &&
+				this.backend.auth?.isAuthenticated &&
+				this.backend.auth.user?.access_token,
+		);
+	}
+
 	private getUserId(): string {
 		return this.backend.auth?.user?.profile?.sub ?? "offline-user";
 	}
@@ -100,11 +108,16 @@ export class UserState implements IUserState {
 		);
 
 		const merged = new Map<string, INotification>();
-		for (const notification of localNotifications.flat().map(localToINotification)) {
+		for (const notification of localNotifications
+			.flat()
+			.map(localToINotification)) {
 			merged.set(notification.id, notification);
 		}
 
-		return sortNotificationsByCreatedAtDesc([...merged.values()]).slice(0, limit);
+		return sortNotificationsByCreatedAtDesc([...merged.values()]).slice(
+			0,
+			limit,
+		);
 	}
 
 	private async markAllRelevantLocalNotificationsRead(): Promise<number> {
@@ -162,7 +175,11 @@ export class UserState implements IUserState {
 		}
 
 		// Try to get remote notifications if online
-		if (this.backend.profile && this.backend.auth) {
+		if (
+			this.backend.profile &&
+			this.backend.auth &&
+			this.hasRemoteAccessToken()
+		) {
 			try {
 				const remoteResult = await fetcher<INotificationsOverview>(
 					this.backend.profile,
@@ -211,7 +228,11 @@ export class UserState implements IUserState {
 
 		// Try to get remote notifications if online
 		let remoteResult: INotification[] = [];
-		if (this.backend.profile && this.backend.auth) {
+		if (
+			this.backend.profile &&
+			this.backend.auth &&
+			this.hasRemoteAccessToken()
+		) {
 			try {
 				const params = new URLSearchParams({
 					limit: (limit + offset).toString(), // Fetch more for proper merge
@@ -251,7 +272,11 @@ export class UserState implements IUserState {
 		}
 
 		// Only attempt remote if authenticated
-		if (!this.backend.profile || !this.backend.auth) {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
 			return; // Silently succeed for offline mode
 		}
 
@@ -276,7 +301,11 @@ export class UserState implements IUserState {
 		}
 
 		// Only attempt remote if authenticated
-		if (!this.backend.profile || !this.backend.auth) {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
 			return; // Silently succeed for offline mode
 		}
 
@@ -294,7 +323,11 @@ export class UserState implements IUserState {
 		let remoteResult = 0;
 
 		// Try remote if authenticated
-		if (this.backend.profile && this.backend.auth) {
+		if (
+			this.backend.profile &&
+			this.backend.auth &&
+			this.hasRemoteAccessToken()
+		) {
 			try {
 				remoteResult = await fetcher<number>(
 					this.backend.profile,
@@ -343,7 +376,11 @@ export class UserState implements IUserState {
 	}
 
 	async updateUser(data: IUserUpdate, avatar?: File): Promise<void> {
-		if (!this.backend.profile || !this.backend.auth) {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
 			throw new Error("Profile or auth context not available");
 		}
 
@@ -373,7 +410,11 @@ export class UserState implements IUserState {
 	}
 
 	async getInfo(): Promise<IUserInfo> {
-		if (!this.backend.profile || !this.backend.auth) {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
 			throw new Error("Profile or auth context not available");
 		}
 

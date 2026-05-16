@@ -88,4 +88,14 @@ message App {
 
   // WASM packages required by this app: package_id -> version
   map<string, string> packages = 26;
+
+  // Whether the project owner has opted into forking (Fork-an-app feature).
+  // Default false — apps are not forkable until explicitly enabled.
+  optional bool allow_forking = 27;
+
+  // For forked apps: the source app's id, for lineage / attribution.
+  optional string forked_from = 28;
+
+  // For forked apps: when the fork happened.
+  optional google.protobuf.Timestamp forked_at = 29;
 }

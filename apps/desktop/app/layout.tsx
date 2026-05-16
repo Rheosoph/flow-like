@@ -50,6 +50,7 @@ import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
+import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
 import { TauriProvider } from "../components/tauri-provider";
@@ -57,9 +58,9 @@ import { ThemeLoader } from "../components/theme-loader";
 import ToastProvider from "../components/toast-provider";
 import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
+import { initBlobOffload } from "../lib/init-blob-offload";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
-import { initBlobOffload } from "../lib/init-blob-offload";
 
 initBlobOffload();
 
@@ -195,6 +196,7 @@ export default function RootLayout({
 										<ToastProvider />
 										<TauriProvider>
 											<DownloadNotificationProvider />
+											<RpaPermissionProvider />
 											<DeeplinkNavigationHandler>
 												<OAuthCallbackHandler>
 													<OAuthExecutionProvider>

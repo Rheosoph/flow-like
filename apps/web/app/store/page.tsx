@@ -5,6 +5,7 @@ import {
 	AppReviewsSection,
 	HeroSkeleton,
 	StoreEmptyState,
+	StoreForkButton,
 	StoreHero,
 	StoreRecommendations,
 	TextEditor,
@@ -118,6 +119,11 @@ export default function Page() {
 				onSettings={onSettings}
 				onBuy={onBuy}
 				onJoinOrRequest={onJoinOrRequest}
+				actionsExtra={
+					appData.allow_forking ? (
+						<StoreForkButton appId={id} appName={appName} target="online" />
+					) : null
+				}
 			/>
 
 			<div className="max-w-5xl mx-auto w-full px-6 md:px-10 pt-8 pb-12 space-y-10">
@@ -125,10 +131,7 @@ export default function Page() {
 
 				{metaData?.long_description && (
 					<div className="leading-relaxed">
-						<TextEditor
-							initialContent={metaData.long_description}
-							isMarkdown
-						/>
+						<TextEditor initialContent={metaData.long_description} isMarkdown />
 					</div>
 				)}
 

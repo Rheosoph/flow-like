@@ -8,30 +8,34 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	DashboardChainWidget,
+	DashboardErrorWidget,
 	GlobalPermission,
+	type IProfile,
 	Skeleton,
 	useBackend,
 	useInvoke,
 	useQuery,
-	type IProfile,
 } from "@tm9657/flow-like-ui";
 import type { ISolutionListResponse } from "@tm9657/flow-like-ui";
 import {
+	Activity,
 	BookOpen,
 	Box,
 	CheckCircle,
 	Clock,
 	Cpu,
 	Download,
+	GraduationCap,
 	Key,
 	Lightbulb,
 	Lock,
+	type LucideIcon,
 	Package,
 	Plus,
 	Shield,
 	UserCog,
 	Users,
-	type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo } from "react";
@@ -77,6 +81,7 @@ interface AdminSection {
 	icon: LucideIcon;
 	href: string;
 	permission: GlobalPermission;
+	alternatePermissions?: GlobalPermission[];
 	actionLabel: string;
 	color: string;
 	links?: { label: string; href: string }[];
@@ -85,7 +90,8 @@ interface AdminSection {
 const ADMIN_SECTIONS: AdminSection[] = [
 	{
 		title: "Bits & Models",
-		description: "Add hosted LLMs, manage existing bits, and edit model metadata.",
+		description:
+			"Add hosted LLMs, manage existing bits, and edit model metadata.",
 		icon: Cpu,
 		href: "/admin/bits/add",
 		permission: GlobalPermission.WriteBits,
@@ -98,7 +104,8 @@ const ADMIN_SECTIONS: AdminSection[] = [
 	},
 	{
 		title: "Packages",
-		description: "Review pending WASM packages and manage the package registry.",
+		description:
+			"Review pending WASM packages and manage the package registry.",
 		icon: Package,
 		href: "/admin/packages",
 		permission: GlobalPermission.ManagePackages,
@@ -116,6 +123,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
+		],
+	},
+	{
+		title: "University",
+		description: "Review drafts, create courses, and manage learning content.",
+		icon: GraduationCap,
+		href: "/learn/admin",
+		permission: GlobalPermission.ReadCourses,
+		alternatePermissions: [GlobalPermission.WriteCourses],
+		actionLabel: "Open Courses",
+		color: "text-sky-500",
+		links: [
+			{ label: "Catalog", href: "/learn" },
+			{ label: "Authoring", href: "/learn/admin" },
 		],
 	},
 	{
@@ -158,6 +179,20 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Manage Tokens",
 		color: "text-rose-500",
+	},
+	{
+		title: "Logs & Observability",
+		description:
+			"Inspect API errors, drill into references, and verify cryptographic audit chains.",
+		icon: Activity,
+		href: "/admin/logs",
+		permission: GlobalPermission.ReadLogs,
+		actionLabel: "Open Control Tower",
+		color: "text-red-500",
+		links: [
+			{ label: "Errors", href: "/admin/logs" },
+			{ label: "Audit chain", href: "/admin/logs?tab=audit" },
+		],
 	},
 ];
 
@@ -226,7 +261,11 @@ function SectionCard({
 
 export default function AdminDashboardPage() {
 	const backend = useBackend();
-	const profile = useInvoke(backend.userState.getProfile, backend.userState, []);
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+	);
 	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
 
 	const perms = useMemo(
@@ -280,7 +319,7 @@ export default function AdminDashboardPage() {
 					<div>
 						<h1 className="text-3xl font-bold">Admin Dashboard</h1>
 						<p className="text-muted-foreground">
-							Central hub for registry management.
+							Central hub for registry, publishing, and learning content.
 						</p>
 					</div>
 
@@ -295,7 +334,8 @@ export default function AdminDashboardPage() {
 									pending review
 								</CardTitle>
 								<CardDescription>
-									Packages are waiting for approval before they can be published.
+									Packages are waiting for approval before they can be
+									published.
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -318,7 +358,11 @@ export default function AdminDashboardPage() {
 						/>
 						<StatCard
 							title="Open Solutions"
-							value={openSolutions.isLoading ? "\u2014" : (openSolutions.data?.total ?? 0)}
+							value={
+								openSolutions.isLoading
+									? "\u2014"
+									: (openSolutions.data?.total ?? 0)
+							}
 							description="Solution requests pending"
 							icon={<Lightbulb className="h-4 w-4 text-cyan-500" />}
 							loading={openSolutions.isLoading}
@@ -341,7 +385,9 @@ export default function AdminDashboardPage() {
 						/>
 						<StatCard
 							title="Profile Templates"
-							value={profiles.isLoading ? "\u2014" : (profiles.data?.length ?? 0)}
+							value={
+								profiles.isLoading ? "\u2014" : (profiles.data?.length ?? 0)
+							}
 							description="Reusable user profiles"
 							icon={<Users className="h-4 w-4 text-purple-500" />}
 							loading={profiles.isLoading}
@@ -374,6 +420,14 @@ export default function AdminDashboardPage() {
 						/>
 					</div>
 
+					{/* Logs & cryptographic audit observability */}
+					{perms.hasPermission(GlobalPermission.ReadLogs) && (
+						<div className="grid gap-4 lg:grid-cols-2">
+							<DashboardErrorWidget profile={profile.data} />
+							<DashboardChainWidget profile={profile.data} />
+						</div>
+					)}
+
 					{/* Admin sections */}
 					<div>
 						<h2 className="mb-3 text-lg font-semibold">Manage</h2>
@@ -382,7 +436,14 @@ export default function AdminDashboardPage() {
 								<SectionCard
 									key={section.title}
 									section={section}
-									hasAccess={perms.hasPermission(section.permission)}
+									hasAccess={
+										perms.hasPermission(section.permission) ||
+										Boolean(
+											section.alternatePermissions?.some((permission) =>
+												perms.hasPermission(permission),
+											),
+										)
+									}
 								/>
 							))}
 						</div>

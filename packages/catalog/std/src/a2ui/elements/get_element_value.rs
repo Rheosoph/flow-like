@@ -94,6 +94,12 @@ impl NodeLogic for GetElementValue {
                         v.clone()
                     } else if let Some(v) = obj.get("literalBool") {
                         v.clone()
+                    } else if let Some(v) = obj.get("literalOptions") {
+                        v.clone()
+                    } else if let Some(v) = obj.get("literalJson") {
+                        v.as_str()
+                            .and_then(|s| flow_like_types::json::from_str::<Value>(s).ok())
+                            .unwrap_or_else(|| v.clone())
                     } else if obj.contains_key("path") {
                         // Path binding - return null as we can't resolve it here
                         Value::Null

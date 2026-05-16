@@ -7,6 +7,8 @@ import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
+import { IExecutionMode } from "../../lib/schema/flow/board";
+import { IEventExecutionMode } from "../../lib/schema/flow/event";
 import type { IHub } from "../../lib/schema/hub/hub";
 import { convertJsonToUint8Array } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
@@ -84,6 +86,9 @@ export function EventForm({
 		event_type: undefined,
 		config: [],
 		path: (event as any)?.path ?? "/",
+		execution_mode:
+			(event?.execution_mode as IEventExecutionMode | undefined) ??
+			IEventExecutionMode.Local,
 	});
 	const [pathError, setPathError] = useState<string | null>(null);
 
@@ -133,6 +138,38 @@ export function EventForm({
 
 	const [selectedNodeType, setSelectedNodeType] = useState<string>("");
 	const [eventTypeConfig, setEventTypeConfig] = useState<any>({});
+
+	const boardExecutionMode = board.data?.execution_mode;
+	const canExecuteLocally = backend.capabilities().canExecuteLocally;
+
+	// Lock the event's execution mode when the board constrains it. Boards in
+	// Hybrid mode let the user pick; Local/Remote boards propagate to events.
+	useEffect(() => {
+		if (!boardExecutionMode) return;
+		if (boardExecutionMode === IExecutionMode.Local) {
+			if (formData.execution_mode !== IEventExecutionMode.Local) {
+				setFormData((prev) => ({
+					...prev,
+					execution_mode: IEventExecutionMode.Local,
+				}));
+			}
+		} else if (boardExecutionMode === IExecutionMode.Remote) {
+			if (formData.execution_mode !== IEventExecutionMode.Remote) {
+				setFormData((prev) => ({
+					...prev,
+					execution_mode: IEventExecutionMode.Remote,
+				}));
+			}
+		}
+	}, [boardExecutionMode, formData.execution_mode]);
+
+	const executionModeLocked =
+		boardExecutionMode === IExecutionMode.Local ||
+		boardExecutionMode === IExecutionMode.Remote;
+
+	// Local is disabled only when the device can't execute locally; Remote
+	// is always a valid choice (the backend rejects unsupported hub setups).
+	const canPickLocal = canExecuteLocally;
 
 	const normalizedPath = (path: string | undefined): string => {
 		const raw = (path ?? "").trim();
@@ -522,6 +559,45 @@ export function EventForm({
 							</Select>
 						</div>
 					</div>
+
+					{/* Execution mode — where the event runs. Locked to match the
+					    board when the board is Local/Remote; user-selectable when
+					    the board is Hybrid. */}
+					{formData.board_id && (
+						<div className="space-y-2">
+							<Label htmlFor="execution_mode">Execution Mode</Label>
+							<Select
+								value={formData.execution_mode}
+								onValueChange={(value) =>
+									handleInputChange(
+										"execution_mode",
+										value as IEventExecutionMode,
+									)
+								}
+								disabled={executionModeLocked}
+							>
+								<SelectTrigger id="execution_mode">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem
+										value={IEventExecutionMode.Local}
+										disabled={!canPickLocal && !executionModeLocked}
+									>
+										Local — runs on this device
+									</SelectItem>
+									<SelectItem value={IEventExecutionMode.Remote}>
+										Remote — runs on the server
+									</SelectItem>
+								</SelectContent>
+							</Select>
+							<p className="text-xs text-muted-foreground">
+								{executionModeLocked
+									? `Locked by the flow's execution mode (${boardExecutionMode}).`
+									: "An event always runs in exactly one environment — the UI, endpoints, and credentials differ between the two."}
+							</p>
+						</div>
+					)}
 				</>
 			)}
 
@@ -565,16 +641,30 @@ export function EventForm({
 						</Select>
 					</div>
 
-					{/* Event Type Selector - shown when node has multiple event types */}
+					{/* Event Type Selector - shown when node has multiple event types.
+					    Types are filtered by the chosen execution mode so a Remote
+					    event never shows offline-only choices (email IMAP, Discord). */}
 					{formData.node_id &&
 						board.data.nodes[formData.node_id] &&
 						(() => {
 							const node = board.data.nodes[formData.node_id];
 							const nodeEventConfig = eventConfig[node?.name];
 
-							if (!nodeEventConfig || nodeEventConfig.eventTypes.length <= 1) {
-								return null;
-							}
+							if (!nodeEventConfig) return null;
+
+							const isLocalEvent =
+								formData.execution_mode === IEventExecutionMode.Local;
+							const visibleTypes = nodeEventConfig.eventTypes.filter((type) => {
+								if (!nodeEventConfig.withSink?.includes(type)) return true;
+								const availability =
+									nodeEventConfig.sinkAvailability?.[type]?.availability;
+								if (!availability || availability === "both") return true;
+								return isLocalEvent
+									? availability === "local"
+									: availability === "remote";
+							});
+
+							if (visibleTypes.length <= 1) return null;
 
 							return (
 								<div className="space-y-2">
@@ -598,7 +688,7 @@ export function EventForm({
 											<SelectValue placeholder="Select event type" />
 										</SelectTrigger>
 										<SelectContent>
-											{nodeEventConfig.eventTypes.map((type) => (
+											{visibleTypes.map((type) => (
 												<SelectItem key={type} value={type}>
 													{type
 														.replace(/_/g, " ")

@@ -1,15 +1,21 @@
-use super::persist::{PersistNotificationParams, build_notification_link, persist_notification};
+use super::{
+    icon::{add_notification_icon_pin, migrate_notification_icon_pin, resolve_notification_icon},
+    persist::{PersistNotificationParams, build_notification_link, persist_notification},
+};
 use flow_like::{
     flow::{
         board::Board,
         execution::{LogLevel, context::ExecutionContext},
-        node::{Node, NodeLogic},
+        node::{Node, NodeLogic, remove_pin_by_name},
         variable::VariableType,
     },
     state::NotificationEvent,
 };
 use flow_like_types::async_trait;
-use std::sync::Arc;
+
+const USER_SUB_PIN_NAME: &str = "_flow_user_sub";
+const USER_SUB_PIN_FRIENDLY_NAME: &str = "User";
+const USER_SUB_PIN_DESCRIPTION: &str = "Project user to notify";
 
 /// Node to notify a specific user in the project by their sub (user ID).
 /// Persists the notification via the backend API for push delivery.
@@ -37,9 +43,9 @@ impl NodeLogic for NotifyProjectUserNode {
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);
 
         node.add_input_pin(
-            "user_sub",
-            "User ID",
-            "The user's sub/ID to notify (must be a member of this project)",
+            USER_SUB_PIN_NAME,
+            USER_SUB_PIN_FRIENDLY_NAME,
+            USER_SUB_PIN_DESCRIPTION,
             VariableType::String,
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
@@ -55,13 +61,7 @@ impl NodeLogic for NotifyProjectUserNode {
         )
         .set_default_value(Some(flow_like_types::json::json!("")));
 
-        node.add_input_pin(
-            "icon",
-            "Icon",
-            "Icon URL or path (optional)",
-            VariableType::String,
-        )
-        .set_default_value(Some(flow_like_types::json::json!("")));
+        add_notification_icon_pin(&mut node);
 
         node.add_input_pin(
             "link",
@@ -91,10 +91,10 @@ impl NodeLogic for NotifyProjectUserNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let user_sub = context.evaluate_pin::<String>("user_sub").await?;
+        let user_sub = context.evaluate_pin::<String>(USER_SUB_PIN_NAME).await?;
         let title = context.evaluate_pin::<String>("title").await?;
         let description = context.evaluate_pin::<String>("description").await?;
-        let icon = context.evaluate_pin::<String>("icon").await?;
+        let icon = resolve_notification_icon(context).await;
         let link = context.evaluate_pin::<String>("link").await?;
 
         if user_sub.is_empty() {
@@ -115,10 +115,8 @@ impl NodeLogic for NotifyProjectUserNode {
             .as_ref()
             .map(|c| c.app_id.as_str())
             .unwrap_or("");
-        let resolved_link = build_notification_link(
-            app_id,
-            if link.is_empty() { None } else { Some(&link) },
-        );
+        let resolved_link =
+            build_notification_link(app_id, if link.is_empty() { None } else { Some(&link) });
 
         let mut notification = NotificationEvent::new(&title)
             .with_desktop(false)
@@ -133,11 +131,10 @@ impl NodeLogic for NotifyProjectUserNode {
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
-        if !icon.is_empty() {
-            notification = notification.with_icon(&icon);
-        }
+        notification = notification.with_icon(&icon);
 
-        // Send notification via InterCom stream (local display / SSE forwarding)
+        // Send notification via InterCom stream for local display / event history.
+        // Remote persistence happens below through the dedicated notification API.
         context
             .stream_response("flow_notification", notification)
             .await?;
@@ -148,7 +145,7 @@ impl NodeLogic for NotifyProjectUserNode {
             PersistNotificationParams {
                 title,
                 description: (!description.is_empty()).then_some(description),
-                icon: (!icon.is_empty()).then_some(icon),
+                icon: Some(icon),
                 link: Some(resolved_link),
                 target_user_sub: Some(user_sub.clone()),
             },
@@ -160,7 +157,9 @@ impl NodeLogic for NotifyProjectUserNode {
                 LogLevel::Debug,
             ),
             Ok(false) => context.log_message(
-                &format!("Notification sent locally for user: {user_sub} (no hub/token or offline)"),
+                &format!(
+                    "Notification sent locally for user: {user_sub} (no hub/token or offline)"
+                ),
                 LogLevel::Debug,
             ),
             Err(e) => context.log_message(
@@ -177,7 +176,18 @@ impl NodeLogic for NotifyProjectUserNode {
         Ok(())
     }
 
-    async fn on_update(&self, _node: &mut Node, _board: &Board) {
-        // No type matching needed
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        if node.get_pin_by_name(USER_SUB_PIN_NAME).is_some() {
+            remove_pin_by_name(node, "user_sub");
+        } else if let Some(pin) = node.get_pin_mut_by_name("user_sub") {
+            pin.name = USER_SUB_PIN_NAME.to_string();
+        }
+
+        if let Some(pin) = node.get_pin_mut_by_name(USER_SUB_PIN_NAME) {
+            pin.friendly_name = USER_SUB_PIN_FRIENDLY_NAME.to_string();
+            pin.description = USER_SUB_PIN_DESCRIPTION.to_string();
+        }
+
+        migrate_notification_icon_pin(node);
     }
 }

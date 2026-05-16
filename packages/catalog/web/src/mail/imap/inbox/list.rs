@@ -1,3 +1,5 @@
+#[cfg(feature = "execute")]
+use chrono::{DateTime, Utc};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -17,7 +19,6 @@ use futures::TryStreamExt;
 use mail_parser::{MessageParser, MimeHeaders};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::mail::imap::{ImapConnection, inbox::ImapInbox};
 
@@ -39,6 +40,11 @@ fn parse_mail_addresses(addresses: &mail_parser::Address<'_>) -> Vec<MailAddress
         .collect()
 }
 
+#[cfg(feature = "execute")]
+fn format_imap_search_date(date: DateTime<Utc>) -> String {
+    date.format("%d-%b-%Y").to_string()
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 pub struct MailAddress {
     pub name: Option<String>,
@@ -58,18 +64,23 @@ pub struct Email {
     pub inbox: ImapInbox,
     pub uid: u32,
 
-    pub from: Option<Vec<MailAddress>>,
-    pub sender: Option<Vec<MailAddress>>,
-    pub to: Option<Vec<MailAddress>>,
-    pub cc: Option<Vec<MailAddress>>,
-    pub bcc: Option<Vec<MailAddress>>,
+    pub from: Option<MailAddress>,
+    #[serde(default)]
+    pub sender: Vec<MailAddress>,
+    #[serde(default)]
+    pub to: Vec<MailAddress>,
+    #[serde(default)]
+    pub cc: Vec<MailAddress>,
+    #[serde(default)]
+    pub bcc: Vec<MailAddress>,
     pub subject: Option<String>,
     pub date: Option<String>,
 
     pub plain: Option<String>,
     pub html: Option<String>,
 
-    pub attachments: Option<Vec<Attachment>>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 impl EmailRef {
@@ -106,63 +117,57 @@ impl EmailRef {
             connection: self.connection.clone(),
             inbox: inbox.clone(),
             uid: self.uid,
-            from: Some(
-                mail.from()
-                    .iter()
-                    .flat_map(|addr| parse_mail_addresses(addr))
-                    .collect(),
-            ),
-            sender: Some(
-                mail.sender()
-                    .iter()
-                    .flat_map(|addr| parse_mail_addresses(addr))
-                    .collect(),
-            ),
-            to: Some(
-                mail.to()
-                    .iter()
-                    .flat_map(|addr| parse_mail_addresses(addr))
-                    .collect(),
-            ),
-            cc: Some(
-                mail.cc()
-                    .iter()
-                    .flat_map(|addr| parse_mail_addresses(addr))
-                    .collect(),
-            ),
-            bcc: Some(
-                mail.bcc()
-                    .iter()
-                    .flat_map(|addr| parse_mail_addresses(addr))
-                    .collect(),
-            ),
+            from: mail
+                .from()
+                .iter()
+                .flat_map(|addr| parse_mail_addresses(addr))
+                .next(),
+            sender: mail
+                .sender()
+                .iter()
+                .flat_map(|addr| parse_mail_addresses(addr))
+                .collect(),
+            to: mail
+                .to()
+                .iter()
+                .flat_map(|addr| parse_mail_addresses(addr))
+                .collect(),
+            cc: mail
+                .cc()
+                .iter()
+                .flat_map(|addr| parse_mail_addresses(addr))
+                .collect(),
+            bcc: mail
+                .bcc()
+                .iter()
+                .flat_map(|addr| parse_mail_addresses(addr))
+                .collect(),
             subject: mail.subject().map(|s| s.to_string()),
             date: mail.date().map(|d| d.to_rfc3339()).map(|s| s.to_string()),
             plain: mail.body_text(0).map(|s| s.to_string()),
             html: mail.body_html(0).map(|s| s.to_string()),
-            attachments: Some(
-                mail.attachments()
-                    .map(|part: &mail_parser::MessagePart<'_>| {
-                        let filename = part.attachment_name().map(|s| s.to_string());
+            attachments: mail
+                .attachments()
+                .map(|part: &mail_parser::MessagePart<'_>| {
+                    let filename = part.attachment_name().map(|s| s.to_string());
 
-                        let content_type = part
-                            .content_type()
-                            .map(|ct| match ct.subtype() {
-                                Some(sub) => format!("{}/{}", ct.ctype(), sub),
-                                None => ct.ctype().to_string(),
-                            })
-                            .unwrap_or_else(|| "application/octet-stream".to_string());
+                    let content_type = part
+                        .content_type()
+                        .map(|ct| match ct.subtype() {
+                            Some(sub) => format!("{}/{}", ct.ctype(), sub),
+                            None => ct.ctype().to_string(),
+                        })
+                        .unwrap_or_else(|| "application/octet-stream".to_string());
 
-                        let data = part.contents().to_vec();
+                    let data = part.contents().to_vec();
 
-                        Attachment {
-                            filename,
-                            content_type,
-                            data,
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            ),
+                    Attachment {
+                        filename,
+                        content_type,
+                        data,
+                    }
+                })
+                .collect::<Vec<_>>(),
         };
 
         Ok(mail)
@@ -189,6 +194,7 @@ impl NodeLogic for ListMailsNode {
             "Email/IMAP",
         );
         node.add_icon("/flow/icons/mail.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
         node.add_output_pin(
@@ -234,7 +240,7 @@ impl NodeLogic for ListMailsNode {
             "List of email references",
             VariableType::Struct,
         )
-        .set_schema::<EmailRef>()
+        .set_schema::<Vec<EmailRef>>()
         .set_value_type(ValueType::Array);
 
         node
@@ -252,12 +258,12 @@ impl NodeLogic for ListMailsNode {
         let mut search_criteria = filter.clone();
         match filter.as_str() {
             "SINCE" => {
-                let since_date: String = context.evaluate_pin("since_date").await?;
-                search_criteria = format!("SINCE {}", since_date);
+                let since_date: DateTime<Utc> = context.evaluate_pin("since_date").await?;
+                search_criteria = format!("SINCE {}", format_imap_search_date(since_date));
             }
             "BEFORE" => {
-                let before_date: String = context.evaluate_pin("before_date").await?;
-                search_criteria = format!("BEFORE {}", before_date);
+                let before_date: DateTime<Utc> = context.evaluate_pin("before_date").await?;
+                search_criteria = format!("BEFORE {}", format_imap_search_date(before_date));
             }
             "FROM" => {
                 let from_addr: String = context.evaluate_pin("from").await?;
@@ -316,41 +322,57 @@ impl NodeLogic for ListMailsNode {
                 "SINCE",
                 "since_date",
                 "Since Date",
-                "Search emails since date (e.g. 01-Jan-2020)",
+                "Search emails since this date; IMAP will receive it as 21-Apr-2026",
+                VariableType::Date,
             ),
             (
                 "BEFORE",
                 "before_date",
                 "Before Date",
-                "Search emails before date (e.g. 01-Jan-2020)",
+                "Search emails before this date; IMAP will receive it as 21-Apr-2026",
+                VariableType::Date,
             ),
-            ("FROM", "from", "From", "Search emails from this sender"),
-            ("TO", "to", "To", "Search emails to this recipient"),
+            (
+                "FROM",
+                "from",
+                "From",
+                "Search emails from this sender",
+                VariableType::String,
+            ),
+            (
+                "TO",
+                "to",
+                "To",
+                "Search emails to this recipient",
+                VariableType::String,
+            ),
             (
                 "SUBJECT",
                 "subject",
                 "Subject",
                 "Search emails with this subject",
+                VariableType::String,
             ),
             (
                 "BODY",
                 "body",
                 "Body",
                 "Search emails with this text in the body",
+                VariableType::String,
             ),
         ];
 
         // Compute sets of needed vs existing dynamic pins
         let needed: std::collections::HashSet<&str> = dynamic_map
             .iter()
-            .filter(|&&(f, _, _, _)| f == filter)
-            .map(|&(_, name, _, _)| name)
+            .filter(|&&(f, _, _, _, _)| f == filter)
+            .map(|&(_, name, _, _, _)| name)
             .collect();
         let existing: std::collections::HashSet<String> = node
             .pins
             .iter()
             .filter_map(|(_, pin)| {
-                dynamic_map.iter().find_map(|&(_, name, _, _)| {
+                dynamic_map.iter().find_map(|&(_, name, _, _, _)| {
                     if pin.name == name {
                         Some(name.to_string())
                     } else {
@@ -367,10 +389,10 @@ impl NodeLogic for ListMailsNode {
 
         // Add any missing pins
         for &name in needed.difference(&existing.iter().map(AsRef::as_ref).collect()) {
-            if let Some(&(_, _, label, description)) =
-                dynamic_map.iter().find(|&&(_, n, _, _)| n == name)
+            if let Some((_, _, label, description, data_type)) =
+                dynamic_map.iter().find(|(_, n, _, _, _)| *n == name)
             {
-                node.add_input_pin(name, label, description, VariableType::String);
+                node.add_input_pin(name, label, description, data_type.clone());
             }
         }
     }

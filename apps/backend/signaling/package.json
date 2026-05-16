@@ -1,0 +1,26 @@
+{
+  "name": "signaling",
+  "version": "1.0.0",
+  "description": "Redis-backed WebSocket signaling server for y-webrtc collaboration.",
+  "main": "server.ts",
+  "scripts": {
+    "start": "bun run server.ts",
+    "dev": "bun --watch server.ts",
+    "test:ws": "bun run tests/test-ws.mjs",
+    "test:comprehensive": "bun run tests/test-comprehensive.mjs",
+    "test:redis-fanout": "bun run tests/test-redis-fanout.mjs",
+    "test:multi-worker": "bun run tests/test-multi-worker.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+  },
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "ws": "^8.18.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

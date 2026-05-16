@@ -2,7 +2,6 @@
 import { useDraggable } from "@dnd-kit/core";
 import { createId } from "@paralleldrive/cuid2";
 import {
-	CirclePlusIcon,
 	GripIcon,
 	PencilIcon,
 	SettingsIcon,
@@ -63,9 +62,7 @@ export function FunctionsList({
 
 	const functions = useMemo(
 		() =>
-			Object.values(board.layers).filter(
-				(l) => l.type === ILayerType.Function,
-			),
+			Object.values(board.layers).filter((l) => l.type === ILayerType.Function),
 		[board.layers],
 	);
 
@@ -97,9 +94,7 @@ export function FunctionsList({
 
 	if (functions.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground py-1">
-				No functions yet.
-			</p>
+			<p className="text-xs text-muted-foreground py-1">No functions yet.</p>
 		);
 	}
 
@@ -232,13 +227,31 @@ function FunctionItem({
 			)}
 
 			<div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-				<Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setNameValue(layer.name); setIsRenaming(true); }}>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-6 w-6"
+					onClick={() => {
+						setNameValue(layer.name);
+						setIsRenaming(true);
+					}}
+				>
 					<PencilIcon className="w-3 h-3" />
 				</Button>
-				<Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit}>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-6 w-6"
+					onClick={onEdit}
+				>
 					<SettingsIcon className="w-3 h-3" />
 				</Button>
-				<Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={onDelete}>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-6 w-6 text-destructive"
+					onClick={onDelete}
+				>
 					<Trash2Icon className="w-3 h-3" />
 				</Button>
 			</div>

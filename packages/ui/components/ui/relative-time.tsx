@@ -2,10 +2,10 @@
 
 import type { ComponentPropsWithoutRef } from "react";
 import {
+	type DateValue,
 	formatAbsoluteDateValue,
 	formatRelativeDateValue,
 	parseDateValue,
-	type DateValue,
 } from "../../lib/date";
 import { cn } from "../../lib/utils";
 
@@ -29,11 +29,7 @@ export function RelativeTime({
 		: undefined;
 
 	return (
-		<span
-			className={cn(className)}
-			title={absoluteLabel}
-			{...props}
-		>
+		<span className={cn(className)} title={absoluteLabel} {...props}>
 			{relativeLabel}
 		</span>
 	);

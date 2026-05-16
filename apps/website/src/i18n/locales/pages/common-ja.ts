@@ -1,6 +1,5 @@
 export const jaCommon = {
 	// Header
-	"header.24h": "24時間ソリューション",
 	"header.compare": "比較",
 	"header.blog": "ブログ",
 	"header.docs": "ドキュメント",
@@ -25,7 +24,6 @@ export const jaCommon = {
 	"footer.link.download": "ダウンロード",
 	"footer.link.compare": "比較",
 	"footer.link.modernBi": "モダンBI",
-	"footer.link.24h": "24時間ソリューション",
 	"footer.link.gettingStarted": "はじめに",
 	"footer.link.whatIs": "Flow-Likeとは？",
 	"footer.link.selfHosting": "セルフホスティング",
@@ -206,7 +204,6 @@ export const jaCommon = {
 	"pricing.ctaSection.title": "カスタムソリューションが必要ですか？",
 	"pricing.ctaSection.description":
 		"24時間以内にビジネス向けの完全にカスタマイズされた自動化ソリューションを入手できます。お客様の正確なニーズに合わせた本番環境対応のワークフローを設計、構築、デプロイします。",
-	"pricing.ctaSection.24h": "24時間ソリューション",
 	"pricing.ctaSection.enterprise": "エンタープライズ営業に問い合わせ",
 	"pricing.ctaSection.startingAt":
 		"€1,999から · 完全なソースコード所有権 · どこでもデプロイ",

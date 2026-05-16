@@ -4,6 +4,18 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AssetKind")]
+pub enum AssetKind {
+    #[sea_orm(string_value = "IMAGE")]
+    Image,
+    #[sea_orm(string_value = "VIDEO")]
+    Video,
+    #[sea_orm(string_value = "AUDIO")]
+    Audio,
+    #[sea_orm(string_value = "DOCUMENT")]
+    Document,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AuditActorType")]
 pub enum AuditActorType {
     #[sea_orm(string_value = "USER")]
@@ -56,6 +68,14 @@ pub enum BitType {
     Board,
     #[sea_orm(string_value = "OTHER")]
     Other,
+    #[sea_orm(string_value = "IMAGE_GENERATION")]
+    ImageGeneration,
+    #[sea_orm(string_value = "VIDEO_GENERATION")]
+    VideoGeneration,
+    #[sea_orm(string_value = "TTS")]
+    Tts,
+    #[sea_orm(string_value = "STT")]
+    Stt,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Category")]
@@ -102,6 +122,66 @@ pub enum Category {
     Communication,
     #[sea_orm(string_value = "ANIME")]
     Anime,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "ChallengeKind")]
+pub enum ChallengeKind {
+    #[sea_orm(string_value = "SINGLE_CHOICE")]
+    SingleChoice,
+    #[sea_orm(string_value = "MULTIPLE_CHOICE")]
+    MultipleChoice,
+    #[sea_orm(string_value = "BOARD_RIDDLE")]
+    BoardRiddle,
+    #[sea_orm(string_value = "EXECUTE_NODE")]
+    ExecuteNode,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "CourseAppPurpose")]
+pub enum CourseAppPurpose {
+    #[sea_orm(string_value = "SHARED_TEMPLATE")]
+    SharedTemplate,
+    #[sea_orm(string_value = "REFERENCE")]
+    Reference,
+    #[sea_orm(string_value = "PLAYGROUND")]
+    Playground,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "CourseCategory")]
+pub enum CourseCategory {
+    #[sea_orm(string_value = "GENERAL")]
+    General,
+    #[sea_orm(string_value = "GETTING_STARTED")]
+    GettingStarted,
+    #[sea_orm(string_value = "FLOWS")]
+    Flows,
+    #[sea_orm(string_value = "PAGES")]
+    Pages,
+    #[sea_orm(string_value = "EVENTS")]
+    Events,
+    #[sea_orm(string_value = "DATA")]
+    Data,
+    #[sea_orm(string_value = "AI")]
+    Ai,
+    #[sea_orm(string_value = "INTEGRATIONS")]
+    Integrations,
+    #[sea_orm(string_value = "DEPLOYMENT")]
+    Deployment,
+    #[sea_orm(string_value = "ADVANCED")]
+    Advanced,
+    #[sea_orm(string_value = "EXPERT")]
+    Expert,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "CourseDifficulty")]
+pub enum CourseDifficulty {
+    #[sea_orm(string_value = "BEGINNER")]
+    Beginner,
+    #[sea_orm(string_value = "INTERMEDIATE")]
+    Intermediate,
+    #[sea_orm(string_value = "ADVANCED")]
+    Advanced,
+    #[sea_orm(string_value = "EXPERT")]
+    Expert,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "DiscountType")]
@@ -154,6 +234,30 @@ pub enum InvitationStatus {
     Rejected,
     #[sea_orm(string_value = "EXPIRED")]
     Expired,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "LessonAppRefKind")]
+pub enum LessonAppRefKind {
+    #[sea_orm(string_value = "NAVIGATE")]
+    Navigate,
+    #[sea_orm(string_value = "FOCUS_NODE")]
+    FocusNode,
+    #[sea_orm(string_value = "ADD_NODE")]
+    AddNode,
+    #[sea_orm(string_value = "CREATE_EVENT")]
+    CreateEvent,
+    #[sea_orm(string_value = "OPEN_OR_CLONE_APP")]
+    OpenOrCloneApp,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "LessonStatus")]
+pub enum LessonStatus {
+    #[sea_orm(string_value = "NOT_STARTED")]
+    NotStarted,
+    #[sea_orm(string_value = "IN_PROGRESS")]
+    InProgress,
+    #[sea_orm(string_value = "COMPLETED")]
+    Completed,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "NotificationType")]

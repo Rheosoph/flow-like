@@ -23,6 +23,8 @@ use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
+pub mod fork;
+pub mod graph;
 pub mod sharing;
 pub mod tables;
 

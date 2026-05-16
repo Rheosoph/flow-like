@@ -108,7 +108,7 @@ impl NodeLogic for AiKeywordExtractionNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/sparkles.svg");
-        node.set_version(1);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

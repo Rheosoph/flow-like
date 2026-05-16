@@ -6,7 +6,8 @@ import {
 	ShieldAlertIcon,
 	ShieldCheckIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { NODE_PERMISSION_LABELS } from "../../lib/permission/node-permission";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -19,7 +20,6 @@ import {
 } from "../ui/dialog";
 import { ScrollArea } from "../ui/scroll-area";
 import { Separator } from "../ui/separator";
-import { NODE_PERMISSION_LABELS } from "../../lib/permission/node-permission";
 
 function formatPermission(perm: string): { label: string; icon: string } {
 	return (

@@ -4,12 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Star } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { useBackend } from "../../state/backend-state";
 import type {
 	AppCommentItem,
 	AppCommentsResponse,
 	UpsertAppCommentRequest,
 } from "../../state/backend-state/app-state";
-import { useBackend } from "../../state/backend-state";
 import {
 	Avatar,
 	AvatarFallback,

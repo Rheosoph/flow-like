@@ -15,10 +15,10 @@ import {
 	useQueryClient,
 } from "@tm9657/flow-like-ui";
 import { ImportIcon } from "lucide-react";
-import { appsDB } from "./../../lib/apps-db";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { appsDB } from "./../../lib/apps-db";
 import ImportEncryptedDialog from "./components/ImportEncryptedDialog";
 
 export default function DesktopLibraryPage() {

@@ -8,7 +8,7 @@ use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
 use context::ExecutionContext;
-use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator};
+use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use flow_like_storage::arrow_schema::{FieldRef, SchemaRef};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
@@ -17,6 +17,7 @@ use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
 use flow_like_storage::{Path, serde_arrow};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
 use flow_like_types::json::to_vec;
 use flow_like_types::sync::{Mutex, RwLock};
@@ -238,36 +239,49 @@ impl LogMeta {
         let arrow_batch = self.into_arrow()?;
         let schema = arrow_batch.schema();
 
-        // Try to open and add to existing table first
-        if let Ok(table) = db.open_table("runs").execute().await {
-            let iter = RecordBatchIterator::new(
+        let make_iter = || -> Box<dyn RecordBatchReader + Send> {
+            Box::new(RecordBatchIterator::new(
                 vec![arrow_batch.clone()].into_iter().map(Ok),
                 schema.clone(),
-            );
-            let mut add = table.add(iter);
+            ))
+        };
+
+        // Try to open and add to existing table first
+        if let Ok(table) = db.open_table("runs").execute().await {
+            let mut add = table.add(make_iter());
             if let Some(opts) = write_options {
                 add = add.write_options(opts.clone());
             }
-            match add.execute().await {
-                Ok(_) => {
-                    return Ok(());
-                }
-                Err(_e) => {
-                    // Table is corrupted (e.g. from failed hard_link on Android), drop and recreate
-                    let _ = db.drop_table("runs", &[]).await;
-                }
+            if add.execute().await.is_ok() {
+                return Ok(());
             }
         }
 
-        // Create table with data (either didn't exist or was dropped due to corruption)
-        let iter = RecordBatchIterator::new(vec![arrow_batch].into_iter().map(Ok), schema.clone());
-        let mut builder = db.create_table("runs", Box::new(iter));
+        // Table doesn't exist — try to create it with data
+        let mut builder = db.create_table("runs", make_iter());
         if let Some(opts) = write_options {
             builder = builder.write_options(opts.clone());
         }
-        let table = builder.execute().await?;
+        match builder.execute().await {
+            Ok(table) => {
+                Self::create_runs_indexes(&table).await;
+                return Ok(());
+            }
+            Err(_create_err) => {
+                // Race: another flush created the table — fall back to open + add
+                let table = db.open_table("runs").execute().await?;
+                let mut add = table.add(make_iter());
+                if let Some(opts) = write_options {
+                    add = add.write_options(opts.clone());
+                }
+                add.execute().await?;
+            }
+        }
 
-        // Create indexes
+        Ok(())
+    }
+
+    async fn create_runs_indexes(table: &flow_like_storage::lancedb::Table) {
         let _ = table
             .create_index(
                 &["event_id"],
@@ -298,8 +312,6 @@ impl LogMeta {
             )
             .execute()
             .await;
-
-        Ok(())
     }
 }
 
@@ -498,42 +510,66 @@ impl PreparedFlush {
         Err(last_err.unwrap())
     }
 
+    fn make_iter(&self) -> Box<dyn RecordBatchReader + Send> {
+        Box::new(RecordBatchIterator::new(
+            vec![self.arrow_batch.clone()].into_iter().map(Ok),
+            self.schema.clone(),
+        ))
+    }
+
+    async fn try_add(
+        &self,
+        table: &flow_like_storage::lancedb::Table,
+    ) -> flow_like_types::Result<()> {
+        let mut add = table.add(self.make_iter());
+        if let Some(opts) = &self.write_options {
+            add = add.write_options(opts.clone());
+        }
+        add.execute().await?;
+        Ok(())
+    }
+
     async fn try_write(&self) -> flow_like_types::Result<FlushResult> {
         let db = (self.db_fn)(self.base_path.clone()).execute().await?;
 
-        // On Android, datasets can get into inconsistent states due to SELinux blocking hard_link().
-        // Try to open existing table, or create new one with data directly.
-        let iter = RecordBatchIterator::new(
-            vec![self.arrow_batch.clone()].into_iter().map(Ok),
-            self.schema.clone(),
-        );
-
+        // Fast path: table already exists, just append
         match db.open_table(&self.run_id).execute().await {
             Ok(table) => {
-                let mut add = table.add(iter);
-                if let Some(opts) = &self.write_options {
-                    add = add.write_options(opts.clone());
-                }
-                add.execute().await?;
+                self.try_add(&table).await?;
+                return Ok(FlushResult {
+                    created_table: false,
+                    meta: self.meta.clone(),
+                });
             }
-            Err(_open_err) => {
-                // Try to drop any corrupted/partial table first
-                match db.drop_table(&self.run_id, &[]).await {
-                    Ok(_) => {}
-                    Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => {}
-                    Err(e) => {
-                        eprintln!("[DBG-v3] drop_table failed unexpectedly: {:?}", e);
-                    }
-                }
+            Err(open_err) => {
+                tracing::debug!(run_id = %self.run_id, error = %open_err, "open_table failed, will create");
+            }
+        }
 
-                // Create the table WITH data in one step (avoids create_empty + add issue)
-                let mut builder = db.create_table(&self.run_id, Box::new(iter));
-                if let Some(opts) = &self.write_options {
-                    builder = builder.write_options(opts.clone());
-                }
-                builder.execute().await?;
+        // Table doesn't exist yet — try to create it with data
+        let mut builder = db.create_table(&self.run_id, self.make_iter());
+        if let Some(opts) = &self.write_options {
+            builder = builder.write_options(opts.clone());
+        }
+        match builder.execute().await {
+            Ok(_) => {
+                return Ok(FlushResult {
+                    created_table: !self.log_initialized,
+                    meta: self.meta.clone(),
+                });
             }
-        };
+            Err(create_err) => {
+                // Another concurrent flush likely created the table between our
+                // open_table and create_table calls — fall back to open + add.
+                tracing::debug!(run_id = %self.run_id, error = %create_err, "create_table failed, falling back to open+add");
+                let table = db.open_table(&self.run_id).execute().await.map_err(|e| {
+                    flow_like_types::anyhow!(
+                        "create_table failed ({create_err}), then open_table also failed: {e}"
+                    )
+                })?;
+                self.try_add(&table).await?;
+            }
+        }
 
         Ok(FlushResult {
             created_table: !self.log_initialized,
@@ -1014,12 +1050,25 @@ impl InternalRun {
             );
         }
 
+        let cache = Arc::new(RwLock::new(AHashMap::new()));
+        let temporary_store = {
+            let config = handler.config.read().await;
+            config.stores.temporary_store.clone()
+        };
+        if let Some(temporary_store) = temporary_store {
+            let cacheable_store: Arc<dyn Cacheable> = Arc::new(temporary_store);
+            cache
+                .write()
+                .await
+                .insert(REQUEST_FILES_STORE_REF.to_string(), cacheable_store);
+        }
+
         Ok(InternalRun {
             run,
             nodes: Arc::new(nodes),
             pins,
             variables,
-            cache: Arc::new(RwLock::new(AHashMap::new())),
+            cache,
             stack: Arc::new(stack),
             concurrency_limit: 128_000,
             cpus: num_cpus::get().max(4) * 4,
@@ -1050,6 +1099,16 @@ impl InternalRun {
     /// Set the user execution context for this run
     pub fn set_user_context(&mut self, user_context: UserExecutionContext) {
         self.user_context = Some(user_context);
+    }
+
+    /// Override the execution subject after the transport token has been
+    /// verified. This keeps PAT-backed runs tied to the executor JWT subject.
+    pub async fn set_execution_sub(&mut self, sub: String) {
+        {
+            let mut run = self.run.lock().await;
+            run.sub = sub.clone();
+        }
+        self.meta.sub = sub;
     }
 
     /// Set the user execution context for offline/local execution

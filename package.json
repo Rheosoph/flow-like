@@ -3,11 +3,23 @@
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
-	"scripts": {},
-	"workspaces": ["packages/*", "packages/dexie-tauri-adapter/*", "apps/*", "libs/*/*"],
+	"scripts": {
+		"test:e2e:package-security": "bun test tests/package-manager-security.e2e.test.ts"
+	},
+	"workspaces": [
+		"packages/*",
+		"packages/dexie-tauri-adapter/*",
+		"apps/*",
+		"libs/*/*"
+	],
 	"overrides": {
 		"@sentry/nextjs": "^10.38.0"
 	},
+	"trustedDependencies": [
+		"esbuild",
+		"fsevents",
+		"sharp"
+	],
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
 		"dotenv-cli": "^8.0.0",

@@ -14,14 +14,22 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 
 const anchorToClasses: Record<string, string> = {
 	topLeft: "top-0 left-0",
-	topCenter: "top-0 left-1/2 -translate-x-1/2",
+	topCenter: "top-0 left-1/2",
 	topRight: "top-0 right-0",
-	centerLeft: "top-1/2 left-0 -translate-y-1/2",
-	center: "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
-	centerRight: "top-1/2 right-0 -translate-y-1/2",
+	centerLeft: "top-1/2 left-0",
+	center: "top-1/2 left-1/2",
+	centerRight: "top-1/2 right-0",
 	bottomLeft: "bottom-0 left-0",
-	bottomCenter: "bottom-0 left-1/2 -translate-x-1/2",
+	bottomCenter: "bottom-0 left-1/2",
 	bottomRight: "bottom-0 right-0",
+};
+
+const anchorToTransform: Record<string, string> = {
+	topCenter: "translateX(-50%)",
+	centerLeft: "translateY(-50%)",
+	center: "translate(-50%, -50%)",
+	centerRight: "translateY(-50%)",
+	bottomCenter: "translateX(-50%)",
 };
 
 export function A2UIOverlay({
@@ -42,6 +50,7 @@ export function A2UIOverlay({
 					? (resolve(overlay.anchor) as string | undefined)
 					: undefined;
 				const anchorClass = anchorToClasses[anchor ?? "topLeft"] ?? "";
+				const anchorTransform = anchorToTransform[anchor ?? "topLeft"];
 				const offsetX = overlay.offsetX
 					? (resolve(overlay.offsetX) as string | undefined)
 					: undefined;
@@ -51,15 +60,18 @@ export function A2UIOverlay({
 				const zIndex = overlay.zIndex
 					? (resolve(overlay.zIndex) as number | undefined)
 					: undefined;
+				const transforms = [
+					anchorTransform,
+					(offsetX || offsetY) &&
+						`translate(${offsetX ?? "0"}, ${offsetY ?? "0"})`,
+				].filter(Boolean);
+
 				return (
 					<div
 						key={overlay.componentId}
 						className={cn("absolute", anchorClass)}
 						style={{
-							transform:
-								offsetX || offsetY
-									? `translate(${offsetX ?? "0"}, ${offsetY ?? "0"})`
-									: undefined,
+							transform: transforms.length ? transforms.join(" ") : undefined,
 							zIndex: zIndex ?? i + 1,
 						}}
 					>

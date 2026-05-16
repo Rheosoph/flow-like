@@ -13,6 +13,15 @@ import ObjectiveC
 final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     @objc static let shared = PushNotificationBridge()
 
+    /// Keys used to bridge a tapped notification's userInfo to JS on cold-start.
+    /// On a tap that launches the app from a terminated state, the plugin
+    /// fires `notification-tapped` before the webview's JS bundle has had a
+    /// chance to register a listener - so the event is lost. We additionally
+    /// persist the userInfo into UserDefaults so JS can retrieve and consume
+    /// it after startup via the `get_pending_notification_tap` Tauri command.
+    static let pendingTapDefaultsKey = "FlowLike.PendingNotificationTap"
+    static let pendingTapTimestampKey = "FlowLike.PendingNotificationTap.Timestamp"
+
     /// Call from `main()` **before** `ffi::start_app()`.
     /// Registers a one-shot observer that fires once the app has launched and
     /// Tao's AppDelegate class exists.
@@ -119,10 +128,36 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let userInfo = response.notification.request.content.userInfo
+        NSLog("[FlowLikePush] userNotificationCenter:didReceive: keys=\(userInfo.keys)")
+        Self.persistPendingTap(userInfo)
         Self.callPlugin(
             "applicationDidReceiveNotificationResponseWithUserInfo:",
-            with: response.notification.request.content.userInfo as NSDictionary)
+            with: userInfo as NSDictionary)
         completionHandler()
+    }
+
+    // MARK: - Cold-start tap persistence
+
+    private static func persistPendingTap(_ userInfo: [AnyHashable: Any]) {
+        let stringKeyed = userInfo.reduce(into: [String: Any]()) { acc, kv in
+            if let key = kv.key as? String {
+                acc[key] = kv.value
+            }
+        }
+        guard JSONSerialization.isValidJSONObject(stringKeyed) else {
+            NSLog("[FlowLikePush] persistPendingTap: payload not JSON-serializable, keys=\(stringKeyed.keys)")
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: stringKeyed, options: []),
+              let json = String(data: data, encoding: .utf8) else {
+            NSLog("[FlowLikePush] persistPendingTap: JSON encoding failed")
+            return
+        }
+        let defaults = UserDefaults.standard
+        defaults.set(json, forKey: pendingTapDefaultsKey)
+        defaults.set(Date().timeIntervalSince1970, forKey: pendingTapTimestampKey)
+        NSLog("[FlowLikePush] persistPendingTap: stored \(json.count) bytes under \(pendingTapDefaultsKey)")
     }
 }
 #endif

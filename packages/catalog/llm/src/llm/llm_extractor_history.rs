@@ -20,7 +20,7 @@ use rig::completion::{Completion, ToolDefinition};
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
-use std::{fmt, sync::Arc, time::Instant};
+use std::{fmt, time::Instant};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -183,7 +183,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

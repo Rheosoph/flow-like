@@ -2,12 +2,11 @@ use super::element_utils::{extract_element_id, find_element};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_pin},
-    pin::PinOptions,
+    node::{Node, NodeLogic, remove_pin_by_name},
+    pin::{PinOptions, PinType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::sync::Arc;
 
 /// Unified toggle (checkbox/switch) update node.
 ///
@@ -143,16 +142,9 @@ impl NodeLogic for UpdateToggle {
             .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok())
             .unwrap_or_else(|| "Set".to_string());
 
-        // Remove dynamic pins
-        let pins_to_check = ["checked", "state"];
-        for pin_name in pins_to_check {
-            if let Some(pin) = node.get_pin_by_name(pin_name).cloned() {
-                remove_pin(node, Some(pin));
-            }
-        }
-
-        match operation.as_str() {
-            "Set" => {
+        let needs_checked_input = operation == "Set";
+        if needs_checked_input {
+            if node.get_pin_by_name("checked").is_none() {
                 node.add_input_pin(
                     "checked",
                     "Checked",
@@ -160,30 +152,35 @@ impl NodeLogic for UpdateToggle {
                     VariableType::Boolean,
                 )
                 .set_default_value(Some(json!(false)));
-                node.add_output_pin(
-                    "state",
-                    "State",
-                    "The checked state after operation",
-                    VariableType::Boolean,
-                );
             }
-            "Toggle" => {
-                node.add_output_pin(
-                    "state",
-                    "New State",
-                    "The new checked state after toggle",
-                    VariableType::Boolean,
-                );
+        } else {
+            remove_pin_by_name(node, "checked");
+        }
+
+        let (state_friendly, state_description) = match operation.as_str() {
+            "Toggle" => ("New State", "The new checked state after toggle"),
+            "Get" => ("Checked", "Current checked state"),
+            _ => ("State", "The checked state after operation"),
+        };
+
+        let existing_state_id = node
+            .pins
+            .iter()
+            .find(|(_, pin)| pin.name == "state" && pin.pin_type == PinType::Output)
+            .map(|(id, _)| id.clone());
+
+        if let Some(id) = existing_state_id {
+            if let Some(pin) = node.pins.get_mut(&id) {
+                pin.friendly_name = state_friendly.to_string();
+                pin.description = state_description.to_string();
             }
-            "Get" => {
-                node.add_output_pin(
-                    "state",
-                    "Checked",
-                    "Current checked state",
-                    VariableType::Boolean,
-                );
-            }
-            _ => {}
+        } else {
+            node.add_output_pin(
+                "state",
+                state_friendly,
+                state_description,
+                VariableType::Boolean,
+            );
         }
     }
 }

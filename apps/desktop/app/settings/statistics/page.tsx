@@ -733,10 +733,7 @@ export default function StatisticsPage() {
 
 	const isComputing = phase !== "idle" && phase !== "complete";
 
-	if (
-		!statistics &&
-		(phase === "loading-boards" || currentProfile.isLoading)
-	) {
+	if (!statistics && (phase === "loading-boards" || currentProfile.isLoading)) {
 		return (
 			<div className="container mx-auto p-6 max-w-7xl">
 				<div className="flex items-center justify-between mb-6">
@@ -1124,9 +1121,7 @@ export default function StatisticsPage() {
 																{cat.unique_nodes} unique node types
 															</p>
 														</div>
-														<Badge variant="secondary">
-															{cat.node_count}
-														</Badge>
+														<Badge variant="secondary">{cat.node_count}</Badge>
 													</div>
 												))}
 										</div>

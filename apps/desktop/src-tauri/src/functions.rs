@@ -5,12 +5,14 @@ pub mod ai;
 pub mod app;
 pub mod bit;
 pub mod developer;
+pub mod device_id;
 pub mod download;
 pub mod event_sink_commands;
 pub mod feedback;
 pub mod file;
 pub mod flow;
 pub mod interaction;
+pub mod notifications;
 pub mod permissions;
 pub mod recording;
 pub mod registry;
@@ -42,6 +44,14 @@ impl TauriFunctionError {
 
 impl From<flow_like_types::Error> for TauriFunctionError {
     fn from(error: flow_like_types::Error) -> Self {
+        Self {
+            error: error.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for TauriFunctionError {
+    fn from(error: serde_json::Error) -> Self {
         Self {
             error: error.to_string(),
         }

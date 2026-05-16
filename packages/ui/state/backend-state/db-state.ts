@@ -39,8 +39,18 @@ export interface IDatabaseState {
 		optimize?: boolean,
 		userScoped?: boolean,
 	): Promise<void>;
-	addItems(appId: string, tableName: string, items: any[], userScoped?: boolean): Promise<void>;
-	removeItems(appId: string, tableName: string, query: string, userScoped?: boolean): Promise<void>;
+	addItems(
+		appId: string,
+		tableName: string,
+		items: any[],
+		userScoped?: boolean,
+	): Promise<void>;
+	removeItems(
+		appId: string,
+		tableName: string,
+		query: string,
+		userScoped?: boolean,
+	): Promise<void>;
 	listItems(
 		appId: string,
 		tableName: string,
@@ -56,10 +66,27 @@ export interface IDatabaseState {
 		limit?: number,
 		userScoped?: boolean,
 	): Promise<any[]>;
-	countItems(appId: string, tableName: string, userScoped?: boolean): Promise<number>;
-	getSchema(appId: string, tableName: string, userScoped?: boolean): Promise<any>;
-	getIndices(appId: string, tableName: string, userScoped?: boolean): Promise<IIndexConfig[]>;
-	dropIndex(appId: string, tableName: string, indexName: string, userScoped?: boolean): Promise<void>;
+	countItems(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<number>;
+	getSchema(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<any>;
+	getIndices(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IIndexConfig[]>;
+	dropIndex(
+		appId: string,
+		tableName: string,
+		indexName: string,
+		userScoped?: boolean,
+	): Promise<void>;
 	listTables(appId: string): Promise<string[]>;
 	listTablesUser(appId: string): Promise<string[]>;
 	optimize(

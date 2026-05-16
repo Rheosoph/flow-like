@@ -16,6 +16,10 @@ import {
 	type IMetadata,
 	type IModelProvider,
 	IPooling,
+	ITtsDTypePreference,
+	type ITtsModelParameters,
+	ITtsModelType,
+	ITtsRuntimePreference,
 	Input,
 	Label,
 	Progress,
@@ -31,20 +35,22 @@ import {
 	useInvoke,
 } from "@tm9657/flow-like-ui";
 import {
+	AudioLines,
+	Binary,
+	Cpu,
+	Eye,
 	FileTextIcon,
 	GaugeIcon,
 	HashIcon,
+	ImageIcon,
 	Loader2Icon,
+	Mic,
 	PackageIcon,
+	ScanLine,
 	TimerIcon,
 	UploadCloudIcon,
 	X,
 	Zap,
-	Cpu,
-	Eye,
-	Binary,
-	ImageIcon,
-	ScanLine,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -62,6 +68,12 @@ import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
+import {
+	TTSConfiguration,
+	type TtsAssetDraft,
+	applyTtsModelPreset,
+	defaultTtsAssetLayout,
+} from "./tts";
 
 // ── constants ──────────────────────────────────────────────────────────────
 
@@ -77,7 +89,9 @@ const HOSTED_PROVIDER_OPTIONS = [
 type BitMode =
 	| "local-llm"
 	| "hosted-llm"
+	| "hosted-stt"
 	| "vlm"
+	| "tts"
 	| "embedding"
 	| "image-embedding"
 	| "classification";
@@ -129,6 +143,22 @@ const DEFAULT_EMBEDDING_PARAMETERS: IEmbeddingModelParameters = {
 		query: "",
 	},
 	vector_length: 1024,
+};
+
+const DEFAULT_TTS_PARAMETERS: ITtsModelParameters = {
+	assets: [],
+	default_language: null,
+	default_voice: null,
+	dtype: ITtsDTypePreference.Auto,
+	languages: [],
+	model_type: ITtsModelType.Kokoro,
+	provider: {
+		provider_name: "local:any-tts",
+		model_id: null,
+		version: null,
+	},
+	runtime: ITtsRuntimePreference.Auto,
+	voices: [],
 };
 
 const DEFAULT_BIT: IBit = {
@@ -205,17 +235,18 @@ function HostedLLMForm({
 			...old,
 			parameters: {
 				...old.parameters,
-				provider: { ...((old.parameters as ILlmParameters).provider ?? {}), ...update },
+				provider: {
+					...((old.parameters as ILlmParameters).provider ?? {}),
+					...update,
+				},
 			},
 		}));
 	};
 
 	const updateProviderParam = (key: string, value: string) => {
 		setBit((old) => {
-			const current = ((old.parameters as ILlmParameters).provider?.params ?? {}) as Record<
-				string,
-				unknown
-			>;
+			const current = ((old.parameters as ILlmParameters).provider?.params ??
+				{}) as Record<string, unknown>;
 			return {
 				...old,
 				parameters: {
@@ -273,7 +304,8 @@ function HostedLLMForm({
 				<CardHeader>
 					<CardTitle>Model Identity</CardTitle>
 					<CardDescription>
-						The slug drives auto-computed capability scores — no manual sliders needed.
+						The slug drives auto-computed capability scores — no manual sliders
+						needed.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -371,7 +403,10 @@ function HostedLLMForm({
 								type="number"
 								value={params.context_length ?? 2048}
 								onChange={(e) =>
-									updateParam("context_length", parseInt(e.target.value) || 2048)
+									updateParam(
+										"context_length",
+										Number.parseInt(e.target.value) || 2048,
+									)
 								}
 							/>
 						</div>
@@ -386,7 +421,9 @@ function HostedLLMForm({
 										? providerParams.endpoint
 										: ""
 								}
-								onChange={(e) => updateProviderParam("endpoint", e.target.value)}
+								onChange={(e) =>
+									updateProviderParam("endpoint", e.target.value)
+								}
 								placeholder="https://api.example.com/v1"
 							/>
 						</div>
@@ -395,7 +432,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-tier"
 								value={
-									typeof providerParams.tier === "string" ? providerParams.tier : ""
+									typeof providerParams.tier === "string"
+										? providerParams.tier
+										: ""
 								}
 								onChange={(e) => updateProviderParam("tier", e.target.value)}
 								placeholder="FREE"
@@ -409,7 +448,9 @@ function HostedLLMForm({
 			<Card>
 				<CardHeader>
 					<CardTitle>Registry Info</CardTitle>
-					<CardDescription>Hub, version, license, and repository.</CardDescription>
+					<CardDescription>
+						Hub, version, license, and repository.
+					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
@@ -418,7 +459,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-hub"
 								value={bit.hub ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, hub: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, hub: e.target.value }))
+								}
 								placeholder="https://flow-like.com/models"
 							/>
 						</div>
@@ -427,7 +470,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-version"
 								value={bit.version ?? "0.0.1"}
-								onChange={(e) => setBit((old) => ({ ...old, version: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, version: e.target.value }))
+								}
 								placeholder="0.0.1"
 							/>
 						</div>
@@ -436,7 +481,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-license"
 								value={bit.license ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, license: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, license: e.target.value }))
+								}
 								placeholder="e.g. MIT, Apache-2.0"
 							/>
 						</div>
@@ -445,7 +492,9 @@ function HostedLLMForm({
 							<Input
 								id="hosted-repository"
 								value={bit.repository ?? ""}
-								onChange={(e) => setBit((old) => ({ ...old, repository: e.target.value }))}
+								onChange={(e) =>
+									setBit((old) => ({ ...old, repository: e.target.value }))
+								}
 								placeholder="https://huggingface.co/…"
 							/>
 						</div>
@@ -506,10 +555,17 @@ function HostedLLMForm({
 							<Input
 								value={authorInput}
 								onChange={(e) => setAuthorInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAuthor(); } }}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										addAuthor();
+									}
+								}}
 								placeholder="Add author and press Enter"
 							/>
-							<Button type="button" variant="outline" onClick={addAuthor}>Add</Button>
+							<Button type="button" variant="outline" onClick={addAuthor}>
+								Add
+							</Button>
 						</div>
 						{authors.length > 0 && (
 							<div className="flex flex-wrap gap-1 pt-1">
@@ -530,10 +586,17 @@ function HostedLLMForm({
 							<Input
 								value={tagInput}
 								onChange={(e) => setTagInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										addTag();
+									}
+								}}
 								placeholder="Add tag and press Enter"
 							/>
-							<Button type="button" variant="outline" onClick={addTag}>Add</Button>
+							<Button type="button" variant="outline" onClick={addTag}>
+								Add
+							</Button>
 						</div>
 						{tags.length > 0 && (
 							<div className="flex flex-wrap gap-1 pt-1">
@@ -573,6 +636,8 @@ const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
 	{ id: "local-llm", label: "Local LLM", icon: <Cpu className="h-4 w-4" /> },
 	{ id: "hosted-llm", label: "Hosted LLM", icon: <Zap className="h-4 w-4" /> },
 	{ id: "vlm", label: "VLM", icon: <Eye className="h-4 w-4" /> },
+	{ id: "tts", label: "TTS", icon: <AudioLines className="h-4 w-4" /> },
+	{ id: "hosted-stt", label: "STT", icon: <Mic className="h-4 w-4" /> },
 	{ id: "embedding", label: "Embedding", icon: <Binary className="h-4 w-4" /> },
 	{
 		id: "image-embedding",
@@ -590,23 +655,39 @@ const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
 
 export default function Page() {
 	const backend = useBackend();
-	const profile = useInvoke(backend.userState.getProfile, backend.userState, [], true);
+	const profile = useInvoke(
+		backend.userState.getProfile,
+		backend.userState,
+		[],
+		true,
+	);
 
 	const [mode, setMode] = useState<BitMode>("local-llm");
 	const [bit, setBit] = useState<IBit>(DEFAULT_BIT);
 	const [loading, setLoading] = useState(false);
 	const [projection, setProjection] = useState<IBit | undefined>(undefined);
-	const [textEmbeddingModel, setTextEmbeddingModel] = useState<IBit | undefined>(undefined);
+	const [textEmbeddingModel, setTextEmbeddingModel] = useState<
+		IBit | undefined
+	>(undefined);
 	const [tokenizer, setTokenizer] = useState<IBit | undefined>(undefined);
-	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(undefined);
-	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(undefined);
+	const [tokenizerConfig, setTokenizerConfig] = useState<IBit | undefined>(
+		undefined,
+	);
+	const [specialTokensMap, setSpecialTokensMap] = useState<IBit | undefined>(
+		undefined,
+	);
 	const [config, setConfig] = useState<IBit | undefined>(undefined);
 	const [imageEmbeddingPreprocessor, setImageEmbeddingPreprocessor] = useState<
 		IBit | undefined
 	>(undefined);
-	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<IBit | undefined>(undefined);
+	const [imageEmbeddingConfig, setImageEmbeddingConfig] = useState<
+		IBit | undefined
+	>(undefined);
+	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
 	const [progress, setProgress] = useState(0);
-	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(null);
+	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
+		null,
+	);
 	const [progressTotal, setProgressTotal] = useState<number | null>(null);
 	const [progressLabel, setProgressLabel] = useState<string | null>(null);
 	const [progressBit, setProgressBit] = useState<IBit | undefined>(undefined);
@@ -618,15 +699,17 @@ export default function Page() {
 	const bitType: IBitTypes = (() => {
 		if (mode === "local-llm" || mode === "hosted-llm") return IBitTypes.Llm;
 		if (mode === "vlm") return IBitTypes.Vlm;
+		if (mode === "tts") return IBitTypes.Tts;
+		if (mode === "hosted-stt") return IBitTypes.Stt;
 		if (mode === "embedding") return IBitTypes.Embedding;
 		if (mode === "image-embedding") return IBitTypes.ImageEmbedding;
 		return IBitTypes.ObjectDetection;
 	})();
 
-	const isHostedMode = mode === "hosted-llm";
+	const isHostedMode = mode === "hosted-llm" || mode === "hosted-stt";
 
 	const isHostedModel =
-		bit.type === IBitTypes.Llm &&
+		(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Stt) &&
 		isHostedProviderName(
 			(bit.parameters as ILlmParameters | undefined)?.provider?.provider_name,
 		);
@@ -640,6 +723,15 @@ export default function Page() {
 					? createDefaultLlmParameters(isHostedMode ? "Hosted" : "Local")
 					: {},
 			type,
+		};
+	}
+
+	function getDefaultTtsAssetBit(): IBit {
+		return {
+			...getDefaultBit(IBitTypes.File),
+			download_link: "",
+			file_name: "",
+			parameters: {},
 		};
 	}
 
@@ -659,11 +751,17 @@ export default function Page() {
 					const totRaw = data?.total;
 					const pRaw = data?.percent;
 					const downloaded =
-						typeof dlRaw === "string" ? Number(dlRaw) : (dlRaw as number | undefined);
+						typeof dlRaw === "string"
+							? Number(dlRaw)
+							: (dlRaw as number | undefined);
 					const total =
-						typeof totRaw === "string" ? Number(totRaw) : (totRaw as number | undefined);
+						typeof totRaw === "string"
+							? Number(totRaw)
+							: (totRaw as number | undefined);
 					let percent =
-						typeof pRaw === "string" ? Number(pRaw) : (pRaw as number | undefined);
+						typeof pRaw === "string"
+							? Number(pRaw)
+							: (pRaw as number | undefined);
 					if (
 						(percent == null || !Number.isFinite(percent)) &&
 						typeof downloaded === "number" &&
@@ -686,7 +784,11 @@ export default function Page() {
 								const bps = (downloaded - last.downloaded) / dt;
 								if (Number.isFinite(bps)) {
 									setSpeedBps(bps);
-									if (typeof total === "number" && total > downloaded && bps > 0) {
+									if (
+										typeof total === "number" &&
+										total > downloaded &&
+										bps > 0
+									) {
 										setEtaSec((total - downloaded) / bps);
 									}
 								}
@@ -717,7 +819,9 @@ export default function Page() {
 			isHostedModel ||
 			!bit.download_link ||
 			bit.download_link === "" ||
-			(bit.type !== IBitTypes.Llm && bit.type !== IBitTypes.Vlm)
+			(bit.type !== IBitTypes.Llm &&
+				bit.type !== IBitTypes.Vlm &&
+				bit.type !== IBitTypes.Stt)
 		)
 			return;
 		setLoading(true);
@@ -725,7 +829,8 @@ export default function Page() {
 			const size = await getModelSize(bit.download_link);
 			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository =
+				(await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -763,7 +868,8 @@ export default function Page() {
 		if (
 			!bit.download_link ||
 			bit.download_link === "" ||
-			(bit.type !== IBitTypes.Embedding && bit.type !== IBitTypes.ImageEmbedding)
+			(bit.type !== IBitTypes.Embedding &&
+				bit.type !== IBitTypes.ImageEmbedding)
 		)
 			return;
 		setLoading(true);
@@ -771,7 +877,8 @@ export default function Page() {
 			const size = await getModelSize(bit.download_link);
 			if (!bit.repository || bit.repository === "")
 				bit.repository = bit.download_link.split("/resolve/")[0];
-			bit.repository = (await getOriginalRepo(bit.repository)) ?? bit.repository;
+			bit.repository =
+				(await getOriginalRepo(bit.repository)) ?? bit.repository;
 			const userInfo = await getUserInfo(bit.repository);
 			const license = await getModelLicense(bit.repository);
 			const tags = await getModelTags(bit.repository);
@@ -780,7 +887,12 @@ export default function Page() {
 				...old,
 				meta: {
 					...old.meta,
-					en: { ...old.meta.en, icon: userInfo.avatarUrl, tags, name: modelName || old.meta.en.name },
+					en: {
+						...old.meta.en,
+						icon: userInfo.avatarUrl,
+						tags,
+						name: modelName || old.meta.en.name,
+					},
 				},
 				file_name: old.download_link?.split("/").pop()?.split("?")[0] || "",
 				repository: bit.repository,
@@ -791,7 +903,8 @@ export default function Page() {
 
 			if (
 				bit.type === IBitTypes.Embedding ||
-				(bit.type === IBitTypes.ImageEmbedding && textEmbeddingModel?.download_link)
+				(bit.type === IBitTypes.ImageEmbedding &&
+					textEmbeddingModel?.download_link)
 			) {
 				const downloadLink =
 					bit.type === IBitTypes.ImageEmbedding
@@ -800,13 +913,17 @@ export default function Page() {
 				let repo = bit.repository;
 				if (downloadLink && downloadLink !== "")
 					repo = (await getOriginalRepo(downloadLink)) ?? repo;
-				const [tokenizerUrl, tokenizerConfigUrl, specialTokensMapUrl, configUrl] =
-					await Promise.all([
-						guessedModelLink(downloadLink, "tokenizer.json"),
-						guessedModelLink(downloadLink, "tokenizer_config.json"),
-						guessedModelLink(downloadLink, "special_tokens_map.json"),
-						guessedModelLink(downloadLink, "config.json"),
-					]);
+				const [
+					tokenizerUrl,
+					tokenizerConfigUrl,
+					specialTokensMapUrl,
+					configUrl,
+				] = await Promise.all([
+					guessedModelLink(downloadLink, "tokenizer.json"),
+					guessedModelLink(downloadLink, "tokenizer_config.json"),
+					guessedModelLink(downloadLink, "special_tokens_map.json"),
+					guessedModelLink(downloadLink, "config.json"),
+				]);
 				setTokenizer((old) => ({
 					...(old || getDefaultBit(IBitTypes.Tokenizer)),
 					download_link: tokenizerUrl,
@@ -882,9 +999,22 @@ export default function Page() {
 			setTokenizerConfig(getDefaultBit(IBitTypes.TokenizerConfig));
 			setSpecialTokensMap(getDefaultBit(IBitTypes.SpecialTokensMap));
 			setConfig(getDefaultBit(IBitTypes.Config));
-			setImageEmbeddingPreprocessor(getDefaultBit(IBitTypes.PreprocessorConfig));
+			setImageEmbeddingPreprocessor(
+				getDefaultBit(IBitTypes.PreprocessorConfig),
+			);
 			setImageEmbeddingConfig(getDefaultBit(IBitTypes.Config));
 			setTextEmbeddingModel(getDefaultBit(IBitTypes.Embedding));
+			return;
+		}
+		if (type === IBitTypes.Tts) {
+			setProjection(undefined);
+			setTokenizer(undefined);
+			setTokenizerConfig(undefined);
+			setSpecialTokensMap(undefined);
+			setConfig(undefined);
+			setImageEmbeddingPreprocessor(undefined);
+			setImageEmbeddingConfig(undefined);
+			setTextEmbeddingModel(undefined);
 			return;
 		}
 		setProjection(undefined);
@@ -895,37 +1025,78 @@ export default function Page() {
 		setImageEmbeddingPreprocessor(undefined);
 		setImageEmbeddingConfig(undefined);
 		setTextEmbeddingModel(undefined);
+		setTtsAssets([]);
 	}
 
 	useEffect(() => {
 		const providerName = isHostedMode ? "Hosted" : "Local";
-		setBit((old) => ({
-			...old,
-			id: createId(),
-			type: bitType,
-			parameters:
-				bitType === IBitTypes.Llm || bitType === IBitTypes.Vlm
-					? createDefaultLlmParameters(providerName)
-					: bitType === IBitTypes.Embedding || bitType === IBitTypes.ImageEmbedding
-						? { ...DEFAULT_EMBEDDING_PARAMETERS }
-						: {},
-			download_link: isHostedMode ? "" : old.download_link,
-			file_name: isHostedMode ? "" : old.file_name,
-			size: isHostedMode ? 0 : old.size,
-			name: "",
-		}));
+		const ttsAssetLayout =
+			bitType === IBitTypes.Tts
+				? defaultTtsAssetLayout(
+						DEFAULT_TTS_PARAMETERS.model_type,
+						getDefaultTtsAssetBit,
+					)
+				: [];
+		setBit((old) => {
+			const nextBit = {
+				...old,
+				id: createId(),
+				type: bitType,
+				parameters:
+					bitType === IBitTypes.Llm ||
+					bitType === IBitTypes.Vlm ||
+					bitType === IBitTypes.Stt
+						? createDefaultLlmParameters(providerName)
+						: bitType === IBitTypes.Tts
+							? DEFAULT_TTS_PARAMETERS
+							: bitType === IBitTypes.Embedding ||
+									bitType === IBitTypes.ImageEmbedding
+								? { ...DEFAULT_EMBEDDING_PARAMETERS }
+								: {},
+				download_link:
+					isHostedMode || bitType === IBitTypes.Tts ? "" : old.download_link,
+				file_name:
+					isHostedMode || bitType === IBitTypes.Tts ? "" : old.file_name,
+				size: isHostedMode || bitType === IBitTypes.Tts ? 0 : old.size,
+				name: "",
+			};
+
+			if (bitType === IBitTypes.Tts) {
+				return applyTtsModelPreset(
+					nextBit,
+					DEFAULT_TTS_PARAMETERS.model_type,
+					ttsAssetLayout,
+				);
+			}
+
+			return nextBit;
+		});
+		if (bitType === IBitTypes.Tts) setTtsAssets(ttsAssetLayout);
 		setDefaultDependencies(bitType);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [mode]);
 
 	useEffect(() => {
-		if ((bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) && !isHostedModel) {
+		if (
+			(bit.type === IBitTypes.Llm ||
+				bit.type === IBitTypes.Vlm ||
+				bit.type === IBitTypes.Stt) &&
+			!isHostedModel
+		) {
 			prefillLLM();
 		}
-		if (bit.type === IBitTypes.Embedding || bit.type === IBitTypes.ImageEmbedding) {
+		if (
+			bit.type === IBitTypes.Embedding ||
+			bit.type === IBitTypes.ImageEmbedding
+		) {
 			prefillEmbeddingModel();
 		}
-	}, [bit.download_link, bit.type, isHostedModel, textEmbeddingModel?.download_link]);
+	}, [
+		bit.download_link,
+		bit.type,
+		isHostedModel,
+		textEmbeddingModel?.download_link,
+	]);
 
 	// ── submit ─────────────────────────────────────────────────────────────
 
@@ -944,9 +1115,13 @@ export default function Page() {
 				}
 				const tokReg = await uploadBit(mergeBitParameters(tokenizer, bit));
 				dependencies.push(tokReg);
-				const tokCfgReg = await uploadBit(mergeBitParameters(tokenizerConfig, bit));
+				const tokCfgReg = await uploadBit(
+					mergeBitParameters(tokenizerConfig, bit),
+				);
 				dependencies.push(tokCfgReg);
-				const stmReg = await uploadBit(mergeBitParameters(specialTokensMap, bit));
+				const stmReg = await uploadBit(
+					mergeBitParameters(specialTokensMap, bit),
+				);
 				dependencies.push(stmReg);
 				const cfgReg = await uploadBit(mergeBitParameters(config, bit));
 				dependencies.push(cfgReg);
@@ -954,7 +1129,11 @@ export default function Page() {
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			if (bit.type === IBitTypes.ImageEmbedding) {
@@ -967,11 +1146,15 @@ export default function Page() {
 					!imageEmbeddingPreprocessor ||
 					!imageEmbeddingConfig
 				) {
-					throw new Error("Missing required dependencies for Image Embedding model");
+					throw new Error(
+						"Missing required dependencies for Image Embedding model",
+					);
 				}
 				textEmbeddingModel.license = bit.license;
 				textEmbeddingModel.authors = bit.authors;
-				const tokReg = await uploadBit(mergeBitParameters(tokenizer, textEmbeddingModel));
+				const tokReg = await uploadBit(
+					mergeBitParameters(tokenizer, textEmbeddingModel),
+				);
 				dependencies.push(tokReg);
 				const tokCfgReg = await uploadBit(
 					mergeBitParameters(tokenizerConfig, textEmbeddingModel),
@@ -981,7 +1164,9 @@ export default function Page() {
 					mergeBitParameters(specialTokensMap, textEmbeddingModel),
 				);
 				dependencies.push(stmReg);
-				const cfgReg = await uploadBit(mergeBitParameters(config, textEmbeddingModel));
+				const cfgReg = await uploadBit(
+					mergeBitParameters(config, textEmbeddingModel),
+				);
 				dependencies.push(cfgReg);
 				const textEmbReg = await uploadBit({
 					...textEmbeddingModel,
@@ -990,15 +1175,23 @@ export default function Page() {
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
 				dependencies = [textEmbReg];
-				const ppReg = await uploadBit(mergeBitParameters(imageEmbeddingPreprocessor, bit));
+				const ppReg = await uploadBit(
+					mergeBitParameters(imageEmbeddingPreprocessor, bit),
+				);
 				dependencies.push(ppReg);
-				const imgCfgReg = await uploadBit(mergeBitParameters(imageEmbeddingConfig, bit));
+				const imgCfgReg = await uploadBit(
+					mergeBitParameters(imageEmbeddingConfig, bit),
+				);
 				dependencies.push(imgCfgReg);
 				const response = await uploadBit({
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			if (bit.type === IBitTypes.Vlm) {
@@ -1012,12 +1205,66 @@ export default function Page() {
 				dependencies.push(projReg);
 			}
 
-			if (bit.type === IBitTypes.Vlm || bit.type === IBitTypes.Llm) {
+			if (bit.type === IBitTypes.Tts) {
+				if (ttsAssets.length === 0) {
+					throw new Error("TTS models require at least one asset");
+				}
+
+				const registeredAssets = [];
+				for (const asset of ttsAssets) {
+					if (!asset.relativePath) {
+						throw new Error("Every TTS asset needs a model-relative path");
+					}
+					if (asset.required && !asset.bit.download_link) {
+						throw new Error(
+							`Missing download link for required TTS asset ${asset.relativePath}`,
+						);
+					}
+					if (!asset.required && !asset.bit.download_link) continue;
+
+					const registered = await uploadBit(
+						mergeTtsAssetParameters(asset.bit, bit),
+					);
+					dependencies.push(registered);
+					registeredAssets.push({
+						bit: `${registered.hub}:${registered.id}`,
+						relative_path: asset.relativePath,
+						required: asset.required,
+					});
+				}
+
+				const response = await uploadBit({
+					...bit,
+					download_link: bit.download_link || null,
+					file_name: bit.file_name || null,
+					size: bit.download_link ? bit.size : 0,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+					parameters: {
+						...bit.parameters,
+						assets: registeredAssets,
+					},
+				});
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
+			}
+
+			if (
+				bit.type === IBitTypes.Vlm ||
+				bit.type === IBitTypes.Llm ||
+				bit.type === IBitTypes.Stt
+			) {
 				const response = await uploadBit({
 					...bit,
 					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
 				});
-				await backend.apiState.put(profile.data, `admin/bit/${response.id}/en`, bit.meta.en);
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
 			}
 
 			toast.success("Bit added successfully");
@@ -1030,8 +1277,11 @@ export default function Page() {
 			setImageEmbeddingPreprocessor(undefined);
 			setImageEmbeddingConfig(undefined);
 			setTextEmbeddingModel(undefined);
+			setTtsAssets([]);
 		} catch (error: unknown) {
-			toast.error(`Failed to add bit: ${error instanceof Error ? error.message : error}`);
+			toast.error(
+				`Failed to add bit: ${error instanceof Error ? error.message : error}`,
+			);
 		} finally {
 			setLoading(false);
 		}
@@ -1045,6 +1295,7 @@ export default function Page() {
 		projection,
 		specialTokensMap,
 		textEmbeddingModel,
+		ttsAssets,
 		tokenizer,
 		tokenizerConfig,
 		uploadBit,
@@ -1067,7 +1318,9 @@ export default function Page() {
 					<Card>
 						<CardHeader>
 							<CardTitle>Bit Type</CardTitle>
-							<CardDescription>Choose what kind of bit you want to add.</CardDescription>
+							<CardDescription>
+								Choose what kind of bit you want to add.
+							</CardDescription>
 						</CardHeader>
 						<CardContent>
 							<div className="flex flex-wrap gap-2">
@@ -1097,28 +1350,36 @@ export default function Page() {
 						/>
 					) : (
 						<>
-							{/* download link for non-hosted */}
-							<div className="flex flex-row items-center gap-2 max-w-3xl">
-								{loading ? (
-									<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
-								) : null}
-								<Input
-									disabled={loading}
-									value={bit.download_link ?? ""}
-									onChange={(e) =>
-										setBit((old) => ({
-											...old,
-											download_link: e.target.value.trim(),
-										}))
-									}
-									placeholder="File URL (ONNX)"
-								/>
-							</div>
+							{/* download link for non-hosted file-backed models */}
+							{bit.type !== IBitTypes.Tts ? (
+								<div className="flex flex-row items-center gap-2 max-w-3xl">
+									{loading ? (
+										<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
+									) : null}
+									<Input
+										disabled={loading}
+										value={bit.download_link ?? ""}
+										onChange={(e) =>
+											setBit((old) => ({
+												...old,
+												download_link: e.target.value.trim(),
+											}))
+										}
+										placeholder="File URL (ONNX/GGUF/Safetensors)"
+									/>
+								</div>
+							) : null}
 
 							{/* model-type-specific configuration */}
-							{(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) ? (
+							{bit.type === IBitTypes.Llm ||
+							bit.type === IBitTypes.Vlm ||
+							bit.type === IBitTypes.Stt ? (
 								<>
-									<LLMConfiguration bit={bit} setBit={setBit} isHosted={false} />
+									<LLMConfiguration
+										bit={bit}
+										setBit={setBit}
+										isHosted={false}
+									/>
 									<Separator className="my-4" />
 								</>
 							) : null}
@@ -1133,8 +1394,20 @@ export default function Page() {
 									<Separator className="my-4" />
 								</>
 							) : null}
-							{(bit.type === IBitTypes.Embedding ||
-								bit.type === IBitTypes.ImageEmbedding) ? (
+							{bit.type === IBitTypes.Tts ? (
+								<>
+									<TTSConfiguration
+										bit={bit}
+										setBit={setBit}
+										assetBits={ttsAssets}
+										setAssetBits={setTtsAssets}
+										createAssetBit={getDefaultTtsAssetBit}
+									/>
+									<Separator className="my-4" />
+								</>
+							) : null}
+							{bit.type === IBitTypes.Embedding ||
+							bit.type === IBitTypes.ImageEmbedding ? (
 								<>
 									<div className="flex flex-col items-start gap-6 w-full max-w-5xl">
 										<EmbeddingConfiguration bit={bit} setBit={setBit} />
@@ -1234,7 +1507,21 @@ export default function Page() {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function mergeBitParameters(bit: IBit, parent: IBit): IBit {
-	return { ...bit, license: parent.license, authors: parent.authors, repository: parent.repository };
+	return {
+		...bit,
+		license: parent.license,
+		authors: parent.authors,
+		repository: parent.repository,
+	};
+}
+
+function mergeTtsAssetParameters(bit: IBit, parent: IBit): IBit {
+	return {
+		...bit,
+		license: bit.license || parent.license,
+		authors: bit.authors?.length ? bit.authors : parent.authors,
+		repository: bit.repository || parent.repository,
+	};
 }
 
 function UploadProgressCard(props: {
@@ -1309,7 +1596,10 @@ function UploadProgressCard(props: {
 function formatBytes(bytes: number): string {
 	if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
 	const units = ["B", "KB", "MB", "GB", "TB"];
-	const i = Math.min(Math.floor(Math.log(bytes || 1) / Math.log(1024)), units.length - 1);
+	const i = Math.min(
+		Math.floor(Math.log(bytes || 1) / Math.log(1024)),
+		units.length - 1,
+	);
 	const value = bytes / 1024 ** i;
 	return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[i]}`;
 }

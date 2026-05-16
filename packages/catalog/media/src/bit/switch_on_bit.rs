@@ -30,7 +30,7 @@ impl NodeLogic for SwitchOnBitNode {
         );
 
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(1);
+        node.set_version(4);
 
         node.add_input_pin(
             "exec_in",
@@ -56,6 +56,18 @@ impl NodeLogic for SwitchOnBitNode {
             VariableType::Execution,
         );
         node.add_output_pin(
+            "tts",
+            "TTS",
+            "Execution if Bit is TTS",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "stt",
+            "STT",
+            "Execution if Bit is STT",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
             "embedding",
             "Embedding",
             "Execution if Bit is Embedding",
@@ -77,6 +89,18 @@ impl NodeLogic for SwitchOnBitNode {
             "media",
             "Media",
             "Execution if Bit is Media",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "image_generation",
+            "Image Generation",
+            "Execution if Bit is Image Generation Model",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "video_generation",
+            "Video Generation",
+            "Execution if Bit is Video Generation Model",
             VariableType::Execution,
         );
         node.add_output_pin(
@@ -163,10 +187,14 @@ impl NodeLogic for SwitchOnBitNode {
 
         context.deactivate_exec_pin("llm").await?;
         context.deactivate_exec_pin("vlm").await?;
+        context.deactivate_exec_pin("tts").await?;
+        context.deactivate_exec_pin("stt").await?;
         context.deactivate_exec_pin("embedding").await?;
         context.deactivate_exec_pin("image_embedding").await?;
         context.deactivate_exec_pin("file").await?;
         context.deactivate_exec_pin("media").await?;
+        context.deactivate_exec_pin("image_generation").await?;
+        context.deactivate_exec_pin("video_generation").await?;
         context.deactivate_exec_pin("template").await?;
         context.deactivate_exec_pin("tokenizer").await?;
         context.deactivate_exec_pin("tokenizer_config").await?;
@@ -185,10 +213,14 @@ impl NodeLogic for SwitchOnBitNode {
         let output_pin = match bit.bit_type {
             BitTypes::Llm => "llm",
             BitTypes::Vlm => "vlm",
+            BitTypes::Tts => "tts",
+            BitTypes::Stt => "stt",
             BitTypes::Embedding => "embedding",
             BitTypes::ImageEmbedding => "image_embedding",
             BitTypes::File => "file",
             BitTypes::Media => "media",
+            BitTypes::ImageGeneration => "image_generation",
+            BitTypes::VideoGeneration => "video_generation",
             BitTypes::Template => "template",
             BitTypes::Tokenizer => "tokenizer",
             BitTypes::TokenizerConfig => "tokenizer_config",

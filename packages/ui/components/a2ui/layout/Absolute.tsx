@@ -3,15 +3,10 @@
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps, RenderChildFn } from "../ComponentRegistry";
+import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
-import type { AbsoluteComponent, BoundValue, Children } from "../types";
-
-function getChildIds(children: Children | undefined): string[] {
-	if (!children) return [];
-	if ("explicitList" in children) return children.explicitList;
-	return [];
-}
+import type { AbsoluteComponent, BoundValue } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -24,9 +19,10 @@ export function A2UIAbsolute({
 	style,
 	renderChild,
 }: ComponentProps<AbsoluteComponent> & { renderChild: RenderChildFn }) {
+	const { resolve } = useData();
 	const width = useResolved<string>(component.width);
 	const height = useResolved<string>(component.height);
-	const childIds = getChildIds(component.children);
+	const children = resolveChildSpecs(component.children, resolve);
 
 	return (
 		<div
@@ -37,8 +33,10 @@ export function A2UIAbsolute({
 				...resolveInlineStyle(style),
 			}}
 		>
-			{childIds.map((id) => (
-				<Fragment key={id}>{renderChild(id)}</Fragment>
+			{children.map((child) => (
+				<Fragment key={child.key}>
+					{renderChild(child.id, child.scope)}
+				</Fragment>
 			))}
 		</div>
 	);

@@ -1,6 +1,6 @@
-use crate::auth::AppUser;
 use crate::error::ApiError;
 use crate::state::AppState;
+use crate::{auth::AppUser, ensure_permission, permission::role_permission::RolePermissions};
 use axum::{
     Extension, Json, Router,
     extract::{Query, State},
@@ -8,6 +8,7 @@ use axum::{
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use flow_like_storage::Path as FLPath;
+use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::tokio::try_join;
 use flow_like_types::{
     create_id,
@@ -28,6 +29,8 @@ const DEFAULT_SIZE_LIMIT_BYTES: Option<u64> = Some(1024 * 1024 * 35); // 35 MB
 #[serde(rename_all = "camelCase")]
 pub struct TemporaryFileResponse {
     pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_path: Option<TemporaryFlowPath>,
     pub content_type: String,
     pub upload_url: String,
     pub upload_expires_at: String,
@@ -38,8 +41,18 @@ pub struct TemporaryFileResponse {
     pub size_limit_bytes: Option<u64>,
 }
 
+#[derive(Clone, Deserialize, Serialize, Debug, ToSchema)]
+pub struct TemporaryFlowPath {
+    pub path: String,
+    pub store_ref: String,
+    pub cache_store_ref: Option<String>,
+}
+
 #[derive(Deserialize, Debug, ToSchema, utoipa::IntoParams)]
 pub struct ExtensionParams {
+    /// Optional app id. When set, the upload is created under the app-scoped temporary invoke prefix.
+    #[serde(default, alias = "appId")]
+    pub app_id: Option<String>,
     /// Optional file extension (e.g. "png"). Will be sanitized (alnum only).
     pub extension: Option<String>,
     /// Optional explicit content-type; falls back to extension mapping or octet-stream.
@@ -86,7 +99,15 @@ pub async fn get_temporary_upload(
     let now_utc = Utc::now();
     let date_prefix = now_utc.format("%Y/%m/%d").to_string();
     let file_name = format!("{id}.{ext}");
-    let key = format!("tmp/user/{sub}/{date_prefix}/{file_name}");
+    let key = if let Some(app_id) = params.app_id.as_deref() {
+        ensure_permission!(user, app_id, &state, RolePermissions::ExecuteEvents);
+        let app_id = sanitize_path_segment(app_id, "app");
+        let sub = sanitize_path_segment(&sub, "user");
+        format!("tmp/user/{sub}/apps/{app_id}/{date_prefix}/{file_name}")
+    } else {
+        let sub = sanitize_path_segment(&sub, "user");
+        format!("tmp/user/{sub}/{date_prefix}/{file_name}")
+    };
 
     let content_type: Mime = params
         .content_type
@@ -118,6 +139,11 @@ pub async fn get_temporary_upload(
     let upload_expires_at = (now_utc + ChronoDuration::seconds(upload_ttl as i64)).to_rfc3339();
 
     let response = TemporaryFileResponse {
+        flow_path: params.app_id.as_ref().map(|_| TemporaryFlowPath {
+            path: key.clone(),
+            store_ref: REQUEST_FILES_STORE_REF.to_string(),
+            cache_store_ref: None,
+        }),
         key,
         content_type: content_type.to_string(),
         upload_url: upload_url.to_string(),
@@ -138,4 +164,22 @@ fn sanitize_ext(input: Option<&str>) -> Option<String> {
         return None;
     }
     Some(std::mem::take(&mut s))
+}
+
+fn sanitize_path_segment(input: &str, fallback: &str) -> String {
+    let mut s = String::with_capacity(input.len().min(80));
+    for ch in input.chars().take(80) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            s.push(ch);
+        } else {
+            s.push('_');
+        }
+    }
+
+    let s = s.trim_matches(|ch| ch == '.' || ch == '_');
+    if s.is_empty() {
+        fallback.to_string()
+    } else {
+        s.to_string()
+    }
 }

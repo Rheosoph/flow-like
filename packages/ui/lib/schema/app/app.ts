@@ -1,4 +1,5 @@
 export interface IApp {
+	allow_forking?: boolean;
 	authors: string[];
 	avg_rating?: number | null;
 	bits: string[];
@@ -8,6 +9,8 @@ export interface IApp {
 	download_count: number;
 	events: string[];
 	execution_mode: IAppExecutionMode;
+	forked_at?: ISystemTime | null;
+	forked_from?: null | string;
 	frontend?: null | IFrontendConfiguration;
 	id: string;
 	interactions_count: number;

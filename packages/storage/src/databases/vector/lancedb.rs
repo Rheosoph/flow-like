@@ -1,4 +1,5 @@
-use arrow_array::{RecordBatch, RecordBatchIterator};
+use arrow_array::RecordBatch;
+use arrow_schema::{DataType, Schema};
 use datafusion::prelude::*;
 use flow_like_types::Cacheable;
 use flow_like_types::async_trait;
@@ -27,7 +28,7 @@ use lancedb::{
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
-use crate::arrow_utils::{ValueBatchIterator, value_to_batch_iterator_with_fields};
+use crate::arrow_utils::{ValueBatchReader, value_to_batch_reader_with_fields};
 
 use super::VectorStore;
 
@@ -245,11 +246,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn insert_record_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        let schema = batch.schema();
-        let items = RecordBatchIterator::new(
-            vec![Ok::<RecordBatch, arrow_schema::ArrowError>(batch)].into_iter(),
-            schema,
-        );
+        let items = vec![batch];
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -262,8 +259,11 @@ impl LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' from record batch: {err:#}",
+                        self.table_name
+                    );
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -279,7 +279,7 @@ impl LanceDBVectorStore {
         }
     }
 
-    async fn write_batch_iterator(&self, items: Vec<Value>) -> Result<ValueBatchIterator> {
+    async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
         let fields = if let Some(table) = &self.table {
             let schema = table.schema().await?;
             Some(schema.fields().iter().cloned().collect())
@@ -287,7 +287,7 @@ impl LanceDBVectorStore {
             None
         };
 
-        value_to_batch_iterator_with_fields(items, fields)
+        value_to_batch_reader_with_fields(items, fields)
     }
 }
 
@@ -306,12 +306,57 @@ pub fn record_batches_to_vec(batches: Option<Vec<RecordBatch>>) -> Result<Vec<Va
                 items.append(&mut values);
             }
             Err(err) => {
-                println!("Error converting batch to value: {:?}", err);
+                eprintln!("[LanceDB] Error converting batch to value: {err:#}");
             }
         }
     }
 
     Ok(items)
+}
+
+fn is_vector_data_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::FixedSizeList(field, _) | DataType::List(field) | DataType::LargeList(field) => {
+            match field.data_type() {
+                DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+                nested => is_vector_data_type(nested),
+            }
+        }
+        _ => false,
+    }
+}
+
+fn split_hybrid_fields(
+    schema: &Schema,
+    fields: Option<Vec<String>>,
+) -> (Option<String>, Option<Vec<String>>) {
+    let Some(fields) = fields else {
+        return (None, None);
+    };
+
+    let mut vector_column = None;
+    let mut fts_fields = Vec::new();
+
+    for field in fields {
+        let is_vector_field = schema
+            .field_with_name(&field)
+            .map(|schema_field| is_vector_data_type(schema_field.data_type()))
+            .unwrap_or(false);
+
+        if vector_column.is_none() && is_vector_field {
+            vector_column = Some(field);
+        } else {
+            fts_fields.push(field);
+        }
+    }
+
+    let fts_fields = if fts_fields.is_empty() {
+        None
+    } else {
+        Some(fts_fields)
+    };
+
+    (vector_column, fts_fields)
 }
 
 #[async_trait]
@@ -333,7 +378,6 @@ impl VectorStore for LanceDBVectorStore {
             .query()
             .nearest_to(vector)?
             .distance_type(lancedb::DistanceType::Cosine)
-            .fast_search()
             .limit(limit)
             .offset(offset);
 
@@ -346,8 +390,8 @@ impl VectorStore for LanceDBVectorStore {
         }
 
         let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await.ok();
-        let result = record_batches_to_vec(result)?;
+        let result = result.try_collect::<Vec<_>>().await?;
+        let result = record_batches_to_vec(Some(result))?;
         Ok(result)
     }
 
@@ -389,8 +433,8 @@ impl VectorStore for LanceDBVectorStore {
         }
 
         let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await.ok();
-        let result = record_batches_to_vec(result)?;
+        let result = result.try_collect::<Vec<_>>().await?;
+        let result = record_batches_to_vec(Some(result))?;
         Ok(result)
     }
 
@@ -409,6 +453,8 @@ impl VectorStore for LanceDBVectorStore {
             .table
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let schema = table.schema().await?;
+        let (vector_column, fields) = split_hybrid_fields(&schema, fields);
 
         let mut fts_query = FullTextSearchQuery::new(text.to_string());
         if let Some(ref fields) = fields {
@@ -424,9 +470,12 @@ impl VectorStore for LanceDBVectorStore {
             .nearest_to(vector)?
             .distance_type(lancedb::DistanceType::Cosine)
             .full_text_search(fts_query)
-            .fast_search()
             .limit(limit)
             .offset(offset);
+
+        if let Some(vector_column) = vector_column {
+            query = query.column(&vector_column);
+        }
 
         if rerank {
             let reranker = Arc::new(lancedb::rerankers::rrf::RRFReranker::new(60.0));
@@ -444,8 +493,8 @@ impl VectorStore for LanceDBVectorStore {
         let result = query
             .execute_hybrid(QueryExecutionOptions::default())
             .await?;
-        let result = result.try_collect::<Vec<_>>().await.ok();
-        let result = record_batches_to_vec(result)?;
+        let result = result.try_collect::<Vec<_>>().await?;
+        let result = record_batches_to_vec(Some(result))?;
         Ok(result)
     }
 
@@ -468,13 +517,13 @@ impl VectorStore for LanceDBVectorStore {
         }
 
         let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await.ok();
-        let result = record_batches_to_vec(result)?;
+        let result = result.try_collect::<Vec<_>>().await?;
+        let result = record_batches_to_vec(Some(result))?;
         Ok(result)
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
-        let items = self.write_batch_iterator(items).await?;
+        let items = self.write_batch_reader(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -487,8 +536,11 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' for upsert: {err:#}",
+                        self.table_name
+                    );
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -499,13 +551,13 @@ impl VectorStore for LanceDBVectorStore {
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
             .to_owned()
-            .execute(Box::new(items))
+            .execute(items)
             .await?;
         Ok(())
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
-        let items = self.write_batch_iterator(items).await?;
+        let items = self.write_batch_reader(items).await?;
 
         if self.table.is_none() {
             let mut builder = self.connection.create_table(&self.table_name, items);
@@ -518,8 +570,11 @@ impl VectorStore for LanceDBVectorStore {
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("Error creating table: {:?}", err);
-                    return Err(anyhow!("Error creating table"));
+                    eprintln!(
+                        "[LanceDB] Error creating table '{}' for insert: {err:#}",
+                        self.table_name
+                    );
+                    return Err(anyhow!("Error creating table '{}': {err}", self.table_name));
                 }
             }
         }
@@ -593,12 +648,9 @@ impl VectorStore for LanceDBVectorStore {
             query = query.select(lancedb::query::Select::Columns(select));
         }
 
-        let result = query.execute().await.ok();
-
-        result.as_ref().ok_or(anyhow!("Error executing query"))?;
-
-        let result = result.unwrap().try_collect::<Vec<_>>().await.ok();
-        return record_batches_to_vec(result);
+        let result = query.execute().await?;
+        let result = result.try_collect::<Vec<_>>().await?;
+        record_batches_to_vec(Some(result))
     }
 
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()> {
@@ -773,6 +825,73 @@ mod tests {
 
         let first_item: TestStruct = from_value(search_results[0].clone())?;
         assert_eq!(first_item, records[0]);
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_hybrid_search_without_vector_index() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let records = vec![
+            TestStruct {
+                id: 1,
+                name: "Alice".to_string(),
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            TestStruct {
+                id: 2,
+                name: "Bob".to_string(),
+                vector: vec![2.0, 3.0, 4.0],
+            },
+        ];
+
+        let json_records: Vec<Value> = records
+            .clone()
+            .into_iter()
+            .map(to_value)
+            .collect::<Result<_, _>>()?;
+
+        db.upsert(json_records, "id".to_string()).await?;
+        db.index("name", Some("FULL TEXT")).await?;
+
+        let search_results: Vec<Value> = db
+            .hybrid_search(
+                vec![1.0, 2.0, 3.0],
+                "Alice",
+                None,
+                None,
+                Some(vec!["name".to_string()]),
+                10,
+                0,
+                true,
+            )
+            .await?;
+
+        assert!(!search_results.is_empty());
+        let items: Vec<TestStruct> = search_results
+            .into_iter()
+            .map(from_value)
+            .collect::<Result<_, _>>()?;
+        assert!(items.iter().any(|item| item.id == 1));
+
+        let search_results_with_vector_field: Vec<Value> = db
+            .hybrid_search(
+                vec![1.0, 2.0, 3.0],
+                "Alice",
+                None,
+                None,
+                Some(vec!["vector".to_string(), "name".to_string()]),
+                10,
+                0,
+                true,
+            )
+            .await?;
+
+        assert!(!search_results_with_vector_field.is_empty());
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
@@ -1038,6 +1157,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_buffered_upsert_deduplicates_same_id_before_flush() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let inner = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let mut db = BufferedVectorStore::new(inner, 10);
+
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice", "tag": "alpha"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.upsert(
+            vec![json!({"id": 1, "name": "Alice Updated", "tag": "beta"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.upsert(
+            vec![json!({"id": 2, "name": "Bob", "tag": "gamma"})],
+            "id".to_string(),
+        )
+        .await?;
+
+        db.flush().await?;
+
+        let mut rows: Vec<NullableFieldRow> = db
+            .list(
+                Some(vec![
+                    "id".to_string(),
+                    "name".to_string(),
+                    "tag".to_string(),
+                ]),
+                10,
+                0,
+            )
+            .await?
+            .into_iter()
+            .map(from_value)
+            .collect::<Result<_, _>>()?;
+
+        rows.sort_by_key(|row| row.id);
+
+        assert_eq!(
+            rows,
+            vec![
+                NullableFieldRow {
+                    id: 1,
+                    name: "Alice Updated".to_string(),
+                    tag: Some("beta".to_string()),
+                },
+                NullableFieldRow {
+                    id: 2,
+                    name: "Bob".to_string(),
+                    tag: Some("gamma".to_string()),
+                },
+            ]
+        );
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_buffered_upsert_rejects_missing_fields_against_existing_table() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path).unwrap();
@@ -1065,6 +1248,79 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_add_and_drop_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.upsert(
+            vec![to_value(&TestStruct2 {
+                id: 1,
+                name: "Alice".to_string(),
+            })?],
+            "id".to_string(),
+        )
+        .await?;
+
+        db.add_column("counter", "CAST(0 AS INT)").await?;
+        db.add_column("note", "CAST('' AS STRING)").await?;
+        db.add_column("flag", "CAST(NULL AS STRING)").await?;
+
+        let names: Vec<String> = db
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert!(names.contains(&"counter".to_string()));
+        assert!(names.contains(&"note".to_string()));
+        assert!(names.contains(&"flag".to_string()));
+
+        db.drop_columns(&["counter", "note"]).await?;
+
+        let names: Vec<String> = db
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert!(!names.contains(&"counter".to_string()));
+        assert!(!names.contains(&"note".to_string()));
+        assert!(names.contains(&"flag".to_string()));
+
+        std::fs::remove_dir_all(&test_path).unwrap();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lance_add_column_bare_null_fails() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.upsert(
+            vec![to_value(&TestStruct2 {
+                id: 1,
+                name: "Alice".to_string(),
+            })?],
+            "id".to_string(),
+        )
+        .await?;
+
+        // LanceDB requires `CAST(NULL AS <type>)`; a bare `NULL` cannot be inferred.
+        let bare_null = db.add_column("flag", "NULL").await;
+        assert!(
+            bare_null.is_err(),
+            "bare NULL should fail; LanceDB requires CAST(NULL AS <type>)"
+        );
+
+        std::fs::remove_dir_all(&test_path).unwrap();
         Ok(())
     }
 }

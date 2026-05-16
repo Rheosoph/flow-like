@@ -308,6 +308,7 @@ impl NodeLogic for ExtractDocumentAiNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -624,6 +625,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -1070,7 +1072,7 @@ impl NodeLogic for SummarizeDocumentNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -1431,6 +1433,7 @@ impl NodeLogic for ExtractContentSectionsNode {
             "AI/Processing",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()

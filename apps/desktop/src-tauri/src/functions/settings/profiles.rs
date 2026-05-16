@@ -318,11 +318,23 @@ pub async fn delete_profile(
 ) -> Result<(), TauriFunctionError> {
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
-    let current_profile = settings.get_current_profile()?;
-    if current_profile.hub_profile.id == profile_id {
-        return Err(TauriFunctionError::new("Cannot delete current profile"));
+
+    if !settings.profiles.contains_key(&profile_id) {
+        return Ok(());
     }
+
+    let deletes_current_profile = settings.current_profile == profile_id
+        || settings
+            .get_current_profile()
+            .map(|profile| profile.hub_profile.id == profile_id)
+            .unwrap_or(false);
+
     settings.profiles.remove(&profile_id);
+
+    if deletes_current_profile || !settings.profiles.contains_key(&settings.current_profile) {
+        settings.current_profile = settings.profiles.keys().next().cloned().unwrap_or_default();
+    }
+
     settings.serialize();
     Ok(())
 }

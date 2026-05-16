@@ -28,15 +28,13 @@ export function isOwner(permission: number): boolean {
 
 export function isMaintainer(permission: number): boolean {
 	return (
-		(permission & PackagePermissionBits.Maintainer) !== 0 ||
-		isOwner(permission)
+		(permission & PackagePermissionBits.Maintainer) !== 0 || isOwner(permission)
 	);
 }
 
 export function isUser(permission: number): boolean {
 	return (
-		(permission & PackagePermissionBits.User) !== 0 ||
-		isMaintainer(permission)
+		(permission & PackagePermissionBits.User) !== 0 || isMaintainer(permission)
 	);
 }
 

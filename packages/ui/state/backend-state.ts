@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type { IProfile } from "../types";
 import type { IAIState } from "./backend-state/ai-state";
+import type { IAnalyticsState } from "./backend-state/analytics-state";
 import type { IApiKeyState } from "./backend-state/api-key-state";
 import type { IApiState } from "./backend-state/api-state";
 import type {
@@ -24,6 +25,7 @@ import {
 	EmptyBoardState,
 	EmptyDatabaseState,
 	EmptyEventState,
+	EmptyGraphState,
 	EmptyHelperState,
 	EmptyRoleState,
 	EmptyRouteState,
@@ -34,7 +36,12 @@ import {
 } from "./backend-state/empty-states";
 import { EmptyUsageState } from "./backend-state/empty-states";
 import type { IEventState } from "./backend-state/event-state";
-import type { IHelperState } from "./backend-state/helper-state";
+import type { IGraphState } from "./backend-state/graph-state";
+import type {
+	IHelperState,
+	ITemporaryFlowPath,
+	ITemporaryUploadedFile,
+} from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
 import type { IRegistryState } from "./backend-state/registry-state";
 import type { IRoleState } from "./backend-state/role-state";
@@ -47,7 +54,6 @@ import type {
 import type { IStorageState } from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
-import type { IAnalyticsState } from "./backend-state/analytics-state";
 import type { IUsageState } from "./backend-state/usage-state";
 import type { IUserState } from "./backend-state/user-state";
 import type { IWidgetState } from "./backend-state/widget-state";
@@ -86,6 +92,9 @@ export type {
 	IWidgetState,
 	IUsageState,
 	IAnalyticsState,
+	IGraphState,
+	ITemporaryFlowPath,
+	ITemporaryUploadedFile,
 };
 
 export type { SinkType } from "./backend-state/sink-state";
@@ -127,8 +136,10 @@ export type {
 	IOAuthRequirement,
 	IPrerunBoardResponse,
 	IPrerunEventResponse,
+	IUserLookup,
 } from "./backend-state/types";
 export * from "./backend-state/db-state";
+export * from "./backend-state/graph-state";
 export type {
 	IUserWidgetInfo,
 	IUserTemplateInfo,
@@ -156,6 +167,7 @@ export interface IBackendState {
 	eventState: IEventState;
 	aiState: IAIState;
 	dbState: IDatabaseState;
+	graphState: IGraphState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -201,6 +213,7 @@ const serverBackend: IBackendState = {
 	eventState: new EmptyEventState(),
 	aiState: new EmptyAIState(),
 	dbState: new EmptyDatabaseState(),
+	graphState: new EmptyGraphState(),
 	widgetState: new Proxy(
 		{},
 		{

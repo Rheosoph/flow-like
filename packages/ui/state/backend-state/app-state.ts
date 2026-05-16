@@ -6,6 +6,14 @@ import type {
 	IMetadata,
 } from "../../lib";
 import type { IAppSearchSort } from "../../lib/schema/app/app-search-query";
+import type {
+	IBeginOfflineForkBody,
+	IBeginOfflineForkResponse,
+	IForkPreviewResponse,
+	IForkPreviewTarget,
+	IOnlineForkBody,
+	IOnlineForkResponse,
+} from "../../lib/schema/app/fork";
 
 export type IMediaItem = "icon" | "thumbnail" | "preview";
 
@@ -77,6 +85,37 @@ export interface IAppState {
 		language?: string,
 	): Promise<void>;
 	changeAppVisibility(appId: string, visibility: IAppVisibility): Promise<void>;
+	/**
+	 * Toggle the project-level Fork-an-app opt-in. Owner-only on the backend
+	 * (PATCH /apps/{app_id}/settings/forking).
+	 */
+	changeAppAllowForking(appId: string, allow: boolean): Promise<void>;
+	/**
+	 * Pre-fork dry run — returns size totals, remote-token requirements, and
+	 * the permission verdict. Safe to call as a probe before committing to a
+	 * full fork. (GET /apps/{app_id}/fork/preview)
+	 */
+	getForkPreview(
+		appId: string,
+		target: IForkPreviewTarget,
+	): Promise<IForkPreviewResponse>;
+	/**
+	 * Materialize an offline-bundle fork on the server and return scoped
+	 * read credentials + the bundle prefix so the desktop client can
+	 * pull the bundle. (POST /apps/{app_id}/fork/offline/begin)
+	 */
+	beginOfflineFork(
+		appId: string,
+		body: IBeginOfflineForkBody,
+	): Promise<IBeginOfflineForkResponse>;
+	/**
+	 * Create an online → online fork on the calling user's account.
+	 * (POST /apps/{app_id}/fork)
+	 */
+	onlineFork(
+		appId: string,
+		body: IOnlineForkBody,
+	): Promise<IOnlineForkResponse>;
 	requestJoinApp(appId: string, comment?: string): Promise<void>;
 	purchaseApp(appId: string): Promise<IPurchaseResponse>;
 	getAppComments(

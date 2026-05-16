@@ -8,6 +8,7 @@ export * from "./animated-store";
 export * from "./animated-brain";
 export * from "./animated-library";
 export * from "./animated-sparkles";
+export * from "./animated-study-hat";
 export * from "./animated-key";
 export * from "./animated-users";
 export * from "./animated-dashboard";
@@ -17,4 +18,4 @@ export * from "./animated-plus-autoplay";
 export * from "./animated-pin";
 export * from "./animated-sidebar";
 export * from "./animated-registry";
-export * from "./animated-code"
+export * from "./animated-code";

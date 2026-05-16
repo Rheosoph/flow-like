@@ -1,4 +1,5 @@
 pub mod athena;
+pub mod bigquery;
 pub mod data_lakes;
 pub mod databases;
 pub mod external_stores;

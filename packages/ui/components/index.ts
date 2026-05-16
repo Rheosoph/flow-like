@@ -17,6 +17,7 @@ export * from "./spotlight/index";
 export * from "./a2ui/index";
 export * from "./builder/index";
 export * from "./store/index";
+export * from "./learn/index";
 export * from "./library/index";
 export * from "./layout/index";
 export * from "./animated-icons/index";

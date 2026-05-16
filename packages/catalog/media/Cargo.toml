@@ -6,6 +6,10 @@ edition = "2024"
 [features]
 default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
+local-tts = ["flow-like/local-tts"]
+local-tts-metal = ["local-tts", "flow-like/local-tts-metal"]
+local-tts-cuda = ["local-tts", "flow-like/local-tts-cuda"]
+local-tts-accelerate = ["local-tts", "flow-like/local-tts-accelerate"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",
@@ -26,14 +30,16 @@ flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
+google-cloud-auth.workspace = true
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 uuid.workspace = true
 async-trait.workspace = true
+http = "1.4.0"
 
 # Media processing dependencies - only included when execute feature is enabled
 nalgebra = { version = "0.34.0", optional = true }

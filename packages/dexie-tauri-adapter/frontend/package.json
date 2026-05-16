@@ -10,14 +10,7 @@
 		"directory": "packages/dexie-tauri-adapter/frontend"
 	},
 	"homepage": "https://flow-like.com",
-	"keywords": [
-		"tauri",
-		"dexie",
-		"indexeddb",
-		"blob",
-		"offload",
-		"middleware"
-	],
+	"keywords": ["tauri", "dexie", "indexeddb", "blob", "offload", "middleware"],
 	"type": "module",
 	"main": "src/index.ts",
 	"types": "src/index.ts",
@@ -31,11 +24,7 @@
 			}
 		}
 	},
-	"files": [
-		"dist",
-		"LICENSE",
-		"README.md"
-	],
+	"files": ["dist", "LICENSE", "README.md"],
 	"scripts": {
 		"build": "tsc",
 		"prepublishOnly": "npm run build"

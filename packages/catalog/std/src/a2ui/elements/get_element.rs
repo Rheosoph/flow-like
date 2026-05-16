@@ -9,7 +9,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
-use std::sync::Arc;
 
 /// Gets an element's data from the workflow payload.
 ///
@@ -134,7 +133,7 @@ impl NodeLogic for GetElement {
 
         if let Some(id) = &element_id {
             let short_name = id.rsplit('/').next().unwrap_or(id);
-            let component_type = find_component_type_in_board(&board, id).await;
+            let component_type = find_component_type_in_board(board, id).await;
 
             if let Some(comp_type) = &component_type {
                 node.friendly_name = format!("Get {} ({})", short_name, comp_type);

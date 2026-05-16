@@ -22,6 +22,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+const NOTIFICATION_DEDUPE_WINDOW_SECONDS: i64 = 10;
+
 #[cfg(feature = "azure")]
 use base64::Engine;
 #[cfg(feature = "azure")]
@@ -119,6 +121,56 @@ pub async fn dispatch_notification(
     state: &AppState,
     input: DispatchNotificationInput,
 ) -> Result<String, sea_orm::DbErr> {
+    if input.source_run_id.is_some() || input.source_node_id.is_some() {
+        let cutoff = chrono::Utc::now().naive_utc()
+            - chrono::Duration::seconds(NOTIFICATION_DEDUPE_WINDOW_SECONDS);
+        let mut existing = notification::Entity::find()
+            .filter(notification::Column::UserId.eq(input.user_id.clone()))
+            .filter(notification::Column::Title.eq(input.title.clone()))
+            .filter(notification::Column::Type.eq(input.notification_type.clone()))
+            .filter(notification::Column::CreatedAt.gte(cutoff));
+
+        existing = match &input.app_id {
+            Some(value) => existing.filter(notification::Column::AppId.eq(value.clone())),
+            None => existing.filter(notification::Column::AppId.is_null()),
+        };
+        existing = match &input.description {
+            Some(value) => existing.filter(notification::Column::Description.eq(value.clone())),
+            None => existing.filter(notification::Column::Description.is_null()),
+        };
+        existing = match &input.icon {
+            Some(value) => existing.filter(notification::Column::Icon.eq(value.clone())),
+            None => existing.filter(notification::Column::Icon.is_null()),
+        };
+        existing = match &input.link {
+            Some(value) => existing.filter(notification::Column::Link.eq(value.clone())),
+            None => existing.filter(notification::Column::Link.is_null()),
+        };
+        existing = match &input.source_run_id {
+            Some(value) => existing.filter(notification::Column::SourceRunId.eq(value.clone())),
+            None => existing.filter(notification::Column::SourceRunId.is_null()),
+        };
+        existing = match &input.source_node_id {
+            Some(value) => existing.filter(notification::Column::SourceNodeId.eq(value.clone())),
+            None => existing.filter(notification::Column::SourceNodeId.is_null()),
+        };
+
+        if let Some(notification) = existing
+            .order_by_desc(notification::Column::CreatedAt)
+            .one(&state.db)
+            .await?
+        {
+            tracing::info!(
+                notification_id = %notification.id,
+                user_id = %input.user_id,
+                source_run_id = ?input.source_run_id,
+                source_node_id = ?input.source_node_id,
+                "Reusing recently-created matching notification"
+            );
+            return Ok(notification.id);
+        }
+    }
+
     let notification_id = create_id();
     let notification = notification::ActiveModel {
         id: Set(notification_id.clone()),
@@ -317,15 +369,20 @@ async fn push_to_user(
         if let Err(error) = result {
             let message = error.to_string();
             if should_invalidate_target(&message) {
-                invalidate_target(state, &target.id, &message).await?;
+                record_invalidation_failure(state, &target.id, &message).await?;
             }
 
             tracing::warn!(
                 error = %message,
                 target_id = %target.id,
                 provider = ?provider,
+                failure_count = target.failure_count,
                 "Push target send failed"
             );
+        } else if target.failure_count > 0 {
+            // Successful delivery clears the consecutive-failure streak so a
+            // healthy device never accumulates toward the disable threshold.
+            reset_failure_count(state, &target.id).await?;
         }
     }
 
@@ -344,6 +401,23 @@ fn is_target_allowed(
     }
 }
 
+fn is_absolute_http_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn notification_image_url(input: &DispatchNotificationInput) -> Option<&str> {
+    input
+        .image
+        .as_deref()
+        .filter(|url| is_absolute_http_url(url))
+        .or_else(|| {
+            input
+                .icon
+                .as_deref()
+                .filter(|url| is_absolute_http_url(url))
+        })
+}
+
 fn should_invalidate_target(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("unregistered")
@@ -353,31 +427,103 @@ fn should_invalidate_target(message: &str) -> bool {
         || lower.contains("endpointdisabled")
         || lower.contains("endpoint is disabled")
         || lower.contains("invalid token")
+        // FCM payload shape errors use a different message prefix; only disable
+        // targets when the structured FCM error classifier marked the token bad.
+        || lower.contains("fcm error invalid_argument")
         || lower.contains("sender_id_mismatch")
 }
 
-async fn invalidate_target(
+/// Number of consecutive provider-classified "token is dead" failures we
+/// tolerate before marking a push target as invalidated. A single failure
+/// (transient FCM/APNs hiccup, fluky network) must NEVER kill a target —
+/// the device may be online and the next send will succeed and reset the
+/// counter. Only sustained, repeated invalidation-class errors disable.
+const INVALIDATION_FAILURE_THRESHOLD: i32 = 15;
+
+/// Increment the consecutive-failure counter on a target after the provider
+/// returned an invalidation-class error. When the counter crosses
+/// [`INVALIDATION_FAILURE_THRESHOLD`], the target is marked disabled with the
+/// last seen reason. Successful sends call [`reset_failure_count`] to clear
+/// the counter.
+async fn record_invalidation_failure(
     state: &AppState,
     target_id: &str,
     reason: &str,
 ) -> Result<(), sea_orm::DbErr> {
+    let now = chrono::Utc::now().naive_utc();
+
     push_notification_target::Entity::update_many()
         .col_expr(
-            push_notification_target::Column::PushEnabled,
-            sea_orm::sea_query::Expr::value(false),
+            push_notification_target::Column::FailureCount,
+            sea_orm::sea_query::Expr::col(push_notification_target::Column::FailureCount).add(1),
         )
         .col_expr(
-            push_notification_target::Column::InvalidatedAt,
-            sea_orm::sea_query::Expr::value(Some(chrono::Utc::now().naive_utc())),
-        )
-        .col_expr(
-            push_notification_target::Column::InvalidationReason,
-            sea_orm::sea_query::Expr::value(Some(reason.to_string())),
+            push_notification_target::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now),
         )
         .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
         .exec(&state.db)
         .await?;
 
+    let target = push_notification_target::Entity::find_by_id(target_id.to_string())
+        .one(&state.db)
+        .await?;
+
+    let Some(target) = target else {
+        return Ok(());
+    };
+
+    if target.failure_count >= INVALIDATION_FAILURE_THRESHOLD && target.push_enabled {
+        let summary = format!(
+            "{} consecutive invalidation-class failures; last reason: {}",
+            target.failure_count, reason
+        );
+        push_notification_target::Entity::update_many()
+            .col_expr(
+                push_notification_target::Column::PushEnabled,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidatedAt,
+                sea_orm::sea_query::Expr::value(Some(now)),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidationReason,
+                sea_orm::sea_query::Expr::value(Some(summary.clone())),
+            )
+            .col_expr(
+                push_notification_target::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
+            .exec(&state.db)
+            .await?;
+
+        tracing::warn!(
+            target_id = %target_id,
+            failure_count = target.failure_count,
+            reason = %summary,
+            "Push target disabled after exceeding failure threshold"
+        );
+    }
+
+    Ok(())
+}
+
+/// Reset the consecutive-failure counter to zero. Called after a successful
+/// send so a previously-flaky-but-recovered target doesn't accumulate
+/// failures across long windows. Filters on `FailureCount > 0` to skip the
+/// no-op write on the steady-state happy path.
+async fn reset_failure_count(state: &AppState, target_id: &str) -> Result<(), sea_orm::DbErr> {
+    push_notification_target::Entity::update_many()
+        .col_expr(
+            push_notification_target::Column::FailureCount,
+            sea_orm::sea_query::Expr::value(0),
+        )
+        .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
+        .filter(push_notification_target::Column::FailureCount.gt(0))
+        .exec(&state.db)
+        .await?;
     Ok(())
 }
 
@@ -422,48 +568,12 @@ async fn send_via_fcm(
     let service_account_json =
         resolve_service_account_json(state, &fcm.service_account_json_env).await?;
 
-    let data = notification_data(notification_id, target, input);
     let url = format!(
         "https://fcm.googleapis.com/v1/projects/{}/messages:send",
         fcm.project_id
     );
 
-    let mut notification_obj = serde_json::json!({
-        "title": input.title,
-        "body": input.description.clone().unwrap_or_default(),
-    });
-    if let Some(image_url) = &input.image {
-        notification_obj["image"] = serde_json::Value::String(image_url.clone());
-    }
-
-    let mut body = serde_json::json!({
-        "message": {
-            "token": token,
-            "notification": notification_obj,
-            "data": data,
-        }
-    });
-
-    // Android-specific: notification channel
-    if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
-        body["message"]["android"] = serde_json::json!({
-            "notification": {
-                "channel_id": channel_id,
-            }
-        });
-    }
-
-    // iOS-specific: sound + badge via APNS payload
-    if target.platform == PushNotificationTargetPlatform::Ios {
-        body["message"]["apns"] = serde_json::json!({
-            "payload": {
-                "aps": {
-                    "sound": "default",
-                    "badge": 1,
-                }
-            }
-        });
-    }
+    let body = fcm_message_body(config, target, token, notification_id, input);
 
     const MAX_RETRIES: u32 = 2;
     let mut attempt = 0;
@@ -502,6 +612,86 @@ async fn send_via_fcm(
             }
         }
     }
+}
+
+fn fcm_message_body(
+    config: &PushNotificationsConfig,
+    target: &push_notification_target::Model,
+    token: &str,
+    notification_id: &str,
+    input: &DispatchNotificationInput,
+) -> serde_json::Value {
+    let data = notification_data(notification_id, target, input);
+    let apns_data = data.clone();
+
+    let mut notification_obj = serde_json::json!({
+        "title": input.title,
+        "body": input.description.clone().unwrap_or_default(),
+    });
+    if let Some(image_url) = notification_image_url(input) {
+        notification_obj["image"] = serde_json::Value::String(image_url.to_string());
+    }
+
+    let mut body = serde_json::json!({
+        "message": {
+            "token": token,
+            "notification": notification_obj,
+            "data": data,
+        }
+    });
+
+    if target.platform == PushNotificationTargetPlatform::Android {
+        let mut android_notification = serde_json::Map::new();
+        if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
+            android_notification.insert(
+                "channel_id".to_string(),
+                serde_json::Value::String(channel_id),
+            );
+        }
+        if let Some(image_url) = notification_image_url(input) {
+            android_notification.insert(
+                "image".to_string(),
+                serde_json::Value::String(image_url.to_string()),
+            );
+        }
+        if !android_notification.is_empty() {
+            body["message"]["android"] = serde_json::json!({
+                "notification": android_notification,
+            });
+        }
+    }
+
+    // iOS-specific: sound + badge via APNS payload
+    if target.platform == PushNotificationTargetPlatform::Ios {
+        let mut apns = serde_json::json!({
+            "payload": {
+                "aps": {
+                    "sound": "default",
+                    "badge": 1,
+                }
+            }
+        });
+
+        if let Some(payload) = apns
+            .get_mut("payload")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (key, value) in apns_data {
+                payload.insert(key, value);
+            }
+        }
+
+        if let Some(image_url) = notification_image_url(input) {
+            apns["payload"]["aps"]["mutable-content"] = serde_json::json!(1);
+            apns["fcm_options"] = serde_json::json!({
+                "image": image_url,
+            });
+        }
+
+        body["message"]["apns"] = apns;
+    }
+
+    body
 }
 
 async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
@@ -697,6 +887,9 @@ fn aws_sns_payload(
             if let Some(channel_id) = &target.channel_id {
                 notification["channel_id"] = serde_json::Value::String(channel_id.clone());
             }
+            if let Some(image_url) = notification_image_url(input) {
+                notification["image"] = serde_json::Value::String(image_url.to_string());
+            }
 
             serde_json::json!({
                 "default": default_body,
@@ -867,15 +1060,22 @@ fn azure_message_payload(
     let data = notification_data(notification_id, target, input);
 
     match target.platform {
-        PushNotificationTargetPlatform::Android => Ok(serde_json::to_string(&serde_json::json!({
-            "message": {
-                "notification": {
-                    "title": input.title,
-                    "body": input.description.clone().unwrap_or_default(),
-                },
-                "data": data,
+        PushNotificationTargetPlatform::Android => {
+            let mut notification = serde_json::json!({
+                "title": input.title,
+                "body": input.description.clone().unwrap_or_default(),
+            });
+            if let Some(image_url) = notification_image_url(input) {
+                notification["image"] = serde_json::Value::String(image_url.to_string());
             }
-        }))?),
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "message": {
+                    "notification": notification,
+                    "data": data,
+                }
+            }))?)
+        }
         PushNotificationTargetPlatform::Ios => {
             let mut apns = serde_json::json!({
                 "aps": {
@@ -1039,4 +1239,132 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
     }
 
     Ok(token.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_config() -> PushNotificationsConfig {
+        PushNotificationsConfig {
+            channel_id: Some("default-channel".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn target(platform: PushNotificationTargetPlatform) -> push_notification_target::Model {
+        let now = chrono::Utc::now().naive_utc();
+
+        push_notification_target::Model {
+            id: "target-id".to_string(),
+            user_id: "user-id".to_string(),
+            device_id: "device-id".to_string(),
+            platform,
+            provider: PushNotificationTargetProvider::Fcm,
+            token_encrypted: "encrypted-token".to_string(),
+            endpoint_arn: None,
+            installation_id: None,
+            channel_id: Some("target-channel".to_string()),
+            device_name: None,
+            metadata: None,
+            push_enabled: true,
+            failure_count: 0,
+            last_registered_at: now,
+            last_seen_at: now,
+            invalidated_at: None,
+            invalidation_reason: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn notification_input() -> DispatchNotificationInput {
+        DispatchNotificationInput {
+            user_id: "user-id".to_string(),
+            app_id: Some("app-id".to_string()),
+            title: "Build finished".to_string(),
+            description: Some("The workflow completed.".to_string()),
+            icon: None,
+            image: Some("https://cdn.example.com/image.png".to_string()),
+            link: Some("flow-like://notification/target-id".to_string()),
+            notification_type: NotificationType::Workflow,
+            source_run_id: Some("run-id".to_string()),
+            source_node_id: None,
+        }
+    }
+
+    fn message_object(body: &serde_json::Value) -> &serde_json::Map<String, serde_json::Value> {
+        body.get("message")
+            .and_then(serde_json::Value::as_object)
+            .expect("FCM body contains a message object")
+    }
+
+    #[test]
+    fn fcm_android_body_includes_android_notification_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Android),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        let android = message.get("android").expect("android options are present");
+        assert_eq!(message.get("token"), Some(&serde_json::json!("fcm-token")));
+        assert_eq!(android["notification"]["channel_id"], "target-channel");
+        assert_eq!(
+            android["notification"]["image"],
+            "https://cdn.example.com/image.png"
+        );
+    }
+
+    #[test]
+    fn fcm_ios_body_omits_android_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        assert!(!message.contains_key("android"));
+        assert!(message.contains_key("apns"));
+        assert_eq!(
+            message["data"]["link"],
+            "flow-like://notification/target-id"
+        );
+        assert_eq!(
+            message["apns"]["payload"]["link"],
+            "flow-like://notification/target-id"
+        );
+        assert_eq!(message["apns"]["payload"]["app_id"], "app-id");
+    }
+
+    #[test]
+    fn fcm_desktop_body_omits_mobile_platform_options() {
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Desktop),
+            "fcm-token",
+            "notification-id",
+            &notification_input(),
+        );
+
+        let message = message_object(&body);
+        assert!(!message.contains_key("android"));
+        assert!(!message.contains_key("apns"));
+    }
+
+    #[test]
+    fn fcm_invalid_argument_error_marks_target_invalid() {
+        assert!(should_invalidate_target(
+            "FCM error INVALID_ARGUMENT: token is invalid (HTTP 400)"
+        ));
+        assert!(!should_invalidate_target(
+            "FCM request failed with status 400: {\"status\":\"INVALID_ARGUMENT\"}"
+        ));
+    }
 }

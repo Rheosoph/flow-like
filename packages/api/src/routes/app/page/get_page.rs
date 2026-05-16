@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -8,6 +8,7 @@ use axum::{
 };
 use flow_like::a2ui::widget::Page;
 use flow_like_types::anyhow;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
@@ -58,9 +59,44 @@ pub async fn get_page(
         None
     };
 
+    // The Page DB row carries the owning `board_id`; trying that
+    // board first avoids scanning every board on the app. A missing
+    // hint, an unresolvable hint, or a load failure all fall through
+    // to a full scan so stale/orphaned DB rows can't make a page
+    // permanently unreachable. The same scan strategy is used by the
+    // desktop's `get_page` Tauri command.
+    let row = page::Entity::find_by_id(&page_id)
+        .filter(page::Column::AppId.eq(&app_id))
+        .one(&state.db)
+        .await?;
+    let board_hint = row.and_then(|r| r.board_id);
+
     let app = state.master_app(&user.sub()?, &app_id, &state).await?;
 
-    let page = app.open_page(page_id, version_opt).await?;
+    let try_board = |board_id: String| {
+        let app = &app;
+        let page_id = &page_id;
+        async move {
+            let board = app.open_board(board_id, None, version_opt).await.ok()?;
+            let board_guard = board.lock().await;
+            match version_opt {
+                Some(v) => board_guard.load_versioned_page(page_id, v, None).await.ok(),
+                None => board_guard.load_page(page_id, None).await.ok(),
+            }
+        }
+    };
 
-    Ok(Json(page))
+    if let Some(board_id) = board_hint
+        && let Some(page) = try_board(board_id).await
+    {
+        return Ok(Json(page));
+    }
+
+    for board_id in app.boards.iter() {
+        if let Some(page) = try_board(board_id.clone()).await {
+            return Ok(Json(page));
+        }
+    }
+
+    Err(ApiError::NOT_FOUND)
 }

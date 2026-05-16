@@ -62,7 +62,7 @@ pub async fn execute_commands(
                     crate::credentials::CredentialsAccess::EditApp,
                 )
                 .await?
-                .to_state(state)
+                .to_state(state.clone())
                 .await?;
             Arc::new(flow_state)
         }

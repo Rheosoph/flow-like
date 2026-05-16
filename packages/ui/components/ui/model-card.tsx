@@ -2,6 +2,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
 	ArrowRightIcon,
+	AudioLinesIcon,
 	BrainIcon,
 	CameraIcon,
 	CheckIcon,
@@ -10,6 +11,7 @@ import {
 	ExternalLinkIcon,
 	FileSearch,
 	ImageIcon,
+	MicIcon,
 	MoreVerticalIcon,
 	PlusIcon,
 	ScanEyeIcon,
@@ -135,8 +137,10 @@ export function ModelCard({
 	const userInfo = useInvoke(backend.userState.getInfo, backend.userState, []);
 
 	const isVirtualBit = useMemo(
-		() => !bit.download_link || (bitSize.data === 0 && bitSize.isSuccess),
-		[bit.download_link, bitSize.data, bitSize.isSuccess],
+		() =>
+			(bit.dependencies?.length ?? 0) === 0 &&
+			(!bit.download_link || (bitSize.data === 0 && bitSize.isSuccess)),
+		[bit.dependencies, bit.download_link, bitSize.data, bitSize.isSuccess],
 	);
 
 	const tierInfo = useMemo(() => {
@@ -159,7 +163,7 @@ export function ModelCard({
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
-			if (!b.download_link || isVirtualBit) {
+			if (isVirtualBit) {
 				await isInstalled.refetch();
 				return;
 			}
@@ -232,7 +236,10 @@ export function ModelCard({
 	const contextLength = (params as ILlmParameters)?.context_length;
 	const isHosted = bitSize.data === 0 || isVirtualBit;
 	const canRunRemotely = supportsRemoteEmbeddingExecution(bit);
-	const isEmbeddingModel = isEmbeddingBit(bit);
+	const isEmbeddingModel =
+		isEmbeddingBit(bit) ||
+		bit.type === IBitTypes.Tts ||
+		bit.type === IBitTypes.Stt;
 
 	if (variant === "list") {
 		return (
@@ -681,6 +688,10 @@ export function ModelTypeIcon({
 			return <BrainIcon className={cn} />;
 		case IBitTypes.Vlm:
 			return <CameraIcon className={cn} />;
+		case IBitTypes.Tts:
+			return <AudioLinesIcon className={cn} />;
+		case IBitTypes.Stt:
+			return <MicIcon className={cn} />;
 		case IBitTypes.Embedding:
 			return <FileSearch className={cn} />;
 		case IBitTypes.ImageEmbedding:
@@ -710,6 +721,22 @@ export function ModalityIcons({
 				<div className="flex items-center gap-1 text-muted-foreground">
 					<TypeIcon className={`${iconClass} text-blue-500`} />
 					<ImageIcon className={`${iconClass} text-purple-500`} />
+					<ArrowRightIcon className={arrowClass} />
+					<TypeIcon className={`${iconClass} text-emerald-500`} />
+				</div>
+			);
+		case IBitTypes.Tts:
+			return (
+				<div className="flex items-center gap-1 text-muted-foreground">
+					<TypeIcon className={`${iconClass} text-blue-500`} />
+					<ArrowRightIcon className={arrowClass} />
+					<AudioLinesIcon className={`${iconClass} text-rose-500`} />
+				</div>
+			);
+		case IBitTypes.Stt:
+			return (
+				<div className="flex items-center gap-1 text-muted-foreground">
+					<AudioLinesIcon className={`${iconClass} text-rose-500`} />
 					<ArrowRightIcon className={arrowClass} />
 					<TypeIcon className={`${iconClass} text-emerald-500`} />
 				</div>
@@ -747,6 +774,10 @@ export function getModelModality(bit: IBit): string {
 			return "Text → Text";
 		case IBitTypes.Vlm:
 			return "Image → Text";
+		case IBitTypes.Tts:
+			return "Text → Speech";
+		case IBitTypes.Stt:
+			return "Speech → Text";
 		case IBitTypes.Embedding:
 			return "Text → Embedding";
 		case IBitTypes.ImageEmbedding:
@@ -759,6 +790,7 @@ export function getModelModality(bit: IBit): string {
 interface IRemoteExecutionConfig {
 	endpoint?: string | null;
 	implementation?: string | null;
+	model_id?: string | null;
 }
 
 interface IEmbeddingProviderParamsWithRemote {
@@ -787,9 +819,18 @@ export function supportsRemoteEmbeddingExecution(bit: IBit): boolean {
 		| IEmbeddingModelParametersWithRemote
 		| undefined;
 	const remote = params?.remote ?? params?.provider?.params?.remote;
-	if (remote?.endpoint && remote?.implementation) return true;
+	const remoteModelId = remote?.model_id ?? params?.provider?.model_id;
+	if (remote?.implementation && remoteModelId) return true;
 
-	if (params?.provider?.provider_name?.toLowerCase() === "premium") return true;
+	const providerName = params?.provider?.provider_name?.toLowerCase();
+	if (
+		providerName === "premium" ||
+		providerName === "internal" ||
+		providerName === "hosted" ||
+		providerName?.startsWith("hosted:")
+	) {
+		return Boolean(params?.provider?.model_id);
+	}
 
 	return false;
 }
