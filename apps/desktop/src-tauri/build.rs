@@ -200,6 +200,7 @@ fn main() {
     // Link against system zlib on iOS (needed by flate2 with zlib feature)
     if target_os == "ios" {
         println!("cargo:rustc-link-lib=z");
+        println!("cargo:rustc-link-lib=framework=Accelerate");
     }
 
     if target_os == "android" {
