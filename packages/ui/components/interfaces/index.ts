@@ -4,6 +4,7 @@ export * from "./generic-event-form";
 export * from "./configs/api";
 export * from "./configs/simple_chat";
 export * from "./configs/cron";
+export * from "./configs/daemon";
 export * from "./configs/deeplink";
 export * from "./configs/discord";
 export * from "./configs/generic_form";

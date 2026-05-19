@@ -1,7 +1,9 @@
 use flow_like::app::App;
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::execution::InternalRun;
 use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::{
+    DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
+};
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
@@ -33,6 +35,15 @@ struct ReportRunRequest {
     start: u64,
     end: u64,
     error_message: Option<String>,
+}
+
+#[derive(Default)]
+struct ExecutionOverrides {
+    cancellation_token: Option<CancellationToken>,
+    cancellation_log_level: Option<LogLevel>,
+    cancellation_log_message: Option<String>,
+    log_flush_interval: Option<Duration>,
+    log_batch_size: Option<usize>,
 }
 
 async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
@@ -141,6 +152,7 @@ async fn execute_internal(
     credentials: Option<SharedCredentials>,
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    overrides: ExecutionOverrides,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
@@ -233,6 +245,19 @@ async fn execute_internal(
     // Set offline user context for desktop app (always admin/owner)
     internal_run.set_offline_user_context();
 
+    if overrides.log_flush_interval.is_some() || overrides.log_batch_size.is_some() {
+        internal_run
+            .set_log_flush_policy(
+                overrides
+                    .log_flush_interval
+                    .unwrap_or(DEFAULT_RUN_LOG_FLUSH_INTERVAL),
+                overrides
+                    .log_batch_size
+                    .unwrap_or(DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD),
+            )
+            .await?;
+    }
+
     let run_id = internal_run.run.lock().await.id.clone();
 
     let _send_result = buffered_sender
@@ -242,7 +267,19 @@ async fn execute_internal(
         ))
         .await;
 
-    let cancellation_token = CancellationToken::new();
+    let cancellation_token = overrides
+        .cancellation_token
+        .unwrap_or_else(CancellationToken::new);
+    internal_run.set_cancellation_token(cancellation_token.clone());
+    if overrides.cancellation_log_level.is_some() || overrides.cancellation_log_message.is_some() {
+        internal_run.set_cancellation_log(
+            overrides
+                .cancellation_log_message
+                .unwrap_or_else(|| "Run cancelled".to_string()),
+            overrides.cancellation_log_level.unwrap_or(LogLevel::Fatal),
+        );
+    }
+
     let board_name = internal_run.board.name.clone();
     let run_data = RunData::with_metadata(
         &board_id,
@@ -258,9 +295,10 @@ async fn execute_internal(
 
     let run_arc = internal_run.run.clone();
 
-    // Spawn execution as a task so we can abort it immediately on cancellation
+    // Spawn execution as a task so cancellation can be observed while the UI remains responsive.
     let flow_like_state_for_task = flow_like_state.clone();
-    let handle = tokio::spawn(async move { internal_run.execute(flow_like_state_for_task).await });
+    let mut handle =
+        tokio::spawn(async move { internal_run.execute(flow_like_state_for_task).await });
 
     let abort_handle = handle.abort_handle();
 
@@ -268,20 +306,34 @@ async fn execute_internal(
         biased;
         _ = cancellation_token.cancelled() => {
             println!("Board execution cancelled for run: {}", run_id);
-            abort_handle.abort();
-            match tokio::time::timeout(Duration::from_secs(30), flush_run_cancelled(&run_arc)).await {
+            match tokio::time::timeout(Duration::from_secs(30), &mut handle).await {
                 Ok(Ok(meta)) => meta,
+                Ok(Err(e)) if e.is_cancelled() => {
+                    println!("Task was cancelled for run: {}", run_id);
+                    None
+                }
                 Ok(Err(e)) => {
-                    println!("Error flushing logs for cancelled run: {}, {:?}", run_id, e);
+                    println!("Task panicked for run: {}, {:?}", run_id, e);
                     None
                 }
                 Err(_) => {
-                    println!("Timeout while flushing logs for cancelled run: {}", run_id);
-                    None
+                    println!("Timeout while waiting for cancelled run to stop: {}", run_id);
+                    abort_handle.abort();
+                    match tokio::time::timeout(Duration::from_secs(30), flush_run_cancelled(&run_arc)).await {
+                        Ok(Ok(meta)) => meta,
+                        Ok(Err(e)) => {
+                            println!("Error flushing logs for cancelled run: {}, {:?}", run_id, e);
+                            None
+                        }
+                        Err(_) => {
+                            println!("Timeout while flushing logs for cancelled run: {}", run_id);
+                            None
+                        }
+                    }
                 }
             }
         }
-        result = handle => {
+        result = &mut handle => {
             match result {
                 Ok(meta) => meta,
                 Err(e) if e.is_cancelled() => {
@@ -341,6 +393,51 @@ async fn execute_internal(
     Ok(meta)
 }
 
+pub(crate) async fn execute_daemon_event(
+    app_handle: AppHandle,
+    app_id: String,
+    event_id: String,
+    payload: Option<flow_like_types::Value>,
+    cancellation_token: CancellationToken,
+    offline: bool,
+    token: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    log_flush_interval: Duration,
+    log_batch_size: usize,
+) -> Result<Option<LogMeta>, TauriFunctionError> {
+    if !offline && token.is_none() {
+        return Err(TauriFunctionError::new(
+            "No token registered, cannot run online daemon event",
+        ));
+    }
+
+    execute_internal(
+        app_handle,
+        app_id,
+        String::new(),
+        RunPayload {
+            id: String::new(),
+            payload,
+            runtime_variables: None,
+            filter_secrets: Some(false),
+        },
+        None,
+        Some(event_id),
+        false,
+        None,
+        token,
+        oauth_tokens,
+        ExecutionOverrides {
+            cancellation_token: Some(cancellation_token),
+            cancellation_log_level: Some(LogLevel::Info),
+            cancellation_log_message: Some("Daemon run stopped".to_string()),
+            log_flush_interval: Some(log_flush_interval),
+            log_batch_size: Some(log_batch_size),
+        },
+    )
+    .await
+}
+
 #[tauri::command(async)]
 pub async fn execute_board(
     app_handle: AppHandle,
@@ -365,6 +462,7 @@ pub async fn execute_board(
         credentials,
         token,
         oauth_tokens,
+        ExecutionOverrides::default(),
     )
     .await
 }
@@ -393,6 +491,7 @@ pub async fn execute_event(
         credentials,
         token,
         oauth_tokens,
+        ExecutionOverrides::default(),
     )
     .await
 }

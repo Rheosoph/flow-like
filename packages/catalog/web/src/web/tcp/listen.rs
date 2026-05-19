@@ -149,10 +149,17 @@ impl NodeLogic for TcpListenNode {
         tokio::pin!(close_fut);
 
         let reference_function = handler;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
 
         loop {
             tokio::select! {
                 _ = &mut close_fut => break,
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("TCP listener cancelled", LogLevel::Warn);
+                    break;
+                }
                 result = listener.accept() => {
                     let (stream, addr) = match result {
                         Ok(pair) => pair,
@@ -226,6 +233,10 @@ impl NodeLogic for TcpListenNode {
 
         context.deactivate_exec_pin("on_listening").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }

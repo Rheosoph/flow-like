@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use flow_like::flow::event::EventExecutionMode;
 use flow_like::flow::oauth::OAuthToken;
 use flow_like_types::intercom::BufferedInterComHandler;
 use rusqlite::{Connection, params};
@@ -567,6 +568,11 @@ impl EventSinkManager {
                 sink.on_register(app_handle, &registration, self.db.clone())
                     .await?;
             }
+            EventConfig::Daemon(sink) => {
+                self.ensure_sink_started("daemon", app_handle, sink).await?;
+                sink.on_register(app_handle, &registration, self.db.clone())
+                    .await?;
+            }
             EventConfig::Nfc(_sink) => {
                 tracing::warn!("NFC sink not yet implemented");
                 // TODO: Implement NFCSink
@@ -659,6 +665,10 @@ impl EventSinkManager {
                 sink.on_unregister(app_handle, &registration, self.db.clone())
                     .await?;
             }
+            EventConfig::Daemon(sink) => {
+                sink.on_unregister(app_handle, &registration, self.db.clone())
+                    .await?;
+            }
             _ => {
                 tracing::warn!("Unregister called for unimplemented sink type");
             }
@@ -694,6 +704,17 @@ impl EventSinkManager {
         // Only register active events
         if !event.active {
             // If it was previously registered, unregister it
+            if self.storage.get_registration(&event.id)?.is_some() {
+                self.unregister_event(app_handle, &event.id).await?;
+            }
+            return Ok(());
+        }
+
+        if event.event_type == "daemon" && event.execution_mode != EventExecutionMode::Local {
+            tracing::info!(
+                "Event {} is a daemon but not local, skipping local daemon registration",
+                event.id
+            );
             if self.storage.get_registration(&event.id)?.is_some() {
                 self.unregister_event(app_handle, &event.id).await?;
             }
@@ -889,6 +910,11 @@ impl EventSinkManager {
                     serde_json::from_value(config_json).context("Failed to parse MCP config")?;
                 Ok(EventConfig::Mcp(mcp_config))
             }
+            "daemon" => {
+                let daemon_config: super::daemon::DaemonSink =
+                    serde_json::from_value(config_json).context("Failed to parse daemon config")?;
+                Ok(EventConfig::Daemon(daemon_config))
+            }
             // Add more sink types as needed
             _ => Err(anyhow::anyhow!(
                 "Unsupported event type for sink registration: {}",
@@ -1012,6 +1038,7 @@ impl EventSinkManager {
                 | "nfc"
                 | "shortcut"
                 | "mcp"
+                | "daemon"
         )
     }
 
@@ -1032,6 +1059,33 @@ impl EventSinkManager {
                 "🔄 [SINK_MANAGER] Found registration: {} (type: {})",
                 reg.event_id, reg.r#type
             );
+        }
+
+        for registration in registrations.iter().cloned() {
+            if let EventConfig::Daemon(sink) = registration.config.clone() {
+                let manager = self.clone();
+                let app_handle = app_handle.clone();
+
+                flow_like_types::tokio::spawn(async move {
+                    flow_like_types::tokio::time::sleep(Duration::from_secs(3)).await;
+                    let result = async {
+                        manager
+                            .ensure_sink_started("daemon", &app_handle, &sink)
+                            .await?;
+                        sink.on_register(&app_handle, &registration, manager.db.clone())
+                            .await
+                    }
+                    .await;
+
+                    if let Err(err) = result {
+                        tracing::error!(
+                            event_id = %registration.event_id,
+                            error = %err,
+                            "Failed to restore daemon event"
+                        );
+                    }
+                });
+            }
         }
 
         // Group registrations by sink type to start each sink once
@@ -1205,5 +1259,69 @@ impl EventSinkManager {
             registrations.len()
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event_sink::daemon::DaemonRestartPolicy;
+
+    #[test]
+    fn supports_daemon_sink_registration() {
+        assert!(EventSinkManager::supports_sink_registration("daemon"));
+    }
+
+    #[test]
+    fn parses_legacy_daemon_registration_config() {
+        let config =
+            RegistrationStorage::parse_config_json(r#"{"restart_policy":"always"}"#, "daemon")
+                .unwrap();
+
+        match config {
+            EventConfig::Daemon(sink) => {
+                assert_eq!(sink.restart_policy, DaemonRestartPolicy::Always);
+            }
+            other => panic!("expected daemon config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_tagged_daemon_registration_config() {
+        let config = RegistrationStorage::parse_config_json(
+            r#"{"sink_type":"daemon","restart_policy":"never"}"#,
+            "daemon",
+        )
+        .unwrap();
+
+        match config {
+            EventConfig::Daemon(sink) => {
+                assert_eq!(sink.restart_policy, DaemonRestartPolicy::Never);
+            }
+            other => panic!("expected daemon config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_flow_daemon_event_config() {
+        let db_path = std::env::temp_dir().join(format!(
+            "flow-like-daemon-test-{}.sqlite",
+            flow_like_types::create_id()
+        ));
+        let manager = EventSinkManager::new(db_path.to_str().unwrap()).unwrap();
+
+        let config = manager
+            .parse_event_config("daemon", br#"{"restart_policy":"always"}"#)
+            .unwrap();
+
+        match config {
+            EventConfig::Daemon(sink) => {
+                assert_eq!(sink.restart_policy, DaemonRestartPolicy::Always);
+            }
+            other => panic!("expected daemon config, got {other:?}"),
+        }
+
+        drop(manager);
+        let _ = std::fs::remove_file(db_path);
     }
 }

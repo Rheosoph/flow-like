@@ -186,6 +186,8 @@ impl NodeLogic for WebSocketConnectNode {
         spawn_message_reader(context, stream, &handler, &ref_id, close_notify.clone()).await?;
 
         let timeout = config.timeout_seconds;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
         if timeout > 0 {
             tokio::select! {
                 _ = close_notify.notified() => {}
@@ -199,9 +201,35 @@ impl NodeLogic for WebSocketConnectNode {
                             let _ = sink.close().await;
                         }
                 }
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("WebSocket connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedWebSocketConnection>() {
+                            let mut sink = conn.sink.lock().await;
+                            use futures::SinkExt;
+                            let _ = sink.close().await;
+                        }
+                }
             }
         } else {
-            close_notify.notified().await;
+            tokio::select! {
+                _ = close_notify.notified() => {}
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("WebSocket connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedWebSocketConnection>() {
+                            let mut sink = conn.sink.lock().await;
+                            use futures::SinkExt;
+                            let _ = sink.close().await;
+                        }
+                }
+            }
         }
 
         {
@@ -211,6 +239,10 @@ impl NodeLogic for WebSocketConnectNode {
 
         context.deactivate_exec_pin("on_connect").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }
