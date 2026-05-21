@@ -9,6 +9,8 @@ import {
 	GenericFormConfig,
 	HttpConfig,
 	type IEventMapping,
+	McpConfig,
+	RestConfig,
 	SimpleChatConfig,
 	TelegramConfig,
 	UserMailConfig,
@@ -139,13 +141,23 @@ export const EVENT_CONFIG: IEventMapping = {
 			cron: CronJobConfig,
 			daemon: DaemonConfig,
 			deeplink: DeeplinkConfig,
+			rest: RestConfig,
+			mcp: McpConfig,
 		},
 		defaultEventType: "quick_action",
-		eventTypes: ["quick_action", "api", "cron", "daemon", "deeplink"],
+		eventTypes: [
+			"quick_action",
+			"api",
+			"cron",
+			"daemon",
+			"deeplink",
+			"rest",
+			"mcp",
+		],
 		useInterfaces: {
 			quick_action: GenericEventFormInterface,
 		},
-		withSink: ["cron", "api", "daemon", "deeplink"],
+		withSink: ["cron", "api", "daemon", "deeplink", "rest", "mcp"],
 		sinkAvailability: {
 			cron: {
 				availability: "both",
@@ -162,6 +174,15 @@ export const EVENT_CONFIG: IEventMapping = {
 			deeplink: {
 				availability: "local",
 				description: "Deep links only work on desktop",
+			},
+			rest: {
+				availability: "remote",
+				description:
+					"Multi-endpoint REST API server with auth - remote only",
+			},
+			mcp: {
+				availability: "remote",
+				description: "Model Context Protocol server - remote only",
 			},
 		},
 		configs: {
@@ -188,6 +209,14 @@ export const EVENT_CONFIG: IEventMapping = {
 			deeplink: {
 				sink_type: "deeplink",
 				route: createId(),
+			},
+			rest: {
+				sink_type: "rest",
+				prefix: "/api",
+			},
+			mcp: {
+				sink_type: "mcp",
+				prefix: "/mcp",
 			},
 		},
 	},

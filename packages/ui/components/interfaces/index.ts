@@ -9,6 +9,8 @@ export * from "./configs/deeplink";
 export * from "./configs/discord";
 export * from "./configs/generic_form";
 export * from "./configs/http";
+export * from "./configs/mcp";
+export * from "./configs/rest";
 export * from "./configs/telegram";
 export * from "./configs/translation";
 export * from "./configs/user_mail";

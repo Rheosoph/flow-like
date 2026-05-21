@@ -32,6 +32,8 @@ const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
 	mqtt: "mqtt",
 	github: "github",
 	rss: "rss",
+	rest: "rest",
+	mcp: "mcp",
 };
 
 /**
