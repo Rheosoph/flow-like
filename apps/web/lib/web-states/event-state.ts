@@ -13,9 +13,9 @@ import {
 	checkOAuthTokens,
 	finishAllProgressToasts,
 	showProgressToast,
-} from "@tm9657/flow-like-ui";
-import type { IOAuthCheckResult } from "@tm9657/flow-like-ui/state/backend-state/event-state";
-import type { IPrerunEventResponse } from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui";
+import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
+import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";

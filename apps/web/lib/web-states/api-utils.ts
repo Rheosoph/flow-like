@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { IProfile } from "@tm9657/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import type { AuthContextProps } from "react-oidc-context";
 
 export interface WebBackendRef {

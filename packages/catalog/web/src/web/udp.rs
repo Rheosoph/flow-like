@@ -5,11 +5,20 @@ pub mod bind;
 pub mod close;
 pub mod receive;
 pub mod send_to;
+pub mod server;
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct UdpConfig {
     pub host: String,
     pub port: u16,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct UdpServerConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub timeout_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]

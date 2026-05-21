@@ -102,9 +102,6 @@ impl NodeLogic for WebSocketSendNode {
         let session: WebSocketSession = context.evaluate_pin("session").await?;
         let message_type: String = context.evaluate_pin("message_type").await?;
 
-        let conn = super::get_ws_connection(context, &session.ref_id).await?;
-        let mut sink = conn.sink.lock().await;
-
         let msg = match message_type.as_str() {
             "Binary" => {
                 let data: Vec<u8> = context.evaluate_pin("payload").await?;
@@ -116,7 +113,18 @@ impl NodeLogic for WebSocketSendNode {
             }
         };
 
-        sink.send(msg).await.map_err(|e| {
+        let conn = super::get_ws_connection(context, &session.ref_id).await?;
+        match &conn.sink {
+            super::CachedWebSocketSink::Client(sink) => {
+                let mut sink = sink.lock().await;
+                sink.send(msg).await
+            }
+            super::CachedWebSocketSink::Server(sink) => {
+                let mut sink = sink.lock().await;
+                sink.send(msg).await
+            }
+        }
+        .map_err(|e| {
             context.log_message(&format!("WebSocket send error: {}", e), LogLevel::Error);
             flow_like_types::anyhow!("WebSocket send failed: {}", e)
         })?;

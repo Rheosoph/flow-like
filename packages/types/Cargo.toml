@@ -28,7 +28,7 @@ minijinja = "2.9.0"
 rxing = { version = "0.7.1", features = ["serde", "image"] }
 ab_glyph = "0.2.29"
 tokio-util = "0.7.15"
-cuid2 = { git = "https://github.com/TM9657/cuid-rust.git", package = "cuid2" }
+cuid2 = { git = "https://github.com/Rheosoph/cuid-rust.git", package = "cuid2" }
 jsonschema = "0.33.0"
 regex.workspace = true
 

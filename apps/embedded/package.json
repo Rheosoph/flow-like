@@ -9,7 +9,7 @@
 		"lint": "next lint"
 	},
 	"dependencies": {
-		"@tm9657/flow-like-ui": "workspace:*",
+		"@flow-like/flow-like-ui": "workspace:*",
 		"@xyflow/react": "^12.10.0",
 		"comlink": "^4.4.2",
 		"next": "^16.1.6",

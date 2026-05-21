@@ -202,7 +202,7 @@ A node cannot access storage outside its declared scope, regardless of what it a
 Flow-Like takes several measures to secure its dependency chain:
 
 - **Dependency auditing** — Rust dependencies are auditable via `cargo-audit`
-- **License inventory** — complete third-party license information is maintained in the [`thirdparty/`](https://github.com/TM9657/flow-like/tree/dev/thirdparty) directory
+- **License inventory** — complete third-party license information is maintained in the [`thirdparty/`](https://github.com/Rheosoph/flow-like/tree/dev/thirdparty) directory
 - **Minimal containers** — production container images use minimal base images
 - **Image pinning** — container images can be pinned by digest
 - **Image signing** — compatible with [cosign](https://docs.sigstore.dev/cosign/overview/) for image verification

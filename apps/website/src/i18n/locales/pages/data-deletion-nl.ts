@@ -109,7 +109,7 @@ export const nlDataDeletion = {
 	"dataDeletion.contact.email": "E-mail",
 	"dataDeletion.contact.company": "Bedrijf",
 	"dataDeletion.contact.companyName":
-		"TM9657 GmbH, Dr. Berndlstr. 5, 87700 Memmingen, Duitsland",
+		"Rheosoph GmbH, Maximilianstraße 29, 80539 München, Duitsland",
 	"dataDeletion.contact.privacyLink":
 		"Voor meer informatie over onze algemene privacypraktijken kunt u ons raadplegen:",
 	"dataDeletion.contact.privacyPolicy": "Privacybeleid",

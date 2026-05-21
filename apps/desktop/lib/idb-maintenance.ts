@@ -1,4 +1,4 @@
-import { runIDBCleanup } from "@tm9657/flow-like-ui/lib/idb-cleanup";
+import { runIDBCleanup } from "@flow-like/flow-like-ui/lib/idb-cleanup";
 import { notificationsDB } from "./notifications-db";
 
 const NOTIFICATION_MAX_AGE_DAYS = 14;

@@ -1,8 +1,8 @@
-import type { IPageState } from "@tm9657/flow-like-ui";
+import type { IPageState } from "@flow-like/flow-like-ui";
 import type {
 	IPage,
 	PageListItem,
-} from "@tm9657/flow-like-ui/state/backend-state/page-state";
+} from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import { type WebBackendRef, apiDelete, apiGet, apiPut } from "./api-utils";
 
 export class WebPageState implements IPageState {

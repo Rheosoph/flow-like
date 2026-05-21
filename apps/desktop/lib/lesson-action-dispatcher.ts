@@ -1,9 +1,9 @@
-import type { IProfile } from "@tm9657/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import {
 	type LessonAction,
 	type UserCourseEnrollment,
 	translateId,
-} from "@tm9657/flow-like-ui/lib/learn/types";
+} from "@flow-like/flow-like-ui/lib/learn/types";
 import type { AuthContextProps } from "react-oidc-context";
 import { learnApi } from "./learn-api";
 

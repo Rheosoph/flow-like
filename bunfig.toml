@@ -7,7 +7,7 @@ minimumReleaseAgeExcludes = [
 	"@flow-like/sdk",
 	"@flow-like/wasm-sdk-assemblyscript",
 	"@flow-like/wasm-sdk-typescript",
-	"@tm9657/flow-like-ui",
+	"@flow-like/flow-like-ui",
 	"flow-like",
 	"flow-like-api",
 	"flow-like-backend-api",

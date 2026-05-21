@@ -1,4 +1,4 @@
-import type { IRegistryState } from "@tm9657/flow-like-ui";
+import type { IRegistryState } from "@flow-like/flow-like-ui";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -13,7 +13,7 @@ import type {
 	UpsertPackageCommentResponse,
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
-} from "@tm9657/flow-like-ui/lib/schema/wasm";
+} from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
 	type WebBackendRef,
 	apiDelete,

@@ -1,5 +1,5 @@
 ---
-import { LuZap, LuShield, LuCpu, LuBrain, LuLayoutDashboard, LuPackage, LuUsers, LuMonitor, LuSmartphone, LuWifiOff, LuHardDrive, LuFileCode, LuFlaskConical, LuLock, LuServer, LuUnlink, LuWorkflow } from "react-icons/lu";
+import { LuZap, LuShield, LuCpu, LuBrain, LuLayoutDashboard, LuPackage, LuUsers, LuMonitor, LuSmartphone, LuWifiOff, LuHardDrive, LuFileCode, LuFlaskConical, LuLock, LuServer, LuUnlink, LuWorkflow, LuDatabase } from "react-icons/lu";
 
 interface Props {
   t: (key: string) => string;
@@ -12,6 +12,7 @@ const capabilities = [
   { id: "replayable", icon: LuShield, color: "emerald" },
   { id: "high_volume", icon: LuZap, color: "amber" },
   { id: "compiled", icon: LuCpu, color: "orange" },
+  { id: "file_size", icon: LuDatabase, color: "fuchsia" },
   { id: "ai_agents", icon: LuBrain, color: "purple" },
   { id: "ui_builder", icon: LuLayoutDashboard, color: "blue" },
   { id: "full_apps", icon: LuPackage, color: "indigo" },
@@ -55,6 +56,7 @@ const capabilities = [
               cap.color === "emerald" && "bg-emerald-500/10 text-emerald-500",
               cap.color === "amber" && "bg-amber-500/10 text-amber-500",
               cap.color === "orange" && "bg-orange-500/10 text-orange-500",
+              cap.color === "fuchsia" && "bg-fuchsia-500/10 text-fuchsia-500",
               cap.color === "purple" && "bg-purple-500/10 text-purple-500",
               cap.color === "blue" && "bg-blue-500/10 text-blue-500",
               cap.color === "indigo" && "bg-indigo-500/10 text-indigo-500",

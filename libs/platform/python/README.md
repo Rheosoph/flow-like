@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://flow-like.com">
-    <img src="https://raw.githubusercontent.com/TM9657/flow-like/dev/apps/desktop/public/app-logo.webp" alt="Flow-Like Logo" width="80" />
+    <img src="https://raw.githubusercontent.com/Rheosoph/flow-like/dev/apps/desktop/public/app-logo.webp" alt="Flow-Like Logo" width="80" />
   </a>
 </p>
 <h1 align="center">flow-like</h1>
@@ -10,12 +10,12 @@
 </p>
 <p align="center">
   <a href="https://pypi.org/project/flow-like/"><img src="https://img.shields.io/pypi/v/flow-like?color=0a7cff" alt="PyPI version" /></a>
-  <a href="https://github.com/TM9657/flow-like"><img src="https://img.shields.io/badge/flow--like-engine-0a7cff?logo=github" alt="Flow-Like" /></a>
+  <a href="https://github.com/Rheosoph/flow-like"><img src="https://img.shields.io/badge/flow--like-engine-0a7cff?logo=github" alt="Flow-Like" /></a>
   <a href="https://docs.flow-like.com"><img src="https://img.shields.io/badge/docs-docs.flow--like.com-0a7cff?logo=readthedocs&logoColor=white" alt="Docs" /></a>
   <a href="https://discord.com/invite/mdBA9kMjFJ"><img src="https://img.shields.io/discord/673169081704120334" alt="Discord" /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/TM9657/flow-like"><strong>⭐ Flow-Like on GitHub</strong></a> ·
+  <a href="https://github.com/Rheosoph/flow-like"><strong>⭐ Flow-Like on GitHub</strong></a> ·
   <a href="https://docs.flow-like.com"><strong>📖 Docs</strong></a> ·
   <a href="https://discord.com/invite/mdBA9kMjFJ"><strong>💬 Discord</strong></a> ·
   <a href="https://flow-like.com"><strong>🌐 Website</strong></a>
@@ -23,7 +23,7 @@
 
 ---
 
-> **Part of the [Flow-Like](https://github.com/TM9657/flow-like) ecosystem** — a Rust-powered visual workflow engine that runs on your device. See the [main repository](https://github.com/TM9657/flow-like) for the full platform.
+> **Part of the [Flow-Like](https://github.com/Rheosoph/flow-like) ecosystem** — a Rust-powered visual workflow engine that runs on your device. See the [main repository](https://github.com/Rheosoph/flow-like) for the full platform.
 
 ---
 

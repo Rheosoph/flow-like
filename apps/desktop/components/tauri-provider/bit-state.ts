@@ -9,7 +9,7 @@ import type {
 	IProfile,
 	ISettingsProfile,
 	ITtsAssetRef,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	IBitTypes,
 	bitDependencyRef,
@@ -18,8 +18,8 @@ import {
 	getTtsAssetRefs,
 	getTtsAssetRepairPlan,
 	localTtsAssetId,
-} from "@tm9657/flow-like-ui";
-import type { IBitSearchQuery } from "@tm9657/flow-like-ui/lib/schema/hub/bit-search-query";
+} from "@flow-like/flow-like-ui";
+import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import type { TauriBackend } from "../tauri-provider";
 
 export class BitState implements IBitState {

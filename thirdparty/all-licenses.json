@@ -6376,8 +6376,8 @@
   {
     "name": "flow-like",
     "version": "0.1.0",
-    "authors": "TM9657 GmbH",
-    "repository": "https://github.com/TM9657/flow-like/",
+    "authors": "Rheosoph GmbH",
+    "repository": "https://github.com/Rheosoph/flow-like/",
     "license": null,
     "description": "Flow-Like, Automation done with the press of a Button. Core Library for Flow Execution and Management",
     "source": "rust"
@@ -6511,8 +6511,8 @@
   {
     "name": "flow-like-desktop",
     "version": "0.0.2",
-    "authors": "TM9657 GmbH",
-    "repository": "https://github.com/TM9657/flow-like/",
+    "authors": "Rheosoph GmbH",
+    "repository": "https://github.com/Rheosoph/flow-like/",
     "license": null,
     "description": "Flow-Like, Automation done with the press of a Button",
     "source": "rust"
@@ -6538,8 +6538,8 @@
   {
     "name": "flow-like-sinks",
     "version": "0.1.0",
-    "authors": "TM9657 GmbH",
-    "repository": "https://github.com/TM9657/flow-like/",
+    "authors": "Rheosoph GmbH",
+    "repository": "https://github.com/Rheosoph/flow-like/",
     "license": null,
     "description": "Event sinks for Flow-Like - HTTP, Webhook, Cron, MQTT, and more",
     "source": "rust"
@@ -6566,7 +6566,7 @@
     "name": "flow-like-wasm",
     "version": "0.1.0",
     "authors": null,
-    "repository": "https://github.com/TM9657/flow-like",
+    "repository": "https://github.com/Rheosoph/flow-like",
     "license": "MIT",
     "description": "WebAssembly runtime for Flow-Like custom nodes",
     "source": "rust"
@@ -10254,7 +10254,7 @@
     "name": "markitdown",
     "version": "0.2.0",
     "authors": null,
-    "repository": "https://github.com/TM9657/markitdown-rs",
+    "repository": "https://github.com/Rheosoph/markitdown-rs",
     "license": "MIT",
     "description": "A Rust library designed to facilitate the conversion of various document formats into markdown text with ObjectStore and LLM support.",
     "source": "rust"
@@ -14688,8 +14688,8 @@
   {
     "name": "schema-gen",
     "version": "0.1.0",
-    "authors": "TM9657 GmbH",
-    "repository": "https://github.com/TM9657/flow-like/",
+    "authors": "Rheosoph GmbH",
+    "repository": "https://github.com/Rheosoph/flow-like/",
     "license": null,
     "description": "Schema Generation for flow-like Types",
     "source": "rust"

@@ -1,5 +1,5 @@
-import type { IApiState } from "@tm9657/flow-like-ui";
-import type { IProfile } from "@tm9657/flow-like-ui/types";
+import type { IApiState } from "@flow-like/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui/types";
 import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
 
 export class WebApiState implements IApiState {

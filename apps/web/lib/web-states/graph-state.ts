@@ -12,7 +12,7 @@ import type {
 	SubgraphResult,
 	UpdateOverlayPayload,
 	ValidationResult,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	type WebBackendRef,
 	apiDelete,

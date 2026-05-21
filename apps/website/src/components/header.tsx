@@ -142,7 +142,7 @@ function useGitHubStars() {
 				}
 			}
 		} catch {}
-		fetch("https://api.github.com/repos/TM9657/flow-like", {
+		fetch("https://api.github.com/repos/Rheosoph/flow-like", {
 			headers: { Accept: "application/vnd.github.v3+json" },
 		})
 			.then((r) => (r.ok ? r.json() : Promise.reject()))
@@ -549,7 +549,7 @@ function MobileMenu({
 						</p>
 						<div className="flex gap-2 px-3">
 							<a
-								href="https://github.com/TM9657/flow-like"
+								href="https://github.com/Rheosoph/flow-like"
 								target="_blank"
 								rel="noreferrer"
 								className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors duration-300"
@@ -853,7 +853,7 @@ export function Header() {
 						</a>
 						<div className="flex items-center border-l border-border/40 ml-1 pl-1 gap-0.5">
 							<a
-								href="https://github.com/TM9657/flow-like"
+								href="https://github.com/Rheosoph/flow-like"
 								target="_blank"
 								rel="noreferrer"
 								aria-label="GitHub"

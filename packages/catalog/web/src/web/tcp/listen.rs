@@ -127,6 +127,16 @@ impl NodeLogic for TcpListenNode {
                 return Ok(());
             }
         };
+        let tls_acceptor = match crate::web::tls::server_acceptor(&config.tls) {
+            Ok(acceptor) => acceptor,
+            Err(err) => {
+                context.log_message(
+                    &format!("TCP listener TLS configuration failed: {}", err),
+                    LogLevel::Error,
+                );
+                return Ok(());
+            }
+        };
 
         context.deactivate_exec_pin("exec_error").await?;
         context.activate_exec_pin("on_listening").await?;
@@ -173,7 +183,20 @@ impl NodeLogic for TcpListenNode {
                     };
 
                     let remote_addr = addr.to_string();
-                    let (reader, writer) = tokio::io::split(stream);
+                    let (reader, writer) = if let Some(acceptor) = &tls_acceptor {
+                        match acceptor.accept(stream).await {
+                            Ok(stream) => crate::web::tls::boxed_split(stream),
+                            Err(err) => {
+                                context.log_message(
+                                    &format!("TCP listener TLS handshake failed: {}", err),
+                                    LogLevel::Error,
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        crate::web::tls::boxed_split(stream)
+                    };
 
                     let ref_id = format!("tcp_{}", flow_like_types::create_id());
                     let conn_close = Arc::new(tokio::sync::Notify::new());

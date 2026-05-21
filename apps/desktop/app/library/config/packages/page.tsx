@@ -1,6 +1,6 @@
 "use client";
 
-import { AppPackagesPage } from "@tm9657/flow-like-ui";
+import { AppPackagesPage } from "@flow-like/flow-like-ui";
 import { useSearchParams } from "next/navigation";
 
 export default function Page() {

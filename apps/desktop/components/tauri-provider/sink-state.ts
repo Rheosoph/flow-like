@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { IEventRegistration, ISinkState } from "@tm9657/flow-like-ui";
+import type { IEventRegistration, ISinkState } from "@flow-like/flow-like-ui";
 
 export class SinkState implements ISinkState {
 	async listEventSinks(): Promise<IEventRegistration[]> {

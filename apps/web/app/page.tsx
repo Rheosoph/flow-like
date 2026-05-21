@@ -1,5 +1,5 @@
 "use client";
-import { HomeSwimlanes, Skeleton, useBackend } from "@tm9657/flow-like-ui";
+import { HomeSwimlanes, Skeleton, useBackend } from "@flow-like/flow-like-ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 

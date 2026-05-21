@@ -9,28 +9,28 @@ import {
 	type IProfile,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { Button } from "@tm9657/flow-like-ui";
-import { Input } from "@tm9657/flow-like-ui";
-import { Label } from "@tm9657/flow-like-ui";
-import { Textarea } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import { Button } from "@flow-like/flow-like-ui";
+import { Input } from "@flow-like/flow-like-ui";
+import { Label } from "@flow-like/flow-like-ui";
+import { Textarea } from "@flow-like/flow-like-ui";
 import {
 	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@tm9657/flow-like-ui";
-import { Badge } from "@tm9657/flow-like-ui";
-import { Avatar, AvatarFallback, AvatarImage } from "@tm9657/flow-like-ui";
-import { Separator } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import { Badge } from "@flow-like/flow-like-ui";
+import { Avatar, AvatarFallback, AvatarImage } from "@flow-like/flow-like-ui";
+import { Separator } from "@flow-like/flow-like-ui";
 import { Image, Monitor, Plus, Save, Upload, User, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";

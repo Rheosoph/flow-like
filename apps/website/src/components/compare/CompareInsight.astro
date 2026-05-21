@@ -22,7 +22,7 @@ const { t } = Astro.props;
     </h2>
 
     <!-- Visual representation -->
-    <div class="grid md:grid-cols-3 gap-6 mb-10">
+    <div class="grid md:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
       <!-- Execution Engines -->
       <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
         <div class="text-sm font-medium text-amber-500 mb-4">Execution Engines</div>
@@ -61,16 +61,46 @@ const { t } = Astro.props;
         </div>
       </div>
 
+      <!-- Enterprise Data Platforms -->
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
+        <div class="text-sm font-medium text-fuchsia-500 mb-4">Enterprise Data</div>
+        <div class="flex flex-wrap justify-center gap-2">
+          {["Palantir Foundry", "SAP Build / BTP"].map((name) => (
+            <span class="px-3 py-1.5 rounded-full bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 text-xs font-medium border border-fuchsia-500/20">
+              {name}
+            </span>
+          ))}
+        </div>
+        <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
+          Ontology / ERP centric.<br/>Heavy, expensive, locked in.
+        </div>
+      </div>
+
+      <!-- Enterprise Automation -->
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
+        <div class="text-sm font-medium text-rose-500 mb-4">Enterprise Automation</div>
+        <div class="flex flex-wrap justify-center gap-2">
+          {["UiPath", "Salesforce", "Regrello"].map((name) => (
+            <span class="px-3 py-1.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-medium border border-rose-500/20">
+              {name}
+            </span>
+          ))}
+        </div>
+        <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
+          RPA / CRM / agents.<br/>SaaS-bound & per-seat.
+        </div>
+      </div>
+
       <!-- Flow-Like -->
       <div class="rounded-2xl border-2 border-emerald-500/50 bg-emerald-500/5 backdrop-blur-sm p-6 relative">
         <div class="absolute -top-3 left-1/2 -translate-x-1/2">
           <span class="px-3 py-1 rounded-full bg-emerald-500 text-white text-xs font-semibold">
-            Both + More
+            All of it
           </span>
         </div>
         <div class="text-sm font-medium text-emerald-600 dark:text-emerald-400 mb-4 mt-2">Flow-Like</div>
         <div class="flex flex-wrap justify-center gap-2">
-          {["Workflows", "UI Builder", "Desktop", "Mobile", "Offline"].map((cap) => (
+          {["Workflows", "UI Builder", "Desktop", "Mobile", "Offline", "Unlimited Files"].map((cap) => (
             <span class="px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium border border-emerald-500/20">
               {cap}
             </span>

@@ -30,7 +30,7 @@ mavenPublishing {
     pom {
         name.set("Flow-Like WASM SDK")
         description.set("Kotlin/WASM SDK for building Flow-Like WASM nodes")
-        url.set("https://github.com/TM9657/flow-like")
+        url.set("https://github.com/Rheosoph/flow-like")
         licenses {
             license {
                 name.set("MIT")
@@ -45,9 +45,9 @@ mavenPublishing {
             }
         }
         scm {
-            connection.set("scm:git:git://github.com/TM9657/flow-like.git")
-            developerConnection.set("scm:git:ssh://github.com/TM9657/flow-like.git")
-            url.set("https://github.com/TM9657/flow-like")
+            connection.set("scm:git:git://github.com/Rheosoph/flow-like.git")
+            developerConnection.set("scm:git:ssh://github.com/Rheosoph/flow-like.git")
+            url.set("https://github.com/Rheosoph/flow-like")
         }
     }
 }

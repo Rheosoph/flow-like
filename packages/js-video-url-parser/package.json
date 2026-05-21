@@ -5,15 +5,18 @@
 	"type": "commonjs",
 	"description": "Flow-Like compatibility shim for the unmaintained js-video-url-parser package.",
 	"main": "lib/index.js",
+	"module": "lib/index.mjs",
 	"types": "lib/index.d.ts",
 	"scripts": {
-		"build": "tsc -p tsconfig.json && biome format --write lib/index.js lib/index.d.ts"
+		"build": "tsc -p tsconfig.json && bun build src/index.ts --target=node --format=esm --outfile=lib/index.mjs && biome format --write lib/index.js lib/index.mjs lib/index.d.ts"
 	},
 	"exports": {
 		".": {
 			"types": "./lib/index.d.ts",
+			"import": "./lib/index.mjs",
+			"module": "./lib/index.mjs",
 			"require": "./lib/index.js",
-			"default": "./lib/index.js"
+			"default": "./lib/index.mjs"
 		}
 	},
 	"devDependencies": {

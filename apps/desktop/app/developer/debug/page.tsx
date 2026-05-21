@@ -29,16 +29,16 @@ import {
 	cn,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IBit } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
-import { IBitTypes } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
+} from "@flow-like/flow-like-ui";
+import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
+import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import type {
 	PackageInspection,
 	WasmExecutionResult,
 	WasmNodeDefinition,
 	WasmPinDefinition,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
-import type { PackageManifest } from "@tm9657/flow-like-ui/lib/schema/wasm";
+} from "@flow-like/flow-like-ui/lib/schema/developer";
+import type { PackageManifest } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,

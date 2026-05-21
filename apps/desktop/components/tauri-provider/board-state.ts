@@ -31,9 +31,9 @@ import {
 	injectDataFunction,
 	isEqual,
 	showProgressToast,
-} from "@tm9657/flow-like-ui";
-import type { IJwks, IRealtimeAccess } from "@tm9657/flow-like-ui";
-import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/types";
+} from "@flow-like/flow-like-ui";
+import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
+import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";

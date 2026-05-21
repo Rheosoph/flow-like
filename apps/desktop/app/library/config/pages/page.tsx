@@ -14,10 +14,10 @@ import {
 	TooltipTrigger,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IOAuthProvider, IStoredOAuthToken } from "@tm9657/flow-like-ui";
-import EventsPage from "@tm9657/flow-like-ui/components/settings/events/events-page";
-import type { PageListItem } from "@tm9657/flow-like-ui/state/backend-state/page-state";
+} from "@flow-like/flow-like-ui";
+import type { IOAuthProvider, IStoredOAuthToken } from "@flow-like/flow-like-ui";
+import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
+import type { PageListItem } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import {
 	FileText,
 	LayoutGrid,

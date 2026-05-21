@@ -1,10 +1,10 @@
-import type { ITeamState } from "@tm9657/flow-like-ui";
+import type { ITeamState } from "@flow-like/flow-like-ui";
 import type {
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
 	IMember,
-} from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type WebBackendRef,
 	apiDelete,

@@ -47,14 +47,14 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { AllowForkingCard } from "@tm9657/flow-like-ui/components/settings/forking/allow-forking-card";
-import { ForkAppCard } from "@tm9657/flow-like-ui/components/settings/forking/fork-app-card";
+} from "@flow-like/flow-like-ui";
+import { AllowForkingCard } from "@flow-like/flow-like-ui/components/settings/forking/allow-forking-card";
+import { ForkAppCard } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-card";
 import {
 	hashToGradient,
 	useThemeInfo,
-} from "@tm9657/flow-like-ui/hooks/use-theme-gradient";
-import { formatRelativeTime } from "@tm9657/flow-like-ui/lib";
+} from "@flow-like/flow-like-ui/hooks/use-theme-gradient";
+import { formatRelativeTime } from "@flow-like/flow-like-ui/lib";
 import { isEqual } from "lodash-es";
 import {
 	AlertTriangleIcon,
@@ -146,16 +146,35 @@ export default function LibraryConfigPage() {
 	const [localMetadata, setLocalMetadata] = useState<IMetadata | undefined>();
 	const [hasChanges, setHasChanges] = useState(false);
 	const [newTag, setNewTag] = useState("");
+	const draftAppIdRef = useRef<string | null>(null);
 
 	useEffect(() => {
-		if (!metadata.data || localMetadata) return;
-		setLocalMetadata(metadata.data);
-	}, [localMetadata, metadata.data]);
+		if (!id) {
+			draftAppIdRef.current = null;
+			setLocalApp(undefined);
+			setLocalMetadata(undefined);
+			setHasChanges(false);
+			setNewTag("");
+			return;
+		}
 
-	useEffect(() => {
-		if (!app.data || localApp) return;
+		if (draftAppIdRef.current === id) return;
+
+		if (app.isFetching || metadata.isFetching || !app.data || !metadata.data) {
+			draftAppIdRef.current = null;
+			setLocalApp(undefined);
+			setLocalMetadata(undefined);
+			setHasChanges(false);
+			setNewTag("");
+			return;
+		}
+
+		draftAppIdRef.current = id;
 		setLocalApp(app.data);
-	}, [localApp, app.data]);
+		setLocalMetadata(metadata.data);
+		setHasChanges(false);
+		setNewTag("");
+	}, [id, app.data, app.isFetching, metadata.data, metadata.isFetching]);
 
 	useEffect(() => {
 		if (!app.data || !metadata.data || !localApp || !localMetadata) {
@@ -310,7 +329,7 @@ export default function LibraryConfigPage() {
 		router.push("/library");
 	}
 
-	if (!app.data || !metadata.data) {
+	if (!app.data || !metadata.data || !localApp || !localMetadata) {
 		return (
 			<div className="flex items-center justify-center h-full">
 				<div className="space-y-3 w-full max-w-xl">

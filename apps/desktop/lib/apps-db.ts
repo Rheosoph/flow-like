@@ -1,4 +1,4 @@
-import type { IAppVisibility } from "@tm9657/flow-like-ui";
+import type { IAppVisibility } from "@flow-like/flow-like-ui";
 import Dexie, { type EntityTable } from "dexie";
 
 export interface IVisibilityStatus {

@@ -4,8 +4,8 @@ import type {
 	IIntercomEvent,
 	IResponse,
 	IResponseChunk,
-} from "@tm9657/flow-like-ui";
-import type { IAIState } from "@tm9657/flow-like-ui/state/backend-state/ai-state";
+} from "@flow-like/flow-like-ui";
+import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { TauriBackend } from "../tauri-provider";
 
 export class AiState implements IAIState {

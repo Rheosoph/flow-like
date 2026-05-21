@@ -1,0 +1,250 @@
+---
+interface Props {
+  t: (key: string) => string;
+}
+
+const { t } = Astro.props;
+
+type Rating = "strong" | "partial" | "weak";
+
+interface CategoryRow {
+  id: string;
+  nameKey: string;
+  examples: string;
+  accent: string; // tailwind text color
+  cells: Record<string, Rating>;
+  highlight?: boolean;
+}
+
+const criteria: { id: string; labelKey: string }[] = [
+  { id: "execution", labelKey: "compare.group.execution" },
+  { id: "data", labelKey: "compare.group.data" },
+  { id: "ai_ux", labelKey: "compare.group.ai_ux" },
+  { id: "distribution", labelKey: "compare.group.distribution" },
+  { id: "trust", labelKey: "compare.group.trust" },
+];
+
+const rows: CategoryRow[] = [
+  {
+    id: "execution",
+    nameKey: "compare.category.execution",
+    examples: "Zapier, n8n, Node-RED",
+    accent: "text-amber-500",
+    cells: {
+      execution: "strong",
+      data: "weak",
+      ai_ux: "weak",
+      distribution: "weak",
+      trust: "partial",
+    },
+  },
+  {
+    id: "lowcode",
+    nameKey: "compare.category.lowcode",
+    examples: "Retool, Power Apps, Appsmith",
+    accent: "text-blue-500",
+    cells: {
+      execution: "partial",
+      data: "partial",
+      ai_ux: "strong",
+      distribution: "partial",
+      trust: "partial",
+    },
+  },
+  {
+    id: "orchestration",
+    nameKey: "compare.category.orchestration",
+    examples: "Airflow, Temporal",
+    accent: "text-purple-500",
+    cells: {
+      execution: "strong",
+      data: "partial",
+      ai_ux: "weak",
+      distribution: "weak",
+      trust: "strong",
+    },
+  },
+  {
+    id: "enterprise_data",
+    nameKey: "compare.category.enterprise_data",
+    examples: "Palantir Foundry, SAP BTP",
+    accent: "text-fuchsia-500",
+    cells: {
+      execution: "strong",
+      data: "strong",
+      ai_ux: "partial",
+      distribution: "partial",
+      trust: "partial",
+    },
+  },
+  {
+    id: "enterprise_automation",
+    nameKey: "compare.category.enterprise_automation",
+    examples: "UiPath, Salesforce, Regrello",
+    accent: "text-rose-500",
+    cells: {
+      execution: "strong",
+      data: "partial",
+      ai_ux: "partial",
+      distribution: "partial",
+      trust: "weak",
+    },
+  },
+  {
+    id: "flowlike",
+    nameKey: "compare.overview.flowlike",
+    examples: "Flow-Like",
+    accent: "text-emerald-500",
+    highlight: true,
+    cells: {
+      execution: "strong",
+      data: "strong",
+      ai_ux: "strong",
+      distribution: "strong",
+      trust: "strong",
+    },
+  },
+];
+
+function ratingMeta(r: Rating) {
+  if (r === "strong") {
+    return {
+      dots: 3,
+      color: "bg-emerald-500",
+      empty: "bg-emerald-500/15",
+      label: "compare.overview.rating.strong",
+    };
+  }
+  if (r === "partial") {
+    return {
+      dots: 2,
+      color: "bg-amber-500",
+      empty: "bg-amber-500/15",
+      label: "compare.overview.rating.partial",
+    };
+  }
+  return {
+    dots: 1,
+    color: "bg-rose-500",
+    empty: "bg-rose-500/15",
+    label: "compare.overview.rating.weak",
+  };
+}
+---
+
+<section id="category-overview" class="relative py-20 lg:py-28 overflow-hidden">
+  <!-- Decorative background -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,hsl(var(--primary)/.06),transparent)]"></div>
+  </div>
+
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="mx-auto max-w-3xl text-center mb-12">
+      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-primary mb-4">
+        {t("compare.overview.tagline")}
+      </p>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight mb-4">
+        {t("compare.overview.headline")}
+      </h2>
+      <p class="text-base sm:text-lg text-muted-foreground">
+        {t("compare.overview.description")}
+      </p>
+    </div>
+
+    <!-- Legend -->
+    <div class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted-foreground mb-6">
+      <div class="flex items-center gap-2">
+        <span class="inline-flex gap-0.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+        </span>
+        <span>{t("compare.overview.rating.strong")}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex gap-0.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-500/15"></span>
+        </span>
+        <span>{t("compare.overview.rating.partial")}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex gap-0.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-rose-500/15"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-rose-500/15"></span>
+        </span>
+        <span>{t("compare.overview.rating.weak")}</span>
+      </div>
+    </div>
+
+    <!-- Matrix -->
+    <div class="rounded-3xl border border-border/40 bg-card/30 backdrop-blur-sm overflow-hidden shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[860px] text-sm">
+          <thead>
+            <tr class="border-b border-border/40 bg-muted/30">
+              <th class="text-left py-4 pl-6 pr-4 font-semibold text-xs uppercase tracking-[0.18em] text-muted-foreground w-[260px]">
+                {t("compare.overview.col.category")}
+              </th>
+              {criteria.map((c) => (
+                <th class="text-center py-4 px-3 font-semibold text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                  {t(c.labelKey)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => (
+              <tr
+                class:list={[
+                  "border-b border-border/30 last:border-b-0 transition-colors",
+                  row.highlight
+                    ? "bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07]"
+                    : "hover:bg-muted/30",
+                ]}
+              >
+                <td class="py-4 pl-6 pr-4 align-middle">
+                  <div class:list={["text-sm font-semibold", row.accent]}>
+                    {row.highlight && (
+                      <span class="inline-block mr-2 px-1.5 py-0.5 rounded-md bg-emerald-500 text-white text-[10px] font-bold tracking-wider align-middle">
+                        US
+                      </span>
+                    )}
+                    {t(row.nameKey)}
+                  </div>
+                  <div class="text-[11px] text-muted-foreground mt-0.5">
+                    {row.examples}
+                  </div>
+                </td>
+                {criteria.map((c) => {
+                  const meta = ratingMeta(row.cells[c.id]);
+                  return (
+                    <td class="py-4 px-3 align-middle" aria-label={t(meta.label)}>
+                      <div class="flex items-center justify-center gap-1">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <span
+                            class:list={[
+                              "w-1.5 h-1.5 rounded-full",
+                              i < meta.dots ? meta.color : meta.empty,
+                            ]}
+                          ></span>
+                        ))}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Footer note -->
+      <div class="px-6 py-4 border-t border-border/40 bg-muted/20 text-xs text-muted-foreground text-center">
+        {t("compare.overview.footnote")}
+      </div>
+    </div>
+  </div>
+</section>

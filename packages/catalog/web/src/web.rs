@@ -1,8 +1,17 @@
 pub mod api;
+#[cfg(feature = "execute")]
+pub(crate) mod auth;
 pub mod camera;
+pub(crate) mod http_runtime;
+pub mod mcp;
+pub mod message_handler;
 pub mod mqtt;
+pub mod rest;
 pub mod scrape;
 pub mod tcp;
+#[cfg(all(test, feature = "execute"))]
+pub(crate) mod test_support;
+pub mod tls;
 pub mod udp;
 pub mod websocket;
 

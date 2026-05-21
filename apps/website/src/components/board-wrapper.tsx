@@ -2,11 +2,11 @@ import {
 	LoadingScreen,
 	QueryClient,
 	createIDBPersister,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { Suspense, lazy } from "react";
 
 const PersistQueryClientProvider = lazy(() =>
-	import("@tm9657/flow-like-ui").then((module) => ({
+	import("@flow-like/flow-like-ui").then((module) => ({
 		default: module.PersistQueryClientProvider,
 	})),
 );

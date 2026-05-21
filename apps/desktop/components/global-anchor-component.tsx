@@ -9,7 +9,7 @@ import {
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const isIosLike = () => {

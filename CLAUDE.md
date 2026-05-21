@@ -171,7 +171,7 @@ After **any package manager operation** (npm/bun/pnpm install, adding deps):
 - Run `codacy_cli_analyze` with `tool: "trivy"` to check for vulnerabilities.
 - Resolve security issues before continuing.
 
-Codacy identifiers: `provider: gh`, `organization: TM9657`, `repository: flow-like`.
+Codacy identifiers: `provider: gh`, `organization: Rheosoph`, `repository: flow-like`.
 
 ---
 

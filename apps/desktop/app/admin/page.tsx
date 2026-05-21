@@ -16,8 +16,8 @@ import {
 	useBackend,
 	useInvoke,
 	useQuery,
-} from "@tm9657/flow-like-ui";
-import type { ISolutionListResponse } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import type { ISolutionListResponse } from "@flow-like/flow-like-ui";
 import {
 	Activity,
 	BookOpen,

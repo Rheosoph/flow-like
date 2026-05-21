@@ -21,7 +21,7 @@ jobs:
       - name: Setup SDK
         run: |
           if [ ! -d "../wasm-sdk-moonbit" ]; then
-            curl -sL https://github.com/TM9657/flow-like/archive/refs/heads/dev.tar.gz -o /tmp/flow-like.tar.gz
+            curl -sL https://github.com/Rheosoph/flow-like/archive/refs/heads/dev.tar.gz -o /tmp/flow-like.tar.gz
             mkdir -p /tmp/flow-like-extract
             tar xzf /tmp/flow-like.tar.gz -C /tmp/flow-like-extract --strip-components=2 "flow-like-dev/templates/wasm-sdk-moonbit"
             mv /tmp/flow-like-extract ../wasm-sdk-moonbit

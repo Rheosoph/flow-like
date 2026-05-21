@@ -108,7 +108,7 @@ export const jaDataDeletion = {
 	"dataDeletion.contact.email": "メール",
 	"dataDeletion.contact.company": "会社",
 	"dataDeletion.contact.companyName":
-		"TM9657 GmbH, Dr. Berndlstr. 5, 87700 Memmingen, ドイツ",
+		"Rheosoph GmbH, Maximilianstraße 29, 80539 München, ドイツ",
 	"dataDeletion.contact.privacyLink":
 		"プライバシーに関する詳細については、こちらをご覧ください：",
 	"dataDeletion.contact.privacyPolicy": "プライバシーポリシー",

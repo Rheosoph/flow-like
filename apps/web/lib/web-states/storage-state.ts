@@ -2,8 +2,8 @@ import {
 	type IStorageItem,
 	type IStorageState,
 	isAzureBlobStorageUrl,
-} from "@tm9657/flow-like-ui";
-import type { IStorageItemActionResult } from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui";
+import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { type WebBackendRef, apiDelete, apiPost, apiPut } from "./api-utils";
 
 export class WebStorageState implements IStorageState {

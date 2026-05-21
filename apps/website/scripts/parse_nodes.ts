@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import type { IComment, INode, IPin, Node } from "@tm9657/flow-like-ui";
-import { typeToColor } from "@tm9657/flow-like-ui/components/flow/utils";
+import type { IComment, INode, IPin, Node } from "@flow-like/flow-like-ui";
+import { typeToColor } from "@flow-like/flow-like-ui/components/flow/utils";
 
 const cache = new Map<string, [IPin, INode]>();
 

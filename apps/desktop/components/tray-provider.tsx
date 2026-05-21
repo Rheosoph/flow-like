@@ -3,8 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check } from "@tauri-apps/plugin-updater";
-import { useBackend, useNetworkStatus } from "@tm9657/flow-like-ui";
-import { useSpotlightStore } from "@tm9657/flow-like-ui/state/spotlight-state";
+import { useBackend, useNetworkStatus } from "@flow-like/flow-like-ui";
+import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state";
 import { useEffect, useMemo } from "react";
 
 interface TrayNotification {

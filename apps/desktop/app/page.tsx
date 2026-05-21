@@ -4,8 +4,8 @@ import {
 	Skeleton,
 	TutorialDialog,
 	useBackend,
-} from "@tm9657/flow-like-ui";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useTauriInvoke } from "../components/useInvoke";

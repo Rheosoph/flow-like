@@ -5,7 +5,7 @@ nameOverride: ""
 fullnameOverride: "flow-like"
 
 global:
-  imageRegistry: "ghcr.io/tm9657/"
+  imageRegistry: "ghcr.io/rheosoph/"
   imagePullSecrets:
     - name: ghcr-pull-secret
 

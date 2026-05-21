@@ -1,7 +1,7 @@
 "use client";
-import type { UseQueryResult } from "@tm9657/flow-like-ui";
-import { humanFileSize } from "@tm9657/flow-like-ui/lib/utils";
-import type { ISystemInfo } from "@tm9657/flow-like-ui/types";
+import type { UseQueryResult } from "@flow-like/flow-like-ui";
+import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
+import type { ISystemInfo } from "@flow-like/flow-like-ui/types";
 import { useTauriInvoke } from "../../../components/useInvoke";
 
 export default function SettingsPage() {

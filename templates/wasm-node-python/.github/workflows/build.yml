@@ -26,7 +26,7 @@ jobs:
       - name: Fetch WIT definition
         run: |
           mkdir -p wit
-          curl -fsSL https://raw.githubusercontent.com/TM9657/flow-like/dev/packages/wasm/wit/flow-like-node.wit -o wit/flow-like-node.wit
+          curl -fsSL https://raw.githubusercontent.com/Rheosoph/flow-like/dev/packages/wasm/wit/flow-like-node.wit -o wit/flow-like-node.wit
 
       - name: Build
         run: uv run python build.py

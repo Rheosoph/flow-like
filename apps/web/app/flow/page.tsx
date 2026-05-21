@@ -1,5 +1,5 @@
 "use client";
-import { FlowWrapper } from "@tm9657/flow-like-ui/components/flow/flow-wrapper";
+import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
 import "@xyflow/react/dist/style.css";
 import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";

@@ -10,7 +10,7 @@ const nextConfig = {
 		unoptimized: true,
 	},
 	transpilePackages: [
-		"@tm9657/flow-like-ui",
+		"@flow-like/flow-like-ui",
 		"@flow-like/dexie-tauri-blob-offload",
 		"tauri-plugin-remote-push-api",
 	],

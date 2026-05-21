@@ -21,13 +21,13 @@ import {
 	TextEditor,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type {
 	Challenge,
 	LessonAppRef,
 	LessonAssetView,
-} from "@tm9657/flow-like-ui/lib/learn/types";
-import { buildAssetPlateNode } from "@tm9657/flow-like-ui/lib/learn/asset-elements";
+} from "@flow-like/flow-like-ui/lib/learn/types";
+import { buildAssetPlateNode } from "@flow-like/flow-like-ui/lib/learn/asset-elements";
 import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";

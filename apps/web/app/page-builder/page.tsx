@@ -25,9 +25,9 @@ import {
 	WidgetBuilder,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IPage, PageLayoutType } from "@tm9657/flow-like-ui";
-import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/types";
+} from "@flow-like/flow-like-ui";
+import type { IPage, PageLayoutType } from "@flow-like/flow-like-ui";
+import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import {
 	ArrowLeft,
 	Check,
@@ -252,7 +252,7 @@ export default function PageBuilderPage() {
 	const performSave = useCallback(
 		async (
 			components: SurfaceComponent[],
-			widgetRefs?: Record<string, import("@tm9657/flow-like-ui").IWidgetRef>,
+			widgetRefs?: Record<string, import("@flow-like/flow-like-ui").IWidgetRef>,
 		) => {
 			const currentPage = pageRef.current;
 			if (!currentPage || !appId) return;
@@ -296,7 +296,7 @@ export default function PageBuilderPage() {
 	const handleComponentsChange = useCallback(
 		(
 			components: SurfaceComponent[],
-			widgetRefs?: Record<string, import("@tm9657/flow-like-ui").IWidgetRef>,
+			widgetRefs?: Record<string, import("@flow-like/flow-like-ui").IWidgetRef>,
 		) => {
 			// Check if there are actual changes using ref (avoid state dependency)
 			const componentsJson = JSON.stringify(components);
@@ -327,7 +327,7 @@ export default function PageBuilderPage() {
 	const handleSave = useCallback(
 		async (
 			components: SurfaceComponent[],
-			widgetRefs?: Record<string, import("@tm9657/flow-like-ui").IWidgetRef>,
+			widgetRefs?: Record<string, import("@flow-like/flow-like-ui").IWidgetRef>,
 		) => {
 			// Clear any pending auto-save
 			if (autoSaveTimeoutRef.current) {

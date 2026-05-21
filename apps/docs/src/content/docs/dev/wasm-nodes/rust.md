@@ -41,7 +41,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-flow-like-wasm-sdk = { git = "https://github.com/TM9657/flow-like", branch = "dev" }
+flow-like-wasm-sdk = { git = "https://github.com/Rheosoph/flow-like", branch = "dev" }
 serde_json = "1"
 
 [profile.release]

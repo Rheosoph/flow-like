@@ -1,4 +1,4 @@
-import { IExecutionMode } from "@tm9657/flow-like-ui";
+import { IExecutionMode } from "@flow-like/flow-like-ui";
 
 type PrerunLike = {
 	can_execute_locally: boolean;

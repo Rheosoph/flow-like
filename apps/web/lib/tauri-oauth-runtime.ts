@@ -1,4 +1,4 @@
-import type { IOAuthRuntime } from "@tm9657/flow-like-ui";
+import type { IOAuthRuntime } from "@flow-like/flow-like-ui";
 
 export const webOAuthRuntime: IOAuthRuntime = {
 	async openUrl(url: string): Promise<void> {

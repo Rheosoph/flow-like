@@ -502,10 +502,16 @@ pub async fn generate_tool_from_function(
     };
     use std::collections::HashMap;
 
+    const EMPTY_STRING_REF_HASH: &str = "16248035215404677707";
+
     fn resolve_ref(value: &str, refs: &HashMap<String, String>) -> String {
-        refs.get(value)
+        let trimmed = value.trim();
+        if trimmed == EMPTY_STRING_REF_HASH {
+            return String::new();
+        }
+        refs.get(trimmed)
             .cloned()
-            .unwrap_or_else(|| value.to_string())
+            .unwrap_or_else(|| trimmed.to_string())
     }
 
     fn nested_schema_from_string(

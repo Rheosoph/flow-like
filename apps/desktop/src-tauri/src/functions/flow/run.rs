@@ -186,19 +186,17 @@ async fn execute_internal(
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
         Arc::new(move |event| {
-            if events.is_none() {
-                return Box::pin(async { Ok(()) });
-            }
-            let events = events.as_ref().unwrap();
-            let events_cb = events.clone();
+            let events_cb = events.as_ref().cloned();
             let app_handle = app_handle.clone();
             Box::pin({
                 async move {
                     // Update last_node_update for run events
                     touch_run_last_update(&app_handle, &event);
 
-                    if let Err(err) = events_cb.send(event.clone()) {
-                        println!("Error emitting event: {}", err);
+                    if let Some(events_cb) = events_cb
+                        && let Err(err) = events_cb.send(event.clone())
+                    {
+                        println!("Error sending event to execution channel: {}", err);
                     }
 
                     let first_event = event.first();

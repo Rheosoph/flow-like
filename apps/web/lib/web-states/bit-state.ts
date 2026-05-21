@@ -5,7 +5,7 @@ import type {
 	IDownloadProgress,
 	IProfile,
 	ITtsAssetRef,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	IBitTypes,
 	bitDependencyRef,
@@ -14,9 +14,9 @@ import {
 	getTtsAssetRefs,
 	getTtsAssetRepairPlan,
 	localTtsAssetId,
-} from "@tm9657/flow-like-ui";
-import type { IBitSearchQuery } from "@tm9657/flow-like-ui/lib/schema/hub/bit-search-query";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui";
+import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { type WebBackendRef, apiGet, apiPost } from "./api-utils";
 import { WebApiState } from "./api-state";
 

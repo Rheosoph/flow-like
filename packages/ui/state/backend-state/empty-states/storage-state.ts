@@ -2,7 +2,7 @@ import type {
 	IStorageItem,
 	IStorageItemActionResult,
 	IStorageState,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export class EmptyStorageState implements IStorageState {
 	listStorageItems(appId: string, prefix: string): Promise<IStorageItem[]> {

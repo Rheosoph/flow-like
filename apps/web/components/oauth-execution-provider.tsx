@@ -7,7 +7,7 @@ import {
 	useBackend,
 	useInvoke,
 	useOAuthExecutionContext,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { type ReactNode, useMemo, useRef } from "react";
 import { oauthConsentStore, oauthTokenStore } from "../lib/oauth-db";
 import { getOAuthService } from "../lib/oauth-service";

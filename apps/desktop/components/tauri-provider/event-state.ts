@@ -19,7 +19,7 @@ import {
 	injectDataFunction,
 	isEqual,
 	showProgressToast,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {

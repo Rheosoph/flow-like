@@ -29,7 +29,7 @@ impl KubernetesConfig {
         Ok(Self {
             namespace: std::env::var("K8S_NAMESPACE").unwrap_or_else(|_| "flow-like".to_string()),
             trigger_image: std::env::var("SINK_TRIGGER_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/tm9657/flow-like/sink-trigger:latest".to_string()),
+                .unwrap_or_else(|_| "ghcr.io/rheosoph/flow-like/sink-trigger:latest".to_string()),
             image_pull_policy: std::env::var("IMAGE_PULL_POLICY")
                 .unwrap_or_else(|_| "IfNotPresent".to_string()),
             service_account: std::env::var("K8S_SERVICE_ACCOUNT").ok(),

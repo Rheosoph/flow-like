@@ -11,12 +11,12 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@tm9657/flow-like-ui";
-import { IEventExecutionMode } from "@tm9657/flow-like-ui/lib/schema/flow/event";
+} from "@flow-like/flow-like-ui";
+import { IEventExecutionMode } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type {
 	IHub,
 	ISupportedSinks,
-} from "@tm9657/flow-like-ui/lib/schema/hub/hub";
+} from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { useEffect, useMemo, useState } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */

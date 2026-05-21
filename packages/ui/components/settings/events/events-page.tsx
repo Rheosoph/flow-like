@@ -46,22 +46,22 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IOAuthConsentStore } from "@tm9657/flow-like-ui/db/oauth-db";
+} from "@flow-like/flow-like-ui";
+import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
 import {
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
-} from "@tm9657/flow-like-ui/lib/oauth/helpers";
+} from "@flow-like/flow-like-ui/lib/oauth/helpers";
 import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
-} from "@tm9657/flow-like-ui/lib/oauth/types";
-import type { IHub } from "@tm9657/flow-like-ui/lib/schema/hub/hub";
+} from "@flow-like/flow-like-ui/lib/oauth/types";
+import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
-} from "@tm9657/flow-like-ui/lib/uint8";
-import type { PageListItem } from "@tm9657/flow-like-ui/state/backend-state/page-state";
+} from "@flow-like/flow-like-ui/lib/uint8";
+import type { PageListItem } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import {
 	AlertTriangle,
 	Cloud,

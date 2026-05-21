@@ -23,17 +23,108 @@ export const enCompare = {
 	"compare.category.orchestration": "Data & Workflow Orchestration",
 	"compare.category.orchestration.desc":
 		"Enterprise-grade tools for complex data pipelines and workflow orchestration. Powerful but require engineering expertise.",
+	"compare.category.enterprise_data": "Enterprise Data Platforms",
+	"compare.category.enterprise_data.desc":
+		"Ontology- and ERP-driven mega platforms built around proprietary data models. Powerful for big organisations—slow to adopt, expensive, and locked to one vendor.",
+	"compare.category.enterprise_automation": "Enterprise Automation Suites",
+	"compare.category.enterprise_automation.desc":
+		"Process and workflow suites built around RPA, CRM, or AI agents. Strong for specific business motions, but SaaS-bound, with heavy licensing and limited portability.",
 
 	// Legend
 	"compare.legend.native": "Native support",
 	"compare.legend.partial": "Partial / Add-on",
 	"compare.legend.none": "Not supported",
 
+	// Category Quadrant (bubble map)
+	"compare.quadrant.tagline": "The Map",
+	"compare.quadrant.headline": "Where each category sits",
+	"compare.quadrant.description":
+		"Plot every category on the two axes that matter: how well it automates workflows, and how well it builds real apps. Flow-Like is the only bubble in the top-right.",
+	"compare.quadrant.axis.x": "Workflow Automation →",
+	"compare.quadrant.axis.x.low": "Weak",
+	"compare.quadrant.axis.x.high": "Strong",
+	"compare.quadrant.axis.y": "↑ App & UI Building",
+	"compare.quadrant.axis.y.short": "Apps",
+	"compare.quadrant.label.tl": "UI only",
+	"compare.quadrant.label.tr": "Apps + Workflows",
+	"compare.quadrant.label.bl": "Limited",
+	"compare.quadrant.label.br": "Workflows only",
+	"compare.quadrant.corner.target": "↗ The sweet spot",
+
+	// Per-category mini bubble plot inside the matrix
+	"compare.matrix.plot.title": "Positioning vs. Flow-Like",
+	"compare.matrix.plot.description":
+		"Where these tools land on the two axes that actually differentiate this category. Flow-Like always sits in the top-right.",
+	"compare.matrix.plot.ideal": "Sweet spot",
+
+	// Per-category axes (X & Y differ per category to highlight what matters most)
+	"compare.matrix.plot.axis.extensibility": "Code & Extensibility",
+	"compare.matrix.plot.axis.extensibility.low": "Click-only",
+	"compare.matrix.plot.axis.extensibility.high": "Code-deep",
+	"compare.matrix.plot.axis.openness": "Openness & Self-Host",
+	"compare.matrix.plot.axis.openness.low": "Vendor-locked",
+	"compare.matrix.plot.axis.openness.high": "Open & portable",
+	"compare.matrix.plot.axis.data_headroom": "Data Headroom",
+	"compare.matrix.plot.axis.data_headroom.low": "Toy-scale",
+	"compare.matrix.plot.axis.data_headroom.high": "Production data",
+	"compare.matrix.plot.axis.data_native": "Data-Native Power",
+	"compare.matrix.plot.axis.data_native.low": "Workflow-only",
+	"compare.matrix.plot.axis.data_native.high": "Files + DataFrames",
+	"compare.matrix.plot.axis.business_ux": "Business UX",
+	"compare.matrix.plot.axis.business_ux.low": "Engineer-only",
+	"compare.matrix.plot.axis.business_ux.high": "Visual + Apps",
+	"compare.matrix.plot.axis.portability": "Portability & Self-Host",
+	"compare.matrix.plot.axis.portability.low": "SaaS-bound",
+	"compare.matrix.plot.axis.portability.high": "Run anywhere",
+	"compare.matrix.plot.axis.customer_reach": "Customer-Facing Reach",
+	"compare.matrix.plot.axis.customer_reach.low": "Internal only",
+	"compare.matrix.plot.axis.customer_reach.high": "Apps + Mobile + Offline",
+	"compare.matrix.plot.axis.ai_reach": "AI Agents & UX Reach",
+	"compare.matrix.plot.axis.ai_reach.low": "RPA-only",
+	"compare.matrix.plot.axis.ai_reach.high": "Agentic + Mobile",
+	"compare.matrix.plot.axis.production_scale": "Production Scale",
+	"compare.matrix.plot.axis.production_scale.low": "Breaks at scale",
+	"compare.matrix.plot.axis.production_scale.high": "Replayable & high-volume",
+	"compare.matrix.plot.axis.customer_distribution": "Customer Distribution",
+	"compare.matrix.plot.axis.customer_distribution.low": "Browser-only internal tools",
+	"compare.matrix.plot.axis.customer_distribution.high": "Desktop, mobile, offline",
+	"compare.matrix.plot.axis.ai_native": "AI-Native Depth",
+	"compare.matrix.plot.axis.ai_native.low": "Bolted-on AI",
+	"compare.matrix.plot.axis.ai_native.high": "Agents + data-native",
+
+	// Category Overview
+	"compare.overview.tagline": "At a Glance",
+	"compare.overview.headline": "The workflow & app landscape",
+	"compare.overview.description":
+		"Six different categories, one honest scoring rubric. How each class of tool stacks up against the criteria that actually matter when you ship to production.",
+	"compare.overview.flowlike": "Flow-Like",
+	"compare.overview.col.category": "Category",
+	"compare.overview.crit.workflows": "Workflows",
+	"compare.overview.crit.apps": "UI / Apps",
+	"compare.overview.crit.agents": "AI Agents",
+	"compare.overview.crit.performance": "Performance",
+	"compare.overview.crit.self_host": "Self-Host",
+	"compare.overview.crit.customer_facing": "Customer-Facing",
+	"compare.overview.crit.portability": "Portability",
+	"compare.overview.rating.strong": "Strong",
+	"compare.overview.rating.partial": "Partial",
+	"compare.overview.rating.weak": "Weak",
+	"compare.overview.footnote":
+		"Category-level summary. Scroll down for the per-vendor breakdown with sources and exact limits.",
+
+	// Capability Group Headers
+	"compare.group.execution": "Execution & Performance",
+	"compare.group.data": "Data & Files",
+	"compare.group.ai_ux": "AI, UI & Apps",
+	"compare.group.distribution": "Distribution & Offline",
+	"compare.group.trust": "Trust, Ops & Portability",
+
 	// Capability Labels
 	"compare.cap.visual_workflow": "Visual workflow builder",
 	"compare.cap.replayable": "Replayable Execution",
 	"compare.cap.high_volume": "High-volume dataflows",
 	"compare.cap.compiled": "Compiled business logic",
+	"compare.cap.file_size": "File / payload limits",
 	"compare.cap.ai_agents": "AI agents built-in",
 	"compare.cap.ui_builder": "End-user UI builder",
 	"compare.cap.full_apps": "Ship full applications",
@@ -52,6 +143,7 @@ export const enCompare = {
 	"compare.fl.visual_workflow": "Typed IR",
 	"compare.fl.high_volume": "255k/s",
 	"compare.fl.compiled": "Rust",
+	"compare.fl.file_size": "Object store",
 	"compare.fl.desktop": "Tauri",
 	"compare.fl.file_native": "Object store",
 	"compare.fl.governance": "Graph + data scoped",
@@ -81,6 +173,12 @@ export const enCompare = {
 		"Your automation logic runs as native, optimized code—not interpreted scripts.",
 	"compare.explain.compiled.flow":
 		"Flow-Like compiles workflows to native Rust code. No JavaScript interpreter overhead, no cold starts. Your automations run at near-hardware speed.",
+
+	"compare.explain.file_size.title": "File & Payload Size",
+	"compare.explain.file_size.what":
+		"How large a single file or workflow payload can be without breaking the platform.",
+	"compare.explain.file_size.flow":
+		"Flow-Like streams binary data through an object store (local disk or S3-compatible). There is no hard cap on file or payload size—gigabyte files flow through nodes the same way kilobyte ones do. n8n's default DB-backed binary mode tops out around 50 MB, Temporal payloads at 2 MB, and most low-code builders ship with single-digit MB upload limits.",
 
 	"compare.explain.ai_agents.title": "AI Agents Built-In",
 	"compare.explain.ai_agents.what":
@@ -163,7 +261,7 @@ export const enCompare = {
 	"compare.insight.tagline": "The Key Insight",
 	"compare.insight.headline": "Other tools make you choose",
 	"compare.insight.description":
-		"n8n, Node-RED, Zapier, Airflow, Temporal are execution engines. Retool, Power Apps, Appsmith are UI shells. Flow-Like is the only system that is both—and can ship the result as a real application.",
+		"n8n, Node-RED, Zapier, Airflow, Temporal are execution engines. Retool, Power Apps, Appsmith are UI shells. Palantir and SAP are enterprise data platforms. UiPath, Salesforce, Regrello are SaaS automation suites. Flow-Like is the only system that is all of these—and can ship the result as a real, portable application.",
 
 	// CTA Section
 	"compare.cta.tagline": "Ready to see the difference?",
@@ -193,6 +291,16 @@ export const enCompare = {
 		"Industry-standard workflow orchestration. Powerful for data pipelines, but requires Python expertise and no UI building.",
 	"compare.competitor.temporal":
 		"Durable execution platform. Excellent for complex workflows, but developer-focused with steep learning curve.",
+	"compare.competitor.palantir":
+		"Ontology-driven enterprise platform used by governments and Fortune 500s. Extremely capable for large-scale data ops, but high contract minimums, slow rollout, and deep vendor lock-in.",
+	"compare.competitor.sap":
+		"SAP Build / BTP brings low-code and process automation to the SAP ecosystem. Great if you already live in S/4HANA, painful and expensive outside of it.",
+	"compare.competitor.uipath":
+		"The RPA giant turned automation platform with Studio, Apps, and AI Center. Powerful for legacy desktop automation, but heavyweight licensing, .NET-bound runtime, and strict per-payload limits in Orchestrator queues.",
+	"compare.competitor.regrello":
+		"AI-native process orchestration for supply-chain and procurement teams. Strong agent story, but SaaS-only, no real app builder, and you're tied to their hosted graph.",
+	"compare.competitor.salesforce":
+		"The CRM giant with Flow, Lightning App Builder, and Agentforce. Excellent if your world is Sales/Service Cloud—but SaaS-only, per-seat-priced, and every workflow drags you deeper into the Salesforce data model.",
 
 	// Capability Deep Dive
 	"compare.explain.how_does_it": "How Flow-Like does it",

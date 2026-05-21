@@ -1,4 +1,4 @@
-import type { IBackendRole, IRoleState } from "@tm9657/flow-like-ui";
+import type { IBackendRole, IRoleState } from "@flow-like/flow-like-ui";
 
 export class EmptyRoleState implements IRoleState {
 	getRoles(appId: string): Promise<[string | undefined, IBackendRole[]]> {

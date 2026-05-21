@@ -39,7 +39,7 @@ import {
 	LoadingScreen,
 	ThemeProvider,
 	useBackendStore,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { Suspense, lazy, useEffect, useState } from "react";
 
 const BoardWrapper = lazy(() => import("./board-wrapper"));

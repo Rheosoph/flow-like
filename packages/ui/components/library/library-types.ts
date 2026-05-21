@@ -34,11 +34,23 @@ export const CATEGORY_COLORS: Record<string, string> = {
 
 export function sortItems(items: LibraryItem[], mode: SortMode): LibraryItem[] {
 	if (mode === "alpha") {
-		return items.toSorted((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+		return items.toSorted((a, b) => {
+			const byName = (a.name ?? "").localeCompare(b.name ?? "");
+			if (byName !== 0) return byName;
+			return a.id.localeCompare(b.id);
+		});
 	}
-	return items.toSorted(
-		(a, b) =>
+	return items.toSorted((a, b) => {
+		const bySecs =
 			(b.updated_at?.secs_since_epoch ?? 0) -
-			(a.updated_at?.secs_since_epoch ?? 0),
-	);
+			(a.updated_at?.secs_since_epoch ?? 0);
+		if (bySecs !== 0) return bySecs;
+		const byNanos =
+			(b.updated_at?.nanos_since_epoch ?? 0) -
+			(a.updated_at?.nanos_since_epoch ?? 0);
+		if (byNanos !== 0) return byNanos;
+		const byName = (a.name ?? "").localeCompare(b.name ?? "");
+		if (byName !== 0) return byName;
+		return a.id.localeCompare(b.id);
+	});
 }

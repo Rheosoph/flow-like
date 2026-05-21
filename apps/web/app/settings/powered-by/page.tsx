@@ -1,5 +1,5 @@
-import { Button } from "@tm9657/flow-like-ui";
-import { Separator } from "@tm9657/flow-like-ui/components/ui/separator";
+import { Button } from "@flow-like/flow-like-ui";
+import { Separator } from "@flow-like/flow-like-ui/components/ui/separator";
 
 const poweredBy: {
 	name: string;

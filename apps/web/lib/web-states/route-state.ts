@@ -1,5 +1,5 @@
-import type { IAppRouteState } from "@tm9657/flow-like-ui";
-import type { IRouteMapping } from "@tm9657/flow-like-ui/state/backend-state/route-state";
+import type { IAppRouteState } from "@flow-like/flow-like-ui";
+import type { IRouteMapping } from "@flow-like/flow-like-ui/state/backend-state/route-state";
 import {
 	type WebBackendRef,
 	apiDelete,

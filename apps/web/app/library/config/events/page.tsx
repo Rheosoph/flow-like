@@ -5,8 +5,8 @@ import {
 	useBackend,
 	useHub,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import EventsPage from "@tm9657/flow-like-ui/components/settings/events/events-page";
+} from "@flow-like/flow-like-ui";
+import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
 import { useCallback, useMemo } from "react";
 import { EVENT_CONFIG } from "../../../../lib/event-config";
 import { oauthConsentStore, oauthTokenStore } from "../../../../lib/oauth-db";

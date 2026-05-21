@@ -136,7 +136,22 @@ impl NodeLogic for TcpConnectNode {
             .map(|a| a.to_string())
             .unwrap_or_else(|_| addr.clone());
 
-        let (reader, writer) = tokio::io::split(stream);
+        let (reader, writer) =
+            if let Some(connector) = crate::web::tls::client_connector(&config.tls)? {
+                let server_name = crate::web::tls::tls_server_name(&config.tls, &config.host)?;
+                match connector.connect(server_name, stream).await {
+                    Ok(stream) => crate::web::tls::boxed_split(stream),
+                    Err(err) => {
+                        context.log_message(
+                            &format!("TCP TLS handshake failed: {}", err),
+                            LogLevel::Error,
+                        );
+                        return Ok(());
+                    }
+                }
+            } else {
+                crate::web::tls::boxed_split(stream)
+            };
 
         let ref_id = format!("tcp_{}", flow_like_types::create_id());
         let close_notify = Arc::new(tokio::sync::Notify::new());

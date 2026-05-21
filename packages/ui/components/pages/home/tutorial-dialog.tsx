@@ -1,5 +1,5 @@
 import { GitHubLogoIcon } from "@radix-ui/react-icons";
-import { Button } from "@tm9657/flow-like-ui";
+import { Button } from "@flow-like/flow-like-ui";
 import { Book, Heart, MessageCircle, Rocket, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -583,7 +583,7 @@ export function TutorialDialog() {
 							: "gap-2 w-fit border-foreground/40 hover:bg-foreground/10 bg-card"
 					}
 					onClick={() =>
-						window.open("https://github.com/TM9657/flow-like", "_blank")
+						window.open("https://github.com/Rheosoph/flow-like", "_blank")
 					}
 				>
 					<GitHubLogoIcon className="w-4 h-4" />

@@ -636,7 +636,7 @@ Pure Rust implementation of Base64 (RFC 4648) which avoids any usages of data-de
 
 
 ## benchmark 0.1.0 — UNKNOWN
-Repository: https://github.com/TM9657/flow-like/
+Repository: https://github.com/Rheosoph/flow-like/
 Schema Generation for flow-like Types
 
 
@@ -1832,7 +1832,7 @@ DEFLATE compression and decompression exposed as Read/BufRead/Write streams. Sup
 
 
 ## flow-like-desktop 0.0.2 — UNKNOWN
-Repository: https://github.com/TM9657/flow-like/
+Repository: https://github.com/Rheosoph/flow-like/
 Flow-Like, Automation done with the press of a Button
 
 
@@ -1846,7 +1846,7 @@ Flow-Like, Automation done with the press of a Button
 
 
 ## flow-like 0.1.0 — UNKNOWN
-Repository: https://github.com/TM9657/flow-like/
+Repository: https://github.com/Rheosoph/flow-like/
 Flow-Like, Automation done with the press of a Button. Core Library for Flow Execution and Management
 
 
@@ -4619,7 +4619,7 @@ Schannel bindings for rust, allowing SSL/TLS (e.g. https) without openssl
 
 
 ## schema-gen 0.1.0 — UNKNOWN
-Repository: https://github.com/TM9657/flow-like/
+Repository: https://github.com/Rheosoph/flow-like/
 Schema Generation for flow-like Types
 
 

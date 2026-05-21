@@ -1,10 +1,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::tls::TlsConfig;
+
 pub mod close;
 pub mod connect;
 pub mod listen;
 pub mod send;
+pub mod server;
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct TcpConfig {
@@ -12,6 +15,8 @@ pub struct TcpConfig {
     pub port: u16,
     #[serde(default)]
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -22,6 +27,8 @@ pub struct TcpListenConfig {
     pub timeout_seconds: u64,
     #[serde(default = "default_backlog")]
     pub max_connections: u32,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 fn default_backlog() -> u32 {
@@ -45,8 +52,8 @@ use tokio::sync::Mutex;
 
 #[cfg(feature = "execute")]
 pub struct CachedTcpConnection {
-    pub reader: Arc<Mutex<tokio::io::ReadHalf<tokio::net::TcpStream>>>,
-    pub writer: Arc<Mutex<tokio::io::WriteHalf<tokio::net::TcpStream>>>,
+    pub reader: Arc<Mutex<super::tls::BoxedReader>>,
+    pub writer: Arc<Mutex<super::tls::BoxedWriter>>,
     pub close_notify: Arc<tokio::sync::Notify>,
 }
 

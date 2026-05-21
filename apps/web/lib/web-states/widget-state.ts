@@ -1,9 +1,9 @@
-import type { IMetadata, IWidgetState } from "@tm9657/flow-like-ui";
+import type { IMetadata, IWidgetState } from "@flow-like/flow-like-ui";
 import type {
 	IWidget,
 	Version,
 	VersionType,
-} from "@tm9657/flow-like-ui/state/backend-state/widget-state";
+} from "@flow-like/flow-like-ui/state/backend-state/widget-state";
 import {
 	type WebBackendRef,
 	apiDelete,

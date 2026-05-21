@@ -13,8 +13,8 @@ import type {
 	UpsertPackageCommentResponse,
 	WasmPurchaseParams,
 	WasmPurchaseResponse,
-} from "@tm9657/flow-like-ui/lib/schema/wasm";
-import type { IRegistryState } from "@tm9657/flow-like-ui/state/backend-state/registry-state";
+} from "@flow-like/flow-like-ui/lib/schema/wasm";
+import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state/registry-state";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

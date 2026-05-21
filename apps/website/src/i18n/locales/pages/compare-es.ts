@@ -23,17 +23,108 @@ export const esCompare = {
 	"compare.category.orchestration": "Orquestación de Datos & Workflows",
 	"compare.category.orchestration.desc":
 		"Herramientas enterprise para pipelines de datos complejos y orquestación. Potentes pero requieren experiencia técnica.",
+	"compare.category.enterprise_data": "Plataformas de Datos Empresariales",
+	"compare.category.enterprise_data.desc":
+		"Mega plataformas basadas en ontologías y ERPs sobre modelos de datos propietarios. Potentes para grandes organizaciones—lentas de adoptar, caras y atadas a un único proveedor.",
+	"compare.category.enterprise_automation": "Suites de Automatización Empresarial",
+	"compare.category.enterprise_automation.desc":
+		"Suites de procesos y workflows construidas alrededor de RPA, CRM o agentes de IA. Fuertes para flujos específicos, pero atadas a SaaS, con licenciamiento pesado y poca portabilidad.",
 
 	// Legend
 	"compare.legend.native": "Soporte nativo",
 	"compare.legend.partial": "Parcial / Add-on",
 	"compare.legend.none": "No soportado",
 
+	// Category Quadrant (bubble map)
+	"compare.quadrant.tagline": "El mapa",
+	"compare.quadrant.headline": "Dónde se ubica cada categoría",
+	"compare.quadrant.description":
+		"Cada categoría sobre los dos ejes que importan: qué tan bien automatiza workflows y qué tan bien construye apps reales. Flow-Like es la única burbuja arriba a la derecha.",
+	"compare.quadrant.axis.x": "Automatización de workflows →",
+	"compare.quadrant.axis.x.low": "Débil",
+	"compare.quadrant.axis.x.high": "Fuerte",
+	"compare.quadrant.axis.y": "↑ Construcción de apps y UI",
+	"compare.quadrant.axis.y.short": "Apps",
+	"compare.quadrant.label.tl": "Solo UI",
+	"compare.quadrant.label.tr": "Apps + Workflows",
+	"compare.quadrant.label.bl": "Limitado",
+	"compare.quadrant.label.br": "Solo workflows",
+	"compare.quadrant.corner.target": "↗ El punto ideal",
+
+	// Per-category mini bubble plot inside the matrix
+	"compare.matrix.plot.title": "Posicionamiento frente a Flow-Like",
+	"compare.matrix.plot.description":
+		"Dónde se ubican estas herramientas en los dos ejes que realmente diferencian esta categoría. Flow-Like siempre está arriba a la derecha.",
+	"compare.matrix.plot.ideal": "Punto ideal",
+
+	// Per-category axes (X & Y differ per category to highlight what matters most)
+	"compare.matrix.plot.axis.extensibility": "Código y Extensibilidad",
+	"compare.matrix.plot.axis.extensibility.low": "Solo clics",
+	"compare.matrix.plot.axis.extensibility.high": "Código profundo",
+	"compare.matrix.plot.axis.openness": "Apertura y Self-Host",
+	"compare.matrix.plot.axis.openness.low": "Bloqueo por proveedor",
+	"compare.matrix.plot.axis.openness.high": "Abierto y portátil",
+	"compare.matrix.plot.axis.data_headroom": "Capacidad de Datos",
+	"compare.matrix.plot.axis.data_headroom.low": "Escala de juguete",
+	"compare.matrix.plot.axis.data_headroom.high": "Datos de producción",
+	"compare.matrix.plot.axis.data_native": "Potencia Data-Native",
+	"compare.matrix.plot.axis.data_native.low": "Solo workflows",
+	"compare.matrix.plot.axis.data_native.high": "Files + DataFrames",
+	"compare.matrix.plot.axis.business_ux": "UX de Negocio",
+	"compare.matrix.plot.axis.business_ux.low": "Solo ingeniería",
+	"compare.matrix.plot.axis.business_ux.high": "Visual + Apps",
+	"compare.matrix.plot.axis.portability": "Portabilidad y Self-Host",
+	"compare.matrix.plot.axis.portability.low": "Atado a SaaS",
+	"compare.matrix.plot.axis.portability.high": "Corre en cualquier lugar",
+	"compare.matrix.plot.axis.customer_reach": "Alcance al Cliente",
+	"compare.matrix.plot.axis.customer_reach.low": "Solo interno",
+	"compare.matrix.plot.axis.customer_reach.high": "Apps + Móvil + Offline",
+	"compare.matrix.plot.axis.ai_reach": "Agentes IA y Alcance UX",
+	"compare.matrix.plot.axis.ai_reach.low": "Solo RPA",
+	"compare.matrix.plot.axis.ai_reach.high": "Agéntico + Móvil",
+	"compare.matrix.plot.axis.production_scale": "Escala de Producción",
+	"compare.matrix.plot.axis.production_scale.low": "Se rompe al escalar",
+	"compare.matrix.plot.axis.production_scale.high": "Replay y alto volumen",
+	"compare.matrix.plot.axis.customer_distribution": "Distribución al Cliente",
+	"compare.matrix.plot.axis.customer_distribution.low": "Solo herramientas internas en el navegador",
+	"compare.matrix.plot.axis.customer_distribution.high": "Escritorio, móvil, sin conexión",
+	"compare.matrix.plot.axis.ai_native": "Profundidad IA-Nativa",
+	"compare.matrix.plot.axis.ai_native.low": "IA superpuesta",
+	"compare.matrix.plot.axis.ai_native.high": "Agentes + data-native",
+
+	// Category Overview
+	"compare.overview.tagline": "De un vistazo",
+	"compare.overview.headline": "El panorama de workflows y apps",
+	"compare.overview.description":
+		"Seis categorías distintas, una rúbrica honesta. Así se comporta cada clase de herramienta frente a los criterios que importan al pasar a producción.",
+	"compare.overview.flowlike": "Flow-Like",
+	"compare.overview.col.category": "Categoría",
+	"compare.overview.crit.workflows": "Workflows",
+	"compare.overview.crit.apps": "UI / Apps",
+	"compare.overview.crit.agents": "Agentes IA",
+	"compare.overview.crit.performance": "Rendimiento",
+	"compare.overview.crit.self_host": "Self-Host",
+	"compare.overview.crit.customer_facing": "Cara al cliente",
+	"compare.overview.crit.portability": "Portabilidad",
+	"compare.overview.rating.strong": "Fuerte",
+	"compare.overview.rating.partial": "Parcial",
+	"compare.overview.rating.weak": "Débil",
+	"compare.overview.footnote":
+		"Resumen a nivel de categoría. Más abajo encontrarás el desglose por proveedor con fuentes y límites exactos.",
+
+	// Capability Group Headers
+	"compare.group.execution": "Ejecución y Rendimiento",
+	"compare.group.data": "Datos y Archivos",
+	"compare.group.ai_ux": "IA, UI y Apps",
+	"compare.group.distribution": "Distribución y Offline",
+	"compare.group.trust": "Confianza, Operación y Portabilidad",
+
 	// Capability Labels
 	"compare.cap.visual_workflow": "Constructor visual de workflows",
 	"compare.cap.replayable": "Ejecución reproducible",
 	"compare.cap.high_volume": "Flujos de datos de alto volumen",
 	"compare.cap.compiled": "Lógica de negocio compilada",
+	"compare.cap.file_size": "Límites de archivo / payload",
 	"compare.cap.ai_agents": "Agentes IA integrados",
 	"compare.cap.ui_builder": "Constructor de interfaz de usuario",
 	"compare.cap.full_apps": "Entregar aplicaciones completas",
@@ -52,6 +143,7 @@ export const esCompare = {
 	"compare.fl.visual_workflow": "IR tipado",
 	"compare.fl.high_volume": "255k/s",
 	"compare.fl.compiled": "Rust",
+	"compare.fl.file_size": "Object store",
 	"compare.fl.desktop": "Tauri",
 	"compare.fl.file_native": "Object store",
 	"compare.fl.governance": "Grafo + alcance de datos",
@@ -81,6 +173,12 @@ export const esCompare = {
 		"Tu lógica de automatización se ejecuta como código nativo optimizado—no scripts interpretados.",
 	"compare.explain.compiled.flow":
 		"Flow-Like compila workflows a código Rust nativo. Sin sobrecarga de intérprete JavaScript, sin arranques en frío.",
+
+	"compare.explain.file_size.title": "Tamaño de Archivo y Payload",
+	"compare.explain.file_size.what":
+		"Qué tan grande puede ser un archivo o payload sin romper la plataforma.",
+	"compare.explain.file_size.flow":
+		"Flow-Like transmite datos binarios a través de un object store (disco local o compatible con S3). No hay límite duro para archivos o payloads—archivos de gigabytes fluyen igual que los de kilobytes. n8n por defecto en modo binario en BD ronda los 50 MB, los payloads de Temporal los 2 MB, y la mayoría de constructores low-code limitan a unos pocos MB.",
 
 	"compare.explain.ai_agents.title": "Agentes IA Integrados",
 	"compare.explain.ai_agents.what":
@@ -163,7 +261,7 @@ export const esCompare = {
 	"compare.insight.tagline": "El Insight Clave",
 	"compare.insight.headline": "Otras herramientas te obligan a elegir",
 	"compare.insight.description":
-		"n8n, Node-RED, Zapier, Airflow, Temporal son motores de ejecución. Retool, Power Apps, Appsmith son shells de UI. Flow-Like es el único sistema que es ambos—y puede entregar el resultado como una aplicación real.",
+		"n8n, Node-RED, Zapier, Airflow, Temporal son motores de ejecución. Retool, Power Apps, Appsmith son shells de UI. Palantir y SAP son plataformas de datos empresariales. UiPath, Salesforce y Regrello son suites de automatización SaaS. Flow-Like es el único sistema que es todo eso—y puede entregar el resultado como una aplicación real y portable.",
 
 	// CTA Section
 	"compare.cta.tagline": "¿Listo para ver la diferencia?",
@@ -193,6 +291,16 @@ export const esCompare = {
 		"Estándar de la industria para orquestación de workflows. Potente para pipelines de datos, pero requiere experiencia en Python y sin desarrollo de UI.",
 	"compare.competitor.temporal":
 		"Plataforma de ejecución durable. Excelente para workflows complejos, pero orientada a desarrolladores con curva de aprendizaje pronunciada.",
+	"compare.competitor.palantir":
+		"Plataforma empresarial basada en ontologías usada por gobiernos y Fortune 500. Muy capaz para operaciones de datos a gran escala, pero con mínimos contractuales altos, despliegue lento y fuerte dependencia del proveedor.",
+	"compare.competitor.sap":
+		"SAP Build / BTP llevan low-code y automatización de procesos al ecosistema SAP. Excelente si ya vives en S/4HANA, costoso y lento fuera de él.",
+	"compare.competitor.uipath":
+		"El gigante de la RPA convertido en plataforma de automatización con Studio, Apps y AI Center. Potente para automatización de escritorio heredada, pero con licenciamiento caro, runtime atado a .NET y límites estrictos de payload en las colas de Orchestrator.",
+	"compare.competitor.regrello":
+		"Orquestación de procesos nativa de IA para equipos de supply chain y compras. Buen relato de agentes, pero solo SaaS, sin constructor de apps real y atado a su grafo alojado.",
+	"compare.competitor.salesforce":
+		"El gigante del CRM con Flow, Lightning App Builder y Agentforce. Excelente si vives en Sales/Service Cloud—pero solo SaaS, precio por usuario y cada workflow te ata más al modelo de datos de Salesforce.",
 
 	// Capability Deep Dive
 	"compare.explain.how_does_it": "Cómo lo hace Flow-Like",

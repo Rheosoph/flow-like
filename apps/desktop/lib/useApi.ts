@@ -3,7 +3,7 @@ import {
 	useBackend,
 	useInvoke,
 	useQuery,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export function useApi<T>(
 	method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH",

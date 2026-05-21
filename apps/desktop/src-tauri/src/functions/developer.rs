@@ -426,7 +426,7 @@ pub async fn developer_scaffold_project(
     };
 
     let api_url = format!(
-        "https://api.github.com/repos/TM9657/flow-like/contents/templates/{}?ref=dev",
+        "https://api.github.com/repos/Rheosoph/flow-like/contents/templates/{}?ref=dev",
         template_dir
     );
 
@@ -1455,7 +1455,19 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         }
         registry.node_registry = Arc::new(inner);
         drop(registry);
-        let _ = app_handle.emit("catalog-updated", ());
+        // Dispatch the emit on the main thread to avoid a startup deadlock:
+        // calling `emit` here from a tokio worker grabs Tauri's internal
+        // `webviews_lock` while iterating webviews and synchronously waits on
+        // the main loop for `Webview::eval`. If the main thread is concurrently
+        // servicing a URL-scheme task that also needs `webviews_lock` (very
+        // likely during early startup) the two deadlock. Running the emit on
+        // the main thread keeps it serialized with URL-scheme handlers.
+        let emit_handle = app_handle.clone();
+        if let Err(e) = app_handle.run_on_main_thread(move || {
+            let _ = emit_handle.emit("catalog-updated", ());
+        }) {
+            tracing::warn!("Failed to schedule catalog-updated emit on main thread: {:?}", e);
+        }
         tracing::info!("Developer nodes loaded into catalog");
     }
 

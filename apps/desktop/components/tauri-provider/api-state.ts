@@ -1,5 +1,5 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import type { IApiState, IProfile } from "@tm9657/flow-like-ui";
+import type { IApiState, IProfile } from "@flow-like/flow-like-ui";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 

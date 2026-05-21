@@ -1,10 +1,10 @@
-import type { IDatabaseState } from "@tm9657/flow-like-ui";
+import type { IDatabaseState } from "@flow-like/flow-like-ui";
 import {
 	type IAddColumnPayload,
 	type IIndexConfig,
 	IIndexType,
 	type IQueryTablePayload,
-} from "@tm9657/flow-like-ui/state/backend-state/db-state";
+} from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import {
 	type WebBackendRef,
 	apiDelete,

@@ -7,22 +7,22 @@ import {
 	useDownloadManager,
 	useInvalidateInvoke,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-} from "@tm9657/flow-like-ui/components/ui/avatar";
-import { BitHover } from "@tm9657/flow-like-ui/components/ui/bit-hover";
+} from "@flow-like/flow-like-ui/components/ui/avatar";
+import { BitHover } from "@flow-like/flow-like-ui/components/ui/bit-hover";
 import {
 	type ChartConfig,
 	ChartContainer,
 	ChartTooltip,
 	ChartTooltipContent,
-} from "@tm9657/flow-like-ui/components/ui/chart";
-import type { IBit } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
-import { humanFileSize } from "@tm9657/flow-like-ui/lib/utils";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui/components/ui/chart";
+import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
+import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, XAxis } from "recharts";

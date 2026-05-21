@@ -1,6 +1,6 @@
 "use client";
 
-import { StreamingTextEditor } from "@tm9657/flow-like-ui";
+import { StreamingTextEditor } from "@flow-like/flow-like-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const SAMPLE_MD = `# Hello World

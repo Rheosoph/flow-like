@@ -32,7 +32,7 @@ import {
 	cn,
 	formatRelativeTime,
 	useBackend,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Clock,
 	ExternalLink,

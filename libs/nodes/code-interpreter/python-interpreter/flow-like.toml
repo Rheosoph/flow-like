@@ -10,7 +10,7 @@ keywords = [
 license = "MIT"
 manifest_version = 1
 name = "Code Interpreter"
-repository = "https://github.com/TM9657/flow-like"
+repository = "https://github.com/Rheosoph/flow-like"
 version = "0.1.0"
 wasm_path = "build/interpreter.wasm"
 

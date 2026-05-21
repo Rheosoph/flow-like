@@ -107,7 +107,7 @@ export const svDataDeletion = {
 	"dataDeletion.contact.email": "E-post",
 	"dataDeletion.contact.company": "Företag",
 	"dataDeletion.contact.companyName":
-		"TM9657 GmbH, Dr. Berndlstr. 5, 87700 Memmingen, Tyskland",
+		"Rheosoph GmbH, Maximilianstraße 29, 80539 München, Tyskland",
 	"dataDeletion.contact.privacyLink":
 		"Mer information om våra allmänna integritetsprinciper hittar du i vår",
 	"dataDeletion.contact.privacyPolicy": "Integritetspolicy",

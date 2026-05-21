@@ -28,7 +28,7 @@ async-trait.workspace = true
 urlencoding.workspace = true
 
 # H3 geospatial indexing - only included when execute feature is enabled
-h3o = { git = "https://github.com/TM9657/h3o", rev = "95255f0", features = ["geo"], optional = true }
+h3o = { git = "https://github.com/Rheosoph/h3o", rev = "95255f0", features = ["geo"], optional = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

@@ -226,7 +226,7 @@ export const ko = {
 	"nav.github": "GitHub",
 	"nav.blog": "블로그",
 	"nav.contact": "문의하기",
-	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+	"footer.copyright": "© 2026 Rheosoph GmbH. All rights reserved.",
 
 	// Compare page — capability deep-dive cards
 	"compare.explain.how_does_it": "Flow-Like의 구현 방식",

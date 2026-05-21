@@ -1,6 +1,6 @@
 # flow-like-wasm-node-nim
 
-A template for creating [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes in **Nim**.
+A template for creating [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes in **Nim**.
 
 Nim compiles to C, then Emscripten compiles the C output to WebAssembly. This gives you Nim's expressive syntax with near-native WASM performance.
 

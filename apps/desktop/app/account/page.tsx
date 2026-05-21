@@ -1,6 +1,6 @@
 "use client";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Button, useBackend, useHub, useInvoke } from "@tm9657/flow-like-ui";
+import { Button, useBackend, useHub, useInvoke } from "@flow-like/flow-like-ui";
 import { Amplify } from "aws-amplify";
 import {
 	type AuthTokens,

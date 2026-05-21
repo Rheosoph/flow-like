@@ -35,26 +35,26 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-} from "@tm9657/flow-like-ui/components/ui/avatar";
+} from "@flow-like/flow-like-ui/components/ui/avatar";
 import {
 	hashToGradient,
 	useThemeInfo,
-} from "@tm9657/flow-like-ui/hooks/use-theme-gradient";
-import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
+} from "@flow-like/flow-like-ui/hooks/use-theme-gradient";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import type {
 	DeveloperProject,
 	DeveloperSettings,
 	PackageInspection,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
+} from "@flow-like/flow-like-ui/lib/schema/developer";
 import {
 	EDITOR_OPTIONS,
 	TEMPLATE_LANGUAGES,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
+} from "@flow-like/flow-like-ui/lib/schema/developer";
 import {
 	AlertCircle,
 	AlertTriangle,

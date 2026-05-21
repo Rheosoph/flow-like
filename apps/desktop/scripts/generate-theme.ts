@@ -1,5 +1,5 @@
 import fs from "fs";
-import type { ITheme, IThemeColors } from "@tm9657/flow-like-ui";
+import type { ITheme, IThemeColors } from "@flow-like/flow-like-ui";
 
 const css = fs.readFileSync("./theme-input.css", "utf-8");
 

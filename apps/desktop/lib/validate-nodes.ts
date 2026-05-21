@@ -1,4 +1,4 @@
-import type { WasmNodeDefinition } from "@tm9657/flow-like-ui/lib/schema/developer";
+import type { WasmNodeDefinition } from "@flow-like/flow-like-ui/lib/schema/developer";
 
 export type LintSeverity = "error" | "warning" | "info";
 
