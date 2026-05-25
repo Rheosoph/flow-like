@@ -255,10 +255,7 @@ where
 }
 
 #[cfg(feature = "execute")]
-pub(crate) async fn write_sse_comment<S>(
-    stream: &mut S,
-    text: &str,
-) -> flow_like_types::Result<()>
+pub(crate) async fn write_sse_comment<S>(stream: &mut S, text: &str) -> flow_like_types::Result<()>
 where
     S: AsyncWrite + Unpin + ?Sized,
 {

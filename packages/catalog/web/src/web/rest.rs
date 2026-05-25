@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use super::tls::TlsConfig;
 
-const REST_CONFIG_NODE_VERSION: u32 = 2;
+const REST_CONFIG_NODE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct RestServerConfig {
@@ -121,6 +121,7 @@ pub enum RestAuthConfig {
         #[serde(default = "default_hmac_max_skew_seconds")]
         max_skew_seconds: u64,
     },
+    #[serde(rename = "oauth_bearer", alias = "o_auth_bearer")]
     OAuthBearer {
         #[serde(default)]
         issuer: Option<String>,
@@ -453,6 +454,20 @@ impl NodeLogic for RegisterRestFilesNode {
         )
         .set_schema::<FlowPath>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "directory",
+            "Directory",
+            "Serve the FlowPath as a directory mount",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(flow_like_types::json::json!(false)));
+        node.add_input_pin(
+            "content_type",
+            "Content Type",
+            "Optional response content type override",
+            VariableType::String,
+        )
+        .set_default_value(Some(flow_like_types::json::json!("")));
         node.add_output_pin(
             "config_out",
             "Config",
@@ -468,14 +483,25 @@ impl NodeLogic for RegisterRestFilesNode {
         let mut config: RestServerConfig = context.evaluate_pin("config_in").await?;
         let path: String = context.evaluate_pin("path").await?;
         let flow_path: FlowPath = context.evaluate_pin("flow_path").await?;
-        let directory = rest_file_route_prefix(&path).is_some()
+        let explicit_directory: bool = context.evaluate_pin("directory").await.unwrap_or(false);
+        let content_type: String = context
+            .evaluate_pin("content_type")
+            .await
+            .unwrap_or_default();
+        let content_type = content_type.trim();
+        let directory = explicit_directory
+            || rest_file_route_prefix(&path).is_some()
             || flow_path_is_directory_mount(&flow_path, context).await;
 
         config.file_routes.push(RestFileRoute {
             path: super::http_runtime::normalize_path(&path),
             flow_path,
             directory,
-            content_type: None,
+            content_type: if content_type.is_empty() {
+                None
+            } else {
+                Some(content_type.to_string())
+            },
         });
 
         context
@@ -1074,7 +1100,8 @@ impl NodeLogic for RegisterRestAuthNode {
         .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin("auth", "Auth", "Auth config", VariableType::Struct)
             .set_schema::<RestAuthConfig>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
+            .set_options(PinOptions::new().set_enforce_schema(true).build())
+            .set_default_value(Some(flow_like_types::json::json!({"type": "none"})));
         node.add_output_pin(
             "config_out",
             "Config",
@@ -1088,7 +1115,12 @@ impl NodeLogic for RegisterRestAuthNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let mut config: RestServerConfig = context.evaluate_pin("config_in").await?;
-        let auth: RestAuthConfig = context.evaluate_pin("auth").await?;
+        let auth_pin = context.get_pin_by_name("auth").await?;
+        let auth: RestAuthConfig = match auth_pin.depends_on().first().and_then(|pin| pin.upgrade())
+        {
+            Some(connected_auth) => context.evaluate_pin_ref(connected_auth).await?,
+            None => RestAuthConfig::None,
+        };
         config.auth = auth;
         context
             .set_pin_value("config_out", flow_like_types::json::json!(config))
@@ -1172,158 +1204,193 @@ impl NodeLogic for RestServerNode {
         context.activate_exec_pin("exec_error").await?;
 
         let config: RestServerConfig = context.evaluate_pin("config").await?;
-        let addr = format!("{}:{}", config.host, config.port);
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(listener) => listener,
-            Err(err) => {
-                context.log_message(
-                    &format!("REST server bind failed on {}: {}", addr, err),
-                    LogLevel::Error,
-                );
-                return Ok(());
-            }
-        };
 
-        let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
-            Ok(acceptor) => acceptor,
-            Err(err) => {
-                context.log_message(
-                    &format!("REST server TLS configuration failed: {}", err),
-                    LogLevel::Error,
-                );
-                return Ok(());
-            }
-        };
-
-        let local_addr = listener.local_addr()?.to_string();
-        let function_contexts = build_function_contexts(context, &config.function_routes).await;
-        let files = preload_files(context, &config.file_routes).await;
-        let openapi_specs = build_openapi_specs(context, &config, &local_addr).await;
-        let oauth_validator = match super::auth::build_oauth_validator(context, &config.auth).await
+        // Remote build: don't bind a socket. Emit the composed config so the
+        // setup-collector on the API side can persist the registration, then
+        // fire on_listening and return.
+        #[cfg(all(feature = "remote", not(feature = "local")))]
         {
-            Ok(validator) => validator,
-            Err(err) => {
-                context.log_message(
-                    &format!("REST server OAuth configuration failed: {}", err),
-                    LogLevel::Error,
-                );
-                return Ok(());
-            }
-        };
-        context
-            .set_pin_value("local_addr", json!(local_addr))
-            .await?;
-        context.deactivate_exec_pin("exec_error").await?;
-        context.activate_exec_pin("on_listening").await?;
-        trigger_connected_exec(context, "on_listening", "REST server on_listening").await;
-
-        let parent_node_id = context.node.node.lock().await.id.clone();
-        let config = Arc::new(config);
-        let function_contexts = Arc::new(function_contexts);
-        let files = Arc::new(files);
-        let openapi_specs = Arc::new(openapi_specs);
-        let oauth_validator = Arc::new(oauth_validator);
-        let cancellation_token = context.get_cancellation_token();
-        let active_connections = Arc::new(AtomicU32::new(0));
-        let mut handles = Vec::new();
-        let mut cancelled = false;
-
-        loop {
-            let accept = if config.timeout_seconds > 0 {
-                tokio::select! {
-                    result = listener.accept() => Some(result),
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(config.timeout_seconds)) => {
-                        context.log_message("REST server timed out", LogLevel::Warn);
-                        None
-                    }
-                    _ = super::wait_for_cancel(cancellation_token.clone()) => {
-                        cancelled = true;
-                        context.log_message("REST server cancelled", LogLevel::Warn);
-                        None
-                    }
-                }
-            } else {
-                tokio::select! {
-                    result = listener.accept() => Some(result),
-                    _ = super::wait_for_cancel(cancellation_token.clone()) => {
-                        cancelled = true;
-                        context.log_message("REST server cancelled", LogLevel::Warn);
-                        None
-                    }
-                }
-            };
-
-            let Some(accept) = accept else {
-                break;
-            };
-            let (stream, remote_addr) = match accept {
-                Ok(pair) => pair,
-                Err(err) => {
-                    context.log_message(&format!("REST accept error: {}", err), LogLevel::Error);
-                    continue;
-                }
-            };
-
-            if config.max_connections > 0
-                && active_connections.load(Ordering::Relaxed) >= config.max_connections
+            if let Err(err) = super::remote::emit_remote_server_config(
+                context,
+                super::remote::RemoteServerKind::Rest,
+                &config,
+            )
+            .await
             {
                 context.log_message(
-                    "REST server rejected request because max_connections was reached",
-                    LogLevel::Warn,
+                    &format!("REST remote config emission failed: {}", err),
+                    LogLevel::Error,
                 );
-                continue;
+                return Ok(());
             }
+            context
+                .set_pin_value(
+                    "local_addr",
+                    json!(format!("remote://rest/{}", config.host)),
+                )
+                .await?;
+            context.deactivate_exec_pin("exec_error").await?;
+            context.activate_exec_pin("on_listening").await?;
+            trigger_connected_exec(context, "on_listening", "REST server (remote)").await;
+            return Ok(());
+        }
 
-            let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(stream) => Box::new(stream),
-                    Err(err) => {
-                        context.log_message(
-                            &format!("REST TLS handshake failed: {}", err),
-                            LogLevel::Error,
-                        );
-                        continue;
-                    }
+        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
+        {
+            let addr = format!("{}:{}", config.host, config.port);
+            let listener = match tokio::net::TcpListener::bind(&addr).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    context.log_message(
+                        &format!("REST server bind failed on {}: {}", addr, err),
+                        LogLevel::Error,
+                    );
+                    return Ok(());
                 }
-            } else {
-                Box::new(stream)
             };
 
-            active_connections.fetch_add(1, Ordering::Relaxed);
-            let config = config.clone();
-            let function_contexts = function_contexts.clone();
-            let files = files.clone();
-            let openapi_specs = openapi_specs.clone();
-            let oauth_validator = oauth_validator.clone();
-            let active_connections = active_connections.clone();
-            let parent_node_id = parent_node_id.clone();
-            handles.push(tokio::spawn(async move {
-                handle_connection(
-                    stream,
-                    remote_addr.to_string(),
-                    config,
-                    function_contexts,
-                    files,
-                    openapi_specs,
-                    oauth_validator,
-                    parent_node_id,
-                )
-                .await;
-                active_connections.fetch_sub(1, Ordering::Relaxed);
-            }));
-        }
+            let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
+                Ok(acceptor) => acceptor,
+                Err(err) => {
+                    context.log_message(
+                        &format!("REST server TLS configuration failed: {}", err),
+                        LogLevel::Error,
+                    );
+                    return Ok(());
+                }
+            };
 
-        for handle in handles {
-            if !handle.is_finished() {
-                handle.abort();
+            let local_addr = listener.local_addr()?.to_string();
+            let function_contexts = build_function_contexts(context, &config.function_routes).await;
+            let files = preload_files(context, &config.file_routes).await;
+            let openapi_specs = build_openapi_specs(context, &config, &local_addr).await;
+            let oauth_validator =
+                match super::auth::build_oauth_validator(context, &config.auth).await {
+                    Ok(validator) => validator,
+                    Err(err) => {
+                        context.log_message(
+                            &format!("REST server OAuth configuration failed: {}", err),
+                            LogLevel::Error,
+                        );
+                        return Ok(());
+                    }
+                };
+            context
+                .set_pin_value("local_addr", json!(local_addr))
+                .await?;
+            context.deactivate_exec_pin("exec_error").await?;
+            context.activate_exec_pin("on_listening").await?;
+            trigger_connected_exec(context, "on_listening", "REST server on_listening").await;
+
+            let parent_node_id = context.node.node.lock().await.id.clone();
+            let config = Arc::new(config);
+            let function_contexts = Arc::new(function_contexts);
+            let files = Arc::new(files);
+            let openapi_specs = Arc::new(openapi_specs);
+            let oauth_validator = Arc::new(oauth_validator);
+            let cancellation_token = context.get_cancellation_token();
+            let active_connections = Arc::new(AtomicU32::new(0));
+            let mut handles = Vec::new();
+            let mut cancelled = false;
+
+            loop {
+                let accept = if config.timeout_seconds > 0 {
+                    tokio::select! {
+                        result = listener.accept() => Some(result),
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(config.timeout_seconds)) => {
+                            context.log_message("REST server timed out", LogLevel::Warn);
+                            None
+                        }
+                        _ = super::wait_for_cancel(cancellation_token.clone()) => {
+                            cancelled = true;
+                            context.log_message("REST server cancelled", LogLevel::Warn);
+                            None
+                        }
+                    }
+                } else {
+                    tokio::select! {
+                        result = listener.accept() => Some(result),
+                        _ = super::wait_for_cancel(cancellation_token.clone()) => {
+                            cancelled = true;
+                            context.log_message("REST server cancelled", LogLevel::Warn);
+                            None
+                        }
+                    }
+                };
+
+                let Some(accept) = accept else {
+                    break;
+                };
+                let (stream, remote_addr) = match accept {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        context
+                            .log_message(&format!("REST accept error: {}", err), LogLevel::Error);
+                        continue;
+                    }
+                };
+
+                if config.max_connections > 0
+                    && active_connections.load(Ordering::Relaxed) >= config.max_connections
+                {
+                    context.log_message(
+                        "REST server rejected request because max_connections was reached",
+                        LogLevel::Warn,
+                    );
+                    continue;
+                }
+
+                let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
+                    match acceptor.accept(stream).await {
+                        Ok(stream) => Box::new(stream),
+                        Err(err) => {
+                            context.log_message(
+                                &format!("REST TLS handshake failed: {}", err),
+                                LogLevel::Error,
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    Box::new(stream)
+                };
+
+                active_connections.fetch_add(1, Ordering::Relaxed);
+                let config = config.clone();
+                let function_contexts = function_contexts.clone();
+                let files = files.clone();
+                let openapi_specs = openapi_specs.clone();
+                let oauth_validator = oauth_validator.clone();
+                let active_connections = active_connections.clone();
+                let parent_node_id = parent_node_id.clone();
+                handles.push(tokio::spawn(async move {
+                    handle_connection(
+                        stream,
+                        remote_addr.to_string(),
+                        config,
+                        function_contexts,
+                        files,
+                        openapi_specs,
+                        oauth_validator,
+                        parent_node_id,
+                    )
+                    .await;
+                    active_connections.fetch_sub(1, Ordering::Relaxed);
+                }));
             }
-        }
-        context.deactivate_exec_pin("on_listening").await?;
-        context.activate_exec_pin("on_close").await?;
-        trigger_connected_exec(context, "on_close", "REST server on_close").await;
 
-        if cancelled {
-            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+            for handle in handles {
+                if !handle.is_finished() {
+                    handle.abort();
+                }
+            }
+            context.deactivate_exec_pin("on_listening").await?;
+            context.activate_exec_pin("on_close").await?;
+            trigger_connected_exec(context, "on_close", "REST server on_close").await;
+
+            if cancelled {
+                return Err(flow_like_types::anyhow!("Execution was cancelled"));
+            }
         }
         Ok(())
     }
@@ -1898,8 +1965,6 @@ fn resolved_openapi_description(
     }
 }
 
-
-
 #[cfg(feature = "execute")]
 fn response_schema_for_content_type(content_type: &str) -> flow_like_types::Value {
     let lower = content_type.to_ascii_lowercase();
@@ -2414,10 +2479,69 @@ async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, 
     }
 }
 
+#[cfg(test)]
+mod serialization_tests {
+    use super::{RestAuthConfig, RestFileRoute, RestServerConfig};
+    use flow_like_catalog_core::FlowPath;
+    use flow_like_types::json::json;
+
+    #[test]
+    fn oauth_bearer_auth_uses_canonical_type_and_accepts_legacy_alias() {
+        let auth = RestAuthConfig::OAuthBearer {
+            issuer: None,
+            audience: None,
+            required_scopes: Vec::new(),
+            jwks_url: None,
+            jwks_flow_path: None,
+            oidc_discovery_url: None,
+        };
+
+        assert_eq!(
+            flow_like_types::json::to_value(&auth).unwrap()["type"],
+            json!("oauth_bearer")
+        );
+
+        let legacy = flow_like_types::json::from_value::<RestAuthConfig>(json!({
+            "type": "o_auth_bearer"
+        }))
+        .unwrap();
+
+        assert!(matches!(legacy, RestAuthConfig::OAuthBearer { .. }));
+    }
+
+    #[test]
+    fn rest_server_config_serializes_file_routes() {
+        let config = RestServerConfig {
+            file_routes: vec![RestFileRoute {
+                path: "/assets".to_string(),
+                flow_path: FlowPath::new(
+                    "storage/assets".to_string(),
+                    "dirs__storage_test".to_string(),
+                    None,
+                ),
+                directory: true,
+                content_type: Some("text/plain".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let value = flow_like_types::json::to_value(config).unwrap();
+        assert_eq!(value["file_routes"][0]["path"], json!("/assets"));
+        assert_eq!(value["file_routes"][0]["directory"], json!(true));
+        assert_eq!(value["file_routes"][0]["content_type"], json!("text/plain"));
+        assert_eq!(
+            value["file_routes"][0]["flow_path"]["path"],
+            json!("storage/assets")
+        );
+    }
+}
+
 #[cfg(all(test, feature = "execute"))]
 mod tests {
     use super::*;
-    use crate::web::test_support::{internal_node, internal_node_with_logic, test_context};
+    use crate::web::test_support::{
+        internal_node, internal_node_with_logic, output_value, test_context,
+    };
     use flow_like::flow::node::NodeLogic;
     use flow_like_storage::{
         Path,
@@ -2463,6 +2587,82 @@ mod tests {
         node.add_output_pin("payload", "Payload", "Payload", VariableType::Struct);
         node.add_output_pin("_client", "Client", "Client", VariableType::Struct);
         internal_node_with_logic(node, Arc::new(RestEchoLogic))
+    }
+
+    #[tokio::test]
+    async fn rest_register_files_node_writes_file_route_fields() {
+        let node = internal_node(RegisterRestFilesNode::new().get_node());
+        let mut context = test_context(node, vec![]).await;
+        let flow_path = FlowPath::new(
+            "storage/assets".to_string(),
+            "dirs__storage_test".to_string(),
+            None,
+        );
+
+        context
+            .set_pin_value("config_in", json!(RestServerConfig::default()))
+            .await
+            .unwrap();
+        context
+            .set_pin_value("path", json!("/assets"))
+            .await
+            .unwrap();
+        context
+            .set_pin_value("flow_path", json!(flow_path))
+            .await
+            .unwrap();
+        context
+            .set_pin_value("directory", json!(true))
+            .await
+            .unwrap();
+        context
+            .set_pin_value("content_type", json!("text/plain"))
+            .await
+            .unwrap();
+
+        RegisterRestFilesNode::new()
+            .run(&mut context)
+            .await
+            .unwrap();
+
+        let config = output_value(&context, "config_out").await.unwrap();
+        assert_eq!(config["file_routes"][0]["path"], json!("/assets"));
+        assert_eq!(config["file_routes"][0]["directory"], json!(true));
+        assert_eq!(
+            config["file_routes"][0]["content_type"],
+            json!("text/plain")
+        );
+        assert_eq!(
+            config["file_routes"][0]["flow_path"]["path"],
+            json!("storage/assets")
+        );
+    }
+
+    #[tokio::test]
+    async fn rest_register_auth_node_clears_disconnected_stale_auth() {
+        let node = internal_node(RegisterRestAuthNode::new().get_node());
+        let mut context = test_context(node, vec![]).await;
+
+        context
+            .set_pin_value("config_in", json!(RestServerConfig::default()))
+            .await
+            .unwrap();
+        context
+            .set_pin_value(
+                "auth",
+                json!({
+                    "type": "api_key",
+                    "header": "x-api-key",
+                    "key": "stale"
+                }),
+            )
+            .await
+            .unwrap();
+
+        RegisterRestAuthNode::new().run(&mut context).await.unwrap();
+
+        let config = output_value(&context, "config_out").await.unwrap();
+        assert_eq!(config["auth"]["type"], json!("none"));
     }
 
     #[tokio::test]

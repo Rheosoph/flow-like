@@ -212,11 +212,9 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 			rest: {
 				sink_type: "rest",
-				prefix: "/api",
 			},
 			mcp: {
 				sink_type: "mcp",
-				prefix: "/mcp",
 			},
 		},
 	},

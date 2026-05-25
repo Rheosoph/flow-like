@@ -356,11 +356,14 @@ export async function fetcher<T>(
 			throw new Error(`Error fetching data: ${response.statusText}`);
 		}
 
-		const json = await response.json();
+		const text = await response.text();
+		if (!text) return undefined as T;
+		const json = tryParseJSON<T>(text);
+		if (json === null) return text as T;
 		console.groupCollapsed(`API Request: ${path}`);
 		console.dir(json, { depth: null });
 		console.groupEnd();
-		return json as T;
+		return json;
 	} catch (error) {
 		console.groupCollapsed(`API Request: ${path}`);
 		console.error(`Error fetching ${path}:`, error);

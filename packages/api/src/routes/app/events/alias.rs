@@ -16,7 +16,9 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -56,6 +58,41 @@ impl From<event_alias::Model> for AliasView {
             created_by: m.created_by,
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/apps/{app_id}/events/{event_id}/alias",
+    tag = "events",
+    description = "List aliases for an event.",
+    params(
+        ("app_id" = String, Path, description = "Application ID"),
+        ("event_id" = String, Path, description = "Event ID"),
+    ),
+    responses(
+        (status = 200, description = "Aliases", body = [AliasView]),
+        (status = 404, description = "Not found"),
+    ),
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
+)]
+pub async fn list_aliases(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, event_id)): Path<(String, String)>,
+) -> Result<Json<Vec<AliasView>>, ApiError> {
+    let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
+    let _event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+
+    let rows = EventAlias::find()
+        .filter(event_alias::Column::AppId.eq(&app_id))
+        .filter(event_alias::Column::EventId.eq(&event_id))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+
+    Ok(Json(rows.into_iter().map(AliasView::from).collect()))
 }
 
 #[utoipa::path(
@@ -161,17 +198,37 @@ pub async fn upsert_alias(
                 slug, other.event_id, other.app_id
             )));
         }
-        None => event_alias::ActiveModel {
-            slug: Set(slug.clone()),
-            app_id: Set(app_id.clone()),
-            event_id: Set(event_id.clone()),
-            created_by: Set(sub),
-            created_at: Set(now),
-            updated_at: Set(now),
+        None => {
+            let txn = state
+                .db
+                .begin()
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+
+            event_alias::Entity::delete_many()
+                .filter(event_alias::Column::AppId.eq(&app_id))
+                .filter(event_alias::Column::EventId.eq(&event_id))
+                .exec(&txn)
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+
+            let model = event_alias::ActiveModel {
+                slug: Set(slug.clone()),
+                app_id: Set(app_id.clone()),
+                event_id: Set(event_id.clone()),
+                created_by: Set(sub),
+                created_at: Set(now),
+                updated_at: Set(now),
+            }
+            .insert(&txn)
+            .await
+            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+
+            txn.commit()
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+            model
         }
-        .insert(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?,
     };
 
     Ok(Json(model.into()))

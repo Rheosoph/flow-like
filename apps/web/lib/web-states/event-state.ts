@@ -15,6 +15,11 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
+import type {
+	IEventAlias,
+	IListRegistrationsResponse,
+	ISetupEventResponse,
+} from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
@@ -500,6 +505,63 @@ export class WebEventState implements IEventState {
 		} catch {
 			return false;
 		}
+	}
+
+	async listEventRegistrations(
+		appId: string,
+		eventId: string,
+		version?: string,
+	): Promise<IListRegistrationsResponse> {
+		const qs = version ? `?version=${encodeURIComponent(version)}` : "";
+		return apiGet<IListRegistrationsResponse>(
+			`apps/${appId}/events/${eventId}/registrations${qs}`,
+			this.backend.auth,
+		);
+	}
+
+	async listEventAliases(
+		appId: string,
+		eventId: string,
+	): Promise<IEventAlias[]> {
+		return apiGet<IEventAlias[]>(
+			`apps/${appId}/events/${eventId}/alias`,
+			this.backend.auth,
+		);
+	}
+
+	async setupEvent(
+		appId: string,
+		eventId: string,
+		force = false,
+	): Promise<ISetupEventResponse> {
+		return apiPost<ISetupEventResponse>(
+			`apps/${appId}/events/${eventId}/setup`,
+			{ force },
+			this.backend.auth,
+		);
+	}
+
+	async upsertEventAlias(
+		appId: string,
+		eventId: string,
+		slug: string,
+	): Promise<IEventAlias> {
+		return apiPut<IEventAlias>(
+			`apps/${appId}/events/${eventId}/alias/${encodeURIComponent(slug)}`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async deleteEventAlias(
+		appId: string,
+		eventId: string,
+		slug: string,
+	): Promise<void> {
+		await apiDelete<void>(
+			`apps/${appId}/events/${eventId}/alias/${encodeURIComponent(slug)}`,
+			this.backend.auth,
+		);
 	}
 
 	async prerunEvent(

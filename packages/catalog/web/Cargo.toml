@@ -6,6 +6,13 @@ edition = "2024"
 [features]
 default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
+
+# Execution environment - determines how server nodes (REST/MCP) behave
+# local: bind a socket and serve in-process (desktop app)
+# remote: emit a structured server-config event and return (server runtimes)
+local = []
+remote = []
+
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",

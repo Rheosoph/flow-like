@@ -342,8 +342,8 @@ model Event {
 
   sink EventSink?
 
-  /// Status of the most recent remote setup run: "Pending", "Running",
-  /// "Success", "Failed". Only meaningful for events whose underlying flow
+  /// Status of the most recent remote setup run: "running", "ok", "error".
+  /// Only meaningful for events whose underlying flow
   /// contains REST/MCP server nodes that are executed remotely.
   setupStatus String?
 
@@ -354,7 +354,7 @@ model Event {
   /// match `EventRemoteRegistration` rows when serving inbound requests.
   lastSetupVersion String?
 
-  /// Last setup error message (truncated), populated only when setupStatus = Failed.
+  /// Last setup error message (truncated), populated only when setupStatus = "error".
   lastSetupError String?
 
   remoteAuths         EventRemoteAuth[]
@@ -393,7 +393,8 @@ model EventRemoteAuth {
   /// "rest" or "mcp".
   kind String
 
-  /// Serialized RestAuthConfig / McpAuthConfig (encrypted secrets recommended).
+  /// Serialized RestAuthConfig / McpAuthConfig. Secret fields are stored as
+  /// *_encrypted values using the sink token encryption key.
   configJson Json
 
   registrations EventRemoteRegistration[]
@@ -420,11 +421,11 @@ model EventRemoteRegistration {
   /// always reads the rows matching event.lastSetupVersion.
   eventVersion String
 
-  /// One of: "rest_fn", "rest_file", "rest_openapi",
-  /// "mcp_tool", "mcp_resource", "mcp_prompt".
+  /// One of: "rest_fn", "rest_file", "rest_openapi", "rest_openapi_ui",
+  /// "mcp_raw", "mcp_tool", "mcp_resource", "mcp_prompt".
   kind String
 
-  /// HTTP method for rest_fn (uppercase). NULL for everything else.
+  /// HTTP method for rest_fn (uppercase, or "ANY"). NULL for everything else.
   method String?
 
   /// Route path for REST kinds. For mcp_resource this is the URI. For
@@ -454,13 +455,13 @@ model EventRemoteRegistration {
 }
 
 /// Vanity slug -> event mapping. Slug is the global URL key; uniqueness
-/// is enforced by the PK. Brand-sensitive / phishing-prone slugs (see
-/// `utils::event_alias::is_admin_reserved_slug`) can only be claimed by
-/// platform admins.
+/// is enforced by the PK. Router/common slugs and generated-id-length
+/// slugs are hard-reserved; brand-sensitive slugs (see
+/// `utils::event_alias::is_admin_reserved_slug`) require platform admin.
 model EventAlias {
   /// URL-safe slug, e.g. "checkout" or "twilio-inbound".
-  /// Regex: [a-z0-9-]{3,64}. Reserved: api, r, m, health, metrics, swagger,
-  /// api-doc, openapi, __, etc.
+  /// Regex: [a-z0-9-]{3,64}. Reserved: api, r, m, health, metrics,
+  /// generated id lengths, swagger, api-doc, openapi, docs, __, etc.
   slug String @id
 
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)

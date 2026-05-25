@@ -20,6 +20,11 @@ import {
 	isEqual,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
+import type {
+	IEventAlias,
+	IListRegistrationsResponse,
+	ISetupEventResponse,
+} from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {
@@ -750,6 +755,86 @@ export class EventState implements IEventState {
 		return await invoke<boolean>("is_event_sink_active", {
 			eventId: eventId,
 		});
+	}
+
+	async listEventRegistrations(
+		appId: string,
+		eventId: string,
+		version?: string,
+	): Promise<IListRegistrationsResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			return { event_id: eventId, event_version: null, registrations: [] };
+		}
+		const qs = version ? `?version=${encodeURIComponent(version)}` : "";
+		return await fetcher<IListRegistrationsResponse>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/registrations${qs}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async listEventAliases(
+		appId: string,
+		eventId: string,
+	): Promise<IEventAlias[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			return [];
+		}
+		return await fetcher<IEventAlias[]>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/alias`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async setupEvent(
+		appId: string,
+		eventId: string,
+		force = false,
+	): Promise<ISetupEventResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Remote setup requires an online profile");
+		}
+		return await fetcher<ISetupEventResponse>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/setup`,
+			{ method: "POST", body: JSON.stringify({ force }) },
+			this.backend.auth,
+		);
+	}
+
+	async upsertEventAlias(
+		appId: string,
+		eventId: string,
+		slug: string,
+	): Promise<IEventAlias> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Alias setup requires an online profile");
+		}
+		return await fetcher<IEventAlias>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/alias/${encodeURIComponent(slug)}`,
+			{ method: "PUT", body: "{}" },
+			this.backend.auth,
+		);
+	}
+
+	async deleteEventAlias(
+		appId: string,
+		eventId: string,
+		slug: string,
+	): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Alias setup requires an online profile");
+		}
+		await fetcher<void>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/alias/${encodeURIComponent(slug)}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
 	}
 
 	async checkEventOAuth(

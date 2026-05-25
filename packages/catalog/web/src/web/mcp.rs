@@ -26,8 +26,7 @@ use super::{rest::RestAuthConfig, tls::TlsConfig};
 const MCP_CONFIG_NODE_VERSION: u32 = 4;
 
 #[cfg(feature = "execute")]
-const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
-    &["2025-06-18", "2025-03-26", "2024-11-05"];
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 #[cfg(feature = "execute")]
 const MCP_DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -567,167 +566,198 @@ impl NodeLogic for McpServerNode {
         context.activate_exec_pin("exec_error").await?;
 
         let config: McpServerConfig = context.evaluate_pin("config").await?;
-        let addr = format!("{}:{}", config.host, config.port);
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(listener) => listener,
-            Err(err) => {
-                context.log_message(
-                    &format!("MCP server bind failed on {}: {}", addr, err),
-                    LogLevel::Error,
-                );
-                return Ok(());
-            }
-        };
 
-        let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
-            Ok(acceptor) => acceptor,
-            Err(err) => {
-                context.log_message(
-                    &format!("MCP server TLS configuration failed: {}", err),
-                    LogLevel::Error,
-                );
-                return Ok(());
-            }
-        };
-
-        let tool_contexts = build_tool_contexts(context, &config.function_refs).await;
-        let resources = preload_resources(context, &config.resources).await;
-        let oauth_validator = match super::auth::build_oauth_validator(context, &config.auth).await
+        // Remote build: don't bind a socket. Emit the composed config so the
+        // setup-collector on the API side can persist the registration, then
+        // fire on_listening and return.
+        #[cfg(all(feature = "remote", not(feature = "local")))]
         {
-            Ok(validator) => validator,
-            Err(err) => {
+            if let Err(err) = super::remote::emit_remote_server_config(
+                context,
+                super::remote::RemoteServerKind::Mcp,
+                &config,
+            )
+            .await
+            {
                 context.log_message(
-                    &format!("MCP server OAuth configuration failed: {}", err),
+                    &format!("MCP remote config emission failed: {}", err),
                     LogLevel::Error,
                 );
                 return Ok(());
             }
-        };
-        let local_addr = listener.local_addr()?.to_string();
-        context
-            .set_pin_value("local_addr", json!(local_addr))
-            .await?;
-        context.deactivate_exec_pin("exec_error").await?;
-        context.activate_exec_pin("on_listening").await?;
-        trigger_connected_exec(context, "on_listening", "MCP server on_listening").await;
+            context
+                .set_pin_value("local_addr", json!(format!("remote://mcp/{}", config.host)))
+                .await?;
+            context.deactivate_exec_pin("exec_error").await?;
+            context.activate_exec_pin("on_listening").await?;
+            trigger_connected_exec(context, "on_listening", "MCP server (remote)").await;
+            return Ok(());
+        }
 
-        let parent_node_id = context.node.node.lock().await.id.clone();
-        let config = Arc::new(config);
-        let tool_contexts = Arc::new(tool_contexts);
-        let resources = Arc::new(resources);
-        let oauth_validator = Arc::new(oauth_validator);
-        let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
-        let cancellation_token = context.get_cancellation_token();
-        let active_connections = Arc::new(AtomicU32::new(0));
-        let mut handles = Vec::new();
-        let mut cancelled = false;
-
-        loop {
-            let accept = if config.timeout_seconds > 0 {
-                tokio::select! {
-                    result = listener.accept() => Some(result),
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(config.timeout_seconds)) => {
-                        context.log_message("MCP server timed out", LogLevel::Warn);
-                        None
-                    }
-                    _ = super::wait_for_cancel(cancellation_token.clone()) => {
-                        cancelled = true;
-                        context.log_message("MCP server cancelled", LogLevel::Warn);
-                        None
-                    }
-                }
-            } else {
-                tokio::select! {
-                    result = listener.accept() => Some(result),
-                    _ = super::wait_for_cancel(cancellation_token.clone()) => {
-                        cancelled = true;
-                        context.log_message("MCP server cancelled", LogLevel::Warn);
-                        None
-                    }
-                }
-            };
-
-            let Some(accept) = accept else {
-                break;
-            };
-            let (stream, remote_addr) = match accept {
-                Ok(pair) => pair,
+        #[cfg(not(all(feature = "remote", not(feature = "local"))))]
+        {
+            let addr = format!("{}:{}", config.host, config.port);
+            let listener = match tokio::net::TcpListener::bind(&addr).await {
+                Ok(listener) => listener,
                 Err(err) => {
-                    context.log_message(&format!("MCP accept error: {}", err), LogLevel::Error);
-                    continue;
+                    context.log_message(
+                        &format!("MCP server bind failed on {}: {}", addr, err),
+                        LogLevel::Error,
+                    );
+                    return Ok(());
                 }
             };
 
-            if config.max_connections > 0
-                && active_connections.load(Ordering::Relaxed) >= config.max_connections
-            {
-                use tokio::io::AsyncWriteExt;
-                let mut stream = stream;
-                let _ = stream
+            let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
+                Ok(acceptor) => acceptor,
+                Err(err) => {
+                    context.log_message(
+                        &format!("MCP server TLS configuration failed: {}", err),
+                        LogLevel::Error,
+                    );
+                    return Ok(());
+                }
+            };
+
+            let tool_contexts = build_tool_contexts(context, &config.function_refs).await;
+            let resources = preload_resources(context, &config.resources).await;
+            let oauth_validator =
+                match super::auth::build_oauth_validator(context, &config.auth).await {
+                    Ok(validator) => validator,
+                    Err(err) => {
+                        context.log_message(
+                            &format!("MCP server OAuth configuration failed: {}", err),
+                            LogLevel::Error,
+                        );
+                        return Ok(());
+                    }
+                };
+            let local_addr = listener.local_addr()?.to_string();
+            context
+                .set_pin_value("local_addr", json!(local_addr))
+                .await?;
+            context.deactivate_exec_pin("exec_error").await?;
+            context.activate_exec_pin("on_listening").await?;
+            trigger_connected_exec(context, "on_listening", "MCP server on_listening").await;
+
+            let parent_node_id = context.node.node.lock().await.id.clone();
+            let config = Arc::new(config);
+            let tool_contexts = Arc::new(tool_contexts);
+            let resources = Arc::new(resources);
+            let oauth_validator = Arc::new(oauth_validator);
+            let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
+            let cancellation_token = context.get_cancellation_token();
+            let active_connections = Arc::new(AtomicU32::new(0));
+            let mut handles = Vec::new();
+            let mut cancelled = false;
+
+            loop {
+                let accept = if config.timeout_seconds > 0 {
+                    tokio::select! {
+                        result = listener.accept() => Some(result),
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(config.timeout_seconds)) => {
+                            context.log_message("MCP server timed out", LogLevel::Warn);
+                            None
+                        }
+                        _ = super::wait_for_cancel(cancellation_token.clone()) => {
+                            cancelled = true;
+                            context.log_message("MCP server cancelled", LogLevel::Warn);
+                            None
+                        }
+                    }
+                } else {
+                    tokio::select! {
+                        result = listener.accept() => Some(result),
+                        _ = super::wait_for_cancel(cancellation_token.clone()) => {
+                            cancelled = true;
+                            context.log_message("MCP server cancelled", LogLevel::Warn);
+                            None
+                        }
+                    }
+                };
+
+                let Some(accept) = accept else {
+                    break;
+                };
+                let (stream, remote_addr) = match accept {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        context.log_message(&format!("MCP accept error: {}", err), LogLevel::Error);
+                        continue;
+                    }
+                };
+
+                if config.max_connections > 0
+                    && active_connections.load(Ordering::Relaxed) >= config.max_connections
+                {
+                    use tokio::io::AsyncWriteExt;
+                    let mut stream = stream;
+                    let _ = stream
                     .write_all(
                         b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     )
                     .await;
-                let _ = stream.shutdown().await;
-                context.log_message(
-                    "MCP server rejected request because max_connections was reached",
-                    LogLevel::Warn,
-                );
-                continue;
-            }
-
-            let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(stream) => Box::new(stream),
-                    Err(err) => {
-                        context.log_message(
-                            &format!("MCP TLS handshake failed: {}", err),
-                            LogLevel::Error,
-                        );
-                        continue;
-                    }
+                    let _ = stream.shutdown().await;
+                    context.log_message(
+                        "MCP server rejected request because max_connections was reached",
+                        LogLevel::Warn,
+                    );
+                    continue;
                 }
-            } else {
-                Box::new(stream)
-            };
 
-            active_connections.fetch_add(1, Ordering::Relaxed);
-            let config = config.clone();
-            let tool_contexts = tool_contexts.clone();
-            let resources = resources.clone();
-            let oauth_validator = oauth_validator.clone();
-            let sessions = sessions.clone();
-            let active_connections = active_connections.clone();
-            let parent_node_id = parent_node_id.clone();
-            let conn_cancel = cancellation_token.clone();
-            handles.push(tokio::spawn(async move {
-                handle_connection(
-                    stream,
-                    remote_addr.to_string(),
-                    config,
-                    tool_contexts,
-                    resources,
-                    oauth_validator,
-                    parent_node_id,
-                    sessions,
-                    conn_cancel,
-                )
-                .await;
-                active_connections.fetch_sub(1, Ordering::Relaxed);
-            }));
-        }
+                let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
+                    match acceptor.accept(stream).await {
+                        Ok(stream) => Box::new(stream),
+                        Err(err) => {
+                            context.log_message(
+                                &format!("MCP TLS handshake failed: {}", err),
+                                LogLevel::Error,
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    Box::new(stream)
+                };
 
-        for handle in handles {
-            if !handle.is_finished() {
-                handle.abort();
+                active_connections.fetch_add(1, Ordering::Relaxed);
+                let config = config.clone();
+                let tool_contexts = tool_contexts.clone();
+                let resources = resources.clone();
+                let oauth_validator = oauth_validator.clone();
+                let sessions = sessions.clone();
+                let active_connections = active_connections.clone();
+                let parent_node_id = parent_node_id.clone();
+                let conn_cancel = cancellation_token.clone();
+                handles.push(tokio::spawn(async move {
+                    handle_connection(
+                        stream,
+                        remote_addr.to_string(),
+                        config,
+                        tool_contexts,
+                        resources,
+                        oauth_validator,
+                        parent_node_id,
+                        sessions,
+                        conn_cancel,
+                    )
+                    .await;
+                    active_connections.fetch_sub(1, Ordering::Relaxed);
+                }));
             }
-        }
-        context.deactivate_exec_pin("on_listening").await?;
-        context.activate_exec_pin("on_close").await?;
-        trigger_connected_exec(context, "on_close", "MCP server on_close").await;
 
-        if cancelled {
-            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+            for handle in handles {
+                if !handle.is_finished() {
+                    handle.abort();
+                }
+            }
+            context.deactivate_exec_pin("on_listening").await?;
+            context.activate_exec_pin("on_close").await?;
+            trigger_connected_exec(context, "on_close", "MCP server on_close").await;
+
+            if cancelled {
+                return Err(flow_like_types::anyhow!("Execution was cancelled"));
+            }
         }
         Ok(())
     }
@@ -841,8 +871,8 @@ async fn tool_metadata(
         register_tool_argument_aliases(&mut argument_aliases, &argument_name, pin);
 
         let resolved_schema = resolve_mcp_schema_ref(pin.schema.as_deref(), board_refs);
-        let resolved_description = resolved_mcp_description(&pin.description, board_refs)
-            .unwrap_or_default();
+        let resolved_description =
+            resolved_mcp_description(&pin.description, board_refs).unwrap_or_default();
         let mut schema = pin_schema(
             &pin.data_type,
             &pin.value_type,
@@ -1084,24 +1114,23 @@ fn cors_origin_header(origin: Option<&str>) -> String {
 }
 
 #[cfg(feature = "execute")]
-fn apply_cors_headers(
-    response: &mut super::http_runtime::HttpResponse,
-    origin: Option<&str>,
-) {
-    response
-        .headers
-        .insert("access-control-allow-origin".to_string(), cors_origin_header(origin));
-    response
-        .headers
-        .insert("access-control-expose-headers".to_string(),
-            "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate".to_string());
+fn apply_cors_headers(response: &mut super::http_runtime::HttpResponse, origin: Option<&str>) {
+    response.headers.insert(
+        "access-control-allow-origin".to_string(),
+        cors_origin_header(origin),
+    );
+    response.headers.insert(
+        "access-control-expose-headers".to_string(),
+        "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate".to_string(),
+    );
     if origin.is_some() {
         response
             .headers
             .insert("vary".to_string(), "Origin".to_string());
-        response
-            .headers
-            .insert("access-control-allow-credentials".to_string(), "true".to_string());
+        response.headers.insert(
+            "access-control-allow-credentials".to_string(),
+            "true".to_string(),
+        );
     }
 }
 
@@ -1119,13 +1148,14 @@ fn cors_preflight_response(
             "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID, Accept"
                 .to_string()
         });
-    response
-        .headers
-        .insert("access-control-allow-methods".to_string(),
-            "GET, POST, DELETE, OPTIONS".to_string());
-    response
-        .headers
-        .insert("access-control-allow-headers".to_string(), requested_headers);
+    response.headers.insert(
+        "access-control-allow-methods".to_string(),
+        "GET, POST, DELETE, OPTIONS".to_string(),
+    );
+    response.headers.insert(
+        "access-control-allow-headers".to_string(),
+        requested_headers,
+    );
     response
         .headers
         .insert("access-control-max-age".to_string(), "86400".to_string());
@@ -1325,10 +1355,8 @@ async fn handle_connection(
         Ok(Some(request)) => request,
         Ok(None) => return,
         Err(err) => {
-            let mut response = super::http_runtime::HttpResponse::text(
-                400,
-                format!("Bad request: {}", err),
-            );
+            let mut response =
+                super::http_runtime::HttpResponse::text(400, format!("Bad request: {}", err));
             apply_cors_headers(&mut response, None);
             let _ = super::http_runtime::write_http_response(&mut *stream, response).await;
             return;
@@ -1386,9 +1414,7 @@ async fn handle_connection(
 
     let session_id = request_session_id(&request);
     let is_legacy_session = !request.headers.contains_key("mcp-session-id")
-        && request
-            .query
-            .contains_key(MCP_LEGACY_SESSION_QUERY_PARAM);
+        && request.query.contains_key(MCP_LEGACY_SESSION_QUERY_PARAM);
 
     match request.method.as_str() {
         "POST" => {
@@ -1448,11 +1474,11 @@ async fn handle_connection(
             let _ = super::http_runtime::write_http_response(&mut *stream, response).await;
         }
         _ => {
-            let mut response =
-                super::http_runtime::HttpResponse::text(405, "Method Not Allowed");
-            response
-                .headers
-                .insert("allow".to_string(), "GET, POST, DELETE, OPTIONS".to_string());
+            let mut response = super::http_runtime::HttpResponse::text(405, "Method Not Allowed");
+            response.headers.insert(
+                "allow".to_string(),
+                "GET, POST, DELETE, OPTIONS".to_string(),
+            );
             apply_cors_headers(&mut response, origin_ref);
             let _ = super::http_runtime::write_http_response(&mut *stream, response).await;
         }
@@ -1478,11 +1504,7 @@ async fn handle_post_request<S>(
 {
     use tokio::io::AsyncWriteExt;
     let origin_ref = origin.as_deref();
-    let accept = request
-        .headers
-        .get("accept")
-        .cloned()
-        .unwrap_or_default();
+    let accept = request.headers.get("accept").cloned().unwrap_or_default();
     let (wants_json, wants_sse) = parse_accept_types(&accept);
 
     let payload = match json::from_slice::<flow_like_types::Value>(&request.body) {
@@ -1508,10 +1530,7 @@ async fn handle_post_request<S>(
         .iter()
         .any(|i| i.get("method").and_then(|m| m.as_str()) == Some("initialize"));
 
-    let request_protocol_header = request
-        .headers
-        .get("mcp-protocol-version")
-        .cloned();
+    let request_protocol_header = request.headers.get("mcp-protocol-version").cloned();
 
     let mut effective_session: Option<std::sync::Arc<flow_like_types::sync::Mutex<McpSession>>> =
         None;
@@ -1569,10 +1588,7 @@ async fn handle_post_request<S>(
 
     let mut responses: Vec<flow_like_types::Value> = Vec::new();
     for item in &items {
-        let method = item
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let method = item.get("method").and_then(|v| v.as_str()).unwrap_or("");
         if method == "initialize" {
             let existing_session = assigned_session_id.as_ref().and_then(|sid| {
                 effective_session
@@ -1592,15 +1608,8 @@ async fn handle_post_request<S>(
             {
                 session.lock().await.initialized = true;
             }
-            if let Some(response) = dispatch_json_rpc(
-                item,
-                config,
-                tools,
-                resources,
-                parent_node_id,
-                &client,
-            )
-            .await
+            if let Some(response) =
+                dispatch_json_rpc(item, config, tools, resources, parent_node_id, &client).await
             {
                 responses.push(response);
             }
@@ -1610,17 +1619,14 @@ async fn handle_post_request<S>(
     if responses.is_empty() {
         let mut r = super::http_runtime::HttpResponse::text(202, "");
         if let Some(sid) = &assigned_session_id {
-            r.headers
-                .insert("mcp-session-id".to_string(), sid.clone());
+            r.headers.insert("mcp-session-id".to_string(), sid.clone());
         }
         apply_cors_headers(&mut r, origin_ref);
         let _ = super::http_runtime::write_http_response(stream, r).await;
         return;
     }
 
-    if is_legacy_session
-        && let Some(session) = &effective_session
-    {
+    if is_legacy_session && let Some(session) = &effective_session {
         let tx = session.lock().await.sse_tx.clone();
         for resp in &responses {
             let data = json::to_string(resp).unwrap_or_else(|_| "{}".to_string());
@@ -1628,8 +1634,7 @@ async fn handle_post_request<S>(
         }
         let mut r = super::http_runtime::HttpResponse::text(202, "");
         if let Some(sid) = &assigned_session_id {
-            r.headers
-                .insert("mcp-session-id".to_string(), sid.clone());
+            r.headers.insert("mcp-session-id".to_string(), sid.clone());
         }
         apply_cors_headers(&mut r, origin_ref);
         let _ = super::http_runtime::write_http_response(stream, r).await;
@@ -1709,8 +1714,7 @@ async fn handle_post_request<S>(
     } else {
         let mut r = super::http_runtime::HttpResponse::json(200, body_value);
         if let Some(sid) = &assigned_session_id {
-            r.headers
-                .insert("mcp-session-id".to_string(), sid.clone());
+            r.headers.insert("mcp-session-id".to_string(), sid.clone());
         }
         apply_cors_headers(&mut r, origin_ref);
         let _ = super::http_runtime::write_http_response(stream, r).await;
@@ -1789,11 +1793,7 @@ async fn handle_get_sse<S>(
     S: tokio::io::AsyncWrite + Unpin + Send + ?Sized,
 {
     use tokio::io::AsyncWriteExt;
-    let accept = request
-        .headers
-        .get("accept")
-        .cloned()
-        .unwrap_or_default();
+    let accept = request.headers.get("accept").cloned().unwrap_or_default();
     let (_, wants_sse) = parse_accept_types(&accept);
     if !wants_sse {
         let mut r = super::http_runtime::HttpResponse::text(
@@ -1860,9 +1860,8 @@ async fn handle_get_sse<S>(
     }
 
     let mut rx = session.lock().await.sse_tx.subscribe();
-    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(
-        MCP_SSE_HEARTBEAT_SECONDS,
-    ));
+    let mut heartbeat =
+        tokio::time::interval(std::time::Duration::from_secs(MCP_SSE_HEARTBEAT_SECONDS));
     heartbeat.tick().await;
 
     loop {
@@ -2020,7 +2019,10 @@ async fn tool_call_response(
     };
 
     let normalized_arguments = normalize_tool_arguments(arguments, tool);
-    let mut args = normalized_arguments.as_object().cloned().unwrap_or_default();
+    let mut args = normalized_arguments
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
     args.insert(
         "payload".to_string(),
         super::auth::payload_with_client(normalized_arguments, client),
@@ -2117,14 +2119,8 @@ fn prompt_argument_specs(template: &str) -> Vec<flow_like_types::Value> {
 }
 
 #[cfg(feature = "execute")]
-fn substitute_prompt_template(
-    template: &str,
-    arguments: &flow_like_types::Value,
-) -> String {
-    let map = arguments
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+fn substitute_prompt_template(template: &str, arguments: &flow_like_types::Value) -> String {
+    let map = arguments.as_object().cloned().unwrap_or_default();
     let mut output = String::with_capacity(template.len());
     let bytes = template.as_bytes();
     let mut i = 0;
@@ -2170,7 +2166,10 @@ fn prompt_get_result(
     let Some(prompt) = prompts.iter().find(|prompt| prompt.name == name) else {
         return Err((-32602, format!("Prompt not found: {}", name)));
     };
-    let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let rendered = substitute_prompt_template(&prompt.template, &arguments);
     Ok(json!({
         "description": prompt.description,
@@ -2198,6 +2197,7 @@ fn json_rpc_error(
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
+#[cfg(feature = "execute")]
 async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, log_name: &str) {
     let Ok(pin) = context.get_pin_by_name(pin_name).await else {
         return;
@@ -2331,9 +2331,11 @@ mod tests {
             response["result"]["tools"][0]["inputSchema"]["properties"]["message"]["type"],
             json!("string")
         );
-        assert!(response["result"]["tools"][0]["inputSchema"]["properties"]
-            .get("_client")
-            .is_none());
+        assert!(
+            response["result"]["tools"][0]["inputSchema"]["properties"]
+                .get("_client")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -2430,8 +2432,7 @@ mod tests {
                 description,
                 schema,
                 context: super::super::http_runtime::create_shared_function_context(
-                    &context,
-                    &handler,
+                    &context, &handler,
                 )
                 .await,
                 argument_aliases,
@@ -2461,8 +2462,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_initialize_negotiates_protocol_and_creates_session() {
-        let sessions: SessionMap =
-            Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
+        let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
         let payload = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -2479,8 +2479,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_initialize_falls_back_to_default_protocol() {
-        let sessions: SessionMap =
-            Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
+        let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
         let payload = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -2498,8 +2497,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_initialize_reuses_existing_legacy_session() {
-        let sessions: SessionMap =
-            Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
+        let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
         let client = json!({"kind": "legacy"});
         let (legacy_sid, legacy_session) =
             create_session(&client, MCP_DEFAULT_PROTOCOL_VERSION, &sessions).await;

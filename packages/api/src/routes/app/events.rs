@@ -34,6 +34,7 @@ pub fn routes() -> Router<AppState> {
             get(get_event_versions::get_event_versions),
         )
         .route("/{event_id}/validate", post(validate_event::validate_event))
+        .route("/{event_id}/setup", post(setup_event::setup_event))
         .route("/{event_id}/prerun", get(prerun_event::prerun_event))
         .route("/{event_id}/invoke", post(invoke_event::invoke_event))
         .route(
@@ -44,6 +45,7 @@ pub fn routes() -> Router<AppState> {
             "/{event_id}/registrations",
             get(registrations::list_registrations),
         )
+        .route("/{event_id}/alias", get(alias::list_aliases))
         .route(
             "/{event_id}/alias/{slug}",
             get(alias::get_alias)

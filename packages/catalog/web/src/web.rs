@@ -6,6 +6,7 @@ pub(crate) mod http_runtime;
 pub mod mcp;
 pub mod message_handler;
 pub mod mqtt;
+pub mod remote;
 pub mod rest;
 pub mod scrape;
 pub mod tcp;
