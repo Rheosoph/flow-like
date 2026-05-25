@@ -1,4 +1,9 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{
+        graph_error_message, graph_get_json, graph_get_paginated_values, normalize_graph_path,
+    },
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -20,6 +25,14 @@ pub struct ExcelWorksheet {
     pub visibility: String,
 }
 
+fn workbook_api_path(file_path: &str, suffix: &str) -> String {
+    format!(
+        "/me/drive/root:{}:/workbook/{}",
+        normalize_graph_path(file_path),
+        suffix
+    )
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct ListExcelWorksheetsNode {}
@@ -39,6 +52,7 @@ impl NodeLogic for ListExcelWorksheetsNode {
             "List worksheets in an Excel workbook stored in OneDrive",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -77,45 +91,29 @@ impl NodeLogic for ListExcelWorksheetsNode {
         let file_path: String = context.evaluate_pin("file_path").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/worksheets",
-                file_path
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let worksheets: Vec<ExcelWorksheet> = body["value"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|w| {
-                                Some(ExcelWorksheet {
-                                    id: w["id"].as_str()?.to_string(),
-                                    name: w["name"].as_str()?.to_string(),
-                                    position: w["position"].as_i64().unwrap_or(0),
-                                    visibility: w["visibility"]
-                                        .as_str()
-                                        .unwrap_or("Visible")
-                                        .to_string(),
-                                })
-                            })
-                            .collect()
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&workbook_api_path(&file_path, "worksheets")),
+        )
+        .await
+        {
+            Ok(values) => {
+                let worksheets: Vec<ExcelWorksheet> = values
+                    .iter()
+                    .filter_map(|w| {
+                        Some(ExcelWorksheet {
+                            id: w["id"].as_str()?.to_string(),
+                            name: w["name"].as_str()?.to_string(),
+                            position: w["position"].as_i64().unwrap_or(0),
+                            visibility: w["visibility"].as_str().unwrap_or("Visible").to_string(),
+                        })
                     })
-                    .unwrap_or_default();
+                    .collect();
                 context
                     .set_pin_value("worksheets", json!(worksheets))
                     .await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -147,6 +145,7 @@ impl NodeLogic for ReadExcelRangeNode {
             "Read data from a range in an Excel worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -199,28 +198,22 @@ impl NodeLogic for ReadExcelRangeNode {
         let range: String = context.evaluate_pin("range").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/worksheets/{}/range(address='{}')",
-                file_path, urlencoding::encode(&worksheet), urlencoding::encode(&range)
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+        let url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!(
+                "worksheets/{}/range(address='{}')",
+                urlencoding::encode(&worksheet),
+                urlencoding::encode(&range)
+            ),
+        ));
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(&client, &provider, url).await {
+            Ok(body) => {
                 let values = body["values"].clone();
                 let row_count = values.as_array().map(|arr| arr.len()).unwrap_or(0) as i64;
                 context.set_pin_value("values", values).await?;
                 context.set_pin_value("row_count", json!(row_count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -252,6 +245,7 @@ impl NodeLogic for WriteExcelRangeNode {
             "Write data to a range in an Excel worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -306,11 +300,16 @@ impl NodeLogic for WriteExcelRangeNode {
         let body = json!({ "values": values });
 
         let client = reqwest::Client::new();
+        let url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!(
+                "worksheets/{}/range(address='{}')",
+                urlencoding::encode(&worksheet),
+                urlencoding::encode(&range)
+            ),
+        ));
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/worksheets/{}/range(address='{}')",
-                file_path, urlencoding::encode(&worksheet), urlencoding::encode(&range)
-            ))
+            .patch(url)
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -322,7 +321,7 @@ impl NodeLogic for WriteExcelRangeNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -356,6 +355,7 @@ impl NodeLogic for GetExcelUsedRangeNode {
             "Get the used range of a worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -412,18 +412,13 @@ impl NodeLogic for GetExcelUsedRangeNode {
         let worksheet: String = context.evaluate_pin("worksheet").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/worksheets/{}/usedRange",
-                file_path, urlencoding::encode(&worksheet)
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+        let url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!("worksheets/{}/usedRange", urlencoding::encode(&worksheet)),
+        ));
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(&client, &provider, url).await {
+            Ok(body) => {
                 let values = body["values"].clone();
                 let address = body["address"].as_str().unwrap_or("").to_string();
                 let row_count = body["rowCount"].as_i64().unwrap_or(0);
@@ -431,11 +426,6 @@ impl NodeLogic for GetExcelUsedRangeNode {
                 context.set_pin_value("address", json!(address)).await?;
                 context.set_pin_value("row_count", json!(row_count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -467,6 +457,7 @@ impl NodeLogic for GetExcelTableNode {
             "Get data from an Excel table by name",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -515,42 +506,29 @@ impl NodeLogic for GetExcelTableNode {
 
         let client = reqwest::Client::new();
 
-        let headers_response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/tables/{}/headerRowRange",
-                file_path, urlencoding::encode(&table_name)
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        let headers: Vec<String> = match headers_response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                body["values"][0]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
+        let headers_url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!("tables/{}/headerRowRange", urlencoding::encode(&table_name)),
+        ));
+        let headers: Vec<String> = match graph_get_json(&client, &provider, headers_url).await {
+            Ok(body) => body["values"][0]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
             _ => Vec::new(),
         };
 
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/tables/{}/dataBodyRange",
-                file_path, urlencoding::encode(&table_name)
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+        let body_url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!("tables/{}/dataBodyRange", urlencoding::encode(&table_name)),
+        ));
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(&client, &provider, body_url).await {
+            Ok(body) => {
                 let rows: Vec<Value> = body["values"]
                     .as_array()
                     .map(|arr| {
@@ -577,11 +555,6 @@ impl NodeLogic for GetExcelTableNode {
                 context.set_pin_value("headers", json!(headers)).await?;
                 context.set_pin_value("row_count", json!(row_count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -613,6 +586,7 @@ impl NodeLogic for AddExcelTableRowNode {
             "Add a row to an Excel table",
             "Data/Microsoft/Excel",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -671,12 +645,12 @@ impl NodeLogic for AddExcelTableRowNode {
         let body = json!({ "values": [values] });
 
         let client = reqwest::Client::new();
+        let url = provider.api_url(&workbook_api_path(
+            &file_path,
+            &format!("tables/{}/rows/add", urlencoding::encode(&table_name)),
+        ));
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/workbook/tables/{}/rows/add",
-                file_path,
-                urlencoding::encode(&table_name)
-            ))
+            .post(url)
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -691,7 +665,7 @@ impl NodeLogic for AddExcelTableRowNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }

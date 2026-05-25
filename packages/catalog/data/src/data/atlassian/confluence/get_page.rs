@@ -28,6 +28,7 @@ impl NodeLogic for GetConfluencePageNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -135,7 +136,6 @@ impl NodeLogic for GetConfluencePageNode {
         let client = reqwest::Client::new();
 
         // Build URL with expansions
-        let base = provider.base_url.trim_end_matches('/');
         let body_expand = format!("body.{}", body_format);
         let mut expand_parts = vec![
             "version".to_string(),
@@ -147,12 +147,11 @@ impl NodeLogic for GetConfluencePageNode {
             expand_parts.push(body_expand.clone());
         }
 
-        let url = format!(
-            "{}/wiki/rest/api/content/{}?expand={}",
-            base,
+        let url = provider.confluence_rest_api_url(&format!(
+            "/content/{}?expand={}",
             page_id,
             expand_parts.join(",")
-        );
+        ));
 
         context.log_message(
             &format!("Fetching Confluence page: {}", page_id),

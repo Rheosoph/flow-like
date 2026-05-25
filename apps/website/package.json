@@ -5,8 +5,9 @@
 	"scripts": {
 		"dev": "astro dev",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 astro build",
-		"deploy": "bun run build && bunx wrangler deploy",
-		"deploy:force": "bun run build && bunx wrangler deploy",
+		"deploy": "bun run build && bun run deploy:workers-sites",
+		"deploy:force": "bun run build && bun run deploy:workers-sites",
+		"deploy:workers-sites": "node ./scripts/prepare-workers-sites-deploy.mjs && bunx wrangler deploy",
 		"preview": "astro preview",
 		"astro": "astro"
 	},

@@ -1,14 +1,15 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{
+    NOTION_API_VERSION, auth_header, log_and_error, notion_error, optional_json_value,
+};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-
-const NOTION_API_VERSION: &str = "2022-06-28";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreatedNotionPage {
@@ -33,9 +34,10 @@ impl NodeLogic for CreateNotionPageNode {
         let mut node = Node::new(
             "data_notion_create_page",
             "Create Notion Page",
-            "Creates a new page in a Notion database",
+            "Creates a new page under a Notion data source, database, or page",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -56,25 +58,48 @@ impl NodeLogic for CreateNotionPageNode {
 
         node.add_input_pin(
             "database_id",
-            "Database ID",
-            "The ID of the database to create the page in",
+            "Parent ID",
+            "The data source, database, or page ID to create the page under",
             VariableType::String,
+        );
+
+        node.add_input_pin(
+            "parent_type",
+            "Parent Type",
+            "Parent type for the page",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("data_source_id")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "data_source_id".to_string(),
+                    "database_id".to_string(),
+                    "page_id".to_string(),
+                ])
+                .build(),
         );
 
         node.add_input_pin(
             "properties",
-            "Properties (JSON)",
-            "Page properties in Notion format. Example: {\"Name\": {\"title\": [{\"text\": {\"content\": \"My Page\"}}]}}",
-            VariableType::String,
-        );
+            "Properties",
+            "Page properties in Notion API format",
+            VariableType::Struct,
+        )
+        .set_schema::<Value>()
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_default_value(Some(json!({})));
 
         node.add_input_pin(
             "content",
-            "Content (JSON)",
-            "Optional: Page content as array of block objects in Notion format",
-            VariableType::String,
+            "Content",
+            "Optional page content as an array of Notion block objects",
+            VariableType::Struct,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array)
+        .set_schema::<Value>()
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "icon_emoji",
@@ -143,48 +168,64 @@ impl NodeLogic for CreateNotionPageNode {
         let provider: NotionProvider = context.evaluate_pin("provider").await?;
         let access_token = provider.access_token;
 
-        let database_id: String = context.evaluate_pin("database_id").await?;
-        let properties_str: String = context.evaluate_pin("properties").await?;
-        let content_str: String = context.evaluate_pin("content").await?;
+        let parent_id: String = context.evaluate_pin("database_id").await?;
+        let parent_type: String = context
+            .evaluate_pin("parent_type")
+            .await
+            .unwrap_or_else(|_| "data_source_id".to_string());
+        let properties_raw: Value = context
+            .evaluate_pin("properties")
+            .await
+            .unwrap_or(json!({}));
+        let content_raw: Value = context.evaluate_pin("content").await.unwrap_or(json!([]));
         let icon_emoji: String = context.evaluate_pin("icon_emoji").await?;
 
-        if database_id.is_empty() {
-            context.log_message("Database ID cannot be empty", LogLevel::Error);
-            context.activate_exec_pin("error").await?;
+        if parent_id.is_empty() {
+            log_and_error(context, "Parent ID cannot be empty").await?;
             return Ok(());
         }
 
-        if properties_str.is_empty() {
-            context.log_message("Properties cannot be empty", LogLevel::Error);
-            context.activate_exec_pin("error").await?;
+        if !matches!(
+            parent_type.as_str(),
+            "data_source_id" | "database_id" | "page_id"
+        ) {
+            log_and_error(
+                context,
+                "Parent Type must be data_source_id, database_id, or page_id",
+            )
+            .await?;
             return Ok(());
         }
 
-        let properties: Value = match flow_like_types::json::from_str(&properties_str) {
-            Ok(p) => p,
-            Err(e) => {
-                context.log_message(&format!("Invalid properties JSON: {}", e), LogLevel::Error);
-                context.activate_exec_pin("error").await?;
+        let mut parent = json!({
+            "type": parent_type.clone()
+        });
+        parent[parent_type.as_str()] = json!(parent_id);
+
+        let properties = match optional_json_value(properties_raw, "properties") {
+            Ok(Some(value)) => value,
+            Ok(None) => json!({}),
+            Err(err) => {
+                log_and_error(context, err.to_string()).await?;
+                return Ok(());
+            }
+        };
+
+        let content = match optional_json_value(content_raw, "content") {
+            Ok(value) => value,
+            Err(err) => {
+                log_and_error(context, err.to_string()).await?;
                 return Ok(());
             }
         };
 
         let mut body = json!({
-            "parent": { "database_id": database_id },
+            "parent": parent,
             "properties": properties
         });
 
-        if !content_str.is_empty() {
-            match flow_like_types::json::from_str::<Value>(&content_str) {
-                Ok(children) => {
-                    body["children"] = children;
-                }
-                Err(e) => {
-                    context.log_message(&format!("Invalid content JSON: {}", e), LogLevel::Error);
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
-            }
+        if let Some(children) = content {
+            body["children"] = children;
         }
 
         if !icon_emoji.is_empty() {
@@ -200,7 +241,7 @@ impl NodeLogic for CreateNotionPageNode {
 
         let response = client
             .post("https://api.notion.com/v1/pages")
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", auth_header(&access_token))
             .header("Notion-Version", NOTION_API_VERSION)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -210,12 +251,7 @@ impl NodeLogic for CreateNotionPageNode {
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+                    context.log_message(&notion_error(resp).await, LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }

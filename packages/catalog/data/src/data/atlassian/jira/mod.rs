@@ -18,7 +18,8 @@ pub mod users;
 pub mod versions;
 pub mod worklog;
 
-use flow_like_types::{JsonSchema, Value};
+use crate::data::atlassian::provider::AtlassianProvider;
+use flow_like_types::{JsonSchema, Value, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -159,6 +160,59 @@ pub struct JiraSearchResult {
     pub start_at: i64,
     /// Maximum results returned
     pub max_results: i64,
+}
+
+pub fn build_jira_search_body(
+    provider: &AtlassianProvider,
+    jql: String,
+    max_results: i64,
+    start_at: i64,
+    fields: Vec<String>,
+    next_page_token: String,
+) -> Value {
+    let mut body = json!({
+        "jql": jql,
+        "maxResults": max_results.clamp(1, 100),
+    });
+
+    if provider.is_cloud {
+        if !next_page_token.is_empty() {
+            body["nextPageToken"] = json!(next_page_token);
+        }
+    } else {
+        body["startAt"] = json!(start_at.max(0));
+    }
+
+    if !fields.is_empty() {
+        body["fields"] = json!(fields);
+    }
+
+    body
+}
+
+pub fn jira_search_total(data: &Value, returned_count: i64) -> i64 {
+    data.get("total")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(returned_count)
+}
+
+pub fn jira_search_next_page_token(data: &Value) -> String {
+    data.get("nextPageToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+pub fn jira_search_has_more(data: &Value, start_at: i64, returned_count: i64, total: i64) -> bool {
+    if let Some(is_last) = data.get("isLast").and_then(|v| v.as_bool()) {
+        return !is_last;
+    }
+
+    if let Some(next_page_token) = data.get("nextPageToken").and_then(|v| v.as_str()) {
+        return !next_page_token.is_empty();
+    }
+
+    start_at + returned_count < total
 }
 
 // =============================================================================
@@ -449,6 +503,9 @@ fn extract_adf_text_recursive(node: &Value, texts: &mut Vec<String>) {
 
 // Re-export node implementations
 pub use add_comment::AddJiraCommentNode;
+pub use attachments::{
+    DeleteAttachmentNode, DownloadAttachmentNode, GetAttachmentsNode, UploadAttachmentNode,
+};
 pub use create_issue::CreateJiraIssueNode;
 pub use delete_issue::DeleteJiraIssueNode;
 pub use get_issue::GetJiraIssueNode;

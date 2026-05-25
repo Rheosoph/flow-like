@@ -1,6 +1,7 @@
 pub mod calendar;
 pub mod copilot;
 pub mod excel;
+pub mod graph;
 pub mod onedrive;
 pub mod onenote;
 pub mod outlook;

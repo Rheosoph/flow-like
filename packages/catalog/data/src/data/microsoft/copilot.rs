@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_json, graph_get_paginated_values, graph_version_url},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use crate::events::chat_event::{Attachment, ComplexAttachment};
 use ahash::AHashSet;
 use flow_like::flow::{
@@ -157,6 +160,7 @@ impl NodeLogic for GetCopilotInteractionsNode {
             "Get Microsoft 365 Copilot interaction history (prompts and responses)",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -223,44 +227,34 @@ impl NodeLogic for GetCopilotInteractionsNode {
         let use_beta: bool = context.evaluate_pin("use_beta").await.unwrap_or(false);
 
         let api_version = if use_beta { "beta" } else { "v1.0" };
-        let mut url = format!(
-            "https://graph.microsoft.com/{}/copilot/users/{}/interactionHistory/getAllEnterpriseInteractions",
-            api_version, user_id
+        let base_url = graph_version_url(
+            &provider,
+            api_version,
+            &format!(
+                "/copilot/users/{}/interactionHistory/getAllEnterpriseInteractions",
+                user_id
+            ),
         );
-
-        let mut query_params = vec![format!("$top={}", top)];
+        let mut query_params = vec![("$top".to_string(), top.to_string())];
         if !app_class_filter.is_empty() {
-            query_params.push(format!("$filter=appClass eq '{}'", app_class_filter));
+            query_params.push((
+                "$filter".to_string(),
+                format!("appClass eq '{}'", app_class_filter),
+            ));
         }
-        if !query_params.is_empty() {
-            url = format!("{}?{}", url, query_params.join("&"));
-        }
+        let url = reqwest::Url::parse_with_params(&base_url, query_params)?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let interactions: Vec<CopilotInteraction> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_interaction).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url.to_string()).await {
+            Ok(values) => {
+                let interactions: Vec<CopilotInteraction> =
+                    values.iter().filter_map(parse_interaction).collect();
                 let count = interactions.len() as i64;
                 context
                     .set_pin_value("interactions", json!(interactions))
                     .await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -297,6 +291,7 @@ impl NodeLogic for ListMeetingInsightsNode {
             "Get AI-generated meeting notes and action items from Teams meetings",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -339,31 +334,20 @@ impl NodeLogic for ListMeetingInsightsNode {
         let meeting_id: String = context.evaluate_pin("meeting_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/beta/me/onlineMeetings/{}/aiInsights",
-                meeting_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+        let url = graph_version_url(
+            &provider,
+            "beta",
+            &format!("/me/onlineMeetings/{}/aiInsights", meeting_id),
+        );
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let insights: Vec<MeetingInsight> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_meeting_insight).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url).await {
+            Ok(values) => {
+                let insights: Vec<MeetingInsight> =
+                    values.iter().filter_map(parse_meeting_insight).collect();
                 let count = insights.len() as i64;
                 context.set_pin_value("insights", json!(insights)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -400,6 +384,7 @@ impl NodeLogic for GetMeetingInsightNode {
             "Get a specific AI insight from a Teams meeting",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -453,18 +438,17 @@ impl NodeLogic for GetMeetingInsightNode {
         let insight_id: String = context.evaluate_pin("insight_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/beta/me/onlineMeetings/{}/aiInsights/{}",
+        let url = graph_version_url(
+            &provider,
+            "beta",
+            &format!(
+                "/me/onlineMeetings/{}/aiInsights/{}",
                 meeting_id, insight_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+            ),
+        );
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(&client, &provider, url).await {
+            Ok(body) => {
                 if let Some(insight) = parse_meeting_insight(&body) {
                     context
                         .set_pin_value("action_items", json!(insight.action_items.clone()))
@@ -480,11 +464,6 @@ impl NodeLogic for GetMeetingInsightNode {
                         .await?;
                     context.activate_exec_pin("error").await?;
                 }
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -746,6 +725,7 @@ impl NodeLogic for GraphSearchNode {
             "Search across Microsoft 365 content using the Microsoft Graph Search API. Supports files, emails, calendar events, Teams messages, SharePoint sites, and more.",
             "Data/Microsoft/Search",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -881,7 +861,7 @@ impl NodeLogic for GraphSearchNode {
 
         if is_drive_only {
             // Try OneDrive search API first - it's more universally available
-            match search_onedrive(&client, &provider.access_token, &query, size as u32).await {
+            match search_onedrive(&client, &provider, &query, size as u32).await {
                 Ok((results, total)) => {
                     let count = results.len() as i64;
                     context.set_pin_value("results", json!(results)).await?;
@@ -945,7 +925,7 @@ impl NodeLogic for GraphSearchNode {
             }
 
             let response = client
-                .post("https://graph.microsoft.com/v1.0/search/query")
+                .post(provider.api_url("/search/query"))
                 .header("Authorization", format!("Bearer {}", provider.access_token))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
@@ -1046,19 +1026,22 @@ impl NodeLogic for GraphSearchNode {
 /// This uses GET /me/drive/root/search(q='{query}')
 async fn search_onedrive(
     client: &reqwest::Client,
-    access_token: &str,
+    provider: &MicrosoftGraphProvider,
     query: &str,
     top: u32,
 ) -> Result<(Vec<GraphSearchHit>, i64), String> {
     let url = format!(
-        "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{}')?$top={}",
-        urlencoding::encode(query),
+        "{}?$top={}",
+        provider.api_url(&format!(
+            "/me/drive/root/search(q='{}')",
+            urlencoding::encode(query)
+        )),
         top
     );
 
     let response = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Authorization", format!("Bearer {}", provider.access_token))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -1631,6 +1614,7 @@ impl NodeLogic for CopilotChatNode {
             "Send a message to Microsoft 365 Copilot using the official Chat API with streaming support. Supports file context from OneDrive/SharePoint and web search grounding.",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1783,7 +1767,11 @@ impl NodeLogic for CopilotChatNode {
         // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotroot-post-conversations
         if conversation_id.is_empty() {
             let create_response = client
-                .post("https://graph.microsoft.com/beta/copilot/conversations")
+                .post(graph_version_url(
+                    &provider,
+                    "beta",
+                    "/copilot/conversations",
+                ))
                 .header("Authorization", format!("Bearer {}", provider.access_token))
                 .header("Content-Type", "application/json")
                 .json(&json!({}))
@@ -1870,9 +1858,10 @@ impl NodeLogic for CopilotChatNode {
             request_body["contextualResources"] = contextual_resources;
         }
 
-        let chat_url = format!(
-            "https://graph.microsoft.com/beta/copilot/conversations/{}/chatOverStream",
-            conversation_id
+        let chat_url = graph_version_url(
+            &provider,
+            "beta",
+            &format!("/copilot/conversations/{}/chatOverStream", conversation_id),
         );
 
         let response = client
@@ -2215,6 +2204,7 @@ impl NodeLogic for CopilotSemanticSearchNode {
             "Perform hybrid semantic and lexical search across OneDrive for work or school content using the official Microsoft 365 Copilot Search API",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -2329,7 +2319,7 @@ impl NodeLogic for CopilotSemanticSearchNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/beta/copilot/search")
+            .post(graph_version_url(&provider, "beta", "/copilot/search"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -2358,7 +2348,7 @@ impl NodeLogic for CopilotSemanticSearchNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -2397,6 +2387,7 @@ impl NodeLogic for SubscribeCopilotNotificationsNode {
             "Subscribe to change notifications for Copilot interactions",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -2482,7 +2473,7 @@ impl NodeLogic for SubscribeCopilotNotificationsNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/beta/subscriptions")
+            .post(graph_version_url(&provider, "beta", "/subscriptions"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -2506,7 +2497,7 @@ impl NodeLogic for SubscribeCopilotNotificationsNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -2545,6 +2536,7 @@ impl NodeLogic for GetUserCopilotSettingsNode {
             "Get the current user's Copilot settings and preferences",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -2579,22 +2571,16 @@ impl NodeLogic for GetUserCopilotSettingsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/beta/me/settings/copilot")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(
+            &client,
+            &provider,
+            graph_version_url(&provider, "beta", "/me/settings/copilot"),
+        )
+        .await
+        {
+            Ok(body) => {
                 context.set_pin_value("settings", body).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -2631,6 +2617,7 @@ impl NodeLogic for FilterCopilotInteractionsByTypeNode {
             "Filter Copilot interactions by type (user prompts vs AI responses)",
             "Data/Microsoft/Copilot",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/copilot.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

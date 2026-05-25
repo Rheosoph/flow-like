@@ -1,4 +1,5 @@
 pub mod add_comment;
+pub mod attachments;
 pub mod children;
 pub mod create_page;
 pub mod delete_page;
@@ -417,6 +418,10 @@ pub fn parse_confluence_content(value: &Value, base_url: &str) -> Option<Conflue
 
 // Re-export node implementations
 pub use add_comment::AddConfluenceCommentNode;
+pub use attachments::{
+    DeleteConfluenceAttachmentNode, DownloadConfluenceAttachmentNode,
+    ListConfluenceAttachmentsNode, UploadConfluenceAttachmentNode,
+};
 pub use create_page::CreateConfluencePageNode;
 pub use delete_page::DeleteConfluencePageNode;
 pub use get_comments::GetConfluenceCommentsNode;

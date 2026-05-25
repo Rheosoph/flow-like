@@ -65,6 +65,7 @@ impl NodeLogic for GetBoardsNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -159,15 +160,10 @@ impl NodeLogic for GetBoardsNode {
             params.push(format!("name={}", urlencoding::encode(&name)));
         }
 
-        let url = if params.is_empty() {
-            format!("{}/rest/agile/1.0/board", provider.base_url)
-        } else {
-            format!(
-                "{}/rest/agile/1.0/board?{}",
-                provider.base_url,
-                params.join("&")
-            )
-        };
+        let mut url = provider.jira_agile_api_url("/board");
+        if !params.is_empty() {
+            url.push_str(&format!("?{}", params.join("&")));
+        }
 
         let response = client
             .get(&url)
@@ -223,6 +219,7 @@ impl NodeLogic for GetBoardIssuesNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -327,9 +324,8 @@ impl NodeLogic for GetBoardIssuesNode {
         }
 
         let url = format!(
-            "{}/rest/agile/1.0/board/{}/issue?{}",
-            provider.base_url,
-            board_id,
+            "{}?{}",
+            provider.jira_agile_api_url(&format!("/board/{}/issue", board_id)),
             params.join("&")
         );
 
@@ -387,6 +383,7 @@ impl NodeLogic for GetBacklogNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -462,8 +459,9 @@ impl NodeLogic for GetBacklogNode {
         let client = reqwest::Client::new();
 
         let url = format!(
-            "{}/rest/agile/1.0/board/{}/backlog?maxResults={}",
-            provider.base_url, board_id, max_results
+            "{}?maxResults={}",
+            provider.jira_agile_api_url(&format!("/board/{}/backlog", board_id)),
+            max_results
         );
 
         let response = client

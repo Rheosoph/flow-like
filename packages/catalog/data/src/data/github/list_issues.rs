@@ -1,4 +1,4 @@
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -136,6 +136,7 @@ impl NodeLogic for ListGitHubIssuesNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -162,7 +163,24 @@ impl NodeLogic for ListGitHubIssuesNode {
             "Issue state: open, closed, all",
             VariableType::String,
         )
-        .set_default_value(Some(json!("open")));
+        .set_default_value(Some(json!("open")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "open".to_string(),
+                    "closed".to_string(),
+                    "all".to_string(),
+                ])
+                .build(),
+        );
+
+        node.add_input_pin(
+            "milestone",
+            "Milestone",
+            "Milestone number, none, or *",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
 
         node.add_input_pin(
             "labels",
@@ -179,6 +197,63 @@ impl NodeLogic for ListGitHubIssuesNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "creator",
+            "Creator",
+            "Filter by issue creator username",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "mentioned",
+            "Mentioned",
+            "Filter by mentioned username",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "issue_type",
+            "Issue Type",
+            "Filter by issue type",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "issue_field_values",
+            "Issue Field Values",
+            "Filter by issue field values",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin("sort", "Sort", "Sort field", VariableType::String)
+            .set_default_value(Some(json!("created")))
+            .set_options(
+                PinOptions::new()
+                    .set_valid_values(vec![
+                        "created".to_string(),
+                        "updated".to_string(),
+                        "comments".to_string(),
+                    ])
+                    .build(),
+            );
+
+        node.add_input_pin(
+            "direction",
+            "Direction",
+            "Sort direction",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("desc")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["asc".to_string(), "desc".to_string()])
+                .build(),
+        );
 
         node.add_input_pin(
             "per_page",
@@ -244,7 +319,23 @@ impl NodeLogic for ListGitHubIssuesNode {
             .await
             .unwrap_or_else(|_| "open".to_string());
         let labels: String = context.evaluate_pin("labels").await.unwrap_or_default();
+        let milestone: String = context.evaluate_pin("milestone").await.unwrap_or_default();
         let assignee: String = context.evaluate_pin("assignee").await.unwrap_or_default();
+        let creator: String = context.evaluate_pin("creator").await.unwrap_or_default();
+        let mentioned: String = context.evaluate_pin("mentioned").await.unwrap_or_default();
+        let issue_type: String = context.evaluate_pin("issue_type").await.unwrap_or_default();
+        let issue_field_values: String = context
+            .evaluate_pin("issue_field_values")
+            .await
+            .unwrap_or_default();
+        let sort: String = context
+            .evaluate_pin("sort")
+            .await
+            .unwrap_or_else(|_| "created".to_string());
+        let direction: String = context
+            .evaluate_pin("direction")
+            .await
+            .unwrap_or_else(|_| "desc".to_string());
         let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
         let page: i64 = context.evaluate_pin("page").await.unwrap_or(1);
 
@@ -255,13 +346,19 @@ impl NodeLogic for ListGitHubIssuesNode {
         }
 
         let mut url = format!(
-            "/repos/{}/{}/issues?state={}&per_page={}&page={}",
+            "/repos/{}/{}/issues?state={}&per_page={}&page={}&sort={}&direction={}",
             owner,
             repo,
             state,
             per_page.clamp(1, 100),
-            page.max(1)
+            page.max(1),
+            sort,
+            direction
         );
+
+        if !milestone.is_empty() {
+            url.push_str(&format!("&milestone={}", urlencoding::encode(&milestone)));
+        }
 
         if !labels.is_empty() {
             url.push_str(&format!("&labels={}", urlencoding::encode(&labels)));
@@ -271,14 +368,33 @@ impl NodeLogic for ListGitHubIssuesNode {
             url.push_str(&format!("&assignee={}", urlencoding::encode(&assignee)));
         }
 
+        if !creator.is_empty() {
+            url.push_str(&format!("&creator={}", urlencoding::encode(&creator)));
+        }
+
+        if !mentioned.is_empty() {
+            url.push_str(&format!("&mentioned={}", urlencoding::encode(&mentioned)));
+        }
+
+        if !issue_type.is_empty() {
+            url.push_str(&format!("&type={}", urlencoding::encode(&issue_type)));
+        }
+
+        if !issue_field_values.is_empty() {
+            url.push_str(&format!(
+                "&issue_field_values={}",
+                urlencoding::encode(&issue_field_values)
+            ));
+        }
+
         let full_url = provider.api_url(&url);
 
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

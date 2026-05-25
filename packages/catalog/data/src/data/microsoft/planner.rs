@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_json, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -98,6 +101,7 @@ impl NodeLogic for ListMyPlansNode {
             "List all Planner plans the user has access to",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -130,28 +134,15 @@ impl NodeLogic for ListMyPlansNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/planner/plans")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let plans: Vec<PlannerPlan> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_plan).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/planner/plans"))
+            .await
+        {
+            Ok(values) => {
+                let plans: Vec<PlannerPlan> = values.iter().filter_map(parse_plan).collect();
                 let count = plans.len() as i64;
                 context.set_pin_value("plans", json!(plans)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -188,6 +179,7 @@ impl NodeLogic for GetPlanNode {
             "Get details of a specific Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -220,18 +212,14 @@ impl NodeLogic for GetPlanNode {
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/planner/plans/{}",
-                plan_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(
+            &client,
+            &provider,
+            provider.api_url(&format!("/planner/plans/{}", plan_id)),
+        )
+        .await
+        {
+            Ok(body) => {
                 if let Some(plan) = parse_plan(&body) {
                     context.set_pin_value("plan", json!(plan)).await?;
                     context.activate_exec_pin("exec_out").await?;
@@ -241,11 +229,6 @@ impl NodeLogic for GetPlanNode {
                         .await?;
                     context.activate_exec_pin("error").await?;
                 }
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -282,6 +265,7 @@ impl NodeLogic for ListPlanTasksNode {
             "List all tasks in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -316,31 +300,19 @@ impl NodeLogic for ListPlanTasksNode {
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/planner/plans/{}/tasks",
-                plan_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let tasks: Vec<PlannerTask> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_task).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/planner/plans/{}/tasks", plan_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let tasks: Vec<PlannerTask> = values.iter().filter_map(parse_task).collect();
                 let count = tasks.len() as i64;
                 context.set_pin_value("tasks", json!(tasks)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -377,6 +349,7 @@ impl NodeLogic for ListPlanBucketsNode {
             "List all buckets in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -411,31 +384,19 @@ impl NodeLogic for ListPlanBucketsNode {
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/planner/plans/{}/buckets",
-                plan_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let buckets: Vec<PlannerBucket> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_bucket).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/planner/plans/{}/buckets", plan_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let buckets: Vec<PlannerBucket> = values.iter().filter_map(parse_bucket).collect();
                 let count = buckets.len() as i64;
                 context.set_pin_value("buckets", json!(buckets)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -472,6 +433,7 @@ impl NodeLogic for CreatePlannerTaskNode {
             "Create a new task in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -544,7 +506,7 @@ impl NodeLogic for CreatePlannerTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/planner/tasks")
+            .post(provider.api_url("/planner/tasks"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -565,8 +527,9 @@ impl NodeLogic for CreatePlannerTaskNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -604,6 +567,7 @@ impl NodeLogic for UpdatePlannerTaskNode {
             "Update an existing Planner task",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -678,10 +642,7 @@ impl NodeLogic for UpdatePlannerTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/planner/tasks/{}",
-                task_id
-            ))
+            .patch(provider.api_url(&format!("/planner/tasks/{}", task_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .header("If-Match", etag)
@@ -694,8 +655,9 @@ impl NodeLogic for UpdatePlannerTaskNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -733,6 +695,7 @@ impl NodeLogic for CreateBucketNode {
             "Create a new bucket in a Planner plan",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -774,7 +737,7 @@ impl NodeLogic for CreateBucketNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/planner/buckets")
+            .post(provider.api_url("/planner/buckets"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -795,8 +758,9 @@ impl NodeLogic for CreateBucketNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -834,6 +798,7 @@ impl NodeLogic for ListMyTasksNode {
             "List all Planner tasks assigned to the current user",
             "Data/Microsoft/Planner",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -866,28 +831,15 @@ impl NodeLogic for ListMyTasksNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/planner/tasks")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let tasks: Vec<PlannerTask> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_task).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/planner/tasks"))
+            .await
+        {
+            Ok(values) => {
+                let tasks: Vec<PlannerTask> = values.iter().filter_map(parse_task).collect();
                 let count = tasks.len() as i64;
                 context.set_pin_value("tasks", json!(tasks)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context

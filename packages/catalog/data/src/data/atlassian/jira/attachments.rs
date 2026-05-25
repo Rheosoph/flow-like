@@ -1,4 +1,7 @@
-use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use crate::data::{
+    atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider},
+    path::FlowPath,
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -7,6 +10,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use super::JiraUser;
 
@@ -48,6 +52,15 @@ fn parse_attachment(value: &Value) -> Option<JiraAttachment> {
     })
 }
 
+fn filename_from_flow_path(path: &FlowPath, fallback: &str) -> String {
+    Path::new(&path.path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
 /// Get attachments for an issue
 #[crate::register_node]
 #[derive(Default)]
@@ -69,6 +82,7 @@ impl NodeLogic for GetAttachmentsNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -177,27 +191,28 @@ impl NodeLogic for GetAttachmentsNode {
     }
 }
 
-/// Download an attachment's content
+/// Upload an attachment to an issue
 #[crate::register_node]
 #[derive(Default)]
-pub struct DownloadAttachmentNode {}
+pub struct UploadAttachmentNode {}
 
-impl DownloadAttachmentNode {
+impl UploadAttachmentNode {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for DownloadAttachmentNode {
+impl NodeLogic for UploadAttachmentNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "data_atlassian_jira_download_attachment",
-            "Download Attachment",
-            "Download the content of an attachment",
+            "data_atlassian_jira_upload_attachment",
+            "Upload Attachment",
+            "Upload a file attachment to a Jira issue",
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -222,18 +237,180 @@ impl NodeLogic for DownloadAttachmentNode {
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_input_pin(
-            "content_url",
-            "Content URL",
-            "The URL of the attachment content (from GetAttachments)",
+            "issue_key",
+            "Issue Key",
+            "The issue key (e.g., PROJ-123)",
             VariableType::String,
         );
 
+        node.add_input_pin("file", "File", "File to upload", VariableType::Struct)
+            .set_schema::<FlowPath>()
+            .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin(
+            "filename",
+            "Filename",
+            "Override file name for the uploaded attachment (optional)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
         node.add_output_pin(
-            "content",
-            "Content",
-            "The attachment content as bytes (base64 encoded)",
+            "attachments",
+            "Attachments",
+            "Created Jira attachments",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array)
+        .set_schema::<JiraAttachment>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin(
+            "count",
+            "Count",
+            "Number of attachments created",
+            VariableType::Integer,
+        );
+
+        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["write:jira-work"]);
+        node.set_scores(
+            NodeScores::new()
+                .set_privacy(7)
+                .set_security(8)
+                .set_performance(5)
+                .set_governance(7)
+                .set_reliability(7)
+                .set_cost(7)
+                .build(),
+        );
+
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
+        let issue_key: String = context.evaluate_pin("issue_key").await?;
+        let file: FlowPath = context.evaluate_pin("file").await?;
+        let filename: String = context.evaluate_pin("filename").await.unwrap_or_default();
+
+        if issue_key.is_empty() {
+            return Err(flow_like_types::anyhow!("Issue key is required"));
+        }
+
+        let bytes = file.get(context, false).await?;
+        let filename = if filename.is_empty() {
+            filename_from_flow_path(&file, "attachment.bin")
+        } else {
+            filename
+        };
+
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let client = reqwest::Client::new();
+        let url = provider.jira_api_url(&format!("/issue/{}/attachments", issue_key));
+
+        let response = client
+            .post(&url)
+            .header("Authorization", provider.auth_header())
+            .header("X-Atlassian-Token", "no-check")
+            .header("Accept", "application/json")
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(flow_like_types::anyhow!(
+                "Failed to upload attachment: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let data: Value = response.json().await?;
+        let attachments: Vec<JiraAttachment> = data
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(parse_attachment)
+            .collect();
+        let count = attachments.len() as i64;
+
+        context
+            .set_pin_value("attachments", json!(attachments))
+            .await?;
+        context.set_pin_value("count", json!(count)).await?;
+
+        Ok(())
+    }
+}
+
+/// Download an attachment's content
+#[crate::register_node]
+#[derive(Default)]
+pub struct DownloadAttachmentNode {}
+
+impl DownloadAttachmentNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for DownloadAttachmentNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "data_atlassian_jira_download_attachment",
+            "Download Attachment",
+            "Download the content of an attachment",
+            "Data/Atlassian/Jira",
+        );
+        node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
+
+        node.add_input_pin(
+            "exec_in",
+            "Exec In",
+            "Execution input",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "exec_out",
+            "Exec Out",
+            "Execution output",
+            VariableType::Execution,
+        );
+
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "Atlassian provider",
+            VariableType::Struct,
+        )
+        .set_schema::<AtlassianProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_input_pin(
+            "attachment_id",
+            "Attachment ID",
+            "The ID of the attachment to download",
             VariableType::String,
         );
+
+        node.add_input_pin(
+            "output_path",
+            "Output Path",
+            "FlowPath to write the downloaded attachment into",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin("path", "Path", "Written file path", VariableType::Struct)
+            .set_schema::<FlowPath>()
+            .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin(
             "size",
@@ -258,20 +435,21 @@ impl NodeLogic for DownloadAttachmentNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
-
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
-        let content_url: String = context.evaluate_pin("content_url").await?;
+        let attachment_id: String = context.evaluate_pin("attachment_id").await?;
+        let output_path: FlowPath = context.evaluate_pin("output_path").await?;
 
-        if content_url.is_empty() {
-            return Err(flow_like_types::anyhow!("Content URL is required"));
+        if attachment_id.is_empty() {
+            return Err(flow_like_types::anyhow!("Attachment ID is required"));
         }
 
         let client = reqwest::Client::new();
+        let url = provider.jira_api_url(&format!("/attachment/content/{}", attachment_id));
 
         let response = client
-            .get(&content_url)
+            .get(&url)
             .header("Authorization", provider.auth_header())
+            .query(&[("redirect", "false")])
             .send()
             .await?;
 
@@ -285,11 +463,11 @@ impl NodeLogic for DownloadAttachmentNode {
             ));
         }
 
-        let bytes = response.bytes().await?;
+        let bytes = response.bytes().await?.to_vec();
         let size = bytes.len() as i64;
-        let content = STANDARD.encode(&bytes);
+        output_path.put(context, bytes, false).await?;
 
-        context.set_pin_value("content", json!(content)).await?;
+        context.set_pin_value("path", json!(output_path)).await?;
         context.set_pin_value("size", json!(size)).await?;
 
         Ok(())
@@ -317,6 +495,7 @@ impl NodeLogic for DeleteAttachmentNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",

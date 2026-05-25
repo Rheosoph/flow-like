@@ -1,4 +1,4 @@
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -76,6 +76,7 @@ impl NodeLogic for ListGitHubReposNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -104,10 +105,50 @@ impl NodeLogic for ListGitHubReposNode {
         node.add_input_pin(
             "type",
             "Type",
-            "Type of repos: all, owner, public, private, member (for user repos)",
+            "Type of repositories to list",
             VariableType::String,
         )
-        .set_default_value(Some(json!("all")));
+        .set_default_value(Some(json!("all")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "all".to_string(),
+                    "owner".to_string(),
+                    "public".to_string(),
+                    "private".to_string(),
+                    "member".to_string(),
+                    "forks".to_string(),
+                    "sources".to_string(),
+                    "internal".to_string(),
+                ])
+                .build(),
+        );
+
+        node.add_input_pin("sort", "Sort", "Sort field", VariableType::String)
+            .set_default_value(Some(json!("full_name")))
+            .set_options(
+                PinOptions::new()
+                    .set_valid_values(vec![
+                        "created".to_string(),
+                        "updated".to_string(),
+                        "pushed".to_string(),
+                        "full_name".to_string(),
+                    ])
+                    .build(),
+            );
+
+        node.add_input_pin(
+            "direction",
+            "Direction",
+            "Sort direction",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("asc")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["asc".to_string(), "desc".to_string()])
+                .build(),
+        );
 
         node.add_input_pin(
             "per_page",
@@ -176,20 +217,33 @@ impl NodeLogic for ListGitHubReposNode {
             .evaluate_pin("type")
             .await
             .unwrap_or_else(|_| "all".to_string());
+        let sort: String = context
+            .evaluate_pin("sort")
+            .await
+            .unwrap_or_else(|_| "full_name".to_string());
+        let direction: String = context
+            .evaluate_pin("direction")
+            .await
+            .unwrap_or_else(|_| "asc".to_string());
         let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
         let page: i64 = context.evaluate_pin("page").await.unwrap_or(1);
 
         let url = if org.is_empty() {
             provider.api_url(&format!(
-                "/user/repos?type={}&per_page={}&page={}",
+                "/user/repos?type={}&sort={}&direction={}&per_page={}&page={}",
                 repo_type,
+                sort,
+                direction,
                 per_page.clamp(1, 100),
                 page.max(1)
             ))
         } else {
             provider.api_url(&format!(
-                "/orgs/{}/repos?per_page={}&page={}",
+                "/orgs/{}/repos?type={}&sort={}&direction={}&per_page={}&page={}",
                 org,
+                repo_type,
+                sort,
+                direction,
                 per_page.clamp(1, 100),
                 page.max(1)
             ))
@@ -198,9 +252,9 @@ impl NodeLogic for ListGitHubReposNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

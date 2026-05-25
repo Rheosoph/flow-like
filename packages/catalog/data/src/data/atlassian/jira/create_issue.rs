@@ -30,6 +30,7 @@ impl NodeLogic for CreateJiraIssueNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -96,10 +97,11 @@ impl NodeLogic for CreateJiraIssueNode {
         node.add_input_pin(
             "labels",
             "Labels",
-            "Comma-separated list of labels",
+            "Labels to assign to the issue",
             VariableType::String,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array)
+        .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "parent_key",
@@ -165,7 +167,7 @@ impl NodeLogic for CreateJiraIssueNode {
         let description: String = context.evaluate_pin("description").await?;
         let priority: String = context.evaluate_pin("priority").await?;
         let assignee_id: String = context.evaluate_pin("assignee_id").await?;
-        let labels: String = context.evaluate_pin("labels").await?;
+        let labels: Vec<String> = context.evaluate_pin("labels").await.unwrap_or_default();
         let parent_key: String = context.evaluate_pin("parent_key").await?;
 
         if project_key.is_empty() {
@@ -230,8 +232,7 @@ impl NodeLogic for CreateJiraIssueNode {
         }
 
         if !labels.is_empty() {
-            let label_list: Vec<&str> = labels.split(',').map(|s| s.trim()).collect();
-            fields["labels"] = json!(label_list);
+            fields["labels"] = json!(labels);
         }
 
         if !parent_key.is_empty() {

@@ -1,4 +1,5 @@
 use super::provider::{GOOGLE_PROVIDER_ID, GoogleProvider};
+use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -705,10 +706,11 @@ impl NodeLogic for ExportGoogleDocNode {
         let mut node = Node::new(
             "data_google_docs_export",
             "Export Document",
-            "Export a Google Document to various formats",
+            "Export a Google Document into a FlowPath",
             "Data/Google/Docs",
         );
         node.add_icon("/flow/icons/google.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
         node.add_input_pin(
@@ -734,14 +736,25 @@ impl NodeLogic for ExportGoogleDocNode {
                     ])
                     .build(),
             );
+        node.add_input_pin(
+            "output_path",
+            "Output Path",
+            "FlowPath to write the exported document into",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
         node.add_output_pin("error", "Error", "", VariableType::Execution);
+        node.add_output_pin("path", "Path", "Written file path", VariableType::Struct)
+            .set_schema::<FlowPath>()
+            .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_output_pin(
-            "content",
-            "Content",
-            "Exported content (string for text formats, base64 for binary)",
-            VariableType::String,
+            "size",
+            "Size",
+            "Exported size in bytes",
+            VariableType::Integer,
         );
         node.add_output_pin("error_message", "Error Message", "", VariableType::String);
 
@@ -763,6 +776,7 @@ impl NodeLogic for ExportGoogleDocNode {
             .evaluate_pin("format")
             .await
             .unwrap_or_else(|_| "text/plain".to_string());
+        let output_path: FlowPath = context.evaluate_pin("output_path").await?;
 
         let client = reqwest::Client::new();
         let response = client
@@ -777,16 +791,11 @@ impl NodeLogic for ExportGoogleDocNode {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let is_text = format.starts_with("text/");
-                if is_text {
-                    let content = resp.text().await?;
-                    context.set_pin_value("content", json!(content)).await?;
-                } else {
-                    let bytes = resp.bytes().await?;
-                    use base64::Engine;
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    context.set_pin_value("content", json!(encoded)).await?;
-                }
+                let bytes = resp.bytes().await?;
+                let size = bytes.len() as i64;
+                output_path.put(context, bytes.to_vec(), false).await?;
+                context.set_pin_value("path", json!(output_path)).await?;
+                context.set_pin_value("size", json!(size)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {

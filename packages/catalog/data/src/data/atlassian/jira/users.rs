@@ -136,6 +136,13 @@ pub struct JiraChangelog {
     pub items: Vec<JiraChangelogItem>,
 }
 
+/// Changelog result for one issue in a batch
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JiraBatchChangelogResult {
+    pub issue_key: String,
+    pub changelog: Vec<JiraChangelog>,
+}
+
 fn parse_changelog_item(value: &Value) -> Option<JiraChangelogItem> {
     let obj = value.as_object()?;
 
@@ -337,6 +344,7 @@ impl NodeLogic for BatchGetChangelogsNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -363,16 +371,21 @@ impl NodeLogic for BatchGetChangelogsNode {
         node.add_input_pin(
             "issue_keys",
             "Issue Keys",
-            "Comma-separated list of issue keys (e.g., 'PROJ-1,PROJ-2,PROJ-3')",
+            "Issue keys to fetch changelogs for",
             VariableType::String,
-        );
+        )
+        .set_value_type(ValueType::Array)
+        .set_default_value(Some(json!([])));
 
         node.add_output_pin(
             "results",
             "Results",
-            "Map of issue key to changelog entries (as JSON)",
-            VariableType::String,
-        );
+            "Changelog entries grouped by issue key",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array)
+        .set_schema::<JiraBatchChangelogResult>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["read:jira-work"]);
         node.set_scores(
@@ -391,26 +404,14 @@ impl NodeLogic for BatchGetChangelogsNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
-        let issue_keys: String = context.evaluate_pin("issue_keys").await?;
+        let keys: Vec<String> = context.evaluate_pin("issue_keys").await.unwrap_or_default();
 
-        if issue_keys.is_empty() {
+        if keys.is_empty() {
             return Err(flow_like_types::anyhow!("Issue keys are required"));
         }
 
-        let keys: Vec<String> = issue_keys
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if keys.is_empty() {
-            return Err(flow_like_types::anyhow!(
-                "At least one issue key is required"
-            ));
-        }
-
         let client = reqwest::Client::new();
-        let mut results = flow_like_types::json::Map::new();
+        let mut results = Vec::with_capacity(keys.len());
 
         for key in keys {
             let url = provider.jira_api_url(&format!("/issue/{}/changelog?maxResults=100", key));
@@ -430,18 +431,27 @@ impl NodeLogic for BatchGetChangelogsNode {
                             .iter()
                             .filter_map(parse_changelog)
                             .collect();
-                        results.insert(key, json!(changelog));
+                        results.push(JiraBatchChangelogResult {
+                            issue_key: key,
+                            changelog,
+                        });
+                    } else {
+                        results.push(JiraBatchChangelogResult {
+                            issue_key: key,
+                            changelog: Vec::new(),
+                        });
                     }
                 }
                 _ => {
-                    results.insert(key, json!([]));
+                    results.push(JiraBatchChangelogResult {
+                        issue_key: key,
+                        changelog: Vec::new(),
+                    });
                 }
             }
         }
 
-        context
-            .set_pin_value("results", json!(Value::Object(results).to_string()))
-            .await?;
+        context.set_pin_value("results", json!(results)).await?;
 
         Ok(())
     }

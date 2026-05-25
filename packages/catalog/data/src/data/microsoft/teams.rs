@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -95,6 +98,7 @@ impl NodeLogic for ListJoinedTeamsNode {
             "List all Microsoft Teams the user has joined",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -127,28 +131,15 @@ impl NodeLogic for ListJoinedTeamsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/joinedTeams")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let teams: Vec<Team> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_team).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/joinedTeams"))
+            .await
+        {
+            Ok(values) => {
+                let teams: Vec<Team> = values.iter().filter_map(parse_team).collect();
                 let count = teams.len() as i64;
                 context.set_pin_value("teams", json!(teams)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -185,6 +176,7 @@ impl NodeLogic for ListTeamChannelsNode {
             "List all channels in a Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -219,31 +211,19 @@ impl NodeLogic for ListTeamChannelsNode {
         let team_id: String = context.evaluate_pin("team_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/teams/{}/channels",
-                team_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let channels: Vec<Channel> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_channel).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/teams/{}/channels", team_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let channels: Vec<Channel> = values.iter().filter_map(parse_channel).collect();
                 let count = channels.len() as i64;
                 context.set_pin_value("channels", json!(channels)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -280,6 +260,7 @@ impl NodeLogic for SendChannelMessageNode {
             "Send a message to a Microsoft Teams channel",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -349,10 +330,10 @@ impl NodeLogic for SendChannelMessageNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/teams/{}/channels/{}/messages",
+            .post(provider.api_url(&format!(
+                "/teams/{}/channels/{}/messages",
                 team_id, channel_id
-            ))
+            )))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -369,8 +350,9 @@ impl NodeLogic for SendChannelMessageNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -408,6 +390,7 @@ impl NodeLogic for GetChannelMessagesNode {
             "Get messages from a Microsoft Teams channel",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -457,32 +440,18 @@ impl NodeLogic for GetChannelMessagesNode {
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(50);
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/teams/{}/channels/{}/messages",
-                team_id, channel_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .query(&[("$top", top.to_string())])
-            .send()
-            .await;
+        let url = provider.api_url(&format!(
+            "/teams/{}/channels/{}/messages?$top={}",
+            team_id, channel_id, top
+        ));
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let messages: Vec<ChatMessage> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_message).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url).await {
+            Ok(values) => {
+                let messages: Vec<ChatMessage> = values.iter().filter_map(parse_message).collect();
                 let count = messages.len() as i64;
                 context.set_pin_value("messages", json!(messages)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -519,6 +488,7 @@ impl NodeLogic for CreateTeamNode {
             "Create a new Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -582,7 +552,7 @@ impl NodeLogic for CreateTeamNode {
             .unwrap_or_else(|_| "private".to_string());
 
         let body = json!({
-            "template@odata.bind": "https://graph.microsoft.com/v1.0/teamsTemplates('standard')",
+            "template@odata.bind": provider.api_url("/teamsTemplates('standard')"),
             "displayName": display_name,
             "description": description,
             "visibility": visibility
@@ -590,7 +560,7 @@ impl NodeLogic for CreateTeamNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/teams")
+            .post(provider.api_url("/teams"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -611,8 +581,9 @@ impl NodeLogic for CreateTeamNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -650,6 +621,7 @@ impl NodeLogic for CreateChannelNode {
             "Create a new channel in a Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -727,10 +699,7 @@ impl NodeLogic for CreateChannelNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/teams/{}/channels",
-                team_id
-            ))
+            .post(provider.api_url(&format!("/teams/{}/channels", team_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -751,8 +720,9 @@ impl NodeLogic for CreateChannelNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {

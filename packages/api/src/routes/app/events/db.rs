@@ -134,6 +134,13 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         .unwrap_or_default()
         .naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
+        // Setup tracking fields are only written by the remote-setup endpoint
+        // (see routes::app::events::setup_event). Preserve existing values on
+        // event upserts by leaving them NotSet here.
+        setup_status: sea_orm::ActiveValue::NotSet,
+        last_setup_at: sea_orm::ActiveValue::NotSet,
+        last_setup_version: sea_orm::ActiveValue::NotSet,
+        last_setup_error: sea_orm::ActiveValue::NotSet,
     }
 }
 

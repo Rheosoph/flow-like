@@ -14,50 +14,408 @@ const { t } = Astro.props;
     <div class="absolute inset-0 [mask-image:radial-gradient(70%_70%_at_50%_40%,black,transparent)] bg-[linear-gradient(to_right,theme(colors.muted.DEFAULT/.08)_1px,transparent_1px),linear-gradient(to_bottom,theme(colors.muted.DEFAULT/.08)_1px,transparent_1px)] bg-[size:48px_48px]"></div>
   </div>
 
-  <div class="mx-auto max-w-5xl px-6 lg:px-8 py-20 lg:py-28 w-full">
-    <div class="text-center">
-      <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-6">
-        {t("compare.hero.tagline")}
-      </p>
+  <div class="mx-auto max-w-7xl px-6 lg:px-8 py-20 lg:py-28 w-full">
+    <div class="grid items-center gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(430px,1.05fr)] xl:grid-cols-[minmax(0,0.9fr)_minmax(560px,1.1fr)] xl:gap-14">
 
-      <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-6">
-        {t("compare.hero.headline")} <span class="text-primary">{t("compare.hero.headline.highlight")}</span>
-      </h1>
+      <!-- Text + CTAs -->
+      <div class="min-w-0 text-center lg:text-left">
+        <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-muted-foreground mb-6">
+          {t("compare.hero.tagline")}
+        </p>
 
-      <p class="text-lg sm:text-xl text-muted-foreground leading-relaxed max-w-3xl mx-auto mb-10">
-        {t("compare.hero.description")}
-      </p>
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-6">
+          {t("compare.hero.headline")} <span class="text-primary">{t("compare.hero.headline.highlight")}</span>
+        </h1>
 
-      <div class="flex flex-wrap items-center justify-center gap-4">
-        <a
-          href="/download"
-          class="inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground px-6 py-3 text-sm font-medium hover:bg-primary/90 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-primary/20"
-        >
-          {t("compare.hero.cta")}
-        </a>
-        <a
-          href="#matrix"
-          class="inline-flex items-center justify-center rounded-full border border-border/80 bg-background/50 px-6 py-3 text-sm font-medium text-foreground hover:bg-muted/50 hover:border-border transition-colors"
-        >
-          {t("compare.hero.cta.demo")}
-        </a>
+        <p class="text-lg sm:text-xl text-muted-foreground leading-relaxed mb-10">
+          {t("compare.hero.description")}
+        </p>
+
+        <div class="flex flex-wrap items-center justify-center lg:justify-start gap-4">
+          <a
+            href="/download"
+            class="inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground px-6 py-3 text-sm font-medium hover:bg-primary/90 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-primary/20"
+          >
+            {t("compare.hero.cta")}
+          </a>
+          <a
+            href="#matrix"
+            class="inline-flex items-center justify-center rounded-full border border-border/80 bg-background/50 px-6 py-3 text-sm font-medium text-foreground hover:bg-muted/50 hover:border-border transition-colors"
+          >
+            {t("compare.hero.cta.demo")}
+          </a>
+        </div>
       </div>
 
-      <!-- Legend -->
-      <div class="mt-16 flex flex-wrap items-center justify-center gap-6 text-sm">
-        <div class="flex items-center gap-2">
-          <span class="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-500">✓</span>
-          <span class="text-muted-foreground">{t("compare.legend.native")}</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500/20 text-amber-500">◐</span>
-          <span class="text-muted-foreground">{t("compare.legend.partial")}</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="flex items-center justify-center w-6 h-6 rounded-full bg-red-500/20 text-red-500">✗</span>
-          <span class="text-muted-foreground">{t("compare.legend.none")}</span>
-        </div>
+      <!-- SVG graphic -->
+      <div class="relative min-w-0 w-full flex justify-center">
+        <div class="absolute inset-0 bg-primary/5 blur-[100px] rounded-full pointer-events-none"></div>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 900 580"
+          class="w-full max-w-none h-auto relative z-10 drop-shadow-sm"
+          fill="none"
+        >
+  <defs>
+    <linearGradient id="flow-glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.2" />
+      <stop offset="50%" stop-color="var(--primary)" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="var(--primary)" stop-opacity="1" />
+    </linearGradient>
+    <filter id="node-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="15" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="particle-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <pattern id="canvas-grid-comp" width="40" height="40" patternUnits="userSpaceOnUse">
+       <circle cx="2" cy="2" r="1.5" fill="var(--foreground)" opacity="0.05" />
+    </pattern>
+
+    <!-- Branching Paths for Traditional -->
+    <path id="path-app" d="M 60 275 C 100 275, 120 80, 165 80" />
+    <path id="path-wf" d="M 60 275 C 100 275, 120 160, 165 160" />
+    <path id="path-code" d="M 60 275 C 100 275, 120 240, 165 240" />
+    <path id="path-db" d="M 60 275 C 100 275, 120 320, 165 320" />
+    <path id="path-auto" d="M 60 275 C 100 275, 120 400, 165 400" />
+
+    <path id="right-straight" d="M 470 275 L 550 275" />
+
+<!-- Internal Unified Paths -->
+    <path id="p-all-v" d="M 0 225 L 138 225" />
+    <path id="p-app-v" d="M 80 140 L 80 180 L 160 180 L 160 200" />
+    <path id="p-data-v" d="M 235 140 L 235 180 L 160 180 L 160 200" />
+    <path id="p-v-work" d="M 160 248 L 160 260 L 77 260 L 77 270" />
+    <path id="p-v-exec" d="M 160 248 L 160 260 L 242 260 L 242 270" />
+    <path id="p-v-auto" d="M 160 260 L 160 390" />
+  </defs>
+
+  <rect width="100%" height="100%" fill="url(#canvas-grid-comp)" rx="24" />
+
+  <!-- Divider -->
+  <g class="opacity-40">
+    <line x1="420" y1="10" x2="420" y2="580" stroke="var(--border)" stroke-width="2" stroke-dasharray="8 8" />
+  </g>
+
+  <!-- HEADERS -->
+  <text x="200" y="25" text-anchor="middle" fill="var(--muted-foreground)" font-size="12" font-weight="700" letter-spacing="0.1em">{t("compare.hero.graph.traditional")}</text>
+  <text x="650" y="25" text-anchor="middle" fill="var(--primary)" font-size="12" font-weight="700" letter-spacing="0.1em">{t("compare.hero.graph.flowlike")}</text>
+
+  <!-- ================= LEFT SIDE ================= -->
+  <use href="#path-app" fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round" />
+  <use href="#path-wf" fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round" />
+  <use href="#path-code" fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round" />
+  <use href="#path-db" fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round" />
+  <use href="#path-auto" fill="none" stroke="var(--border)" stroke-width="3" stroke-linecap="round" />
+
+  <use href="#path-app" fill="none" stroke="var(--muted-foreground)" stroke-dasharray="20 400" stroke-width="3" stroke-linecap="round" class="edge-fail" />
+
+  <!-- Start Idea Node -->
+  <circle cx="60" cy="275" r="10" fill="var(--card)" stroke="var(--border)" stroke-width="2" />
+  <circle cx="60" cy="275" r="4" fill="var(--muted-foreground)" />
+
+  <!-- OR BADGES -->
+  <g transform="translate(100, 108)"><rect width="42" height="24" rx="12" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" /><text x="21" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="var(--muted-foreground)">{t("compare.hero.graph.or")}</text></g>
+  <g transform="translate(115, 188)"><rect width="42" height="24" rx="12" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" /><text x="21" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="var(--muted-foreground)">{t("compare.hero.graph.or")}</text></g>
+  <g transform="translate(115, 268)"><rect width="42" height="24" rx="12" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" /><text x="21" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="var(--muted-foreground)">{t("compare.hero.graph.or")}</text></g>
+  <g transform="translate(100, 348)"><rect width="42" height="24" rx="12" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" /><text x="21" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="var(--muted-foreground)">{t("compare.hero.graph.or")}</text></g>
+
+  <!-- Fragment 1: App Builder -->
+  <g transform="translate(160, 50)"><g class="hover-float-1">
+    <rect width="200" height="60" rx="12" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" />
+    <rect x="15" y="15" width="20" height="30" rx="4" fill="var(--muted)" />
+    <rect x="42" y="15" width="40" height="8" rx="2" fill="var(--muted)" />
+    <rect x="42" y="30" width="30" height="15" rx="2" fill="var(--muted-foreground)" opacity="0.4" />
+    <text x="135" y="27" text-anchor="middle" fill="var(--foreground)" font-size="12" font-weight="600">{t("compare.hero.graph.lowcode.line1")}<tspan x="135" dy="14">{t("compare.hero.graph.lowcode.line2")}</tspan></text>
+  </g></g>
+
+  <!-- Fragment 2: Workflow Engine -->
+  <g transform="translate(160, 130)"><g class="hover-float-2">
+    <rect width="200" height="60" rx="12" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" />
+    <path d="M 15 30 L 30 30 M 50 30 L 65 30" stroke="var(--muted-foreground)" opacity="0.6" stroke-width="2" />
+    <circle cx="10" cy="30" r="5" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="2" />
+    <rect x="30" y="22" width="20" height="16" rx="4" fill="var(--muted)" />
+    <circle cx="70" cy="30" r="5" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="2" />
+    <text x="135" y="27" text-anchor="middle" fill="var(--foreground)" font-size="11" font-weight="600">{t("compare.hero.graph.orchestration.line1")}<tspan x="135" dy="14">{t("compare.hero.graph.orchestration.line2")}</tspan></text>
+  </g></g>
+
+  <!-- Fragment 3: Coding Backend -->
+  <g transform="translate(160, 210)"><g class="hover-float-3">
+    <rect width="200" height="60" rx="12" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" />
+
+    <!-- Workflow Icon for Execution Engines -->
+    <g transform="translate(45, 25)">
+      <path d="M -20 0 L -10 0 M -10 0 L -10 -10 L 0 -10 M -10 0 L -10 10 L 0 10 M 10 -10 L 20 -10 L 20 0 L 30 0 M 10 10 L 20 10 L 20 0" stroke="var(--muted-foreground)" stroke-width="1.5" fill="none" opacity="0.6" />
+      <rect x="-30" y="-5" width="10" height="10" rx="2" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+      <rect x="0" y="-15" width="10" height="10" rx="2" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+      <rect x="0" y="5" width="10" height="10" rx="2" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+      <circle cx="30" cy="0" r="4" fill="var(--muted)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+    </g>
+
+    <text x="135" y="27" text-anchor="middle" fill="var(--foreground)" font-size="12" font-weight="600">{t("compare.hero.graph.execution.line1")}<tspan x="135" dy="14">{t("compare.hero.graph.execution.line2")}</tspan></text>
+  </g></g>
+
+  <!-- Fragment 4: Storage -->
+  <g transform="translate(160, 290)"><g class="hover-float-4">
+    <rect width="200" height="60" rx="12" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" />
+
+    <g transform="translate(45, 30)">
+      <path d="M -16 -8 L -16 8 A 16 5 0 0 0 16 8 L 16 -8" fill="var(--muted)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+      <ellipse cx="0" cy="-8" rx="16" ry="5" fill="var(--background)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+      <path d="M -16 0 A 16 5 0 0 0 16 0" fill="none" stroke="var(--muted-foreground)" stroke-width="1.5" />
+    </g>
+
+    <text x="135" y="27" text-anchor="middle" fill="var(--foreground)" font-size="12" font-weight="600">{t("compare.hero.graph.enterprise_data.line1")}<tspan x="135" dy="14">{t("compare.hero.graph.enterprise_data.line2")}</tspan></text>
+  </g></g>
+
+
+
+  <!-- Fragment 5: Automation -->
+  <g transform="translate(160, 370)"><g class="hover-float-5">
+    <rect width="200" height="60" rx="12" fill="var(--card)" stroke="var(--border)" stroke-width="1.5" />
+    <circle cx="25" cy="30" r="10" fill="var(--muted)" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="4 2"/>
+    <path d="M 40 30 L 60 30 M 55 25 L 60 30 L 55 35" stroke="var(--muted-foreground)" stroke-width="1.5" fill="none"/>
+    <text x="135" y="27" text-anchor="middle" fill="var(--foreground)" font-size="12" font-weight="600">{t("compare.hero.graph.enterprise_automation.line1")}<tspan x="135" dy="14">{t("compare.hero.graph.enterprise_automation.line2")}</tspan></text>
+  </g></g>
+
+  <!-- ================= RIGHT SIDE ================= -->
+
+  <use href="#right-straight" fill="none" stroke="var(--primary)" stroke-width="4" stroke-linecap="round" opacity="0.2" />
+  <use href="#right-straight" fill="none" stroke="url(#flow-glow)" stroke-width="4" stroke-linecap="round" class="flow-edge-fast" />
+
+  <circle r="4" fill="var(--primary)" filter="url(#particle-glow)">
+    <animateMotion dur="1.5s" repeatCount="indefinite"><mpath href="#right-straight" /></animateMotion>
+    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1" dur="1.5s" repeatCount="indefinite" />
+  </circle>
+
+  <!-- Start Idea Node -->
+  <circle cx="460" cy="275" r="10" fill="var(--card)" stroke="var(--primary)" stroke-width="2" />
+  <circle cx="460" cy="275" r="5" fill="var(--primary)" filter="url(#particle-glow)" />
+
+  <g transform="translate(480, 260)">
+    <rect width="50" height="30" rx="15" fill="var(--background)" />
+    <rect width="50" height="30" rx="15" fill="var(--primary)" opacity="0.1" />
+    <rect width="50" height="30" rx="15" fill="none" stroke="var(--primary)" stroke-width="1.5" />
+    <text x="25" y="19" text-anchor="middle" font-size="11" font-weight="800" fill="var(--primary)">{t("compare.hero.graph.all")}</text>
+  </g>
+
+  <!-- Flow Like Unified Container -->
+  <g transform="translate(550, 50)"><g class="unified-float">
+    <circle cx="0" cy="225" r="6" fill="var(--background)" stroke="var(--primary)" stroke-width="2" />
+    <rect x="-10" y="-10" width="340" height="540" rx="24" fill="var(--primary)" opacity="0.06" filter="url(#node-glow)" />
+    <rect width="320" height="520" rx="20" fill="var(--card)" stroke="var(--primary)" stroke-width="2" style="backdrop-filter: blur(12px)" />
+
+<!-- Flow paths connecting the internal modules -->
+    <g opacity="0.4">
+      <use href="#p-all-v" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+      <use href="#p-app-v" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+      <use href="#p-data-v" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+      <use href="#p-v-work" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+      <use href="#p-v-exec" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+      <use href="#p-v-auto" fill="none" stroke="var(--primary)" stroke-width="3" stroke-dasharray="4 4" />
+    </g>
+    <!-- T-junction grounding nodes for cleaner line merges -->
+    <circle cx="160" cy="180" r="4" fill="var(--primary)" />
+    <circle cx="160" cy="260" r="4" fill="var(--primary)" />
+
+    <!-- Flow Particles -->
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.1s"><mpath href="#p-all-v" /></animateMotion></circle>
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.3s"><mpath href="#p-app-v" /></animateMotion></circle>
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.8s"><mpath href="#p-data-v" /></animateMotion></circle>
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.5s"><mpath href="#p-v-work" /></animateMotion></circle>
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.7s"><mpath href="#p-v-exec" /></animateMotion></circle>
+    <circle r="4" fill="var(--primary)" filter="url(#particle-glow)"><animateMotion dur="2s" repeatCount="indefinite" begin="0.4s"><mpath href="#p-v-auto" /></animateMotion></circle>
+
+    <!-- Quadrant 1: App Builder -->
+    <g transform="translate(15, 10)">
+       <rect width="130" height="130" rx="12" fill="var(--background)" stroke="var(--border)" stroke-width="1.5" />
+       <text x="65" y="16" text-anchor="middle" fill="var(--foreground)" font-size="11" font-weight="700">{t("compare.hero.graph.lowcode.line1")}<tspan x="65" dy="12">{t("compare.hero.graph.lowcode.line2")}</tspan></text>
+       <rect x="15" y="40" width="25" height="85" rx="4" fill="var(--muted)" />
+       <rect x="48" y="40" width="67" height="15" rx="4" fill="var(--primary)" opacity="0.2" />
+       <rect x="48" y="62" width="40" height="8" rx="4" fill="var(--muted-foreground)" opacity="0.4" />
+       <rect x="48" y="78" width="67" height="47" rx="4" fill="var(--muted)" stroke="var(--border)" stroke-width="1"/>
+       <rect x="75" y="105" width="30" height="12" rx="4" fill="var(--primary)" />
+       <!-- Output ports -->
+       <circle cx="65" cy="130" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+       <circle cx="130" cy="90" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+    </g>
+
+    <!-- Quadrant 2: Storage -->
+    <g transform="translate(170, 10)">
+       <rect width="130" height="130" rx="12" fill="var(--background)" stroke="var(--border)" stroke-width="1.5" />
+       <text x="65" y="16" text-anchor="middle" fill="var(--foreground)" font-size="11" font-weight="700">{t("compare.hero.graph.enterprise_data.line1")}<tspan x="65" dy="12">{t("compare.hero.graph.enterprise_data.line2")}</tspan></text>
+
+
+       <g transform="translate(65, 80)">
+         <path d="M -30 -15 L -30 15 A 30 8 0 0 0 30 15 L 30 -15" fill="var(--muted)" stroke="var(--primary)" stroke-width="2" />
+         <ellipse cx="0" cy="-15" rx="30" ry="8" fill="var(--background)" stroke="var(--primary)" stroke-width="2" />
+         <path d="M -30 0 A 30 8 0 0 0 30 0" fill="none" stroke="var(--primary)" stroke-width="2" />
+       </g>
+
+
+       <!-- Input/Output ports -->
+       <circle cx="0" cy="90" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+       <circle cx="65" cy="130" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+    </g>
+
+    <!-- Quadrant 3: Workflow Engine -->
+    <g transform="translate(15, 270)">
+       <rect width="125" height="110" rx="12" fill="var(--background)" stroke="var(--border)" stroke-width="1.5" />
+       <text x="62" y="90" text-anchor="middle" fill="var(--foreground)" font-size="10" font-weight="700">{t("compare.hero.graph.orchestration.line1")}<tspan x="62" dy="12">{t("compare.hero.graph.orchestration.line2")}</tspan></text>
+
+       <g transform="translate(62.5, 45) scale(0.75)">
+         <path d="M -35 0 L -15 0 M 15 0 L 35 0 M 0 -15 L 0 -20" stroke="var(--primary)" stroke-width="2" opacity="0.6" />
+         <rect x="-15" y="-15" width="30" height="30" rx="6" fill="var(--card)" stroke="var(--primary)" stroke-width="2" />
+         <circle cx="-5" cy="0" r="4" fill="var(--primary)" />
+         <circle cx="-35" cy="0" r="6" fill="var(--muted)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+         <circle cx="35" cy="0" r="6" fill="var(--muted)" stroke="var(--muted-foreground)" stroke-width="1.5" />
+         <rect x="-10" y="-35" width="20" height="15" rx="4" fill="var(--muted)" stroke="var(--border)" stroke-width="1" />
+       </g>
+
+       <!-- Input/Output ports -->
+       <circle cx="62" cy="0" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+    </g>
+
+    <!-- Quadrant 4: Coding Backend -->
+    <g transform="translate(180, 270)">
+       <rect width="125" height="110" rx="12" fill="var(--background)" stroke="var(--border)" stroke-width="1.5" />
+       <text x="62" y="90" text-anchor="middle" fill="var(--foreground)" font-size="11" font-weight="700">{t("compare.hero.graph.execution.line1")}<tspan x="62" dy="12">{t("compare.hero.graph.execution.line2")}</tspan></text>
+
+
+       <!-- Workflow Visualization for Execution Engines -->
+       <g transform="translate(62.5, 40) scale(0.75)">
+         <path d="M -25 0 L -15 0 M -15 0 L -15 -15 L -10 -15 M -15 0 L -15 15 L -10 15 M 10 -15 L 15 -15 L 15 0 L 25 0 M 10 15 L 15 15 L 15 0" stroke="var(--primary)" stroke-width="2" fill="none" opacity="0.6" />
+         <rect x="-40" y="-10" width="15" height="20" rx="4" fill="var(--card)" stroke="var(--primary)" stroke-width="2" />
+         <rect x="-10" y="-25" width="20" height="20" rx="4" fill="var(--card)" stroke="var(--primary)" stroke-width="2" />
+         <rect x="-10" y="5" width="20" height="20" rx="4" fill="var(--card)" stroke="var(--primary)" stroke-width="2" />
+         <circle cx="25" cy="0" r="5" fill="var(--primary)" />
+       </g>
+       <!-- Input ports -->
+       <circle cx="62" cy="0" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+    </g>
+
+
+    <!-- Quadrant 5: Automation -->
+    <g transform="translate(95, 390)">
+       <rect width="130" height="110" rx="12" fill="var(--background)" stroke="var(--border)" stroke-width="1.5" />
+       <circle cx="65" cy="0" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+       <text x="65" y="16" text-anchor="middle" fill="var(--foreground)" font-size="11" font-weight="700">{t("compare.hero.graph.enterprise_automation.line1")}<tspan x="65" dy="12">{t("compare.hero.graph.enterprise_automation.line2")}</tspan></text>
+
+       <!-- Interlocking gears or circular arrows symbol -->
+       <g transform="translate(65, 80)">
+         <circle cx="-15" cy="0" r="12" fill="none" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="5 3"/>
+         <circle cx="15" cy="0" r="12" fill="none" stroke="var(--primary)" stroke-width="2" stroke-dasharray="5 3"/>
+         <circle cx="-15" cy="0" r="4" fill="var(--muted)"/>
+         <circle cx="15" cy="0" r="4" fill="var(--primary)" />
+       </g>
+
+       <!-- Input ports -->
+       <circle cx="65" cy="0" r="5" fill="var(--primary)" stroke="var(--card)" stroke-width="2" />
+    </g>
+
+    <!-- Core Fusion Symbol in the center -->
+    <g transform="translate(160, 225)">
+       <circle cx="0" cy="0" r="22" fill="var(--background)" stroke="var(--primary)" stroke-width="2" />
+       <circle cx="0" cy="0" r="14" fill="var(--primary)" opacity="0.2" class="pulse-port" />
+       <path d="M -8 -4 L 0 4 L 8 -4 L 0 12 Z" fill="var(--primary)" />
+    </g>
+  </g></g>
+</svg>
+      </div>
+
+    </div>
+
+    <!-- Legend -->
+    <div class="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm sm:text-base">
+      <div class="inline-flex items-center gap-2.5 whitespace-nowrap">
+        <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-500">
+          <svg aria-hidden="true" viewBox="0 0 16 16" class="h-4 w-4" fill="none">
+            <path d="M13.25 4.5 6.75 11 3 7.25" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <span class="text-muted-foreground leading-none">{t("compare.legend.native")}</span>
+      </div>
+      <div class="inline-flex items-center gap-2.5 whitespace-nowrap">
+        <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-500">
+          <svg aria-hidden="true" viewBox="0 0 16 16" class="h-4 w-4" fill="none">
+            <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="2" opacity="0.45" />
+            <path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor" />
+          </svg>
+        </span>
+        <span class="text-muted-foreground leading-none">{t("compare.legend.partial")}</span>
+      </div>
+      <div class="inline-flex items-center gap-2.5 whitespace-nowrap">
+        <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-500">
+          <svg aria-hidden="true" viewBox="0 0 16 16" class="h-4 w-4" fill="none">
+            <path d="m4.25 4.25 7.5 7.5m0-7.5-7.5 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </span>
+        <span class="text-muted-foreground leading-none">{t("compare.legend.none")}</span>
       </div>
     </div>
   </div>
 </section>
+
+<style>
+  @media (prefers-reduced-motion: no-preference) {
+    .hover-float-1 { animation: float-subtle 5s ease-in-out infinite; }
+    .hover-float-2 { animation: float-subtle 6s ease-in-out infinite reverse; }
+    .hover-float-3 { animation: float-subtle 5.5s ease-in-out infinite 1s; }
+    .hover-float-4 { animation: float-subtle 6.5s ease-in-out infinite 0.5s reverse; }
+    .hover-float-5 { animation: float-subtle 5.2s ease-in-out infinite 0.2s; }
+    .unified-float { animation: float-glow 8s ease-in-out infinite; }
+
+    @keyframes float-subtle {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    @keyframes float-glow {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    .flow-edge-fast {
+      stroke-dasharray: 1000;
+      stroke-dashoffset: 1000;
+      animation: draw-flow 1.5s linear infinite;
+    }
+
+    .edge-fail {
+      animation: fail-flow 4s linear infinite;
+    }
+
+    .pulse-port {
+      animation: pulse-port 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes pulse-port {
+      0%, 100% { transform: scale(0.8); opacity: 0.1; }
+      50% { transform: scale(1.2); opacity: 0.3; }
+    }
+
+    @keyframes draw-flow {
+      to { stroke-dashoffset: 0; }
+    }
+
+    @keyframes fail-flow {
+      to { stroke-dashoffset: -420; }
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hover-float-1, .hover-float-2, .hover-float-3, .hover-float-4, .hover-float-5, .unified-float,
+    .flow-edge-fast, .edge-fail, .pulse-port {
+      animation: none !important;
+    }
+  }
+</style>

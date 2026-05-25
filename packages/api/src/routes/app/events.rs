@@ -1,3 +1,4 @@
+pub mod alias;
 pub mod db;
 pub mod delete_event;
 pub mod get_event;
@@ -6,6 +7,8 @@ pub mod get_events;
 pub mod invoke_event;
 pub mod invoke_event_async;
 pub mod prerun_event;
+pub mod registrations;
+pub mod setup_event;
 pub mod upsert_event;
 pub mod upsert_event_feedback;
 pub mod validate_event;
@@ -36,6 +39,16 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{event_id}/invoke/async",
             post(invoke_event_async::invoke_event_async),
+        )
+        .route(
+            "/{event_id}/registrations",
+            get(registrations::list_registrations),
+        )
+        .route(
+            "/{event_id}/alias/{slug}",
+            get(alias::get_alias)
+                .put(alias::upsert_alias)
+                .delete(alias::delete_alias),
         )
         .route(
             "/{event_id}/feedback",

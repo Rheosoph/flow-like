@@ -67,7 +67,7 @@ const rows: CategoryRow[] = [
   {
     id: "enterprise_data",
     nameKey: "compare.category.enterprise_data",
-    examples: "Palantir Foundry, SAP BTP",
+    examples: "Ontology platforms, ERP data suites",
     accent: "text-fuchsia-500",
     cells: {
       execution: "strong",
@@ -87,6 +87,58 @@ const rows: CategoryRow[] = [
       data: "partial",
       ai_ux: "partial",
       distribution: "partial",
+      trust: "weak",
+    },
+  },
+  {
+    id: "agent_runtimes",
+    nameKey: "compare.category.agent_runtimes",
+    examples: "CrewAI, AutoGen, LangGraph",
+    accent: "text-teal-500",
+    cells: {
+      execution: "weak",
+      data: "weak",
+      ai_ux: "partial",
+      distribution: "weak",
+      trust: "weak",
+    },
+  },
+  {
+    id: "llm_frameworks",
+    nameKey: "compare.category.llm_frameworks",
+    examples: "LangChain, LlamaIndex, Haystack",
+    accent: "text-violet-500",
+    cells: {
+      execution: "weak",
+      data: "partial",
+      ai_ux: "weak",
+      distribution: "weak",
+      trust: "weak",
+    },
+  },
+  {
+    id: "ai_ipaas",
+    nameKey: "compare.category.ai_ipaas",
+    examples: "Make.com, Workato, Pipedream",
+    accent: "text-cyan-500",
+    cells: {
+      execution: "partial",
+      data: "weak",
+      ai_ux: "partial",
+      distribution: "weak",
+      trust: "partial",
+    },
+  },
+  {
+    id: "coding_agents",
+    nameKey: "compare.category.coding_agents",
+    examples: "OpenClaw, Hermes Agent, OpenHands",
+    accent: "text-sky-500",
+    cells: {
+      execution: "weak",
+      data: "weak",
+      ai_ux: "weak",
+      distribution: "weak",
       trust: "weak",
     },
   },
@@ -209,7 +261,7 @@ function ratingMeta(r: Rating) {
                   <div class:list={["text-sm font-semibold", row.accent]}>
                     {row.highlight && (
                       <span class="inline-block mr-2 px-1.5 py-0.5 rounded-md bg-emerald-500 text-white text-[10px] font-bold tracking-wider align-middle">
-                        US
+                        {t("compare.overview.badge.us")}
                       </span>
                     )}
                     {t(row.nameKey)}

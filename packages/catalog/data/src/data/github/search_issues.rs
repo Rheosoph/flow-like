@@ -1,6 +1,6 @@
 use super::{
     list_issues::{GitHubIssue, parse_issue},
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -30,6 +30,7 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -48,7 +49,16 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Repository owner (optional)",
             VariableType::String,
         )
-        .set_default_value(Some(json!("")));
+        .set_default_value(Some(json!("")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "".to_string(),
+                    "open".to_string(),
+                    "closed".to_string(),
+                ])
+                .build(),
+        );
 
         node.add_input_pin(
             "repo",
@@ -79,7 +89,12 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Filter by type: issue, pr",
             VariableType::String,
         )
-        .set_default_value(Some(json!("issue")));
+        .set_default_value(Some(json!("issue")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["".to_string(), "issue".to_string(), "pr".to_string()])
+                .build(),
+        );
 
         node.add_input_pin(
             "author",
@@ -111,7 +126,25 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Sort by: comments, reactions, reactions-+1, interactions, created, updated",
             VariableType::String,
         )
-        .set_default_value(Some(json!("best-match")));
+        .set_default_value(Some(json!("best-match")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "best-match".to_string(),
+                    "comments".to_string(),
+                    "reactions".to_string(),
+                    "reactions-+1".to_string(),
+                    "reactions--1".to_string(),
+                    "reactions-smile".to_string(),
+                    "reactions-thinking_face".to_string(),
+                    "reactions-heart".to_string(),
+                    "reactions-tada".to_string(),
+                    "interactions".to_string(),
+                    "created".to_string(),
+                    "updated".to_string(),
+                ])
+                .build(),
+        );
 
         node.add_input_pin(
             "order",
@@ -119,7 +152,12 @@ impl NodeLogic for SearchGitHubIssuesNode {
             "Sort order: asc, desc",
             VariableType::String,
         )
-        .set_default_value(Some(json!("desc")));
+        .set_default_value(Some(json!("desc")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["asc".to_string(), "desc".to_string()])
+                .build(),
+        );
 
         node.add_input_pin(
             "per_page",
@@ -260,9 +298,9 @@ impl NodeLogic for SearchGitHubIssuesNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
