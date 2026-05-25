@@ -90,6 +90,14 @@ function PermissionBadge({
 	);
 }
 
+function PackageMarkdown({ content }: { content: string }) {
+	return (
+		<div className="text-sm leading-7 text-foreground/90 [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:decoration-primary/50 [&_a]:underline-offset-4 [&_a:hover]:decoration-primary [&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_h1]:mb-2 [&_h1]:mt-7 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h1:first-of-type]:mt-0 [&_h2]:mb-2 [&_h2]:mt-6 [&_h2]:text-xl [&_h2]:font-semibold [&_h2:first-of-type]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-5 [&_h3]:text-lg [&_h3]:font-semibold [&_h3:first-of-type]:mt-0 [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:py-0.5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6">
+			<TextEditor initialContent={content} isMarkdown />
+		</div>
+	);
+}
+
 function NodeCard({
 	node,
 }: {
@@ -523,8 +531,18 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				</Button>
 
 				{/* Header Card */}
-				<Card>
-					<CardHeader>
+				<Card className="relative overflow-hidden bg-card/75">
+					{meta?.thumbnail && (
+						<>
+							<img
+								src={meta.thumbnail}
+								alt=""
+								className="absolute inset-0 h-full w-full scale-[1.02] object-cover opacity-[0.18] saturate-125 dark:opacity-[0.26]"
+							/>
+							<div className="absolute inset-0 bg-linear-to-r from-card via-card/85 to-card/55" />
+						</>
+					)}
+					<CardHeader className="relative z-10">
 						<div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
 							<div className="flex items-start gap-4">
 								<Avatar className="h-14 w-14 rounded-lg">
@@ -718,18 +736,12 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					<TabsContent value="overview" className="space-y-4">
 						{/* Long Description */}
 						{meta?.longDescription && (
-							<Card>
+							<Card className="gap-3">
 								<CardHeader>
 									<CardTitle className="text-base">About</CardTitle>
 								</CardHeader>
 								<CardContent>
-									<div className="leading-relaxed">
-										<TextEditor
-											initialContent={meta.longDescription}
-											isMarkdown
-											minimal
-										/>
-									</div>
+									<PackageMarkdown content={meta.longDescription} />
 								</CardContent>
 							</Card>
 						)}

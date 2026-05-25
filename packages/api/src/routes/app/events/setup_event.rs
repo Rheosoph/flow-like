@@ -40,8 +40,9 @@ use crate::{
     entity::{event, event_remote_auth, event_remote_registration, sea_orm_active_enums::RunMode},
     error::ApiError,
     execution::{
-        DispatchRequest, ExecutionJwtParams, TokenType, fetch_profile_for_dispatch,
-        is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
+        ByteStream, DispatchError, DispatchRequest, ExecutionBackend, ExecutionJwtParams,
+        TokenType, fetch_profile_for_dispatch, is_jwt_configured, resolve_wasm_packages,
+        sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -143,6 +144,59 @@ struct ServerConfigEnvelope {
     kind: String,
     node_id: String,
     config: Value,
+}
+
+fn http_response_byte_stream(response: reqwest::Response) -> ByteStream {
+    Box::pin(
+        response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|err| DispatchError::Network(err.to_string()))),
+    )
+}
+
+async fn collect_server_config_events(
+    stream: ByteStream,
+) -> (Vec<ServerConfigEnvelope>, Option<String>) {
+    let mut events: Vec<ServerConfigEnvelope> = Vec::new();
+    let mut error: Option<String> = None;
+    let mut es = stream.eventsource();
+
+    while let Some(item) = es.next().await {
+        let sse = match item {
+            Ok(evt) => evt,
+            Err(err) => {
+                error = Some(format!("sse parse error: {err}"));
+                break;
+            }
+        };
+        let parsed: Value = match serde_json::from_str(&sse.data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let event_type = parsed
+            .get("event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if event_type == SERVER_CONFIG_EVENT_TYPE
+            && let Some(payload) = parsed.get("payload").cloned()
+            && let Ok(env) = serde_json::from_value::<ServerConfigEnvelope>(payload)
+        {
+            events.push(env);
+        }
+        if event_type == "completed" {
+            let payload = parsed.get("payload");
+            if let Some(status) = payload
+                .and_then(|p| p.get("status"))
+                .and_then(|s| s.as_str())
+                && !is_completed_run_status(status)
+            {
+                error = Some(format!("setup run finished with status: {status}"));
+            }
+            break;
+        }
+    }
+
+    (events, error)
 }
 
 /// Core setup logic. Invoked from background tasks spawned by
@@ -290,71 +344,51 @@ pub(crate) async fn run_event_setup(
         wasm_packages,
     };
 
-    let (_dispatch_response, executor_response) =
-        match state.dispatcher.dispatch_http_sse(request).await {
-            Ok(pair) => pair,
+    let backend = state.dispatcher.backend();
+    let setup_stream = match backend {
+        ExecutionBackend::LambdaStream => {
+            match state.dispatcher.dispatch_streaming(request).await {
+                Ok((_dispatch_response, byte_stream)) => {
+                    tracing::info!(run_id = %run_id, "Got Lambda setup response, collecting server config");
+                    byte_stream
+                }
+                Err(e) => {
+                    let msg = format!("dispatch failed: {e}");
+                    record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+                    return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
+                }
+            }
+        }
+        _ => match state.dispatcher.dispatch_http_sse(request).await {
+            Ok((_dispatch_response, executor_response)) => {
+                tracing::info!(run_id = %run_id, "Got executor setup response, collecting server config");
+                http_response_byte_stream(executor_response)
+            }
             Err(e) => {
                 let msg = format!("dispatch failed: {e}");
                 record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
                 return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
             }
-        };
+        },
+    };
 
     // Drain the SSE stream and collect `server_config` events. Bail out as
     // soon as we see a `completed` event so we don't hold the connection
     // longer than necessary.
     let timeout = Duration::from_secs(body.timeout_seconds.unwrap_or(DEFAULT_SETUP_TIMEOUT_SECS));
-    let collect_future = async {
-        let mut events: Vec<ServerConfigEnvelope> = Vec::new();
-        let mut error: Option<String> = None;
-        let byte_stream = executor_response.bytes_stream();
-        let mut es = byte_stream.eventsource();
-        while let Some(item) = es.next().await {
-            let sse = match item {
-                Ok(evt) => evt,
-                Err(err) => {
-                    error = Some(format!("sse parse error: {err}"));
-                    break;
-                }
-            };
-            let parsed: Value = match serde_json::from_str(&sse.data) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let event_type = parsed
-                .get("event_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if event_type == SERVER_CONFIG_EVENT_TYPE
-                && let Some(payload) = parsed.get("payload").cloned()
-                && let Ok(env) = serde_json::from_value::<ServerConfigEnvelope>(payload)
-            {
-                events.push(env);
-            }
-            if event_type == "completed" {
-                let payload = parsed.get("payload");
-                if let Some(status) = payload
-                    .and_then(|p| p.get("status"))
-                    .and_then(|s| s.as_str())
-                    && !is_completed_run_status(status)
-                {
-                    error = Some(format!("setup run finished with status: {status}"));
-                }
-                break;
-            }
+    let (collected, error) = match flow_like_types::tokio::time::timeout(
+        timeout,
+        collect_server_config_events(setup_stream),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(_) => {
+            let msg = format!("setup timed out after {}s", timeout.as_secs());
+            record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+            return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
         }
-        (events, error)
     };
-
-    let (collected, error) =
-        match flow_like_types::tokio::time::timeout(timeout, collect_future).await {
-            Ok(pair) => pair,
-            Err(_) => {
-                let msg = format!("setup timed out after {}s", timeout.as_secs());
-                record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
-                return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
-            }
-        };
 
     if let Some(ref err_msg) = error {
         record_setup_failure(&state, &core_event.id, &event_version, err_msg).await;

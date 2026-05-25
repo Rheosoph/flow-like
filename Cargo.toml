@@ -170,7 +170,7 @@ wasmtime-wasi-http = "43.0.2"
 # Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)
 [patch.crates-io]
-esaxx-rs = { git = "https://github.com/thewh1teagle/esaxx-rs.git", branch = "feat/dynamic-msvc-link" }
+esaxx-rs = { git = "https://github.com/Rheosoph/esaxx-rs.git", branch = "main" }
 
 # Use line-tables-only debug info and strip debuginfo to keep .so under 4GB for Android APK ZIP32 limit
 [profile.dev]

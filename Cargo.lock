@@ -7184,7 +7184,7 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 [[package]]
 name = "esaxx-rs"
 version = "0.1.10"
-source = "git+https://github.com/thewh1teagle/esaxx-rs.git?branch=feat%2Fdynamic-msvc-link#3c8ac57d245ab328f7c71953b7c116a8d1d5498f"
+source = "git+https://github.com/Rheosoph/esaxx-rs.git?branch=main#20538c8aac099faae4fb8c472107285692a87a7e"
 dependencies = [
  "cc",
 ]
@@ -14520,9 +14520,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws_lambda_events 0.16.1",
- "flow-like-types",
  "image",
- "imageproc",
  "lambda_runtime 0.14.4",
  "serde",
  "serde_json",

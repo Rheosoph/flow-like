@@ -1,14 +1,15 @@
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion};
 use aws_lambda_events::{
     event::s3::S3Event,
     s3::S3EventRecord,
     sqs::{SqsBatchResponse, SqsEvent},
 };
 use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
-use image::ImageReader;
-use imageproc::drawing::Canvas;
+use image::{GenericImageView, ImageReader};
 use lambda_runtime::{tracing, Error, LambdaEvent};
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
+use webp::Encoder;
+
+const WEBP_QUALITY: f32 = 92.0;
 
 fn decode(key: &str) -> Result<String, Error> {
     let key = key.replace("+", " ");
@@ -20,21 +21,35 @@ fn decode(key: &str) -> Result<String, Error> {
 #[tracing::instrument(name = "SQS Function Handler", skip(event))]
 pub(crate) async fn function_handler(
     event: LambdaEvent<SqsEvent>,
+    s3_client: S3Client,
+    bucket_name: String,
 ) -> Result<SqsBatchResponse, Error> {
     let mut batch_item_failures = Vec::new();
 
     for record in event.payload.records.iter() {
+        let message_id = record.message_id.clone().unwrap_or_default();
         let body = &record.body;
-        let s3_event = body
-            .as_ref()
-            .ok_or_else(|| Error::from("Record body is missing"))?;
+        let Some(s3_event) = body.as_ref() else {
+            tracing::error!("Record body is missing");
+            batch_item_failures.push(aws_lambda_events::sqs::BatchItemFailure {
+                item_identifier: message_id,
+            });
+            continue;
+        };
 
-        let s3_event: S3Event = serde_json::from_str(s3_event)
-            .map_err(|e| Error::from(format!("Failed to parse SQS message: {}", e)))?;
+        let s3_event: S3Event = match serde_json::from_str(s3_event) {
+            Ok(event) => event,
+            Err(err) => {
+                tracing::error!("Failed to parse SQS message: {}", err);
+                batch_item_failures.push(aws_lambda_events::sqs::BatchItemFailure {
+                    item_identifier: message_id,
+                });
+                continue;
+            }
+        };
 
-        if let Err(err) = process_s3_events(&s3_event.records).await {
+        if let Err(err) = process_s3_events(&s3_event.records, &s3_client, &bucket_name).await {
             tracing::error!("Error processing S3 event: {}", err);
-            let message_id = record.message_id.clone().unwrap_or_default();
             tracing::error!("Failed to process S3 event for message ID: {}", &message_id);
             batch_item_failures.push(aws_lambda_events::sqs::BatchItemFailure {
                 item_identifier: message_id,
@@ -48,37 +63,24 @@ pub(crate) async fn function_handler(
 }
 
 #[tracing::instrument(name = "Process S3 Events", skip(records))]
-async fn process_s3_events(records: &Vec<S3EventRecord>) -> Result<(), Error> {
-    let bucket_name = std::env::var("BUCKET_NAME").map_err(|e| {
-        Error::from(format!(
-            "Failed to get BUCKET_NAME environment variable: {}",
-            e
-        ))
-    })?;
-
-    let retry_config = RetryConfig::adaptive()
-        .with_max_attempts(5)
-        .with_initial_backoff(Duration::from_millis(100));
-
-    let timeout_config = TimeoutConfig::builder()
-        .operation_timeout(Duration::from_secs(300))
-        .operation_attempt_timeout(Duration::from_secs(60))
-        .build();
-
-    let config = aws_config::defaults(BehaviorVersion::latest())
-        .retry_config(retry_config)
-        .timeout_config(timeout_config)
-        .load()
-        .await;
-
-    let s3_client = S3Client::new(&config);
-
+async fn process_s3_events(
+    records: &[S3EventRecord],
+    s3_client: &S3Client,
+    bucket_name: &str,
+) -> Result<(), Error> {
+    let mut failed_records = 0;
     for record in records {
         if let Err(err) = process_single_record(record, &s3_client, &bucket_name).await {
             tracing::error!("Failed to process record: {}", err);
-            // Continue processing other records instead of failing the entire batch
-            continue;
+            failed_records += 1;
         }
+    }
+
+    if failed_records > 0 {
+        return Err(Error::from(format!(
+            "{} S3 record(s) failed in this SQS message",
+            failed_records
+        )));
     }
 
     Ok(())
@@ -115,31 +117,13 @@ async fn process_single_record(
         return Ok(());
     }
 
-    if key.ends_with(".webp") {
+    let extension = key.split('.').next_back().unwrap_or("");
+
+    if extension.eq_ignore_ascii_case("webp") {
         return Ok(());
     }
 
-    match s3_client
-        .head_object()
-        .bucket(bucket_name)
-        .key(&key)
-        .send()
-        .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            tracing::error!(
-                "Object does not exist or cannot be accessed: {} - Error: {}",
-                key,
-                e
-            );
-            return Err(Error::from(format!("Object not accessible: {}", key)));
-        }
-    }
-
-    let extension = key.split('.').next_back().unwrap_or("");
-
-    if !flow_like_types::images::is_supported_image_format(extension) {
+    if !is_supported_image_format(extension) {
         if is_video_format(extension) {
             tracing::info!("Skipping video file: {}", key);
             return Ok(());
@@ -170,6 +154,13 @@ async fn process_single_record(
         .map_err(|e| Error::from(format!("Failed to delete original file {}: {}", key, e)))?;
 
     Ok(())
+}
+
+fn is_supported_image_format(extension: &str) -> bool {
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "jpg" | "jpeg" | "jfif" | "png" | "gif" | "bmp" | "tif" | "tiff" | "avif" | "ico"
+    )
 }
 
 fn is_video_format(extension: &str) -> bool {
@@ -244,23 +235,17 @@ async fn convert_and_store_image(
         .map_err(|e| Error::from(format!("Failed to read image data: {}", e)))?
         .into_bytes();
 
-    let cursor = Cursor::new(image_data);
-    let img = ImageReader::new(cursor)
-        .with_guessed_format()
-        .map_err(|e| {
-            Error::from(format!(
-                "Image format detection failed for {}: {}",
-                source_key, e
-            ))
-        })?;
-
-    let mut decoded_img = img
-        .decode()
-        .map_err(|e| Error::from(format!("Image decoding failed for {}: {}", source_key, e)))?;
-
-    decoded_img = flow_like_types::images::resize_image(decoded_img);
-
-    let webp_data = flow_like_types::images::encode_as_webp(decoded_img)?;
+    let source_key_for_transform = source_key.to_string();
+    let webp_data = tokio::task::spawn_blocking(move || {
+        decode_resize_encode_webp(image_data, &source_key_for_transform)
+    })
+    .await
+    .map_err(|e| {
+        Error::from(format!(
+            "Image transform task failed for {}: {}",
+            source_key, e
+        ))
+    })??;
 
     s3_client
         .put_object()
@@ -268,7 +253,7 @@ async fn convert_and_store_image(
         .key(target_key)
         .body(ByteStream::from(webp_data))
         .content_type("image/webp")
-        .metadata("Cache-Control", "max-age=31536000")
+        .cache_control("public, max-age=31536000, immutable")
         .send()
         .await
         .map_err(|e| {
@@ -281,18 +266,55 @@ async fn convert_and_store_image(
     Ok(())
 }
 
+fn decode_resize_encode_webp(
+    image_data: impl AsRef<[u8]>,
+    source_key: &str,
+) -> Result<Vec<u8>, Error> {
+    let cursor = Cursor::new(image_data);
+    let img = ImageReader::new(cursor)
+        .with_guessed_format()
+        .map_err(|e| {
+            Error::from(format!(
+                "Image format detection failed for {}: {}",
+                source_key, e
+            ))
+        })?;
+
+    let decoded_img = img
+        .decode()
+        .map_err(|e| Error::from(format!("Image decoding failed for {}: {}", source_key, e)))?;
+
+    let resized_img = resize_image(decoded_img);
+    encode_as_webp(resized_img)
+}
+
 #[tracing::instrument(name = "Resize Image", skip(img))]
 fn resize_image(img: image::DynamicImage) -> image::DynamicImage {
     let (width, height) = img.dimensions();
+    let filter = image::imageops::FilterType::CatmullRom;
 
     if width == height {
         // Square image - resize to 1024x1024
-        img.resize(1024, 1024, image::imageops::FilterType::Lanczos3)
+        img.resize(1024, 1024, filter)
     } else if width > height {
-        img.resize_to_fill(1280, 720, image::imageops::FilterType::Lanczos3)
+        img.resize_to_fill(1280, 720, filter)
     } else {
-        img.resize(1280, 1280, image::imageops::FilterType::Lanczos3)
+        img.resize(1280, 1280, filter)
     }
+}
+
+fn encode_as_webp(img: image::DynamicImage) -> Result<Vec<u8>, Error> {
+    let encoded = if img.color().has_alpha() {
+        let rgba = img.to_rgba8();
+        let encoder = Encoder::from_rgba(&rgba, rgba.width(), rgba.height());
+        encoder.encode(WEBP_QUALITY)
+    } else {
+        let rgb = img.to_rgb8();
+        let encoder = Encoder::from_rgb(&rgb, rgb.width(), rgb.height());
+        encoder.encode(WEBP_QUALITY)
+    };
+
+    Ok(encoded.to_vec())
 }
 
 #[cfg(test)]
@@ -324,5 +346,22 @@ mod tests {
         let decoded_key = decode(key).unwrap();
 
         assert_eq!(decoded_key, "media/image (1) copy+1.jpg");
+    }
+
+    #[test]
+    fn test_supported_image_formats() {
+        assert!(is_supported_image_format("jpg"));
+        assert!(is_supported_image_format("JPG"));
+        assert!(is_supported_image_format("jfif"));
+        assert!(is_supported_image_format("tif"));
+        assert!(!is_supported_image_format("heic"));
+    }
+
+    #[test]
+    fn test_generate_webp_key() {
+        assert_eq!(
+            generate_webp_key("media/folder/image.JPG").unwrap(),
+            "media/folder/image.webp"
+        );
     }
 }
