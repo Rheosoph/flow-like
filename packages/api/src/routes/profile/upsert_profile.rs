@@ -3,7 +3,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     routes::{
-        profile::{delete_old_image, generate_upload_url},
+        profile::{
+            delete_old_image, find_profile_for_user, generate_upload_url,
+            is_profile_unique_violation,
+        },
         user::ensure_user_exists,
     },
     state::AppState,
@@ -13,8 +16,8 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::profile::{ProfileApp, Settings};
-use flow_like_types::Value;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use flow_like_types::{Value, create_id};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use utoipa::ToSchema;
@@ -76,14 +79,7 @@ pub async fn upsert_profile(
     }
 
     ensure_user_exists(&state, &sub).await?;
-    let found_profile = profile::Entity::find()
-        .filter(
-            profile::Column::Id
-                .eq(&profile_id)
-                .and(profile::Column::UserId.eq(&sub)),
-        )
-        .one(&state.db)
-        .await?;
+    let found_profile = find_profile_for_user(&state.db, &sub, &profile_id).await?;
 
     if let Some(found_profile) = found_profile {
         if found_profile.deleted_at.is_some() {
@@ -157,63 +153,103 @@ pub async fn upsert_profile(
         }));
     }
 
-    let apps = if let Some(apps) = profile_body.apps {
-        let apps: Vec<Value> = apps.iter().map(|v| to_value(v).unwrap()).collect();
-        Some(apps)
+    let ProfileBody {
+        name,
+        description,
+        icon_upload_ext,
+        thumbnail_upload_ext,
+        interests,
+        tags,
+        theme,
+        bit_ids,
+        apps,
+        hub,
+        hubs,
+        settings,
+    } = profile_body;
+
+    let apps = if let Some(apps) = apps {
+        let apps: Vec<Value> = apps.iter().map(to_value).collect::<Result<_, _>>()?;
+        Some(Value::Array(apps))
     } else {
         None
     };
 
-    let settings = if let Some(settings) = profile_body.settings {
+    let settings = if let Some(settings) = settings {
         Some(to_value(&settings)?)
     } else {
         None
     };
 
-    let apps = apps.map(Value::Array);
-
-    let hub = profile_body
-        .hub
-        .or_else(|| profile_body.hubs.as_ref().and_then(|h| h.first().cloned()))
+    let hub = hub
+        .or_else(|| hubs.as_ref().and_then(|h| h.first().cloned()))
         .unwrap_or_else(|| "https://api.flow-like.com".to_string());
 
     // Generate upload URLs for the new profile
-    let (icon_upload_url, icon_id) = if let Some(ext) = &profile_body.icon_upload_ext {
+    let (mut icon_upload_url, icon_id) = if let Some(ext) = &icon_upload_ext {
         let (url, img_id) = generate_upload_url(&state, &sub, ext).await?;
         (Some(url), Some(img_id))
     } else {
         (None, None)
     };
 
-    let (thumbnail_upload_url, thumbnail_id) = if let Some(ext) = &profile_body.thumbnail_upload_ext
-    {
+    let (mut thumbnail_upload_url, thumbnail_id) = if let Some(ext) = &thumbnail_upload_ext {
         let (url, img_id) = generate_upload_url(&state, &sub, ext).await?;
         (Some(url), Some(img_id))
     } else {
         (None, None)
     };
 
-    let new_profile = profile::ActiveModel {
-        id: Set(profile_id),
-        user_id: Set(sub),
-        name: Set(profile_body.name.unwrap_or_default()),
-        description: Set(profile_body.description),
-        icon: Set(icon_id),
-        thumbnail: Set(thumbnail_id),
-        interests: Set(profile_body.interests),
-        tags: Set(profile_body.tags),
-        theme: Set(profile_body.theme),
-        bit_ids: Set(profile_body.bit_ids),
-        apps: Set(apps),
-        settings: Set(settings),
-        hub: Set(hub),
-        hubs: Set(profile_body.hubs),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
+    let make_new_profile = |id: String| {
+        let now = chrono::Utc::now().naive_utc();
+        profile::ActiveModel {
+            id: Set(id),
+            user_id: Set(sub.clone()),
+            name: Set(name.clone().unwrap_or_default()),
+            description: Set(description.clone()),
+            icon: Set(icon_id.clone()),
+            thumbnail: Set(thumbnail_id.clone()),
+            interests: Set(interests.clone()),
+            tags: Set(tags.clone()),
+            theme: Set(theme.clone()),
+            bit_ids: Set(bit_ids.clone()),
+            apps: Set(apps.clone()),
+            settings: Set(settings.clone()),
+            hub: Set(hub.clone()),
+            hubs: Set(hubs.clone()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
     };
 
-    let created_profile = new_profile.insert(&state.db).await?;
+    let created_profile = match make_new_profile(profile_id.clone()).insert(&state.db).await {
+        Ok(created_profile) => created_profile,
+        Err(e) if is_profile_unique_violation(&e) => {
+            if let Some(existing) = find_profile_for_user(&state.db, &sub, &profile_id).await? {
+                icon_upload_url = None;
+                thumbnail_upload_url = None;
+                existing
+            } else {
+                let fallback_profile_id = create_id();
+                tracing::warn!(
+                    "profile id '{}' hit a legacy global uniqueness constraint; creating '{}' for user '{}'",
+                    profile_id,
+                    fallback_profile_id,
+                    sub
+                );
+                make_new_profile(fallback_profile_id)
+                    .insert(&state.db)
+                    .await?
+            }
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    if created_profile.deleted_at.is_some() {
+        return Err(ApiError::gone("Profile has been deleted"));
+    }
+
     Ok(Json(UpsertProfileResponse {
         profile: created_profile,
         icon_upload_url,
