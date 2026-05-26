@@ -1,6 +1,5 @@
 use anyhow::Result;
 use flow_like::app::App;
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
 use flow_like::flow::event::{Event, EventExecutionMode};
 use flow_like::flow::execution::{LogLevel, LogMeta};
 use flow_like_types::Value;
@@ -10,9 +9,7 @@ use flow_like_types::tokio_util::sync::CancellationToken;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::AppHandle;
 
@@ -105,7 +102,7 @@ struct BoardMarker {
     version: (u32, u32, u32),
     updated_secs: u64,
     updated_nanos: u32,
-    content_hash: u64,
+    hash: Option<u64>,
     nodes: usize,
     layers: usize,
     variables: usize,
@@ -359,8 +356,11 @@ async fn run_daemon_loop(
         );
         tokio::pin!(run_future);
 
-        let mut poll_interval =
-            tokio::time::interval(Duration::from_millis(config.board_poll_interval_ms));
+        let board_poll_interval = Duration::from_millis(config.board_poll_interval_ms);
+        let mut poll_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + board_poll_interval,
+            board_poll_interval,
+        );
         let mut restart_for_board_change = false;
         let run_result = loop {
             tokio::select! {
@@ -506,102 +506,12 @@ async fn load_board_marker(
         version: board.version,
         updated_secs,
         updated_nanos,
-        content_hash: board_content_hash(&board),
+        hash: board.hash,
         nodes: board.nodes.len(),
         layers: board.layers.len(),
         variables: board.variables.len(),
         comments: board.comments.len(),
     })
-}
-
-fn board_content_hash(board: &Board) -> u64 {
-    let mut hasher = DefaultHasher::new();
-
-    board.id.hash(&mut hasher);
-    board.name.hash(&mut hasher);
-    board.description.hash(&mut hasher);
-    board.version.hash(&mut hasher);
-    board.viewport.0.to_bits().hash(&mut hasher);
-    board.viewport.1.to_bits().hash(&mut hasher);
-    board.viewport.2.to_bits().hash(&mut hasher);
-    board.log_level.to_u8().hash(&mut hasher);
-    stage_marker(&board.stage).hash(&mut hasher);
-    execution_mode_marker(&board.execution_mode).hash(&mut hasher);
-
-    let mut refs = board.refs.iter().collect::<Vec<_>>();
-    refs.sort_by_key(|(key, _)| *key);
-    for (key, value) in refs {
-        key.hash(&mut hasher);
-        value.hash(&mut hasher);
-    }
-
-    let mut page_ids = board.page_ids.clone();
-    page_ids.sort();
-    page_ids.hash(&mut hasher);
-
-    let mut nodes = board.nodes.iter().collect::<Vec<_>>();
-    nodes.sort_by_key(|(id, _)| *id);
-    for (id, node) in nodes {
-        id.hash(&mut hasher);
-        node.hash.hash(&mut hasher);
-        node.name.hash(&mut hasher);
-        node.friendly_name.hash(&mut hasher);
-        node.version.hash(&mut hasher);
-        if let Some(fn_refs) = &node.fn_refs {
-            fn_refs.can_reference_fns.hash(&mut hasher);
-            fn_refs.can_be_referenced_by_fns.hash(&mut hasher);
-            let mut refs = fn_refs.fn_refs.clone();
-            refs.sort();
-            refs.hash(&mut hasher);
-        }
-        node.pins.len().hash(&mut hasher);
-    }
-
-    let mut layers = board.layers.iter().collect::<Vec<_>>();
-    layers.sort_by_key(|(id, _)| *id);
-    for (id, layer) in layers {
-        id.hash(&mut hasher);
-        layer.hash.hash(&mut hasher);
-        layer.nodes.len().hash(&mut hasher);
-        layer.variables.len().hash(&mut hasher);
-        layer.comments.len().hash(&mut hasher);
-        layer.pins.len().hash(&mut hasher);
-    }
-
-    let mut variables = board.variables.iter().collect::<Vec<_>>();
-    variables.sort_by_key(|(id, _)| *id);
-    for (id, variable) in variables {
-        id.hash(&mut hasher);
-        variable.hash.hash(&mut hasher);
-        variable.name.hash(&mut hasher);
-    }
-
-    let mut comments = board.comments.iter().collect::<Vec<_>>();
-    comments.sort_by_key(|(id, _)| *id);
-    for (id, comment) in comments {
-        id.hash(&mut hasher);
-        comment.hash.hash(&mut hasher);
-    }
-
-    hasher.finish()
-}
-
-fn stage_marker(stage: &ExecutionStage) -> u8 {
-    match stage {
-        ExecutionStage::Dev => 0,
-        ExecutionStage::Int => 1,
-        ExecutionStage::QA => 2,
-        ExecutionStage::PreProd => 3,
-        ExecutionStage::Prod => 4,
-    }
-}
-
-fn execution_mode_marker(mode: &ExecutionMode) -> u8 {
-    match mode {
-        ExecutionMode::Hybrid => 0,
-        ExecutionMode::Remote => 1,
-        ExecutionMode::Local => 2,
-    }
 }
 
 fn system_time_parts(time: SystemTime) -> (u64, u32) {

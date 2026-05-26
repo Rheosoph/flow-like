@@ -7,7 +7,6 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::event_sink::cron::CronSchedule;
@@ -1061,30 +1060,22 @@ impl EventSinkManager {
             );
         }
 
-        for registration in registrations.iter().cloned() {
-            if let EventConfig::Daemon(sink) = registration.config.clone() {
-                let manager = self.clone();
-                let app_handle = app_handle.clone();
+        for registration in &registrations {
+            if let EventConfig::Daemon(sink) = &registration.config {
+                let result = async {
+                    self.ensure_sink_started("daemon", app_handle, sink).await?;
+                    sink.on_register(app_handle, registration, self.db.clone())
+                        .await
+                }
+                .await;
 
-                flow_like_types::tokio::spawn(async move {
-                    flow_like_types::tokio::time::sleep(Duration::from_secs(3)).await;
-                    let result = async {
-                        manager
-                            .ensure_sink_started("daemon", &app_handle, &sink)
-                            .await?;
-                        sink.on_register(&app_handle, &registration, manager.db.clone())
-                            .await
-                    }
-                    .await;
-
-                    if let Err(err) = result {
-                        tracing::error!(
-                            event_id = %registration.event_id,
-                            error = %err,
-                            "Failed to restore daemon event"
-                        );
-                    }
-                });
+                if let Err(err) = result {
+                    tracing::error!(
+                        event_id = %registration.event_id,
+                        error = %err,
+                        "Failed to restore daemon event"
+                    );
+                }
             }
         }
 
@@ -1119,23 +1110,12 @@ impl EventSinkManager {
             sink_types
         );
 
-        let default_delay = Duration::from_secs(3);
-
         for sink_type in sink_types {
             let sink_type = sink_type.to_string();
             let manager = self.clone();
             let app_handle = app_handle.clone();
 
             flow_like_types::tokio::spawn(async move {
-                if !default_delay.is_zero() {
-                    tracing::debug!(
-                        "Delaying {} sink start by {}s during initialization",
-                        sink_type,
-                        default_delay.as_secs()
-                    );
-                    flow_like_types::tokio::time::sleep(default_delay).await;
-                }
-
                 tracing::info!("⚙️ Starting {} sink during initialization", sink_type);
 
                 let start_result = match sink_type.as_str() {

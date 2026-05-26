@@ -165,6 +165,7 @@ pub async fn upsert_board(
     template: Option<Board>,
 ) -> Result<(), TauriFunctionError> {
     let board_id = board_id.unwrap_or_else(create_id);
+    let has_board_data = board_data.is_some();
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let mut app = App::load(app_id, flow_like_state).await?;
 
@@ -197,8 +198,12 @@ pub async fn upsert_board(
                 board.viewport = data.viewport;
                 board.page_ids = data.page_ids;
                 board.updated_at = data.updated_at;
+                board.hash();
             }
 
+            if !has_board_data {
+                board.mark_changed();
+            }
             board.save(None).await?;
             return Ok(());
         }
@@ -228,6 +233,7 @@ pub async fn upsert_board(
         board.execution_mode = board.execution_mode.clone();
         board.created_at = board_data.created_at;
         board.updated_at = board_data.updated_at;
+        board.hash();
         board.save(None).await?;
         return Ok(());
     }
@@ -250,6 +256,7 @@ pub async fn upsert_board(
     if let Some(execution_mode) = execution_mode {
         board.execution_mode = execution_mode;
     }
+    board.mark_changed();
     board.save(None).await?;
 
     Ok(())
@@ -641,6 +648,7 @@ pub async fn set_app_config(
         let mut board = board.lock().await;
         if let Some(variable) = board.variables.get_mut(&variable_id) {
             variable.default_value = Some(serde_json::to_vec(&default_value).unwrap());
+            board.mark_changed();
         }
         board.save(None).await?;
     }
