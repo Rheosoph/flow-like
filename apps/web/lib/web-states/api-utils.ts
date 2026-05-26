@@ -25,6 +25,22 @@ function jsonStringify(value: unknown): string {
 	);
 }
 
+function apiErrorMessage(status: number, body: string): string {
+	if (body) {
+		try {
+			const parsed = JSON.parse(body);
+			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			if (typeof message === "string" && message.trim()) {
+				return message;
+			}
+		} catch {
+			const trimmed = body.trim();
+			if (trimmed) return trimmed;
+		}
+	}
+	return `API error: ${status}`;
+}
+
 export async function apiFetch<T>(
 	path: string,
 	options?: RequestInit,
@@ -53,7 +69,7 @@ export async function apiFetch<T>(
 		}
 		const errorText = await response.text();
 		console.error(`API error ${response.status} for ${path}:`, errorText);
-		throw new Error(`API error: ${response.status}`);
+		throw new Error(apiErrorMessage(response.status, errorText));
 	}
 
 	const text = await response.text();

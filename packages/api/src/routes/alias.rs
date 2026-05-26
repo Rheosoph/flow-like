@@ -30,6 +30,7 @@ pub struct AliasLookupResponse {
     params(("slug" = String, Path, description = "Alias slug")),
     responses(
         (status = 200, description = "Resolved", body = AliasLookupResponse),
+        (status = 409, description = "Alias exists for multiple interfaces"),
         (status = 404, description = "Not found"),
     )
 )]

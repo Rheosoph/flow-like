@@ -352,8 +352,9 @@ export async function fetcher<T>(
 				auth?.startSilentRenew();
 			}
 			console.error(`Error fetching ${path}:`, response);
-			console.error(await response.text());
-			throw new Error(`Error fetching data: ${response.statusText}`);
+			const errorText = await response.text();
+			console.error(errorText);
+			throw new Error(apiErrorMessage(response, errorText));
 		}
 
 		const text = await response.text();
@@ -380,10 +381,28 @@ export async function fetcher<T>(
 			) {
 				throw new Error(`Network unavailable: ${path}`);
 			}
+			throw error;
 		}
 
 		throw new Error(`Error fetching data: ${error}`);
 	}
+}
+
+function apiErrorMessage(response: Response, body: string): string {
+	if (body) {
+		try {
+			const parsed = JSON.parse(body);
+			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			if (typeof message === "string" && message.trim()) {
+				return message;
+			}
+		} catch {
+			const trimmed = body.trim();
+			if (trimmed) return trimmed;
+		}
+	}
+
+	return response.statusText || `HTTP error: ${response.status}`;
 }
 
 export async function post<T>(

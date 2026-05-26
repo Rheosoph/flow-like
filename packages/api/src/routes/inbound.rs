@@ -188,7 +188,7 @@ async fn dispatch_inbound_rest(
     method: &axum::http::Method,
     body: &Bytes,
 ) -> Result<Response, ApiError> {
-    let resolved = alias_util::resolve(&state.db, slug_or_id, None).await?;
+    let resolved = alias_util::resolve_for_event_type(&state.db, slug_or_id, None, "rest").await?;
 
     // Load event row to get last_setup_version + node_id (entry).
     let event_row = event::Entity::find_by_id(&resolved.event_id)
@@ -316,7 +316,7 @@ async fn dispatch_inbound_mcp(
     method: &axum::http::Method,
     body: &Bytes,
 ) -> Result<Response, ApiError> {
-    let resolved = alias_util::resolve(&state.db, slug_or_id, None).await?;
+    let resolved = alias_util::resolve_for_event_type(&state.db, slug_or_id, None, "mcp").await?;
     let event_row = event::Entity::find_by_id(&resolved.event_id)
         .filter(event::Column::AppId.eq(&resolved.app_id))
         .one(&state.db)

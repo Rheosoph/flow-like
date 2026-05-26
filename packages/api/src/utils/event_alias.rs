@@ -141,6 +141,24 @@ const ADMIN_RESERVED_EXACT: &[&str] = &["wallet", "bank", "transfer", "kyc", "id
 
 const ADMIN_RESERVED_PREFIXES: &[&str] = &["flow-like", "flowlike", "flow_like"];
 
+const REST_ALIAS_PREFIX: &str = "rest_";
+const MCP_ALIAS_PREFIX: &str = "mcp_";
+
+pub fn storage_slug_for_event_type(event_type: &str, slug: &str) -> String {
+    match event_type {
+        "rest" => format!("{REST_ALIAS_PREFIX}{slug}"),
+        "mcp" => format!("{MCP_ALIAS_PREFIX}{slug}"),
+        _ => slug.to_string(),
+    }
+}
+
+pub fn public_slug_from_storage(slug: &str) -> String {
+    slug.strip_prefix(REST_ALIAS_PREFIX)
+        .or_else(|| slug.strip_prefix(MCP_ALIAS_PREFIX))
+        .unwrap_or(slug)
+        .to_string()
+}
+
 /// Returns true if `slug` is syntactically valid but reserved for
 /// platform admins. Call only after [`validate_slug`] passes.
 pub fn is_admin_reserved_slug(slug: &str) -> bool {
@@ -200,14 +218,38 @@ pub struct ResolvedAlias {
     pub app_id: String,
 }
 
+fn resolved_from_alias_model(
+    model: event_alias::Model,
+    slug_or_id: &str,
+    app_hint: Option<&str>,
+) -> Result<ResolvedAlias, ApiError> {
+    if let Some(app_id) = app_hint
+        && app_id != model.app_id
+    {
+        return Err(ApiError::not_found(format!(
+            "alias '{slug_or_id}' not found"
+        )));
+    }
+
+    Ok(ResolvedAlias {
+        event_id: model.event_id,
+        app_id: model.app_id,
+    })
+}
+
 /// Resolve `slug_or_id` to `(app_id, event_id)`.
 ///
 /// Generated-id-length strings are resolved only as event ids. Other
-/// strings try the alias table first (cheap PK lookup), then fall back to
-/// a direct event-id lookup.
+/// strings try scoped and unscoped alias table lookups first (cheap PK
+/// lookups), then fall back to a direct event-id lookup.
 ///
 /// When `app_hint` is supplied, the resolved row must belong to that app
 /// (cross-app lookups return 404 to avoid leaking which slugs exist).
+///
+/// This generic resolver is kept for compatibility with public lookup
+/// tooling. Inbound `/r` and `/m` dispatch should use
+/// [`resolve_for_event_type`] so `rest` and `mcp` aliases can share the
+/// same public slug.
 pub async fn resolve(
     db: &DatabaseConnection,
     slug_or_id: &str,
@@ -220,24 +262,60 @@ pub async fn resolve(
         return resolve_event_id(db, slug_or_id, app_hint).await;
     }
 
-    if let Some(model) = event_alias::Entity::find_by_id(slug_or_id)
+    let candidate_storage_slugs = [
+        slug_or_id.to_string(),
+        storage_slug_for_event_type("rest", slug_or_id),
+        storage_slug_for_event_type("mcp", slug_or_id),
+    ];
+    let mut matches = Vec::new();
+
+    for storage_slug in candidate_storage_slugs {
+        if let Some(model) = event_alias::Entity::find_by_id(storage_slug)
+            .one(db)
+            .await
+            .map_err(|e| {
+                ApiError::internal_error(flow_like_types::anyhow!("alias resolve db error: {e}"))
+            })?
+        {
+            matches.push(resolved_from_alias_model(model, slug_or_id, app_hint)?);
+        }
+    }
+
+    if matches.len() > 1 {
+        return Err(ApiError::conflict(format!(
+            "alias '{slug_or_id}' exists for multiple interfaces; use the REST or MCP route"
+        )));
+    }
+
+    if let Some(resolved) = matches.pop() {
+        return Ok(resolved);
+    }
+
+    resolve_event_id(db, slug_or_id, app_hint).await
+}
+
+pub async fn resolve_for_event_type(
+    db: &DatabaseConnection,
+    slug_or_id: &str,
+    app_hint: Option<&str>,
+    event_type: &str,
+) -> Result<ResolvedAlias, ApiError> {
+    if is_reserved_generated_id_slug(slug_or_id) {
+        return resolve_event_id(db, slug_or_id, app_hint).await;
+    }
+    if is_hard_reserved_slug(slug_or_id) {
+        return resolve_event_id(db, slug_or_id, app_hint).await;
+    }
+
+    let storage_slug = storage_slug_for_event_type(event_type, slug_or_id);
+    if let Some(model) = event_alias::Entity::find_by_id(storage_slug)
         .one(db)
         .await
         .map_err(|e| {
             ApiError::internal_error(flow_like_types::anyhow!("alias resolve db error: {e}"))
         })?
     {
-        if let Some(app_id) = app_hint
-            && app_id != model.app_id
-        {
-            return Err(ApiError::not_found(format!(
-                "alias '{slug_or_id}' not found"
-            )));
-        }
-        return Ok(ResolvedAlias {
-            event_id: model.event_id,
-            app_id: model.app_id,
-        });
+        return resolved_from_alias_model(model, slug_or_id, app_hint);
     }
 
     resolve_event_id(db, slug_or_id, app_hint).await

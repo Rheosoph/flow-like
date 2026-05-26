@@ -7,7 +7,9 @@
 //!
 //! All writes require `WriteEvents`. Reads require `ReadEvents`.
 //!
-//! Slugs are globally unique (PK). Brand-sensitive / phishing-prone
+//! Slugs are unique per inbound interface. REST/MCP aliases are stored
+//! with an internal prefix (`rest_` / `mcp_`) while the public API accepts
+//! and returns the unprefixed slug. Brand-sensitive / phishing-prone
 //! slugs (`checkout`, `login`, `flow-like*`, … — see
 //! [`alias_util::is_admin_reserved_slug`]) require platform-admin
 //! (`GlobalPermission::Admin`) on the upserting user.
@@ -34,10 +36,10 @@ use crate::{
 
 /// Request body for `PUT /apps/{app_id}/events/{event_id}/alias/{slug}`.
 ///
-/// Currently empty — aliases are always globally unique by slug and the
-/// owning app/event are taken from the URL. The struct exists so future
-/// per-alias options (e.g. `expires_at`) can be added without breaking
-/// the client contract.
+/// Currently empty — aliases are keyed by the owning event interface and
+/// the owning app/event are taken from the URL. The struct exists so future
+/// per-alias options (e.g. `expires_at`) can be added without breaking the
+/// client contract.
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 pub struct UpsertAliasRequest {}
 
@@ -52,7 +54,7 @@ pub struct AliasView {
 impl From<event_alias::Model> for AliasView {
     fn from(m: event_alias::Model) -> Self {
         Self {
-            slug: m.slug,
+            slug: alias_util::public_slug_from_storage(&m.slug),
             app_id: m.app_id,
             event_id: m.event_id,
             created_by: m.created_by,
@@ -118,7 +120,11 @@ pub async fn get_alias(
 ) -> Result<Json<AliasView>, ApiError> {
     let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
     alias_util::validate_slug(&slug)?;
-    let row = EventAlias::find_by_id(&slug)
+    let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
+    let row = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
@@ -171,14 +177,15 @@ pub async fn upsert_alias(
     }
 
     // Validate event ownership.
-    let _event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
+    let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
 
     let sub = permission.sub().ok();
     let now = chrono::Utc::now().naive_utc();
 
-    let existing = EventAlias::find_by_id(&slug)
+    let existing = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
@@ -192,10 +199,10 @@ pub async fn upsert_alias(
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
         }
-        Some(other) => {
+        Some(_) => {
             return Err(ApiError::conflict(format!(
-                "alias '{}' is already owned by event {} (app {})",
-                slug, other.event_id, other.app_id
+                "Alias '{}' is not available. Choose a different public alias.",
+                slug
             )));
         }
         None => {
@@ -213,7 +220,7 @@ pub async fn upsert_alias(
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
             let model = event_alias::ActiveModel {
-                slug: Set(slug.clone()),
+                slug: Set(storage_slug),
                 app_id: Set(app_id.clone()),
                 event_id: Set(event_id.clone()),
                 created_by: Set(sub),
@@ -258,7 +265,11 @@ pub async fn delete_alias(
 ) -> Result<axum::http::StatusCode, ApiError> {
     let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     alias_util::validate_slug(&slug)?;
-    let row = EventAlias::find_by_id(&slug)
+    let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
+    let row = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
@@ -268,7 +279,7 @@ pub async fn delete_alias(
             "alias '{slug}' does not belong to this event"
         )));
     }
-    EventAlias::delete_by_id(slug)
+    EventAlias::delete_by_id(storage_slug)
         .exec(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
