@@ -5,7 +5,7 @@ import {
 	type INode,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";

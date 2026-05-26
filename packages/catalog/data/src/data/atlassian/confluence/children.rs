@@ -30,6 +30,7 @@ impl NodeLogic for GetPageChildrenNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -120,10 +121,8 @@ impl NodeLogic for GetPageChildrenNode {
 
         let children = if provider.is_cloud {
             // Cloud v2 API
-            let url = format!(
-                "{}/wiki/api/v2/pages/{}/children?limit={}",
-                provider.base_url, page_id, limit
-            );
+            let url = provider
+                .confluence_api_url(&format!("/pages/{}/children?limit={}", page_id, limit));
 
             let response = client
                 .get(&url)
@@ -150,10 +149,10 @@ impl NodeLogic for GetPageChildrenNode {
                 .collect::<Vec<_>>()
         } else {
             // Server v1 API
-            let mut url = format!(
-                "{}/rest/api/content/{}/child/page?limit={}",
-                provider.base_url, page_id, limit
-            );
+            let mut url = provider.confluence_rest_api_url(&format!(
+                "/content/{}/child/page?limit={}",
+                page_id, limit
+            ));
             if !expand.is_empty() {
                 url.push_str(&format!("&expand={}", urlencoding::encode(&expand)));
             }
@@ -213,6 +212,7 @@ impl NodeLogic for GetPageAncestorsNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -287,10 +287,7 @@ impl NodeLogic for GetPageAncestorsNode {
 
         let ancestors = if provider.is_cloud {
             // Cloud v2 API
-            let url = format!(
-                "{}/wiki/api/v2/pages/{}/ancestors",
-                provider.base_url, page_id
-            );
+            let url = provider.confluence_api_url(&format!("/pages/{}/ancestors", page_id));
 
             let response = client
                 .get(&url)
@@ -317,10 +314,8 @@ impl NodeLogic for GetPageAncestorsNode {
                 .collect::<Vec<_>>()
         } else {
             // Server v1 API - get ancestors via content expand
-            let url = format!(
-                "{}/rest/api/content/{}?expand=ancestors",
-                provider.base_url, page_id
-            );
+            let url =
+                provider.confluence_rest_api_url(&format!("/content/{}?expand=ancestors", page_id));
 
             let response = client
                 .get(&url)

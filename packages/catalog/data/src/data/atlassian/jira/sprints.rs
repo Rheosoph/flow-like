@@ -72,6 +72,7 @@ impl NodeLogic for GetSprintsNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -143,17 +144,10 @@ impl NodeLogic for GetSprintsNode {
 
         let client = reqwest::Client::new();
 
-        let url = if state.is_empty() {
-            format!(
-                "{}/rest/agile/1.0/board/{}/sprint",
-                provider.base_url, board_id
-            )
-        } else {
-            format!(
-                "{}/rest/agile/1.0/board/{}/sprint?state={}",
-                provider.base_url, board_id, state
-            )
-        };
+        let mut url = provider.jira_agile_api_url(&format!("/board/{}/sprint", board_id));
+        if !state.is_empty() {
+            url.push_str(&format!("?state={}", urlencoding::encode(&state)));
+        }
 
         let response = client
             .get(&url)
@@ -209,6 +203,7 @@ impl NodeLogic for GetSprintIssuesNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -299,9 +294,8 @@ impl NodeLogic for GetSprintIssuesNode {
         }
 
         let url = format!(
-            "{}/rest/agile/1.0/sprint/{}/issue?{}",
-            provider.base_url,
-            sprint_id,
+            "{}?{}",
+            provider.jira_agile_api_url(&format!("/sprint/{}/issue", sprint_id)),
             params.join("&")
         );
 
@@ -359,6 +353,7 @@ impl NodeLogic for CreateSprintNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -449,7 +444,7 @@ impl NodeLogic for CreateSprintNode {
         }
 
         let client = reqwest::Client::new();
-        let url = format!("{}/rest/agile/1.0/sprint", provider.base_url);
+        let url = provider.jira_agile_api_url("/sprint");
 
         let mut body = json!({
             "name": name,
@@ -514,6 +509,7 @@ impl NodeLogic for UpdateSprintNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -613,7 +609,7 @@ impl NodeLogic for UpdateSprintNode {
         let end_date: String = context.evaluate_pin("end_date").await.unwrap_or_default();
 
         let client = reqwest::Client::new();
-        let url = format!("{}/rest/agile/1.0/sprint/{}", provider.base_url, sprint_id);
+        let url = provider.jira_agile_api_url(&format!("/sprint/{}", sprint_id));
 
         let mut body = json!({});
 
@@ -634,7 +630,7 @@ impl NodeLogic for UpdateSprintNode {
         }
 
         let response = client
-            .put(&url)
+            .post(&url)
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&body)
@@ -681,6 +677,7 @@ impl NodeLogic for MoveToSprintNode {
             "Data/Atlassian/Jira/Agile",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -714,9 +711,11 @@ impl NodeLogic for MoveToSprintNode {
         node.add_input_pin(
             "issue_keys",
             "Issue Keys",
-            "Issue keys to move (comma-separated, e.g., 'PROJ-1,PROJ-2')",
+            "Issue keys to move",
             VariableType::String,
-        );
+        )
+        .set_value_type(ValueType::Array)
+        .set_default_value(Some(json!([])));
 
         node.add_output_pin(
             "success",
@@ -743,29 +742,14 @@ impl NodeLogic for MoveToSprintNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
         let sprint_id: i64 = context.evaluate_pin("sprint_id").await?;
-        let issue_keys: String = context.evaluate_pin("issue_keys").await?;
+        let keys: Vec<String> = context.evaluate_pin("issue_keys").await.unwrap_or_default();
 
-        if issue_keys.is_empty() {
+        if keys.is_empty() {
             return Err(flow_like_types::anyhow!("Issue keys are required"));
         }
 
-        let keys: Vec<String> = issue_keys
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if keys.is_empty() {
-            return Err(flow_like_types::anyhow!(
-                "At least one issue key is required"
-            ));
-        }
-
         let client = reqwest::Client::new();
-        let url = format!(
-            "{}/rest/agile/1.0/sprint/{}/issue",
-            provider.base_url, sprint_id
-        );
+        let url = provider.jira_agile_api_url(&format!("/sprint/{}/issue", sprint_id));
 
         let body = json!({
             "issues": keys

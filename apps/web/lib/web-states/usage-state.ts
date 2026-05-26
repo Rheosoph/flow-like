@@ -5,7 +5,7 @@ import type {
 	IPaginatedResponse,
 	IUsageState,
 	IUsageSummary,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { type WebBackendRef, apiGet } from "./api-utils";
 
 export class WebUsageState implements IUsageState {

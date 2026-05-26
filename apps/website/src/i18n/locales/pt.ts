@@ -230,7 +230,7 @@ export const pt = {
 	"nav.github": "GitHub",
 	"nav.blog": "Blog",
 	"nav.contact": "Contato",
-	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+	"footer.copyright": "© 2026 Rheosoph GmbH. All rights reserved.",
 
 	// Compare page — capability deep-dive cards
 	"compare.explain.how_does_it": "Como o Flow-Like faz isso",

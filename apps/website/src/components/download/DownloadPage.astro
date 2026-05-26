@@ -1,5 +1,5 @@
 ---
-import "@tm9657/flow-like-ui/global.css";
+import "@flow-like/flow-like-ui/global.css";
 import "../../styles/blog.css";
 import BlogLayout from "../../layouts/Blog-Layout.astro";
 import AmbientGlow from "../ambient-glow.astro";
@@ -25,7 +25,7 @@ const siteUrl = typeof site === "string" ? site : site.toString();
 const canonical = new URL(Astro.url.pathname, siteUrl).toString();
 const alternateLinks = buildAlternateLinks(siteUrl, Astro.url.pathname);
 
-const ownerRepo = "TM9657/flow-like";
+const ownerRepo = "Rheosoph/flow-like";
 const listUrl = `https://api.github.com/repos/${ownerRepo}/releases`;
 
 // --- server-side fetch that also works when only prereleases exist -----------

@@ -299,7 +299,7 @@ export const ja = {
 	"nav.github": "GitHub",
 	"nav.blog": "ブログ",
 	"nav.contact": "お問い合わせ",
-	"footer.copyright": "© 2024 TM9657 GmbH. All rights reserved.",
+	"footer.copyright": "© 2026 Rheosoph GmbH. All rights reserved.",
 
 	// Compare page — capability deep-dive cards
 	"compare.explain.how_does_it": "Flow-Likeの実装方法",

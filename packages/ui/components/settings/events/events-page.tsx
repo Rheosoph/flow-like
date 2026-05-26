@@ -46,22 +46,22 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IOAuthConsentStore } from "@tm9657/flow-like-ui/db/oauth-db";
+} from "@flow-like/flow-like-ui";
+import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
 import {
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
-} from "@tm9657/flow-like-ui/lib/oauth/helpers";
+} from "@flow-like/flow-like-ui/lib/oauth/helpers";
 import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
-} from "@tm9657/flow-like-ui/lib/oauth/types";
-import type { IHub } from "@tm9657/flow-like-ui/lib/schema/hub/hub";
+} from "@flow-like/flow-like-ui/lib/oauth/types";
+import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
-} from "@tm9657/flow-like-ui/lib/uint8";
-import type { PageListItem } from "@tm9657/flow-like-ui/state/backend-state/page-state";
+} from "@flow-like/flow-like-ui/lib/uint8";
+import type { PageListItem } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import {
 	AlertTriangle,
 	Cloud,
@@ -1183,8 +1183,8 @@ function EventConfiguration({
 			{/* Content */}
 			<div className="space-y-6 pb-24">
 				{/* Status */}
-				<div className="flex flex-wrap items-center gap-4 rounded-lg border bg-card p-4">
-					<div className="flex items-center gap-2.5">
+				<div className="flex items-center gap-3 overflow-x-auto rounded-lg border bg-card/80 px-4 py-3">
+					<div className="flex shrink-0 items-center gap-2.5 pr-3 border-r">
 						<div
 							className={`w-2.5 h-2.5 rounded-full ${formData.active ? "bg-green-500" : "bg-orange-500"}`}
 						/>
@@ -1194,8 +1194,7 @@ function EventConfiguration({
 					</div>
 					{(() => {
 						const boardMode = board.data?.execution_mode;
-						const locked =
-							boardMode === "Local" || boardMode === "Remote";
+						const locked = boardMode === "Local" || boardMode === "Remote";
 						const currentMode =
 							formData.execution_mode ?? IEventExecutionMode.Local;
 						// Only gate Local on platform capability — Remote is always a
@@ -1206,7 +1205,7 @@ function EventConfiguration({
 							currentMode !== IEventExecutionMode.Local &&
 							!locked;
 						return (
-							<div className="flex items-center gap-2">
+							<div className="flex shrink-0 items-center gap-2">
 								<Label className="text-xs text-muted-foreground">
 									Execution
 								</Label>
@@ -1221,7 +1220,7 @@ function EventConfiguration({
 									}}
 									disabled={!isEditing || locked}
 								>
-									<SelectTrigger className="h-7 w-32 text-xs">
+									<SelectTrigger size="sm" className="w-32 text-xs">
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
@@ -1243,7 +1242,7 @@ function EventConfiguration({
 							</div>
 						);
 					})()}
-					<div className="flex-1" />
+					<div className="ml-auto" />
 					{board.data?.nodes?.[formData.node_id] && formData.node_id && (
 						<EventTypeConfiguration
 							eventConfig={eventMapping}
@@ -1256,7 +1255,10 @@ function EventConfiguration({
 							}}
 							hub={hub}
 							canExecuteLocally={canExecuteLocally}
-							eventExecutionMode={formData.execution_mode ?? IEventExecutionMode.Local}
+							eventExecutionMode={
+								formData.execution_mode ?? IEventExecutionMode.Local
+							}
+							compact
 						/>
 					)}
 					<Button
@@ -1266,7 +1268,7 @@ function EventConfiguration({
 							if (!isEditing) enterEdit();
 							handleInputChange("active", !formData.active);
 						}}
-						className="gap-2"
+						className="shrink-0 gap-2"
 					>
 						{formData.active ? (
 							<>
@@ -1921,7 +1923,9 @@ function EventConfiguration({
 									hub={hub}
 									eventId={event.id}
 									canExecuteLocally={canExecuteLocally}
-									eventExecutionMode={formData.execution_mode ?? IEventExecutionMode.Local}
+									eventExecutionMode={
+										formData.execution_mode ?? IEventExecutionMode.Local
+									}
 									onUpdate={(config) => {
 										console.dir(config);
 										if (!isEditing) setIsEditing(true);

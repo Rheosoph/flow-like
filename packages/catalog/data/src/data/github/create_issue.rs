@@ -1,14 +1,35 @@
 use super::{
     list_issues::{GitHubIssue, parse_issue},
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json, reqwest};
+
+fn string_list_from_value(value: Value) -> Vec<String> {
+    if let Some(values) = value.as_array() {
+        return values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+            .collect();
+    }
+
+    value
+        .as_str()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+        .collect()
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -30,6 +51,7 @@ impl NodeLogic for CreateGitHubIssueNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -62,18 +84,18 @@ impl NodeLogic for CreateGitHubIssueNode {
         node.add_input_pin(
             "labels",
             "Labels",
-            "Comma-separated list of label names",
+            "Label names to apply",
             VariableType::String,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin(
             "assignees",
             "Assignees",
-            "Comma-separated list of usernames to assign",
+            "Usernames to assign",
             VariableType::String,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin(
             "milestone",
@@ -82,6 +104,22 @@ impl NodeLogic for CreateGitHubIssueNode {
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
+
+        node.add_input_pin(
+            "issue_type",
+            "Issue Type",
+            "Issue type name or ID",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "issue_field_values",
+            "Issue Field Values",
+            "Issue form field values accepted by the GitHub API",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "exec_out",
@@ -132,9 +170,8 @@ impl NodeLogic for CreateGitHubIssueNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let title: String = context.evaluate_pin("title").await?;
         let body: String = context.evaluate_pin("body").await.unwrap_or_default();
-        let labels: String = context.evaluate_pin("labels").await.unwrap_or_default();
-        let assignees: String = context.evaluate_pin("assignees").await.unwrap_or_default();
         let milestone: i64 = context.evaluate_pin("milestone").await.unwrap_or(0);
+        let issue_type: String = context.evaluate_pin("issue_type").await.unwrap_or_default();
 
         if owner.is_empty() || repo.is_empty() || title.is_empty() {
             context.log_message("Owner, repository, and title are required", LogLevel::Error);
@@ -152,26 +189,44 @@ impl NodeLogic for CreateGitHubIssueNode {
             request_body["body"] = json!(body);
         }
 
-        if !labels.is_empty() {
-            let label_list: Vec<&str> = labels.split(',').map(|s| s.trim()).collect();
-            request_body["labels"] = json!(label_list);
+        if let Ok(labels_value) = context.evaluate_pin::<Value>("labels").await {
+            let labels = string_list_from_value(labels_value);
+            if !labels.is_empty() {
+                request_body["labels"] = json!(labels);
+            }
         }
 
-        if !assignees.is_empty() {
-            let assignee_list: Vec<&str> = assignees.split(',').map(|s| s.trim()).collect();
-            request_body["assignees"] = json!(assignee_list);
+        if let Ok(assignees_value) = context.evaluate_pin::<Value>("assignees").await {
+            let assignees = string_list_from_value(assignees_value);
+            if !assignees.is_empty() {
+                request_body["assignees"] = json!(assignees);
+            }
         }
 
         if milestone > 0 {
             request_body["milestone"] = json!(milestone);
         }
 
+        if !issue_type.is_empty() {
+            request_body["type"] = json!(issue_type);
+        }
+
+        if let Ok(issue_field_values) = context.evaluate_pin::<Value>("issue_field_values").await {
+            if issue_field_values
+                .as_array()
+                .map(|values| !values.is_empty())
+                .unwrap_or(false)
+            {
+                request_body["issue_field_values"] = issue_field_values;
+            }
+        }
+
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()

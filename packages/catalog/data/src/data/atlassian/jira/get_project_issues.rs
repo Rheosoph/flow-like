@@ -1,4 +1,7 @@
-use super::{JiraIssue, parse_jira_issue};
+use super::{
+    JiraIssue, build_jira_search_body, jira_search_next_page_token, jira_search_total,
+    parse_jira_issue,
+};
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -29,6 +32,7 @@ impl NodeLogic for GetProjectIssuesNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -83,10 +87,18 @@ impl NodeLogic for GetProjectIssuesNode {
         node.add_input_pin(
             "start_at",
             "Start At",
-            "Index to start at for pagination",
+            "Index to start at for server/Data Center pagination",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
+
+        node.add_input_pin(
+            "next_page_token",
+            "Next Page Token",
+            "Cloud pagination token from a previous response",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
 
         node.add_output_pin(
             "issues",
@@ -110,6 +122,13 @@ impl NodeLogic for GetProjectIssuesNode {
             "Count",
             "Number of issues returned in this response",
             VariableType::Integer,
+        );
+
+        node.add_output_pin(
+            "next_page_token",
+            "Next Page Token",
+            "Cloud pagination token for the next page",
+            VariableType::String,
         );
 
         node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["read:jira-work"]);
@@ -136,6 +155,10 @@ impl NodeLogic for GetProjectIssuesNode {
         let jql_filter: String = context.evaluate_pin("jql_filter").await.unwrap_or_default();
         let max_results: i64 = context.evaluate_pin("max_results").await.unwrap_or(50);
         let start_at: i64 = context.evaluate_pin("start_at").await.unwrap_or(0);
+        let next_page_token: String = context
+            .evaluate_pin("next_page_token")
+            .await
+            .unwrap_or_default();
 
         if project_key.is_empty() {
             context.log_message("Project key is required", LogLevel::Error);
@@ -152,19 +175,34 @@ impl NodeLogic for GetProjectIssuesNode {
             format!("project = {} AND ({})", project_key, jql_filter)
         };
 
-        let url = provider.jira_api_url("/search");
+        let url = provider.jira_search_api_url();
+        let fields = vec![
+            "summary".to_string(),
+            "description".to_string(),
+            "status".to_string(),
+            "assignee".to_string(),
+            "reporter".to_string(),
+            "priority".to_string(),
+            "issuetype".to_string(),
+            "created".to_string(),
+            "updated".to_string(),
+            "labels".to_string(),
+            "comment".to_string(),
+        ];
+        let body = build_jira_search_body(
+            &provider,
+            jql,
+            max_results,
+            start_at,
+            fields,
+            next_page_token,
+        );
         let response = client
-            .get(&url)
+            .post(&url)
             .header("Authorization", provider.auth_header())
-            .query(&[
-                ("jql", jql.as_str()),
-                ("maxResults", &max_results.to_string()),
-                ("startAt", &start_at.to_string()),
-                (
-                    "fields",
-                    "summary,description,status,assignee,reporter,priority,issuetype,created,updated,labels,comment",
-                ),
-            ])
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&body)
             .send()
             .await?;
 
@@ -188,12 +226,16 @@ impl NodeLogic for GetProjectIssuesNode {
             .filter_map(|issue| parse_jira_issue(issue, &provider.base_url))
             .collect();
 
-        let total = data["total"].as_i64().unwrap_or(0);
         let count = issues.len() as i64;
+        let total = jira_search_total(&data, count);
+        let next_page_token = jira_search_next_page_token(&data);
 
         context.set_pin_value("issues", json!(issues)).await?;
         context.set_pin_value("total", json!(total)).await?;
         context.set_pin_value("count", json!(count)).await?;
+        context
+            .set_pin_value("next_page_token", json!(next_page_token))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

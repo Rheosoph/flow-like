@@ -180,6 +180,7 @@ pub struct Board {
     pub refs: HashMap<String, String>,
     pub layers: HashMap<String, Layer>,
     pub page_ids: Vec<String>,
+    pub hash: Option<u64>,
 
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
@@ -203,6 +204,34 @@ pub struct BoardUndoRedoStack {
     pub redo_stack: Vec<String>,
 }
 
+fn append_optional_u64(hasher: &mut HighwayHasher, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hasher.append(&[1]);
+            hasher.append(&value.to_le_bytes());
+        }
+        None => hasher.append(&[0]),
+    }
+}
+
+fn stage_marker(stage: &ExecutionStage) -> u8 {
+    match stage {
+        ExecutionStage::Dev => 0,
+        ExecutionStage::Int => 1,
+        ExecutionStage::QA => 2,
+        ExecutionStage::PreProd => 3,
+        ExecutionStage::Prod => 4,
+    }
+}
+
+fn execution_mode_marker(mode: &ExecutionMode) -> u8 {
+    match mode {
+        ExecutionMode::Hybrid => 0,
+        ExecutionMode::Remote => 1,
+        ExecutionMode::Local => 2,
+    }
+}
+
 impl Board {
     /// Create a new board with a unique ID
     /// The board is created in the base directory appended with the ID
@@ -210,7 +239,7 @@ impl Board {
         let id = id.unwrap_or(create_id());
         let board_dir = base_dir;
 
-        Board {
+        let mut board = Board {
             id,
             name: "New Board".to_string(),
             description: "Your new Workflow!".to_string(),
@@ -226,12 +255,126 @@ impl Board {
             updated_at: SystemTime::now(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
+            hash: None,
             refs: HashMap::new(),
             parent: None,
             board_dir,
             logic_nodes: HashMap::new(),
             app_state: Some(app_state.clone()),
+        };
+        board.hash();
+        board
+    }
+
+    pub fn mark_changed(&mut self) {
+        self.updated_at = SystemTime::now();
+        self.hash();
+    }
+
+    pub fn hash(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.hash();
         }
+        for variable in self.variables.values_mut() {
+            variable.hash();
+        }
+        for comment in self.comments.values_mut() {
+            comment.hash();
+        }
+        for layer in self.layers.values_mut() {
+            for node in layer.nodes.values_mut() {
+                node.hash();
+            }
+            for variable in layer.variables.values_mut() {
+                variable.hash();
+            }
+            for comment in layer.comments.values_mut() {
+                comment.hash();
+            }
+            layer.hash();
+        }
+
+        let mut hasher = HighwayHasher::new(highway::Key([
+            0x0123456789abcdfe,
+            0xfedcba9876543210,
+            0x0011223344556677,
+            0x8899aabbccddeeff,
+        ]));
+
+        hasher.append(self.id.as_bytes());
+        hasher.append(self.name.as_bytes());
+        hasher.append(self.description.as_bytes());
+        hasher.append(&self.version.0.to_le_bytes());
+        hasher.append(&self.version.1.to_le_bytes());
+        hasher.append(&self.version.2.to_le_bytes());
+        hasher.append(&self.viewport.0.to_le_bytes());
+        hasher.append(&self.viewport.1.to_le_bytes());
+        hasher.append(&self.viewport.2.to_le_bytes());
+        hasher.append(&[stage_marker(&self.stage)]);
+        hasher.append(&[self.log_level.to_u8()]);
+        hasher.append(&[execution_mode_marker(&self.execution_mode)]);
+
+        let mut refs = self.refs.iter().collect::<Vec<_>>();
+        refs.sort_by_key(|(key, _)| *key);
+        for (key, value) in refs {
+            hasher.append(key.as_bytes());
+            hasher.append(value.as_bytes());
+        }
+
+        for page_id in &self.page_ids {
+            hasher.append(page_id.as_bytes());
+        }
+
+        let mut nodes = self.nodes.iter().collect::<Vec<_>>();
+        nodes.sort_by_key(|(id, _)| *id);
+        for (id, node) in nodes {
+            hasher.append(id.as_bytes());
+            append_optional_u64(&mut hasher, node.hash);
+        }
+
+        let mut variables = self.variables.iter().collect::<Vec<_>>();
+        variables.sort_by_key(|(id, _)| *id);
+        for (id, variable) in variables {
+            hasher.append(id.as_bytes());
+            append_optional_u64(&mut hasher, variable.hash);
+        }
+
+        let mut comments = self.comments.iter().collect::<Vec<_>>();
+        comments.sort_by_key(|(id, _)| *id);
+        for (id, comment) in comments {
+            hasher.append(id.as_bytes());
+            append_optional_u64(&mut hasher, comment.hash);
+        }
+
+        let mut layers = self.layers.iter().collect::<Vec<_>>();
+        layers.sort_by_key(|(id, _)| *id);
+        for (id, layer) in layers {
+            hasher.append(id.as_bytes());
+            append_optional_u64(&mut hasher, layer.hash);
+
+            let mut layer_nodes = layer.nodes.iter().collect::<Vec<_>>();
+            layer_nodes.sort_by_key(|(id, _)| *id);
+            for (id, node) in layer_nodes {
+                hasher.append(id.as_bytes());
+                append_optional_u64(&mut hasher, node.hash);
+            }
+
+            let mut layer_variables = layer.variables.iter().collect::<Vec<_>>();
+            layer_variables.sort_by_key(|(id, _)| *id);
+            for (id, variable) in layer_variables {
+                hasher.append(id.as_bytes());
+                append_optional_u64(&mut hasher, variable.hash);
+            }
+
+            let mut layer_comments = layer.comments.iter().collect::<Vec<_>>();
+            layer_comments.sort_by_key(|(id, _)| *id);
+            for (id, comment) in layer_comments {
+                hasher.append(id.as_bytes());
+                append_optional_u64(&mut hasher, comment.hash);
+            }
+        }
+
+        self.hash = Some(hasher.finalize64());
     }
 
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
@@ -399,8 +542,8 @@ impl Board {
         }
         println!("[Board] execute_command ✓ Success");
         self.node_updates(state).await;
-        self.updated_at = SystemTime::now();
         self.cleanup();
+        self.mark_changed();
         Ok(command)
     }
 
@@ -447,8 +590,8 @@ impl Board {
             }
         }
         self.node_updates(state).await;
-        self.updated_at = SystemTime::now();
         self.cleanup();
+        self.mark_changed();
         Ok(commands)
     }
 
@@ -481,8 +624,8 @@ impl Board {
             }
         }
         self.node_updates(state).await;
-        self.updated_at = SystemTime::now();
         self.cleanup();
+        self.mark_changed();
         Ok(())
     }
 
@@ -529,8 +672,8 @@ impl Board {
             }
         }
         self.node_updates(state).await;
-        self.updated_at = SystemTime::now();
         self.cleanup();
+        self.mark_changed();
         Ok(())
     }
 
@@ -629,7 +772,7 @@ impl Board {
         };
 
         self.version = new_version;
-        self.updated_at = SystemTime::now();
+        self.mark_changed();
         self.save(Some(store)).await?;
         Ok(new_version)
     }
@@ -975,8 +1118,8 @@ impl Board {
 
         if !self.page_ids.contains(&page.id) {
             self.page_ids.push(page.id.clone());
-            self.updated_at = SystemTime::now();
         }
+        self.mark_changed();
         Ok(())
     }
 
@@ -995,7 +1138,7 @@ impl Board {
         let legacy = self.board_dir.child(format!("{}.page", page_id));
         let _ = store.delete(&legacy).await;
         self.page_ids.retain(|id| id != page_id);
-        self.updated_at = SystemTime::now();
+        self.mark_changed();
         Ok(())
     }
 
@@ -1178,7 +1321,6 @@ impl Board {
         let mut template = self.clone();
         template.id = template_id;
         template.version = new_version;
-        template.updated_at = SystemTime::now();
 
         for variable in template.variables.values_mut() {
             if variable.secret {
@@ -1186,6 +1328,7 @@ impl Board {
             }
         }
 
+        template.mark_changed();
         template.save_as_template(Some(store)).await?;
         Ok(new_version)
     }

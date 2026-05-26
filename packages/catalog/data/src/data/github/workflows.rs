@@ -7,7 +7,7 @@ use flow_like::flow::{
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
 
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitHubWorkflow {
@@ -65,6 +65,12 @@ fn parse_workflow_run(run: &Value) -> Option<GitHubWorkflowRun> {
         created_at: run["created_at"].as_str()?.to_string(),
         updated_at: run["updated_at"].as_str()?.to_string(),
     })
+}
+
+fn push_query_param(query_params: &mut Vec<String>, key: &str, value: &str) {
+    if !value.is_empty() {
+        query_params.push(format!("{}={}", key, urlencoding::encode(value)));
+    }
 }
 
 #[crate::register_node]
@@ -141,17 +147,20 @@ impl NodeLogic for ListWorkflowsNode {
         let per_page: i64 = context.evaluate_pin("per_page").await?;
         let page: i64 = context.evaluate_pin("page").await?;
 
-        let url = format!(
-            "{}/repos/{}/{}/actions/workflows?per_page={}&page={}",
-            provider.base_url, owner, repo, per_page, page
-        );
+        let url = provider.api_url(&format!(
+            "/repos/{}/{}/actions/workflows?per_page={}&page={}",
+            owner,
+            repo,
+            per_page.clamp(1, 100),
+            page.max(1)
+        ));
 
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -210,6 +219,7 @@ impl NodeLogic for TriggerWorkflowNode {
             "Data/GitHub/Workflows",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -242,9 +252,23 @@ impl NodeLogic for TriggerWorkflowNode {
             VariableType::Struct,
         )
         .set_default_value(Some(json!({})));
+        node.add_input_pin(
+            "return_run_details",
+            "Return Run Details",
+            "Ask GitHub to return the created workflow run when supported",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
         node.add_output_pin("error", "Error", "", VariableType::Execution);
+        node.add_output_pin(
+            "run",
+            "Run",
+            "Created workflow run when returned by GitHub",
+            VariableType::Struct,
+        )
+        .set_schema::<GitHubWorkflowRun>();
         node.add_output_pin(
             "error_message",
             "Error Message",
@@ -267,23 +291,32 @@ impl NodeLogic for TriggerWorkflowNode {
         let workflow_id: String = context.evaluate_pin("workflow_id").await?;
         let git_ref: String = context.evaluate_pin("ref").await?;
         let inputs: Value = context.evaluate_pin("inputs").await?;
+        let return_run_details: bool = context
+            .evaluate_pin("return_run_details")
+            .await
+            .unwrap_or(false);
 
-        let url = format!(
-            "{}/repos/{}/{}/actions/workflows/{}/dispatches",
-            provider.base_url, owner, repo, workflow_id
-        );
+        let url = provider.api_url(&format!(
+            "/repos/{}/{}/actions/workflows/{}/dispatches",
+            owner,
+            repo,
+            urlencoding::encode(&workflow_id)
+        ));
 
-        let body = json!({
+        let mut body = json!({
             "ref": git_ref,
             "inputs": inputs
         });
+        if return_run_details {
+            body["return_run_details"] = json!(true);
+        }
 
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&body)
             .send()
@@ -291,6 +324,15 @@ impl NodeLogic for TriggerWorkflowNode {
 
         match response {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
+                let bytes = resp.bytes().await.unwrap_or_default();
+                if !bytes.is_empty() {
+                    if let Ok(value) = flow_like_types::json::from_slice::<Value>(&bytes) {
+                        let run_value = value.get("workflow_run").unwrap_or(&value);
+                        if let Some(run) = parse_workflow_run(run_value) {
+                            context.set_pin_value("run", json!(run)).await?;
+                        }
+                    }
+                }
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
@@ -336,6 +378,7 @@ impl NodeLogic for ListWorkflowRunsNode {
             "Data/GitHub/Workflows",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -362,6 +405,20 @@ impl NodeLogic for ListWorkflowRunsNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "actor",
+            "Actor",
+            "Filter by username that triggered the run",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "event",
+            "Event",
+            "Filter by event type",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin("status", "Status", "Filter by status", VariableType::String)
             .set_default_value(Some(json!("")))
             .set_options(
@@ -385,6 +442,34 @@ impl NodeLogic for ListWorkflowRunsNode {
                     ])
                     .build(),
             );
+        node.add_input_pin(
+            "created",
+            "Created",
+            "Filter runs by creation date range, e.g. >=2024-01-01",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "exclude_pull_requests",
+            "Exclude PRs",
+            "Exclude runs triggered by pull requests",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+        node.add_input_pin(
+            "check_suite_id",
+            "Check Suite ID",
+            "Filter by check suite ID",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "head_sha",
+            "Head SHA",
+            "Filter by head commit SHA",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin(
             "per_page",
             "Per Page",
@@ -426,28 +511,46 @@ impl NodeLogic for ListWorkflowRunsNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let workflow_id: String = context.evaluate_pin("workflow_id").await?;
         let branch: String = context.evaluate_pin("branch").await?;
+        let actor: String = context.evaluate_pin("actor").await.unwrap_or_default();
+        let event: String = context.evaluate_pin("event").await.unwrap_or_default();
         let status: String = context.evaluate_pin("status").await?;
+        let created: String = context.evaluate_pin("created").await.unwrap_or_default();
+        let exclude_prs: bool = context
+            .evaluate_pin("exclude_pull_requests")
+            .await
+            .unwrap_or(false);
+        let check_suite_id: String = context
+            .evaluate_pin("check_suite_id")
+            .await
+            .unwrap_or_default();
+        let head_sha: String = context.evaluate_pin("head_sha").await.unwrap_or_default();
         let per_page: i64 = context.evaluate_pin("per_page").await?;
         let page: i64 = context.evaluate_pin("page").await?;
 
         let base_url = if workflow_id.is_empty() {
-            format!(
-                "{}/repos/{}/{}/actions/runs",
-                provider.base_url, owner, repo
-            )
+            provider.api_url(&format!("/repos/{}/{}/actions/runs", owner, repo))
         } else {
-            format!(
-                "{}/repos/{}/{}/actions/workflows/{}/runs",
-                provider.base_url, owner, repo, workflow_id
-            )
+            provider.api_url(&format!(
+                "/repos/{}/{}/actions/workflows/{}/runs",
+                owner,
+                repo,
+                urlencoding::encode(&workflow_id)
+            ))
         };
 
-        let mut query_params = vec![format!("per_page={}", per_page), format!("page={}", page)];
-        if !branch.is_empty() {
-            query_params.push(format!("branch={}", branch));
-        }
-        if !status.is_empty() {
-            query_params.push(format!("status={}", status));
+        let mut query_params = vec![
+            format!("per_page={}", per_page.clamp(1, 100)),
+            format!("page={}", page.max(1)),
+        ];
+        push_query_param(&mut query_params, "branch", &branch);
+        push_query_param(&mut query_params, "actor", &actor);
+        push_query_param(&mut query_params, "event", &event);
+        push_query_param(&mut query_params, "status", &status);
+        push_query_param(&mut query_params, "created", &created);
+        push_query_param(&mut query_params, "check_suite_id", &check_suite_id);
+        push_query_param(&mut query_params, "head_sha", &head_sha);
+        if exclude_prs {
+            query_params.push("exclude_pull_requests=true".to_string());
         }
 
         let url = format!("{}?{}", base_url, query_params.join("&"));
@@ -455,9 +558,9 @@ impl NodeLogic for ListWorkflowRunsNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -559,17 +662,17 @@ impl NodeLogic for GetWorkflowRunNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let run_id: i64 = context.evaluate_pin("run_id").await?;
 
-        let url = format!(
-            "{}/repos/{}/{}/actions/runs/{}",
-            provider.base_url, owner, repo, run_id
-        );
+        let url = provider.api_url(&format!(
+            "/repos/{}/{}/actions/runs/{}",
+            owner, repo, run_id
+        ));
 
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -672,17 +775,17 @@ impl NodeLogic for CancelWorkflowRunNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let run_id: i64 = context.evaluate_pin("run_id").await?;
 
-        let url = format!(
-            "{}/repos/{}/{}/actions/runs/{}/cancel",
-            provider.base_url, owner, repo, run_id
-        );
+        let url = provider.api_url(&format!(
+            "/repos/{}/{}/actions/runs/{}/cancel",
+            owner, repo, run_id
+        ));
 
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -734,6 +837,7 @@ impl NodeLogic for RerunWorkflowNode {
             "Data/GitHub/Workflows",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -756,6 +860,13 @@ impl NodeLogic for RerunWorkflowNode {
             "failed_only",
             "Failed Only",
             "Only rerun failed jobs",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+        node.add_input_pin(
+            "enable_debug_logging",
+            "Enable Debug Logging",
+            "Enable debug logging for the rerun",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -783,6 +894,10 @@ impl NodeLogic for RerunWorkflowNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let run_id: i64 = context.evaluate_pin("run_id").await?;
         let failed_only: bool = context.evaluate_pin("failed_only").await?;
+        let enable_debug_logging: bool = context
+            .evaluate_pin("enable_debug_logging")
+            .await
+            .unwrap_or(false);
 
         let endpoint = if failed_only {
             "rerun-failed-jobs"
@@ -790,18 +905,19 @@ impl NodeLogic for RerunWorkflowNode {
             "rerun"
         };
 
-        let url = format!(
-            "{}/repos/{}/{}/actions/runs/{}/{}",
-            provider.base_url, owner, repo, run_id, endpoint
-        );
+        let url = provider.api_url(&format!(
+            "/repos/{}/{}/actions/runs/{}/{}",
+            owner, repo, run_id, endpoint
+        ));
 
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
+            .json(&json!({ "enable_debug_logging": enable_debug_logging }))
             .send()
             .await;
 
@@ -852,6 +968,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             "Data/GitHub/Workflows",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -874,6 +991,41 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             "branch",
             "Branch",
             "Filter by branch name (optional)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "actor",
+            "Actor",
+            "Filter by username that triggered the run",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "event",
+            "Event",
+            "Filter by event type",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "created",
+            "Created",
+            "Filter runs by creation date range, e.g. >=2024-01-01",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "check_suite_id",
+            "Check Suite ID",
+            "Filter by check suite ID",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "head_sha",
+            "Head SHA",
+            "Filter by head commit SHA",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -904,6 +1056,13 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
+        node.add_input_pin(
+            "per_page",
+            "Per Page",
+            "Number of runs to inspect (max 100)",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(30)));
 
         node.add_output_pin("exec_out", "Success", "", VariableType::Execution);
         node.add_output_pin("error", "Error", "", VariableType::Execution);
@@ -991,28 +1150,40 @@ impl NodeLogic for GetLatestWorkflowRunNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let workflow_id: String = context.evaluate_pin("workflow_id").await?;
         let branch: String = context.evaluate_pin("branch").await?;
+        let actor: String = context.evaluate_pin("actor").await.unwrap_or_default();
+        let event: String = context.evaluate_pin("event").await.unwrap_or_default();
+        let created: String = context.evaluate_pin("created").await.unwrap_or_default();
+        let check_suite_id: String = context
+            .evaluate_pin("check_suite_id")
+            .await
+            .unwrap_or_default();
+        let head_sha: String = context.evaluate_pin("head_sha").await.unwrap_or_default();
         let conclusion: String = context.evaluate_pin("conclusion").await?;
         let exclude_prs: bool = context.evaluate_pin("exclude_pull_requests").await?;
+        let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
 
         let base_url = if workflow_id.is_empty() {
-            format!(
-                "{}/repos/{}/{}/actions/runs",
-                provider.base_url, owner, repo
-            )
+            provider.api_url(&format!("/repos/{}/{}/actions/runs", owner, repo))
         } else {
-            format!(
-                "{}/repos/{}/{}/actions/workflows/{}/runs",
-                provider.base_url, owner, repo, workflow_id
-            )
+            provider.api_url(&format!(
+                "/repos/{}/{}/actions/workflows/{}/runs",
+                owner,
+                repo,
+                urlencoding::encode(&workflow_id)
+            ))
         };
 
-        let mut query_params = vec!["per_page=10".to_string(), "page=1".to_string()];
-        if !branch.is_empty() {
-            query_params.push(format!("branch={}", branch));
-        }
-        if !conclusion.is_empty() {
-            query_params.push("status=completed".to_string());
-        }
+        let mut query_params = vec![
+            format!("per_page={}", per_page.clamp(1, 100)),
+            "page=1".to_string(),
+        ];
+        push_query_param(&mut query_params, "branch", &branch);
+        push_query_param(&mut query_params, "actor", &actor);
+        push_query_param(&mut query_params, "event", &event);
+        push_query_param(&mut query_params, "created", &created);
+        push_query_param(&mut query_params, "check_suite_id", &check_suite_id);
+        push_query_param(&mut query_params, "head_sha", &head_sha);
+        push_query_param(&mut query_params, "status", &conclusion);
         if exclude_prs {
             query_params.push("exclude_pull_requests=true".to_string());
         }
@@ -1022,9 +1193,9 @@ impl NodeLogic for GetLatestWorkflowRunNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -1041,16 +1212,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
                     })
                     .unwrap_or_default();
 
-                // Filter by conclusion if specified (GitHub API doesn't support conclusion filter directly)
-                let filtered_runs: Vec<_> = if conclusion.is_empty() {
-                    runs
-                } else {
-                    runs.into_iter()
-                        .filter(|r| r.conclusion.as_deref() == Some(conclusion.as_str()))
-                        .collect()
-                };
-
-                if let Some(latest) = filtered_runs.first() {
+                if let Some(latest) = runs.first() {
                     let is_success = latest.conclusion.as_deref() == Some("success");
 
                     context.set_pin_value("run", json!(latest)).await?;

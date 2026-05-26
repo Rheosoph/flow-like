@@ -8,7 +8,7 @@ sidebar:
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/TM9657/flow-like.git
+git clone https://github.com/Rheosoph/flow-like.git
 cd flow-like/apps/backend/docker-compose
 ```
 

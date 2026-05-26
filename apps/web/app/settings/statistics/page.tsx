@@ -5,7 +5,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { MonitorIcon } from "lucide-react";
 
 export default function StatisticsPage() {

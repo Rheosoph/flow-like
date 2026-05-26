@@ -34,7 +34,6 @@ import {
 	type GenericFetcher,
 	StorePackageDetail,
 } from "../pages/store/store-package-detail";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Input } from "../ui/input";
 import type { CompileStatus } from "../ui/package-status-badge";
 import {
@@ -59,6 +58,65 @@ interface PackagesStorePageProps {
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }
 
+const PACKAGE_CARD_SKELETON_KEYS = Array.from(
+	{ length: 9 },
+	(_, index) => `package-skeleton-${index}`,
+);
+
+function getPackageInitials(name: string): string {
+	const words = name
+		.replace(/[()]/g, " ")
+		.split(/\s+/)
+		.filter((word) => {
+			const normalized = word.toLowerCase();
+			return normalized !== "custom" && normalized !== "node";
+		});
+	if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+	const initials = (words.length ? words : [name])
+		.slice(0, 2)
+		.map((word) => word[0]?.toUpperCase() ?? "")
+		.join("");
+
+	return initials || "PK";
+}
+
+function PackageMark({
+	displayName,
+	icon,
+	thumbnail,
+	gradient,
+}: {
+	displayName: string;
+	icon?: string;
+	thumbnail?: string;
+	gradient: ReturnType<typeof hashToGradient>;
+}) {
+	const image = icon ?? thumbnail;
+
+	return (
+		<div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border/40 bg-muted/40 shadow-sm">
+			<div
+				className="absolute inset-0"
+				style={{
+					background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+					opacity: gradient.opacity,
+				}}
+			/>
+			{image ? (
+				<img
+					src={image}
+					alt=""
+					className="relative h-full w-full bg-background/20 object-cover"
+				/>
+			) : (
+				<div className="relative flex h-full w-full items-center justify-center font-mono text-xs font-semibold text-foreground/80">
+					{getPackageInitials(displayName)}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
@@ -73,81 +131,78 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 	return (
 		<Link
 			href={`/store/packages?id=${pkg.id}`}
-			className="group relative flex flex-row rounded-lg border border-border/40 bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg"
+			className="group relative flex min-h-35 flex-col overflow-hidden rounded-lg border border-border/40 bg-card/70 p-4 backdrop-blur-sm transition-all hover:border-primary/40 hover:bg-card/90 hover:shadow-lg"
 		>
-			{/* Left gradient accent */}
-			<div className="relative w-28 shrink-0 overflow-hidden">
-				{thumbnail ? (
+			<div
+				className="absolute inset-0"
+				style={{
+					background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+					opacity: isDark ? 0.1 : 0.08,
+				}}
+			/>
+			{thumbnail && (
+				<>
 					<img
 						src={thumbnail}
 						alt=""
-						className="absolute inset-0 w-full h-full object-cover"
+						className="absolute inset-0 h-full w-full scale-[1.02] object-cover opacity-[0.14] saturate-125 transition-opacity group-hover:opacity-[0.18] dark:opacity-[0.18] dark:group-hover:opacity-[0.24]"
 					/>
-				) : (
-					<div
-						className="absolute inset-0"
-						style={{
-							background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
-							opacity: gradient.opacity,
-						}}
-					/>
-				)}
-				<div className="absolute inset-0 bg-linear-to-r from-transparent to-card/80" />
-				<div className="absolute inset-0 flex items-center justify-center">
-					<Avatar className="w-10 h-10 rounded-lg shadow-md border-2 border-background/20 bg-background/30 backdrop-blur-sm">
-						{icon ? (
-							<AvatarImage
-								src={icon}
-								alt={displayName}
-								className="rounded-lg"
-							/>
-						) : null}
-						<AvatarFallback className="rounded-lg text-xs font-mono font-bold bg-background/20 text-white/80">
-							<Package className="h-5 w-5" />
-						</AvatarFallback>
-					</Avatar>
-				</div>
-			</div>
+					<div className="absolute inset-0 bg-linear-to-r from-card/90 via-card/78 to-card/70" />
+				</>
+			)}
+			<div
+				className="absolute inset-y-0 left-0 z-10 w-1"
+				style={{
+					background: `linear-gradient(180deg, ${gradient.from}, ${gradient.to})`,
+					opacity: gradient.opacity,
+				}}
+			/>
 
-			{/* Card body */}
-			<div className="flex-1 min-w-0 px-3.5 py-3 flex flex-col gap-1">
-				{/* Top row: name + badges */}
-				<div className="flex items-center gap-1.5 min-w-0">
-					<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
-						{displayName}
-					</h3>
-					<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
-						v{pkg.latestVersion}
-					</span>
-					<div className="flex items-center gap-1 ml-auto shrink-0">
-						{pkg.verified && (
-							<span className="inline-flex items-center rounded bg-background/80 border border-border/40 p-1">
-								<Shield className="h-3 w-3 text-blue-500" />
+			<div className="relative z-10 flex flex-1 min-w-0 flex-col gap-3">
+				<div className="flex min-w-0 items-start gap-3">
+					<PackageMark
+						displayName={displayName}
+						icon={icon}
+						thumbnail={thumbnail}
+						gradient={gradient}
+					/>
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center gap-1.5 min-w-0">
+							<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
+								{displayName}
+							</h3>
+							<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
+								v{pkg.latestVersion}
 							</span>
-						)}
-						{pkg.visibility !== "public" && (
-							<span className="inline-flex items-center gap-0.5 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
-								{pkg.visibility === "private" ? (
-									<>
-										<Lock className="h-2.5 w-2.5" /> private
-									</>
-								) : (
-									<>
-										<KeyRound className="h-2.5 w-2.5" /> gated
-									</>
+							<div className="flex items-center gap-1 ml-auto shrink-0">
+								{pkg.verified && (
+									<span className="inline-flex items-center rounded bg-background/80 border border-border/40 p-1">
+										<Shield className="h-3 w-3 text-blue-500" />
+									</span>
 								)}
-							</span>
-						)}
+								{pkg.visibility !== "public" && (
+									<span className="inline-flex items-center gap-0.5 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
+										{pkg.visibility === "private" ? (
+											<>
+												<Lock className="h-2.5 w-2.5" /> private
+											</>
+										) : (
+											<>
+												<KeyRound className="h-2.5 w-2.5" /> gated
+											</>
+										)}
+									</span>
+								)}
+							</div>
+						</div>
+
+						<p className="text-xs text-muted-foreground/80 line-clamp-2 leading-relaxed">
+							{displayDesc}
+						</p>
 					</div>
 				</div>
 
-				{/* Description */}
-				<p className="text-xs text-muted-foreground/80 line-clamp-2 leading-relaxed">
-					{displayDesc}
-				</p>
-
-				{/* Footer meta row */}
-				<div className="flex items-center gap-2 mt-auto pt-1.5 border-t border-border/20 text-[10px] text-muted-foreground/60 font-mono">
+				<div className="flex items-center gap-2 mt-auto pt-3 border-t border-border/20 text-[10px] text-muted-foreground/60 font-mono">
 					<span className="flex items-center gap-1">
 						<Download className="h-3 w-3" />
 						{pkg.downloadCount.toLocaleString()}
@@ -164,9 +219,12 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 						</span>
 					)}
 					{pkg.keywords.length > 0 && (
-						<span className="inline-flex items-center gap-1 border-l border-border/30 pl-2">
+						<span className="inline-flex min-w-0 items-center gap-1 border-l border-border/30 pl-2">
 							{pkg.keywords.slice(0, 2).map((kw) => (
-								<span key={kw} className="rounded bg-muted/30 px-1.5 py-0.5">
+								<span
+									key={kw}
+									className="max-w-24 truncate rounded bg-muted/30 px-1.5 py-0.5"
+								>
 									{kw}
 								</span>
 							))}
@@ -183,19 +241,21 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 
 function PackageCardSkeleton() {
 	return (
-		<div className="flex flex-row rounded-lg border border-border/40 bg-card/60 overflow-hidden">
-			<Skeleton className="w-28 shrink-0 rounded-none" />
-			<div className="flex-1 px-3.5 py-3 space-y-2">
-				<div className="flex items-center gap-2">
-					<Skeleton className="h-4 w-28 rounded" />
-					<Skeleton className="h-3 w-10 rounded" />
+		<div className="flex min-h-35 flex-col rounded-lg border border-border/40 bg-card/60 p-4">
+			<div className="flex items-start gap-3">
+				<Skeleton className="h-11 w-11 shrink-0 rounded-md" />
+				<div className="min-w-0 flex-1 space-y-2">
+					<div className="flex items-center gap-2">
+						<Skeleton className="h-4 w-28 rounded" />
+						<Skeleton className="h-3 w-10 rounded" />
+					</div>
+					<Skeleton className="h-3 w-full rounded" />
+					<Skeleton className="h-3 w-3/4 rounded" />
 				</div>
-				<Skeleton className="h-3 w-full rounded" />
-				<Skeleton className="h-3 w-3/4 rounded" />
-				<div className="flex gap-2 pt-1.5 border-t border-border/20">
-					<Skeleton className="h-3.5 w-10 rounded" />
-					<Skeleton className="h-3.5 w-16 rounded" />
-				</div>
+			</div>
+			<div className="mt-auto flex gap-2 border-t border-border/20 pt-3">
+				<Skeleton className="h-3.5 w-10 rounded" />
+				<Skeleton className="h-3.5 w-16 rounded" />
 			</div>
 		</div>
 	);
@@ -271,9 +331,13 @@ function groupByCategory(
 	for (const pkg of packages) {
 		const category = pkg.primaryCategory ?? pkg.secondaryCategory ?? "OTHER";
 		const label = categoryLabel(category);
-		if (!groups.has(label)) groups.set(label, []);
+		let group = groups.get(label);
+		if (!group) {
+			group = [];
+			groups.set(label, group);
+		}
 		if (!seen.has(pkg.id)) {
-			groups.get(label)!.push(pkg);
+			group.push(pkg);
 			seen.add(pkg.id);
 		}
 	}
@@ -484,8 +548,8 @@ export function PackageListContent({
 
 			{searchResults.isLoading ? (
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-					{Array.from({ length: 9 }).map((_, i) => (
-						<PackageCardSkeleton key={i} />
+					{PACKAGE_CARD_SKELETON_KEYS.map((key) => (
+						<PackageCardSkeleton key={key} />
 					))}
 				</div>
 			) : searchResults.data?.packages.length === 0 ? (

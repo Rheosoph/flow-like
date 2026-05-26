@@ -5,7 +5,7 @@ import {
 	useBackend,
 	useHub,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useAuth } from "react-oidc-context";

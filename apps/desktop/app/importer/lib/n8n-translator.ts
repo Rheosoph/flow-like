@@ -1,10 +1,10 @@
-import type { IBoard, INode, IPin } from "@tm9657/flow-like-ui";
+import type { IBoard, INode, IPin } from "@flow-like/flow-like-ui";
 import {
 	ICommentType,
 	IPinType,
 	IValueType,
 	IVariableType,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	type CatalogIndex,
 	addCommentToBoard,
@@ -30,12 +30,12 @@ import {
 	setPinDefault,
 	warn,
 } from "./board-builder";
-import { MAPPING_DEFS } from "@tm9657/flow-like-ui/lib/importer/mappings";
+import { MAPPING_DEFS } from "@flow-like/flow-like-ui/lib/importer/mappings";
 import type {
 	FlowDirectDef,
 	FlowLayerDef,
 	ParameterRule,
-} from "@tm9657/flow-like-ui/lib/importer/mappings/types";
+} from "@flow-like/flow-like-ui/lib/importer/mappings/types";
 import type {
 	N8nNode,
 	N8nWorkflow,

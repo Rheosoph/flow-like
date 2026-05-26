@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { IProfile } from "@tm9657/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import type { AuthContextProps } from "react-oidc-context";
 
 export interface WebBackendRef {
@@ -23,6 +23,22 @@ function jsonStringify(value: unknown): string {
 	return JSON.stringify(value, (_key, v) =>
 		typeof v === "bigint" ? Number(v) : v,
 	);
+}
+
+function apiErrorMessage(status: number, body: string): string {
+	if (body) {
+		try {
+			const parsed = JSON.parse(body);
+			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			if (typeof message === "string" && message.trim()) {
+				return message;
+			}
+		} catch {
+			const trimmed = body.trim();
+			if (trimmed) return trimmed;
+		}
+	}
+	return `API error: ${status}`;
 }
 
 export async function apiFetch<T>(
@@ -53,7 +69,7 @@ export async function apiFetch<T>(
 		}
 		const errorText = await response.text();
 		console.error(`API error ${response.status} for ${path}:`, errorText);
-		throw new Error(`API error: ${response.status}`);
+		throw new Error(apiErrorMessage(response.status, errorText));
 	}
 
 	const text = await response.text();

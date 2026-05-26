@@ -1,6 +1,6 @@
 use super::{
     list_issues::{GitHubIssue, GitHubIssueUser, parse_issue},
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -10,6 +10,27 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
+
+fn string_list_from_value(value: Value) -> Vec<String> {
+    if let Some(values) = value.as_array() {
+        return values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+            .collect();
+    }
+
+    value
+        .as_str()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+        .collect()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitHubIssueComment {
@@ -153,9 +174,9 @@ impl NodeLogic for GetGitHubIssueNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -229,6 +250,7 @@ impl NodeLogic for UpdateGitHubIssueNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -289,20 +311,62 @@ impl NodeLogic for UpdateGitHubIssueNode {
         );
 
         node.add_input_pin(
+            "state_reason",
+            "State Reason",
+            "Reason for the state change",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "".to_string(),
+                    "completed".to_string(),
+                    "not_planned".to_string(),
+                    "reopened".to_string(),
+                ])
+                .build(),
+        );
+
+        node.add_input_pin(
             "labels",
             "Labels",
-            "Comma-separated list of label names (replaces all labels)",
+            "Label names (replaces all labels when connected)",
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array);
+
+        node.add_input_pin(
+            "assignees",
+            "Assignees",
+            "Usernames (replaces all assignees when connected)",
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array);
+
+        node.add_input_pin(
+            "milestone",
+            "Milestone",
+            "Milestone number to associate with the issue",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(0)));
+
+        node.add_input_pin(
+            "issue_type",
+            "Issue Type",
+            "Issue type name or ID",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
 
         node.add_input_pin(
-            "assignees",
-            "Assignees",
-            "Comma-separated list of usernames (replaces all assignees)",
-            VariableType::String,
+            "issue_field_values",
+            "Issue Field Values",
+            "Issue form field values accepted by the GitHub API",
+            VariableType::Struct,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array);
 
         node.add_output_pin(
             "exec_out",
@@ -348,8 +412,12 @@ impl NodeLogic for UpdateGitHubIssueNode {
         let title: String = context.evaluate_pin("title").await.unwrap_or_default();
         let body: String = context.evaluate_pin("body").await.unwrap_or_default();
         let state: String = context.evaluate_pin("state").await.unwrap_or_default();
-        let labels: String = context.evaluate_pin("labels").await.unwrap_or_default();
-        let assignees: String = context.evaluate_pin("assignees").await.unwrap_or_default();
+        let state_reason: String = context
+            .evaluate_pin("state_reason")
+            .await
+            .unwrap_or_default();
+        let milestone: i64 = context.evaluate_pin("milestone").await.unwrap_or(0);
+        let issue_type: String = context.evaluate_pin("issue_type").await.unwrap_or_default();
 
         if owner.is_empty() || repo.is_empty() {
             context.log_message("Owner and repository are required", LogLevel::Error);
@@ -373,21 +441,37 @@ impl NodeLogic for UpdateGitHubIssueNode {
         if !state.is_empty() {
             request_body["state"] = json!(state);
         }
-        if !labels.is_empty() {
-            let label_list: Vec<&str> = labels.split(',').map(|s| s.trim()).collect();
-            request_body["labels"] = json!(label_list);
+        if !state_reason.is_empty() {
+            request_body["state_reason"] = json!(state_reason);
         }
-        if !assignees.is_empty() {
-            let assignee_list: Vec<&str> = assignees.split(',').map(|s| s.trim()).collect();
-            request_body["assignees"] = json!(assignee_list);
+        if let Ok(labels_value) = context.evaluate_pin::<Value>("labels").await {
+            request_body["labels"] = json!(string_list_from_value(labels_value));
+        }
+        if let Ok(assignees_value) = context.evaluate_pin::<Value>("assignees").await {
+            request_body["assignees"] = json!(string_list_from_value(assignees_value));
+        }
+        if milestone > 0 {
+            request_body["milestone"] = json!(milestone);
+        }
+        if !issue_type.is_empty() {
+            request_body["type"] = json!(issue_type);
+        }
+        if let Ok(issue_field_values) = context.evaluate_pin::<Value>("issue_field_values").await {
+            if issue_field_values
+                .as_array()
+                .map(|values| !values.is_empty())
+                .unwrap_or(false)
+            {
+                request_body["issue_field_values"] = issue_field_values;
+            }
         }
 
         let client = reqwest::Client::new();
         let response = client
             .patch(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -565,9 +649,9 @@ impl NodeLogic for AddGitHubIssueCommentNode {
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -752,9 +836,9 @@ impl NodeLogic for ListGitHubIssueCommentsNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

@@ -1,7 +1,7 @@
-import { Background, BackgroundVariant, ReactFlow } from "@tm9657/flow-like-ui";
-import { CommentNode } from "@tm9657/flow-like-ui/components/flow/comment-node";
-import { FlowNode } from "@tm9657/flow-like-ui/components/flow/flow-node";
-import { LayerNode } from "@tm9657/flow-like-ui/components/flow/layer-node";
+import { Background, BackgroundVariant, ReactFlow } from "@flow-like/flow-like-ui";
+import { CommentNode } from "@flow-like/flow-like-ui/components/flow/comment-node";
+import { FlowNode } from "@flow-like/flow-like-ui/components/flow/flow-node";
+import { LayerNode } from "@flow-like/flow-like-ui/components/flow/layer-node";
 import { useEffect, useMemo, useState } from "react";
 
 export default function Board({

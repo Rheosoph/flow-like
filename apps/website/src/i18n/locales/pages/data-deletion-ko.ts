@@ -107,7 +107,7 @@ export const koDataDeletion = {
 	"dataDeletion.contact.email": "이메일",
 	"dataDeletion.contact.company": "회사",
 	"dataDeletion.contact.companyName":
-		"TM9657 GmbH, Dr. Berndlstr. 5, 87700 Memmingen, 독일",
+		"Rheosoph GmbH, Maximilianstraße 29, 80539 München, 독일",
 	"dataDeletion.contact.privacyLink":
 		"일반적인 개인정보 보호 관행에 대한 자세한 내용은 다음을 참조하세요:",
 	"dataDeletion.contact.privacyPolicy": "개인정보 처리방침",

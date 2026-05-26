@@ -311,7 +311,7 @@ function combineAllLicenses(
 	// Add npm licenses
 	for (const [key, entry] of Object.entries(npmLicenses)) {
 		// Skip internal packages
-		if (key.includes("flow-like") || key.includes("@tm9657")) continue;
+		if (key.includes("flow-like") || key.includes("@flow-like")) continue;
 
 		const match = key.match(/^(.+)@(\d+\.\d+\.\d+.*)$/);
 		const name = match ? match[1] : key;

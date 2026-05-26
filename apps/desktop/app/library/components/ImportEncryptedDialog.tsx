@@ -13,7 +13,7 @@ import {
 	type IApp,
 	IAppVisibility,
 	Input,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { EyeIcon, EyeOffIcon, LockIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";

@@ -12,8 +12,8 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSpotlightStore,
-} from "@tm9657/flow-like-ui";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	Bookmark,

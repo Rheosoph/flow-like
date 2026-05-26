@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{entity::profile as profile_entity, error::ApiError, state::AppState};
 use axum::{
     Router,
     routing::{get, post},
 };
 use flow_like_types::create_id;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 pub mod create_default;
 pub mod delete_profile;
@@ -13,6 +14,31 @@ pub mod get_profile_bits;
 pub mod get_profiles;
 pub mod sync_profiles;
 pub mod upsert_profile;
+
+/// Profile IDs are user-local keys. Historically the database used a global
+/// primary key, so insert paths still detect unique violations for rolling
+/// deploys and legacy schemas.
+pub(crate) async fn find_profile_for_user(
+    db: &DatabaseConnection,
+    user_id: &str,
+    profile_id: &str,
+) -> Result<Option<profile_entity::Model>, sea_orm::DbErr> {
+    profile_entity::Entity::find()
+        .filter(
+            profile_entity::Column::UserId
+                .eq(user_id)
+                .and(profile_entity::Column::Id.eq(profile_id)),
+        )
+        .one(db)
+        .await
+}
+
+pub(crate) fn is_profile_unique_violation(err: &sea_orm::DbErr) -> bool {
+    let err = format!("{err:?}");
+    err.contains("Profile_pkey")
+        || (err.contains("23505") && err.contains("Profile"))
+        || (err.contains("duplicate key value") && err.contains("Profile"))
+}
 
 /// Generate a signed upload URL for a profile image and return the filename to store in DB.
 /// - Upload path: media/users/{sub}/{cuid}.{ext} (auto-converted to webp)

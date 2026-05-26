@@ -4,7 +4,7 @@ import type {
 	IJoinRequest,
 	IMember,
 	ITeamState,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export class EmptyTeamState implements ITeamState {
 	createInviteLink(

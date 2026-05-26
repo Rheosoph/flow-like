@@ -1,5 +1,5 @@
-import type { INode, IPin } from "@tm9657/flow-like-ui";
-import { IPinType, IValueType, IVariableType } from "@tm9657/flow-like-ui";
+import type { INode, IPin } from "@flow-like/flow-like-ui";
+import { IPinType, IValueType, IVariableType } from "@flow-like/flow-like-ui";
 import {
 	addExecPins,
 	addLayerToBoard,

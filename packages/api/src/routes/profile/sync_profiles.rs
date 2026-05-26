@@ -3,15 +3,18 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     routes::{
-        profile::{delete_old_image, generate_upload_url},
+        profile::{
+            delete_old_image, find_profile_for_user, generate_upload_url,
+            is_profile_unique_violation,
+        },
         user::ensure_user_exists,
     },
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
 use flow_like::profile::{ProfileApp, ProfileShortcut, Settings};
-use flow_like_types::Value;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use flow_like_types::{Value, create_id};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use utoipa::ToSchema;
@@ -118,14 +121,7 @@ pub async fn sync_profiles(
         }
 
         // Check if profile exists on server (including soft-deleted)
-        let found_profile = profile::Entity::find()
-            .filter(
-                profile::Column::Id
-                    .eq(&profile_req.id)
-                    .and(profile::Column::UserId.eq(&sub)),
-            )
-            .one(&state.db)
-            .await?;
+        let found_profile = find_profile_for_user(&state.db, &sub, &profile_req.id).await?;
 
         if let Some(existing) = found_profile {
             // If this profile was soft-deleted, tell the client to delete it locally
@@ -267,9 +263,10 @@ pub async fn sync_profiles(
                 }
             }
         } else {
-            // Create new profile with the client-provided ID. This makes sync idempotent
-            // if the client crashes or misses the response before any remap is applied.
-            let server_id = profile_req.id.clone();
+            // Prefer the client-provided ID so sync stays idempotent, but fall
+            // back to a fresh server ID if that global primary key is already
+            // owned by another account.
+            let mut server_id = profile_req.id.clone();
             println!(
                 "[ProfileSync] Creating new profile: local_id={}, server_id={}",
                 profile_req.id, server_id
@@ -315,35 +312,81 @@ pub async fn sync_profiles(
                     (None, None)
                 };
 
-            let new_profile = profile::ActiveModel {
-                id: Set(server_id.clone()),
-                user_id: Set(sub.clone()),
-                name: Set(profile_req.name.clone()),
-                description: Set(profile_req.description.clone()),
-                icon: Set(icon_id),
-                thumbnail: Set(thumbnail_id),
-                interests: Set(profile_req.interests.clone()),
-                tags: Set(profile_req.tags.clone()),
-                theme: Set(profile_req.theme.clone()),
-                bit_ids: Set(profile_req.bit_ids.clone()),
-                apps: Set(apps),
-                shortcuts: Set(shortcuts),
-                settings: Set(settings),
-                hub: Set(default_hub.clone()),
-                hubs: Set(profile_req.hubs.or(Some(vec![default_hub]))),
-                created_at: Set(chrono::Utc::now().naive_utc()),
-                updated_at: Set(chrono::Utc::now().naive_utc()),
-                ..Default::default()
-            };
+            let mut created_server_id: Option<String> = None;
+            let mut skipped_existing_local = false;
 
-            new_profile.insert(&state.db).await?;
+            for attempt in 0..4 {
+                let now = chrono::Utc::now().naive_utc();
+                let new_profile = profile::ActiveModel {
+                    id: Set(server_id.clone()),
+                    user_id: Set(sub.clone()),
+                    name: Set(profile_req.name.clone()),
+                    description: Set(profile_req.description.clone()),
+                    icon: Set(icon_id.clone()),
+                    thumbnail: Set(thumbnail_id.clone()),
+                    interests: Set(profile_req.interests.clone()),
+                    tags: Set(profile_req.tags.clone()),
+                    theme: Set(profile_req.theme.clone()),
+                    bit_ids: Set(profile_req.bit_ids.clone()),
+                    apps: Set(apps.clone()),
+                    shortcuts: Set(shortcuts.clone()),
+                    settings: Set(settings.clone()),
+                    hub: Set(default_hub.clone()),
+                    hubs: Set(profile_req.hubs.clone().or(Some(vec![default_hub.clone()]))),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                };
 
-            created.push(SyncedProfile {
-                local_id: profile_req.id.clone(),
-                server_id,
-                icon_upload_url,
-                thumbnail_upload_url,
-            });
+                match new_profile.insert(&state.db).await {
+                    Ok(_) => {
+                        created_server_id = Some(server_id.clone());
+                        break;
+                    }
+                    Err(e) if is_profile_unique_violation(&e) => {}
+                    Err(e) => return Err(e.into()),
+                }
+
+                if let Some(existing) = find_profile_for_user(&state.db, &sub, &server_id).await?
+                    && server_id == profile_req.id
+                {
+                    if existing.deleted_at.is_some() {
+                        deleted.push(profile_req.id.clone());
+                    } else {
+                        skipped.push(profile_req.id.clone());
+                    }
+                    skipped_existing_local = true;
+                    break;
+                }
+
+                if attempt == 3 {
+                    return Err(ApiError::conflict("Could not allocate a unique profile ID"));
+                }
+
+                if server_id == profile_req.id {
+                    println!(
+                        "[ProfileSync] Profile ID collision for local_id={} on a legacy global uniqueness constraint; retrying with a generated server id",
+                        profile_req.id
+                    );
+                }
+
+                server_id = create_id();
+                println!(
+                    "[ProfileSync] Profile ID collision for local_id={}, retrying with server_id={}",
+                    profile_req.id, server_id
+                );
+            }
+
+            if let Some(server_id) = created_server_id {
+                created.push(SyncedProfile {
+                    local_id: profile_req.id.clone(),
+                    server_id,
+                    icon_upload_url,
+                    thumbnail_upload_url,
+                });
+            } else if !skipped_existing_local {
+                return Err(ApiError::conflict("Could not allocate a unique profile ID"));
+            }
         }
     }
 

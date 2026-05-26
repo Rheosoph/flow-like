@@ -413,6 +413,7 @@ mod tests {
             refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
+            hash: None,
             created_at: SystemTime::now(),
             updated_at: SystemTime::now(),
             parent: None,

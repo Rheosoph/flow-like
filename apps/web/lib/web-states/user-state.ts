@@ -5,13 +5,13 @@ import type {
 	IProfileApp,
 	ISettings,
 	IUserState,
-} from "@tm9657/flow-like-ui";
-import { IAppVisibility, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import { IAppVisibility, isAzureBlobStorageUrl } from "@flow-like/flow-like-ui";
 import type {
 	INotification,
 	INotificationsOverview,
 	IUserLookup,
-} from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import type {
 	IBillingSession,
 	IPricingResponse,
@@ -21,8 +21,8 @@ import type {
 	IUserTemplateInfo,
 	IUserUpdate,
 	IUserWidgetInfo,
-} from "@tm9657/flow-like-ui/state/backend-state/user-state";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui/state/backend-state/user-state";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { appsDB } from "../apps-db";
 import {
 	type WebBackendRef,

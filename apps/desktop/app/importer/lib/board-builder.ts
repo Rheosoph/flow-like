@@ -5,7 +5,7 @@ import type {
 	INode,
 	IPin,
 	IVariable,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	ICommentType,
 	IExecutionMode,
@@ -14,8 +14,8 @@ import {
 	IPinType,
 	IValueType,
 	IVariableType,
-} from "@tm9657/flow-like-ui";
-import { type ILayer, ILayerType } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import { type ILayer, ILayerType } from "@flow-like/flow-like-ui";
 import type { TranslationDiagnostic } from "./types";
 
 const textEncoder = new TextEncoder();

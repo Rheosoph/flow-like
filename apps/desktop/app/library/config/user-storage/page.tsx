@@ -2,7 +2,7 @@
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { StorageSystem, useBackend } from "@tm9657/flow-like-ui";
+import { StorageSystem, useBackend } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 

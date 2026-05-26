@@ -1,5 +1,6 @@
 pub mod array;
 pub mod bool;
+pub mod crypto;
 pub mod csv;
 pub mod cuid;
 pub mod datetime;

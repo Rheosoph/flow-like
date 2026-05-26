@@ -1,6 +1,6 @@
 "use client";
 
-import { NotFoundPage } from "@tm9657/flow-like-ui";
+import { NotFoundPage } from "@flow-like/flow-like-ui";
 
 export default function NotFound() {
 	return <NotFoundPage onGoBack={() => window.history.back()} homeHref="/" />;

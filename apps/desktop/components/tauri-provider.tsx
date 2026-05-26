@@ -41,10 +41,10 @@ import {
 	useDownloadManager,
 	useInvoke,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
-import type { ICommandSync } from "@tm9657/flow-like-ui/lib";
-import type { IAIState } from "@tm9657/flow-like-ui/state/backend-state/ai-state";
-import type { IAnalyticsState } from "@tm9657/flow-like-ui/state/backend-state/analytics-state";
+} from "@flow-like/flow-like-ui";
+import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
+import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
+import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";

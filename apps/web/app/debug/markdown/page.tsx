@@ -1,6 +1,6 @@
 "use client";
 
-import { TextEditor } from "@tm9657/flow-like-ui";
+import { TextEditor } from "@flow-like/flow-like-ui";
 import { useState } from "react";
 
 const EXAMPLE_FULL_MARKDOWN = `# Markdown Debug Preview
@@ -308,11 +308,11 @@ start: 45
 \`\`\``;
 
 const EXAMPLE_EMBED_GITHUB = `\`\`\`embed
-https://github.com/TM9657/flow-like
+https://github.com/Rheosoph/flow-like
 \`\`\``;
 
 const EXAMPLE_EMBED_GITHUB_ISSUE = `\`\`\`embed
-https://github.com/TM9657/flow-like/issues/525
+https://github.com/Rheosoph/flow-like/issues/525
 \`\`\``;
 
 const EXAMPLE_EMBED_TWITTER = `\`\`\`embed
@@ -421,7 +421,7 @@ The credentials are ||admin:supersecret123|| — rotate immediately.
 ## Embeds
 
 \`\`\`embed
-https://github.com/TM9657/flow-like
+https://github.com/Rheosoph/flow-like
 \`\`\`
 
 \`\`\`embed

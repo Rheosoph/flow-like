@@ -1,6 +1,6 @@
 # flow-like-wasm-node-lua
 
-A template for creating [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes in **Lua**.
+A template for creating [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes in **Lua**.
 
 Lua runs embedded in a C glue layer compiled to WebAssembly via Emscripten. This gives you Lua's lightweight scripting with the full Flow-Like host API.
 

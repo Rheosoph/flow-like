@@ -13,11 +13,11 @@ import {
 	cn,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
-} from "@tm9657/flow-like-ui/lib/uint8";
+} from "@flow-like/flow-like-ui/lib/uint8";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	CheckCircle2Icon,

@@ -1,6 +1,6 @@
 use super::{
     list_repos::GitHubRepository,
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -139,9 +139,9 @@ impl NodeLogic for GetGitHubRepoNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-kotlin
 
-Kotlin SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using **Kotlin/Wasm** (the `wasmWasi` target). This SDK uses Kotlin Multiplatform and `kotlinx.serialization` to produce portable WASM binaries.
+Kotlin SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using **Kotlin/Wasm** (the `wasmWasi` target). This SDK uses Kotlin Multiplatform and `kotlinx.serialization` to produce portable WASM binaries.
 
 ## Prerequisites
 

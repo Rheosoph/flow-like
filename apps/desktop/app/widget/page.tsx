@@ -20,12 +20,12 @@ import {
 	WidgetBuilder,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IWidget, Version, VersionType } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import type { IWidget, Version, VersionType } from "@flow-like/flow-like-ui";
 import type {
 	SurfaceComponent,
 	WidgetAction,
-} from "@tm9657/flow-like-ui/components/a2ui/types";
+} from "@flow-like/flow-like-ui/components/a2ui/types";
 import {
 	ArrowLeft,
 	Check,

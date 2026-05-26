@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk (Python)
 
-Python SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using [componentize-py](https://github.com/bytecodealliance/componentize-py). Write your node logic in plain Python — the SDK handles compilation to a WASM component via the WIT Component Model.
+Python SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using [componentize-py](https://github.com/bytecodealliance/componentize-py). Write your node logic in plain Python — the SDK handles compilation to a WASM component via the WIT Component Model.
 
 ## Install
 

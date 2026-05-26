@@ -1,6 +1,6 @@
 # Flow-Like WASM SDKs
 
-This directory contains official SDKs for building **WASM nodes** for the [Flow-Like](https://github.com/TM9657/flow-like) runtime. Each SDK targets a different language but exposes the same programming model and ABI.
+This directory contains official SDKs for building **WASM nodes** for the [Flow-Like](https://github.com/Rheosoph/flow-like) runtime. Each SDK targets a different language but exposes the same programming model and ABI.
 
 ## What is a WASM Node?
 

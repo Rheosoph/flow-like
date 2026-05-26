@@ -3,7 +3,7 @@ import type {
 	IHistoryMessage,
 	IResponse,
 	IResponseChunk,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
 
 export class WebAIState implements IAIState {

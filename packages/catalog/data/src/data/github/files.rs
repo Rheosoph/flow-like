@@ -1,4 +1,5 @@
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
+use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -59,6 +60,7 @@ impl NodeLogic for GetGitHubFileContentsNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -118,7 +120,13 @@ impl NodeLogic for GetGitHubFileContentsNode {
         node.add_output_pin(
             "content",
             "Content",
-            "Decoded file content",
+            "Decoded UTF-8 file content",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "base64_content",
+            "Base64 Content",
+            "Exact file content returned by GitHub, without line breaks",
             VariableType::String,
         );
         node.add_output_pin(
@@ -176,9 +184,9 @@ impl NodeLogic for GetGitHubFileContentsNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -202,23 +210,29 @@ impl NodeLogic for GetGitHubFileContentsNode {
                     .map_err(|e| flow_like_types::anyhow!("Failed to parse response: {}", e))?;
 
                 if let Some(file_info) = parse_file_content(&file_json) {
-                    // Decode base64 content if present
-                    let decoded_content = if let Some(content) = &file_info.content {
-                        // Remove newlines from base64 content (GitHub adds them)
-                        let cleaned = content.replace('\n', "");
+                    let base64_content = file_info
+                        .content
+                        .as_ref()
+                        .map(|content| content.replace('\n', ""))
+                        .unwrap_or_default();
+
+                    let decoded_content = if base64_content.is_empty() {
+                        String::new()
+                    } else {
                         match flow_like_types::base64::Engine::decode(
                             &flow_like_types::base64::prelude::BASE64_STANDARD,
-                            &cleaned,
+                            &base64_content,
                         ) {
-                            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                            Err(_) => content.clone(),
+                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+                            Err(_) => String::new(),
                         }
-                    } else {
-                        String::new()
                     };
 
                     context
                         .set_pin_value("content", json!(decoded_content))
+                        .await?;
+                    context
+                        .set_pin_value("base64_content", json!(base64_content))
                         .await?;
                     context
                         .set_pin_value("sha", json!(file_info.sha.clone()))
@@ -264,6 +278,7 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -289,7 +304,21 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             "Path to file in the repository",
             VariableType::String,
         );
-        node.add_input_pin("content", "Content", "File content", VariableType::String);
+        node.add_input_pin(
+            "source_file",
+            "Source File",
+            "FlowPath file to upload. When connected, this is used instead of Content",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "content",
+            "Content",
+            "Text content used when Source File is not connected",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin(
             "message",
             "Commit Message",
@@ -325,6 +354,22 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             "committer_email",
             "Committer Email",
             "Email of the committer (default: authenticated user's email)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "author_name",
+            "Author Name",
+            "Name of the author (default: authenticated user)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "author_email",
+            "Author Email",
+            "Email of the author (default: authenticated user's email)",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -380,7 +425,8 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
         let owner: String = context.evaluate_pin("owner").await?;
         let repo: String = context.evaluate_pin("repo").await?;
         let path: String = context.evaluate_pin("path").await?;
-        let content: String = context.evaluate_pin("content").await?;
+        let source_file: Option<FlowPath> = context.evaluate_pin("source_file").await.ok();
+        let content: String = context.evaluate_pin("content").await.unwrap_or_default();
         let message: String = context.evaluate_pin("message").await?;
         let sha: String = context.evaluate_pin("sha").await.unwrap_or_default();
         let branch: String = context.evaluate_pin("branch").await.unwrap_or_default();
@@ -390,6 +436,14 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             .unwrap_or_default();
         let committer_email: String = context
             .evaluate_pin("committer_email")
+            .await
+            .unwrap_or_default();
+        let author_name: String = context
+            .evaluate_pin("author_name")
+            .await
+            .unwrap_or_default();
+        let author_email: String = context
+            .evaluate_pin("author_email")
             .await
             .unwrap_or_default();
 
@@ -409,10 +463,15 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             urlencoding::encode(&path)
         ));
 
-        // Encode content to base64
+        let content_bytes = if let Some(source_file) = source_file {
+            source_file.get(context, false).await?
+        } else {
+            content.into_bytes()
+        };
+
         let encoded_content = flow_like_types::base64::Engine::encode(
             &flow_like_types::base64::prelude::BASE64_STANDARD,
-            content.as_bytes(),
+            content_bytes,
         );
 
         let mut request_body = json!({
@@ -435,12 +494,19 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             });
         }
 
+        if !author_name.is_empty() && !author_email.is_empty() {
+            request_body["author"] = json!({
+                "name": author_name,
+                "email": author_email
+            });
+        }
+
         let client = reqwest::Client::new();
         let response = client
             .put(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -510,6 +576,7 @@ impl NodeLogic for DeleteGitHubFileNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -552,6 +619,38 @@ impl NodeLogic for DeleteGitHubFileNode {
             "branch",
             "Branch",
             "Branch to delete from (default: default branch)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "committer_name",
+            "Committer Name",
+            "Name of the committer (default: authenticated user)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "committer_email",
+            "Committer Email",
+            "Email of the committer (default: authenticated user's email)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "author_name",
+            "Author Name",
+            "Name of the author (default: authenticated user)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "author_email",
+            "Author Email",
+            "Email of the author (default: authenticated user's email)",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -604,6 +703,22 @@ impl NodeLogic for DeleteGitHubFileNode {
         let sha: String = context.evaluate_pin("sha").await?;
         let message: String = context.evaluate_pin("message").await?;
         let branch: String = context.evaluate_pin("branch").await.unwrap_or_default();
+        let committer_name: String = context
+            .evaluate_pin("committer_name")
+            .await
+            .unwrap_or_default();
+        let committer_email: String = context
+            .evaluate_pin("committer_email")
+            .await
+            .unwrap_or_default();
+        let author_name: String = context
+            .evaluate_pin("author_name")
+            .await
+            .unwrap_or_default();
+        let author_email: String = context
+            .evaluate_pin("author_email")
+            .await
+            .unwrap_or_default();
 
         if owner.is_empty()
             || repo.is_empty()
@@ -635,12 +750,26 @@ impl NodeLogic for DeleteGitHubFileNode {
             request_body["branch"] = json!(branch);
         }
 
+        if !committer_name.is_empty() && !committer_email.is_empty() {
+            request_body["committer"] = json!({
+                "name": committer_name,
+                "email": committer_email
+            });
+        }
+
+        if !author_name.is_empty() && !author_email.is_empty() {
+            request_body["author"] = json!({
+                "name": author_name,
+                "email": author_email
+            });
+        }
+
         let client = reqwest::Client::new();
         let response = client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -707,6 +836,7 @@ impl NodeLogic for DownloadGitHubFileNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -741,6 +871,15 @@ impl NodeLogic for DownloadGitHubFileNode {
         )
         .set_default_value(Some(json!("")));
 
+        node.add_input_pin(
+            "output_path",
+            "Output Path",
+            "FlowPath to write the downloaded file into",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
         node.add_output_pin(
             "exec_out",
             "Success",
@@ -755,12 +894,9 @@ impl NodeLogic for DownloadGitHubFileNode {
             VariableType::Execution,
         );
 
-        node.add_output_pin(
-            "content",
-            "Content",
-            "Raw file content",
-            VariableType::String,
-        );
+        node.add_output_pin("path", "Path", "Written file path", VariableType::Struct)
+            .set_schema::<FlowPath>()
+            .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_output_pin("size", "Size", "File size in bytes", VariableType::Integer);
 
         node.add_required_oauth_scopes(GITHUB_PROVIDER_ID, vec!["repo"]);
@@ -788,6 +924,7 @@ impl NodeLogic for DownloadGitHubFileNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let path: String = context.evaluate_pin("path").await?;
         let ref_param: String = context.evaluate_pin("ref").await.unwrap_or_default();
+        let output_path: FlowPath = context.evaluate_pin("output_path").await?;
 
         if owner.is_empty() || repo.is_empty() || path.is_empty() {
             context.log_message("Owner, repository, and path are required", LogLevel::Error);
@@ -811,9 +948,9 @@ impl NodeLogic for DownloadGitHubFileNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Accept", "application/vnd.github.raw")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("Authorization", provider.auth_header())
+            .header("Accept", "application/vnd.github.raw+json")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -831,19 +968,20 @@ impl NodeLogic for DownloadGitHubFileNode {
                     return Ok(());
                 }
 
-                let content = resp
-                    .text()
+                let bytes = resp
+                    .bytes()
                     .await
                     .map_err(|e| flow_like_types::anyhow!("Failed to read response: {}", e))?;
 
-                let size = content.len() as i64;
+                let size = bytes.len() as i64;
+                output_path.put(context, bytes.to_vec(), false).await?;
 
                 context.log_message(
                     &format!("Downloaded file: {} ({} bytes)", path, size),
                     LogLevel::Info,
                 );
 
-                context.set_pin_value("content", json!(content)).await?;
+                context.set_pin_value("path", json!(output_path)).await?;
                 context.set_pin_value("size", json!(size)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }

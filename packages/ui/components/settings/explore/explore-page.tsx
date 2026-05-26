@@ -13,19 +13,19 @@ import {
 	cn,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	GraphViewer,
 	getGraphIcon,
-} from "@tm9657/flow-like-ui/components/ui/graph";
+} from "@flow-like/flow-like-ui/components/ui/graph";
 import {
 	OverlayWizard,
 	type TableInfo,
-} from "@tm9657/flow-like-ui/components/ui/graph/overlay-builder";
+} from "@flow-like/flow-like-ui/components/ui/graph/overlay-builder";
 import LanceDBExplorer, {
 	type ArrowSchemaJSON,
 	arrowToLanceSchema,
-} from "@tm9657/flow-like-ui/components/ui/lance-viewer";
+} from "@flow-like/flow-like-ui/components/ui/lance-viewer";
 import type {
 	CreateOverlayPayload,
 	GraphOverlay,
@@ -34,7 +34,7 @@ import type {
 	SubgraphNode,
 	SubgraphResult,
 	ValidationResult,
-} from "@tm9657/flow-like-ui/state/backend-state/graph-state";
+} from "@flow-like/flow-like-ui/state/backend-state/graph-state";
 import {
 	ArrowDownAZ,
 	ArrowLeftIcon,

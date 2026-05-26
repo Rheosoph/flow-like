@@ -11,12 +11,12 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@tm9657/flow-like-ui";
-import { IEventExecutionMode } from "@tm9657/flow-like-ui/lib/schema/flow/event";
+} from "@flow-like/flow-like-ui";
+import { IEventExecutionMode } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type {
 	IHub,
 	ISupportedSinks,
-} from "@tm9657/flow-like-ui/lib/schema/hub/hub";
+} from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { useEffect, useMemo, useState } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */
@@ -32,6 +32,8 @@ const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
 	mqtt: "mqtt",
 	github: "github",
 	rss: "rss",
+	rest: "rest",
+	mcp: "mcp",
 };
 
 /**
@@ -100,6 +102,7 @@ export function EventTypeConfiguration({
 	hub,
 	canExecuteLocally,
 	eventExecutionMode,
+	compact = false,
 }: Readonly<{
 	eventConfig: IEventMapping;
 	node: INode;
@@ -112,6 +115,8 @@ export function EventTypeConfiguration({
 	canExecuteLocally?: boolean;
 	/** Event's own execution mode; filters event types to matching availability. */
 	eventExecutionMode?: IEventExecutionMode;
+	/** Render label and select on one compact row. */
+	compact?: boolean;
 }>) {
 	const foundConfig = eventConfig[node?.name];
 
@@ -162,8 +167,17 @@ export function EventTypeConfiguration({
 	});
 
 	return (
-		<div className="space-y-3">
-			<Label htmlFor="event_type">Event Type</Label>
+		<div className={compact ? "flex shrink-0 items-center gap-2" : "space-y-3"}>
+			<Label
+				htmlFor="event_type"
+				className={
+					compact
+						? "text-xs text-muted-foreground whitespace-nowrap"
+						: undefined
+				}
+			>
+				{compact ? "Type" : "Event Type"}
+			</Label>
 			<Select
 				disabled={disabled}
 				value={event.event_type}
@@ -171,15 +185,16 @@ export function EventTypeConfiguration({
 					onUpdate(value, foundConfig.configs[value] ?? {});
 				}}
 			>
-				<SelectTrigger className="w-full">
+				<SelectTrigger
+					size={compact ? "sm" : "default"}
+					className={compact ? "w-32 text-xs" : "w-full"}
+				>
 					<SelectValue placeholder="Select event type" />
 				</SelectTrigger>
 				<SelectContent>
 					{availableEventTypes?.map((type) => (
 						<SelectItem key={type} value={type}>
-							{type
-								.replace(/_/g, " ")
-								.replace(/\b\w/g, (c) => c.toUpperCase())}
+							{type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
 						</SelectItem>
 					))}
 				</SelectContent>

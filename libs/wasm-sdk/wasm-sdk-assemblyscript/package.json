@@ -3,7 +3,7 @@
 	"version": "0.1.1",
 	"description": "SDK for building Flow-Like WASM nodes in AssemblyScript",
 	"license": "MIT",
-	"repository": "https://github.com/TM9657/flow-like",
+	"repository": "https://github.com/Rheosoph/flow-like",
 	"type": "module",
 	"main": "assembly/index.ts",
 	"files": ["assembly/"],

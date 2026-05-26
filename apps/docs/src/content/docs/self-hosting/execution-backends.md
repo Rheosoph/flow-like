@@ -174,7 +174,7 @@ AWS_REGION=us-east-1
 
 # Kubernetes Job backend
 K8S_NAMESPACE=flow-like
-K8S_EXECUTOR_IMAGE=ghcr.io/tm9657/flow-like-executor:latest
+K8S_EXECUTOR_IMAGE=ghcr.io/rheosoph/flow-like-executor:latest
 ```
 
 ### Runtime Selection

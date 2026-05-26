@@ -1,6 +1,6 @@
 "use client";
 
-import { Tabs, TabsList, TabsTrigger } from "@tm9657/flow-like-ui";
+import { Tabs, TabsList, TabsTrigger } from "@flow-like/flow-like-ui";
 import { Download, Package, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";

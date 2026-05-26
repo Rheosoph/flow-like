@@ -31,7 +31,7 @@ impl Default for KubernetesConfig {
     fn default() -> Self {
         Self {
             namespace: "flow-like".to_string(),
-            executor_image: "ghcr.io/tm9657/flow-like-k8s-executor:latest".to_string(),
+            executor_image: "ghcr.io/rheosoph/flow-like-k8s-executor:latest".to_string(),
             runtime_class: None,
             job_timeout_seconds: 3600,
             job_max_retries: 3,
@@ -50,7 +50,7 @@ impl KubernetesConfig {
         Self {
             namespace: std::env::var("K8S_NAMESPACE").unwrap_or_else(|_| "flow-like".to_string()),
             executor_image: std::env::var("K8S_EXECUTOR_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/tm9657/flow-like-k8s-executor:latest".to_string()),
+                .unwrap_or_else(|_| "ghcr.io/rheosoph/flow-like-k8s-executor:latest".to_string()),
             runtime_class: std::env::var("K8S_RUNTIME_CLASS").ok(),
             job_timeout_seconds: std::env::var("K8S_JOB_TIMEOUT")
                 .ok()

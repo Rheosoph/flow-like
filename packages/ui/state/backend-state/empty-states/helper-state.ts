@@ -2,7 +2,7 @@ import type {
 	IFileMetadata,
 	IHelperState,
 	ITemporaryUploadedFile,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export class EmptyHelperState implements IHelperState {
 	getPathMeta(folderPath: string): Promise<IFileMetadata[]> {

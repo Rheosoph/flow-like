@@ -14,14 +14,14 @@ import {
 	type PageListItem,
 	useBackend,
 	useInvalidateInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type {
 	IBeginOnlineForkBody,
 	IBeginOnlineForkResponse,
 	IFinalizeOnlineForkResponse,
 	IForkBundleSummary,
-} from "@tm9657/flow-like-ui/lib/schema/app/fork";
-import type { IProfileApp } from "@tm9657/flow-like-ui/lib/schema/profile/profile";
+} from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";

@@ -6,7 +6,7 @@ import {
 	CardContent,
 	CardHeader,
 	type ISettingsProfile,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { PartyPopper } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";

@@ -1,5 +1,5 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import type { IProfile } from "@tm9657/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -352,15 +352,19 @@ export async function fetcher<T>(
 				auth?.startSilentRenew();
 			}
 			console.error(`Error fetching ${path}:`, response);
-			console.error(await response.text());
-			throw new Error(`Error fetching data: ${response.statusText}`);
+			const errorText = await response.text();
+			console.error(errorText);
+			throw new Error(apiErrorMessage(response, errorText));
 		}
 
-		const json = await response.json();
+		const text = await response.text();
+		if (!text) return undefined as T;
+		const json = tryParseJSON<T>(text);
+		if (json === null) return text as T;
 		console.groupCollapsed(`API Request: ${path}`);
 		console.dir(json, { depth: null });
 		console.groupEnd();
-		return json as T;
+		return json;
 	} catch (error) {
 		console.groupCollapsed(`API Request: ${path}`);
 		console.error(`Error fetching ${path}:`, error);
@@ -377,10 +381,28 @@ export async function fetcher<T>(
 			) {
 				throw new Error(`Network unavailable: ${path}`);
 			}
+			throw error;
 		}
 
 		throw new Error(`Error fetching data: ${error}`);
 	}
+}
+
+function apiErrorMessage(response: Response, body: string): string {
+	if (body) {
+		try {
+			const parsed = JSON.parse(body);
+			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			if (typeof message === "string" && message.trim()) {
+				return message;
+			}
+		} catch {
+			const trimmed = body.trim();
+			if (trimmed) return trimmed;
+		}
+	}
+
+	return response.statusText || `HTTP error: ${response.status}`;
 }
 
 export async function post<T>(

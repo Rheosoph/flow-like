@@ -1,5 +1,4 @@
 use super::provider::{GOOGLE_PROVIDER_ID, GoogleProvider};
-use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -26,7 +25,7 @@ struct DriveFileList {
     next_page_token: Option<String>,
 }
 
-/// Represents a Google Drive file as a FlowPath-compatible structure
+/// Represents a Google Drive file returned by the Drive API.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoogleDriveFile {
     pub id: String,
@@ -34,17 +33,6 @@ pub struct GoogleDriveFile {
     pub mime_type: String,
     pub size: Option<u64>,
     pub path: String,
-}
-
-impl GoogleDriveFile {
-    /// Convert to a FlowPath for use in other nodes
-    pub fn to_flow_path(&self) -> FlowPath {
-        FlowPath::new(
-            format!("gdrive://{}", self.id),
-            format!("google_drive_{}", self.id),
-            None,
-        )
-    }
 }
 
 #[crate::register_node]

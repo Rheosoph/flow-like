@@ -136,7 +136,22 @@ impl NodeLogic for TcpConnectNode {
             .map(|a| a.to_string())
             .unwrap_or_else(|_| addr.clone());
 
-        let (reader, writer) = tokio::io::split(stream);
+        let (reader, writer) =
+            if let Some(connector) = crate::web::tls::client_connector(&config.tls)? {
+                let server_name = crate::web::tls::tls_server_name(&config.tls, &config.host)?;
+                match connector.connect(server_name, stream).await {
+                    Ok(stream) => crate::web::tls::boxed_split(stream),
+                    Err(err) => {
+                        context.log_message(
+                            &format!("TCP TLS handshake failed: {}", err),
+                            LogLevel::Error,
+                        );
+                        return Ok(());
+                    }
+                }
+            } else {
+                crate::web::tls::boxed_split(stream)
+            };
 
         let ref_id = format!("tcp_{}", flow_like_types::create_id());
         let close_notify = Arc::new(tokio::sync::Notify::new());
@@ -175,6 +190,8 @@ impl NodeLogic for TcpConnectNode {
         spawn_message_reader(context, &handler, &ref_id, close_notify.clone()).await?;
 
         let timeout = config.timeout_seconds;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
         if timeout > 0 {
             tokio::select! {
                 _ = close_notify.notified() => {}
@@ -188,9 +205,35 @@ impl NodeLogic for TcpConnectNode {
                             let _ = writer.shutdown().await;
                         }
                 }
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("TCP connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedTcpConnection>() {
+                            use tokio::io::AsyncWriteExt;
+                            let mut writer = conn.writer.lock().await;
+                            let _ = writer.shutdown().await;
+                        }
+                }
             }
         } else {
-            close_notify.notified().await;
+            tokio::select! {
+                _ = close_notify.notified() => {}
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("TCP connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedTcpConnection>() {
+                            use tokio::io::AsyncWriteExt;
+                            let mut writer = conn.writer.lock().await;
+                            let _ = writer.shutdown().await;
+                        }
+                }
+            }
         }
 
         {
@@ -200,6 +243,10 @@ impl NodeLogic for TcpConnectNode {
 
         context.deactivate_exec_pin("on_connect").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }

@@ -440,11 +440,16 @@ function ExtendedAppCard({
 								role="button"
 								tabIndex={0}
 								onClick={(e) => {
+									e.preventDefault();
 									e.stopPropagation();
 									onSettingsClick?.();
 								}}
+								onPointerDown={(e) => {
+									e.stopPropagation();
+								}}
 								onKeyDown={(e) => {
 									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
 										e.stopPropagation();
 										onSettingsClick?.();
 									}

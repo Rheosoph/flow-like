@@ -6,7 +6,7 @@ import type {
 	IOAuthProvider,
 	IStoredOAuthToken,
 	OAuthService,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import {

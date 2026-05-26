@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -81,6 +84,7 @@ impl NodeLogic for ListTaskListsNode {
             "List all Microsoft To Do task lists",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -113,28 +117,15 @@ impl NodeLogic for ListTaskListsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/todo/lists")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let lists: Vec<TodoTaskList> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_task_list).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/todo/lists"))
+            .await
+        {
+            Ok(values) => {
+                let lists: Vec<TodoTaskList> = values.iter().filter_map(parse_task_list).collect();
                 let count = lists.len() as i64;
                 context.set_pin_value("task_lists", json!(lists)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -171,6 +162,7 @@ impl NodeLogic for CreateTaskListNode {
             "Create a new Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -213,7 +205,7 @@ impl NodeLogic for CreateTaskListNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/todo/lists")
+            .post(provider.api_url("/me/todo/lists"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -234,8 +226,9 @@ impl NodeLogic for CreateTaskListNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -273,6 +266,7 @@ impl NodeLogic for ListTasksNode {
             "List all tasks in a Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -312,31 +306,19 @@ impl NodeLogic for ListTasksNode {
         let list_id: String = context.evaluate_pin("list_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/todo/lists/{}/tasks",
-                list_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let tasks: Vec<TodoTask> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_task).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/me/todo/lists/{}/tasks", list_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let tasks: Vec<TodoTask> = values.iter().filter_map(parse_task).collect();
                 let count = tasks.len() as i64;
                 context.set_pin_value("tasks", json!(tasks)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -373,6 +355,7 @@ impl NodeLogic for CreateTaskNode {
             "Create a new task in a Microsoft To Do task list",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -463,10 +446,7 @@ impl NodeLogic for CreateTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/me/todo/lists/{}/tasks",
-                list_id
-            ))
+            .post(provider.api_url(&format!("/me/todo/lists/{}/tasks", list_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -487,8 +467,9 @@ impl NodeLogic for CreateTaskNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -526,6 +507,7 @@ impl NodeLogic for UpdateTaskNode {
             "Update an existing task in Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -619,10 +601,7 @@ impl NodeLogic for UpdateTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/me/todo/lists/{}/tasks/{}",
-                list_id, task_id
-            ))
+            .patch(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -643,8 +622,9 @@ impl NodeLogic for UpdateTaskNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -682,6 +662,7 @@ impl NodeLogic for CompleteTaskNode {
             "Mark a task as completed in Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -726,10 +707,7 @@ impl NodeLogic for CompleteTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/me/todo/lists/{}/tasks/{}",
-                list_id, task_id
-            ))
+            .patch(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -750,8 +728,9 @@ impl NodeLogic for CompleteTaskNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -789,6 +768,7 @@ impl NodeLogic for DeleteTaskNode {
             "Delete a task from Microsoft To Do",
             "Data/Microsoft/To Do",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -827,10 +807,7 @@ impl NodeLogic for DeleteTaskNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .delete(format!(
-                "https://graph.microsoft.com/v1.0/me/todo/lists/{}/tasks/{}",
-                list_id, task_id
-            ))
+            .delete(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -840,8 +817,9 @@ impl NodeLogic for DeleteTaskNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {

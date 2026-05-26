@@ -54,7 +54,7 @@ export default defineConfig({
 			noExternal: [
 				"katex",
 				"rehype-katex",
-				"@tm9657/flow-like-ui",
+				"@flow-like/flow-like-ui",
 				"lodash-es",
 				"@platejs/math",
 				"@platejs/markdown",

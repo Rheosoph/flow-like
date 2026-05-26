@@ -9,8 +9,8 @@ default = []
 # Execution environment - determines how interactions are handled
 # local: Desktop app with polling-based interactions
 # remote: Server execution with SSE-based interactions via API
-local = ["flow-like-catalog-data/local"]
-remote = ["flow-like-catalog-data/remote"]
+local = ["flow-like-catalog-data/local", "flow-like-catalog-web/local"]
+remote = ["flow-like-catalog-data/remote", "flow-like-catalog-web/remote"]
 
 local-ml = [
     "flow-like-catalog-core/local-ml",

@@ -10,7 +10,7 @@
 
     <name>Flow-Like WASM SDK for Java</name>
     <description>SDK for building Flow-Like WASM nodes in Java via TeaVM</description>
-    <url>https://github.com/TM9657/flow-like</url>
+    <url>https://github.com/Rheosoph/flow-like</url>
 
     <licenses>
         <license>
@@ -23,14 +23,14 @@
         <developer>
             <id>tm9657</id>
             <name>TM9657</name>
-            <url>https://github.com/TM9657</url>
+            <url>https://github.com/Rheosoph</url>
         </developer>
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/TM9657/flow-like.git</connection>
-        <developerConnection>scm:git:ssh://github.com:TM9657/flow-like.git</developerConnection>
-        <url>https://github.com/TM9657/flow-like/tree/main/templates/wasm-sdk-java</url>
+        <connection>scm:git:git://github.com/Rheosoph/flow-like.git</connection>
+        <developerConnection>scm:git:ssh://github.com:Rheosoph/flow-like.git</developerConnection>
+        <url>https://github.com/Rheosoph/flow-like/tree/main/templates/wasm-sdk-java</url>
     </scm>
 
     <properties>

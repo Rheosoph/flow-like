@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-java
 
-Java SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using [TeaVM](https://teavm.org/), which compiles Java bytecode directly to WebAssembly.
+Java SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using [TeaVM](https://teavm.org/), which compiles Java bytecode directly to WebAssembly.
 
 ## Prerequisites
 

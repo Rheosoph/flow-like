@@ -9,7 +9,7 @@ import {
 	useBackend,
 	useInvoke,
 	useMutation,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Badge,
 	Button,
@@ -28,7 +28,7 @@ import {
 	SelectValue,
 	Separator,
 	Textarea,
-} from "@tm9657/flow-like-ui/components";
+} from "@flow-like/flow-like-ui/components";
 import {
 	AlertTriangle,
 	Check,

@@ -42,7 +42,7 @@ futures-util.workspace = true
 bytes.workspace = true
 moka.workspace = true
 blake3.workspace = true
-aes-gcm = "0.10"
+aes-gcm.workspace = true
 getrandom.workspace = true
 p256 = "0.13.2"
 async-trait.workspace = true
@@ -66,7 +66,7 @@ aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 # -----
 
 # ----- Azure dependencies ----
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 rand = { version = "0.9" }
 urlencoding = { workspace = true }
@@ -109,7 +109,7 @@ secrets-aws = ["flow-like-secrets/aws"]
 secrets-gcp = ["flow-like-secrets/gcp"]
 secrets-azure = ["flow-like-secrets/azure"]
 aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "flow-like-sinks/aws"]
-azure = ["hmac", "urlencoding"]
+azure = ["urlencoding"]
 gcp = ["rsa", "urlencoding"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
 cognito = ["aws-sdk-cognitoidentityprovider", "aws-config"]

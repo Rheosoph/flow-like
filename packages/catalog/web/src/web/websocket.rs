@@ -3,9 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::tls::TlsConfig;
+
 pub mod close;
 pub mod connect;
 pub mod send;
+pub mod server;
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct WebSocketConfig {
@@ -14,12 +17,32 @@ pub struct WebSocketConfig {
     pub headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct WebSocketSession {
     pub ref_id: String,
     pub url: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct WebSocketServerConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    #[serde(default)]
+    pub tls: TlsConfig,
+}
+
+fn default_max_connections() -> u32 {
+    128
 }
 
 #[cfg(feature = "execute")]
@@ -45,8 +68,23 @@ type WsStream = futures::stream::SplitStream<
 >;
 
 #[cfg(feature = "execute")]
+type ServerWsSink =
+    futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<super::tls::BoxedIo>, Message>;
+
+#[cfg(feature = "execute")]
+pub(crate) type ServerWsStream =
+    futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<super::tls::BoxedIo>>;
+
+#[cfg(feature = "execute")]
+#[derive(Clone)]
+pub enum CachedWebSocketSink {
+    Client(Arc<Mutex<WsSink>>),
+    Server(Arc<Mutex<ServerWsSink>>),
+}
+
+#[cfg(feature = "execute")]
 pub struct CachedWebSocketConnection {
-    pub sink: Arc<Mutex<WsSink>>,
+    pub sink: CachedWebSocketSink,
     pub close_notify: Arc<tokio::sync::Notify>,
     pub reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }

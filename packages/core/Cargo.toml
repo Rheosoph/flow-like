@@ -3,8 +3,8 @@ name = "flow-like"
 description = "Flow-Like, Automation done with the press of a Button. Core Library for Flow Execution and Management"
 version = "0.1.0"
 edition = "2024"
-authors = ["TM9657 GmbH"]
-repository = "https://github.com/TM9657/flow-like/"
+authors = ["Rheosoph GmbH"]
+repository = "https://github.com/Rheosoph/flow-like/"
 categories = ["GenAI", "AI", "Productivity"]
 license-file = "LICENSE"
 readme = "README.md"
@@ -45,9 +45,9 @@ highway = "1.3.0"
 canonical_json = "0.5.0"
 zip = {version = "8.2.0", default-features = false, features = ["deflate"] }
 flate2.workspace = true
-chacha20poly1305 = {version="0.10.1", features=["stream", "std"]}
-argon2 = "0.5.3"
-zeroize = "1.8.1"
+chacha20poly1305 = { workspace = true, features = ["stream", "std"] }
+argon2.workspace = true
+zeroize.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true

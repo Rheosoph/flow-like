@@ -1,6 +1,6 @@
 {
 	"productName": "Flow Like",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"identifier": "com.flow-like.app",
 	"build": {
 		"beforeDevCommand": "bun run dev",
@@ -87,7 +87,7 @@
 			"developmentTeam": "VVT9DYMA6M"
 		},
 		"homepage": "https://flow-like.com",
-		"publisher": "TM9657 GmbH",
+		"publisher": "Rheosoph GmbH",
 		"licenseFile": "../../../LICENSE",
 		"active": true,
 		"targets": "all",

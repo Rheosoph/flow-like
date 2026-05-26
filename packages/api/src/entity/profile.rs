@@ -31,7 +31,12 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub hub: String,
     pub hubs: Option<Vec<String>>,
-    #[sea_orm(column_name = "userId", column_type = "Text")]
+    #[sea_orm(
+        primary_key,
+        auto_increment = false,
+        column_name = "userId",
+        column_type = "Text"
+    )]
     pub user_id: String,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,

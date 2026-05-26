@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -106,6 +109,7 @@ impl NodeLogic for ListNotebooksNode {
             "List all OneNote notebooks",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -138,28 +142,20 @@ impl NodeLogic for ListNotebooksNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/onenote/notebooks")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let notebooks: Vec<OneNoteNotebook> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_notebook).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url("/me/onenote/notebooks"),
+        )
+        .await
+        {
+            Ok(values) => {
+                let notebooks: Vec<OneNoteNotebook> =
+                    values.iter().filter_map(parse_notebook).collect();
                 let count = notebooks.len() as i64;
                 context.set_pin_value("notebooks", json!(notebooks)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -196,6 +192,7 @@ impl NodeLogic for CreateNotebookNode {
             "Create a new OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -238,7 +235,7 @@ impl NodeLogic for CreateNotebookNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/onenote/notebooks")
+            .post(provider.api_url("/me/onenote/notebooks"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -259,8 +256,9 @@ impl NodeLogic for CreateNotebookNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -298,6 +296,7 @@ impl NodeLogic for ListSectionsNode {
             "List all sections in a OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -337,31 +336,20 @@ impl NodeLogic for ListSectionsNode {
         let notebook_id: String = context.evaluate_pin("notebook_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/notebooks/{}/sections",
-                notebook_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let sections: Vec<OneNoteSection> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_section).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/me/onenote/notebooks/{}/sections", notebook_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let sections: Vec<OneNoteSection> =
+                    values.iter().filter_map(parse_section).collect();
                 let count = sections.len() as i64;
                 context.set_pin_value("sections", json!(sections)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -398,6 +386,7 @@ impl NodeLogic for CreateSectionNode {
             "Create a new section in a OneNote notebook",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -447,10 +436,7 @@ impl NodeLogic for CreateSectionNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/notebooks/{}/sections",
-                notebook_id
-            ))
+            .post(provider.api_url(&format!("/me/onenote/notebooks/{}/sections", notebook_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -471,8 +457,9 @@ impl NodeLogic for CreateSectionNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -510,6 +497,7 @@ impl NodeLogic for ListPagesNode {
             "List all pages in a OneNote section",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -549,31 +537,19 @@ impl NodeLogic for ListPagesNode {
         let section_id: String = context.evaluate_pin("section_id").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/sections/{}/pages",
-                section_id
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let pages: Vec<OneNotePage> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_page).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(
+            &client,
+            &provider,
+            provider.api_url(&format!("/me/onenote/sections/{}/pages", section_id)),
+        )
+        .await
+        {
+            Ok(values) => {
+                let pages: Vec<OneNotePage> = values.iter().filter_map(parse_page).collect();
                 let count = pages.len() as i64;
                 context.set_pin_value("pages", json!(pages)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -610,6 +586,7 @@ impl NodeLogic for CreatePageNode {
             "Create a new page in a OneNote section",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -671,10 +648,7 @@ impl NodeLogic for CreatePageNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/sections/{}/pages",
-                section_id
-            ))
+            .post(provider.api_url(&format!("/me/onenote/sections/{}/pages", section_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/xhtml+xml")
             .body(html_content)
@@ -695,8 +669,9 @@ impl NodeLogic for CreatePageNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -734,6 +709,7 @@ impl NodeLogic for GetPageContentNode {
             "Get the HTML content of a OneNote page",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -771,10 +747,7 @@ impl NodeLogic for GetPageContentNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/pages/{}/content",
-                page_id
-            ))
+            .get(provider.api_url(&format!("/me/onenote/pages/{}/content", page_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -786,8 +759,9 @@ impl NodeLogic for GetPageContentNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -825,6 +799,7 @@ impl NodeLogic for DeletePageNode {
             "Delete a OneNote page",
             "Data/Microsoft/OneNote",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onenote.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -856,10 +831,7 @@ impl NodeLogic for DeletePageNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .delete(format!(
-                "https://graph.microsoft.com/v1.0/me/onenote/pages/{}",
-                page_id
-            ))
+            .delete(provider.api_url(&format!("/me/onenote/pages/{}", page_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -869,8 +841,9 @@ impl NodeLogic for DeletePageNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {

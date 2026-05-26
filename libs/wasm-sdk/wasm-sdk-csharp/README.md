@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-csharp
 
-C# SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes targeting **.NET 10+ with WASI** (`wasm32-wasi`). This uses the experimental `wasi-experimental` workload to compile .NET assemblies directly to WASM.
+C# SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes targeting **.NET 10+ with WASI** (`wasm32-wasi`). This uses the experimental `wasi-experimental` workload to compile .NET assemblies directly to WASM.
 
 ## Prerequisites
 

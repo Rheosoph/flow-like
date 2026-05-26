@@ -17,9 +17,9 @@ import {
 	useBackend,
 	useInfiniteInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
-import type { IUserLookup } from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui";
+import { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
+import type { IUserLookup } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { motion } from "framer-motion";
 import {
 	AlertCircle,

@@ -3,7 +3,7 @@ import type {
 	IMetadata,
 	ITemplateState,
 	IVersionType,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { type WebBackendRef, apiDelete, apiGet, apiPut } from "./api-utils";
 
 export class WebTemplateState implements ITemplateState {

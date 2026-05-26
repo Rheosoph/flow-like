@@ -1,3 +1,3 @@
 "use client";
 
-export { NotificationsPageScreen as default } from "@tm9657/flow-like-ui";
+export { NotificationsPageScreen as default } from "@flow-like/flow-like-ui";

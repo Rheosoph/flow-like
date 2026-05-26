@@ -1,6 +1,6 @@
 "use client";
 
-import { PackagesStorePage } from "@tm9657/flow-like-ui";
+import { PackagesStorePage } from "@flow-like/flow-like-ui";
 import { useAuth } from "react-oidc-context";
 import { fetcher } from "../../../lib/api";
 

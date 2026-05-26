@@ -31,25 +31,25 @@ import {
 	useFlowBoardParentState,
 	useHub,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { FlowWrapper } from "@tm9657/flow-like-ui/components/flow/flow-wrapper";
+} from "@flow-like/flow-like-ui";
+import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
 import type {
 	BoardSnapshot,
 	Challenge,
 	ChallengeAttempt,
 	LessonAction,
 	LessonAppRef,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	type UserLessonProgress,
 	translateId,
-} from "@tm9657/flow-like-ui/lib/learn/types";
-import { BOARD_BRIDGE_NATIVE_EVENT } from "@tm9657/flow-like-ui/lib/learn/board-bridge";
-import EventsPage from "@tm9657/flow-like-ui/components/settings/events/events-page";
+} from "@flow-like/flow-like-ui/lib/learn/types";
+import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
+import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
 import {
 	PagesSection,
 	type PageData,
-} from "@tm9657/flow-like-ui/components/settings/routes";
+} from "@flow-like/flow-like-ui/components/settings/routes";
 import "@xyflow/react/dist/style.css";
 import {
 	ArrowLeft,

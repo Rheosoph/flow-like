@@ -1,10 +1,10 @@
-import { getOrUploadTemporaryFile } from "@tm9657/flow-like-ui";
+import { getOrUploadTemporaryFile } from "@flow-like/flow-like-ui";
 import type {
 	IHelperState,
 	ITemporaryFlowPath,
 	ITemporaryUploadedFile,
-} from "@tm9657/flow-like-ui";
-import type { IFileMetadata } from "@tm9657/flow-like-ui/lib";
+} from "@flow-like/flow-like-ui";
+import type { IFileMetadata } from "@flow-like/flow-like-ui/lib";
 import { type WebBackendRef, apiGet } from "./api-utils";
 
 interface ITemporaryFileResponse {

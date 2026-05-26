@@ -41,7 +41,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Optional execution dependencies
-tract-tflite = { git = "https://github.com/TM9657/tract", rev = "ed3b020", optional = true }
+tract-tflite = { git = "https://github.com/Rheosoph/tract", rev = "ed3b020", optional = true }
 hound = { version = "3.5", optional = true }
 tokenizers = { version = "0.22.2", optional = true }
 

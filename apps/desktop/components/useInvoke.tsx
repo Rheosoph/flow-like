@@ -3,7 +3,7 @@ import {
 	type UseQueryResult,
 	useQuery,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export function useTauriInvoke<T>(
 	path: string,

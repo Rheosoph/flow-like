@@ -11,7 +11,7 @@ import {
 	useInvoke,
 	useQuery,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 

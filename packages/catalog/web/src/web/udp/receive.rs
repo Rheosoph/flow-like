@@ -171,7 +171,7 @@ impl NodeLogic for UdpReceiveNode {
         let parent_node_id = context.node.node.lock().await.id.clone();
 
         let reader_close_notify = close_notify.clone();
-        let handle = tokio::spawn(async move {
+        let mut handle = tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
             loop {
                 let recv_result = tokio::select! {
@@ -274,18 +274,45 @@ impl NodeLogic for UdpReceiveNode {
 
             close_notify.notify_waiters();
         });
+        let abort_handle = handle.abort_handle();
 
         let timeout = timeout_seconds as u64;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
         if timeout > 0 {
             tokio::select! {
-                _ = handle => {}
+                _ = &mut handle => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(timeout)) => {
                     context.log_message("UDP receive timed out", LogLevel::Warn);
                     cached.close_notify.notify_waiters();
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut handle).await;
+                    if !handle.is_finished() {
+                        abort_handle.abort();
+                    }
+                }
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("UDP receive cancelled", LogLevel::Warn);
+                    cached.close_notify.notify_waiters();
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut handle).await;
+                    if !handle.is_finished() {
+                        abort_handle.abort();
+                    }
                 }
             }
         } else {
-            let _ = handle.await;
+            tokio::select! {
+                _ = &mut handle => {}
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("UDP receive cancelled", LogLevel::Warn);
+                    cached.close_notify.notify_waiters();
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut handle).await;
+                    if !handle.is_finished() {
+                        abort_handle.abort();
+                    }
+                }
+            }
         }
 
         {
@@ -295,6 +322,10 @@ impl NodeLogic for UdpReceiveNode {
 
         context.deactivate_exec_pin("on_listening").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }

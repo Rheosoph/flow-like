@@ -2,7 +2,7 @@ import type {
 	IHistoryMessage,
 	IResponse,
 	IResponseChunk,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type { IAIState } from "../ai-state";
 
 export class EmptyAIState implements IAIState {

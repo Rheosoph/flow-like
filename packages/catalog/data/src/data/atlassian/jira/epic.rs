@@ -2,12 +2,12 @@ use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider}
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json, reqwest};
 
-use super::JiraIssue;
+use super::{JiraIssue, build_jira_search_body};
 
 /// Link an issue to an epic
 #[crate::register_node]
@@ -30,6 +30,7 @@ impl NodeLogic for LinkToEpicNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -74,7 +75,10 @@ impl NodeLogic for LinkToEpicNode {
             VariableType::Boolean,
         );
 
-        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["write:epic:jira-software"]);
+        node.add_required_oauth_scopes(
+            ATLASSIAN_PROVIDER_ID,
+            vec!["write:jira-work", "write:epic:jira-software"],
+        );
         node.set_scores(
             NodeScores::new()
                 .set_privacy(6)
@@ -135,10 +139,7 @@ impl NodeLogic for LinkToEpicNode {
             }
         } else {
             // Server/DC: Use agile endpoint
-            let url = format!(
-                "{}/rest/agile/1.0/epic/{}/issue",
-                provider.base_url, epic_key
-            );
+            let url = provider.jira_agile_api_url(&format!("/epic/{}/issue", epic_key));
             let body = json!({
                 "issues": [issue_key]
             });
@@ -189,6 +190,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -226,7 +228,10 @@ impl NodeLogic for UnlinkFromEpicNode {
             VariableType::Boolean,
         );
 
-        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["write:epic:jira-software"]);
+        node.add_required_oauth_scopes(
+            ATLASSIAN_PROVIDER_ID,
+            vec!["write:jira-work", "write:epic:jira-software"],
+        );
         node.set_scores(
             NodeScores::new()
                 .set_privacy(6)
@@ -279,7 +284,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             }
         } else {
             // Server/DC: Use agile endpoint
-            let url = format!("{}/rest/agile/1.0/epic/none/issue", provider.base_url);
+            let url = provider.jira_agile_api_url("/epic/none/issue");
             let body = json!({
                 "issues": [issue_key]
             });
@@ -330,6 +335,7 @@ impl NodeLogic for GetEpicIssuesNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -373,7 +379,7 @@ impl NodeLogic for GetEpicIssuesNode {
             "Issues linked to the epic",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_value_type(ValueType::Array)
         .set_schema::<JiraIssue>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
@@ -417,16 +423,16 @@ impl NodeLogic for GetEpicIssuesNode {
             format!("\"Epic Link\" = {}", epic_key)
         };
 
-        let url = format!(
-            "{}?jql={}&maxResults={}",
-            provider.jira_api_url("/search"),
-            urlencoding::encode(&jql),
-            max_results
-        );
+        let url = provider.jira_search_api_url();
+        let body =
+            build_jira_search_body(&provider, jql, max_results, 0, Vec::new(), String::new());
 
         let response = client
-            .get(&url)
+            .post(&url)
             .header("Authorization", provider.auth_header())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&body)
             .send()
             .await?;
 

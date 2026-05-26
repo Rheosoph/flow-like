@@ -11,7 +11,7 @@ Flow-Like is available under different licensing terms depending on your use cas
 
 ### Business Source License (BSL 1.1)
 
-The open-source version of Flow-Like is released under the **Business Source License 1.1**, owned by **TM9657 GmbH**.
+The open-source version of Flow-Like is released under the **Business Source License 1.1**, owned by **Rheosoph GmbH**.
 
 **What this means:**
 
@@ -25,7 +25,7 @@ The open-source version of Flow-Like is released under the **Business Source Lic
 :::caution[Usage Restrictions]
 The BSL includes specific restrictions:
 
-1. **No Competitive Products** — You cannot use Flow-Like to develop, offer, or provide products/services that compete with Flow-Like or other TM9657 GmbH offerings. This includes SaaS platforms with similar workflow automation functionality.
+1. **No Competitive Products** — You cannot use Flow-Like to develop, offer, or provide products/services that compete with Flow-Like or other Rheosoph GmbH offerings. This includes SaaS platforms with similar workflow automation functionality.
 
 2. **Large Entity Restriction** — Companies with **more than 2,000 employees** or **annual revenue exceeding €300 million** must obtain a commercial license before using Flow-Like in any capacity.
 :::
@@ -98,4 +98,4 @@ For licensing questions or to discuss enterprise options:
 
 - [White-Labeling](/enterprise/whitelabeling/) — Deploy under your brand
 - [Self-Hosting](/self-hosting/overview/) — Deployment options
-- [BSL 1.1 Full Text](https://github.com/TM9657/flow-like/blob/main/LICENSE) — Complete license terms
+- [BSL 1.1 Full Text](https://github.com/Rheosoph/flow-like/blob/main/LICENSE) — Complete license terms

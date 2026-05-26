@@ -4,7 +4,7 @@ version = "0.3.6"
 edition = "2021"
 description = "Proc macros for the Flow-Like WASM SDK"
 license = "MIT"
-repository = "https://github.com/TM9657/flow-like"
+repository = "https://github.com/Rheosoph/flow-like"
 
 [workspace]
 

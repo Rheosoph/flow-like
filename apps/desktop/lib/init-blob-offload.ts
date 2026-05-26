@@ -1,6 +1,6 @@
 import { dexieTauriBlobOffload } from "@flow-like/dexie-tauri-blob-offload";
-import { chatDb } from "@tm9657/flow-like-ui/components/interfaces/chat-default/chat-db";
-import { flowpilotDB } from "@tm9657/flow-like-ui/lib/flowpilot-db";
+import { chatDb } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
+import { flowpilotDB } from "@flow-like/flow-like-ui/lib/flowpilot-db";
 import { runtimeVarsDB } from "./runtime-vars-db";
 
 let initialized = false;

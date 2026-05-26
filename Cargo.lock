@@ -440,7 +440,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -451,7 +451,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -988,6 +988,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "516b6b4f0e40d50dcda9365d53964ec74560ad4284da2e7fc97122cd83174516"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "asn1-rs"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
+dependencies = [
+ "asn1-rs-derive",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-traits 0.2.19",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "synstructure",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2725,6 +2764,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3921,7 +3969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3930,7 +3978,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4852,12 +4900,12 @@ dependencies = [
 [[package]]
 name = "cuid-util"
 version = "0.1.1"
-source = "git+https://github.com/TM9657/cuid-rust.git#ae24cbaf892e2179b029cbb89f6c8074bbf2a5b4"
+source = "git+https://github.com/Rheosoph/cuid-rust.git#ae24cbaf892e2179b029cbb89f6c8074bbf2a5b4"
 
 [[package]]
 name = "cuid2"
 version = "0.1.4"
-source = "git+https://github.com/TM9657/cuid-rust.git#ae24cbaf892e2179b029cbb89f6c8074bbf2a5b4"
+source = "git+https://github.com/Rheosoph/cuid-rust.git#ae24cbaf892e2179b029cbb89f6c8074bbf2a5b4"
 dependencies = [
  "cuid-util",
  "getrandom 0.4.2",
@@ -5769,7 +5817,7 @@ dependencies = [
 [[package]]
 name = "datafusion-table-providers"
 version = "0.10.1"
-source = "git+https://github.com/TM9657/datafusion-table-providers.git?rev=ad55aa2#ad55aa2860607c75350f443db6e2cc569f7d51d8"
+source = "git+https://github.com/Rheosoph/datafusion-table-providers.git?rev=ad55aa2#ad55aa2860607c75350f443db6e2cc569f7d51d8"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -6036,6 +6084,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs",
+ "displaydoc",
+ "nom 7.1.3",
+ "num-bigint",
+ "num-traits 0.2.19",
+ "rusticata-macros",
+]
+
+[[package]]
 name = "der_derive"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6287,7 +6349,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6342,7 +6404,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -7110,7 +7172,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7122,7 +7184,7 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 [[package]]
 name = "esaxx-rs"
 version = "0.1.10"
-source = "git+https://github.com/thewh1teagle/esaxx-rs.git?branch=feat%2Fdynamic-msvc-link#3c8ac57d245ab328f7c71953b7c116a8d1d5498f"
+source = "git+https://github.com/Rheosoph/esaxx-rs.git?branch=main#20538c8aac099faae4fb8c472107285692a87a7e"
 dependencies = [
  "cc",
 ]
@@ -7332,7 +7394,7 @@ checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
 [[package]]
 name = "fastembed"
 version = "5.2.0"
-source = "git+https://github.com/TM9657/fastembed-rs.git?rev=8cddfc6#8cddfc653df04589ff81a0f632575f37169a5ee7"
+source = "git+https://github.com/Rheosoph/fastembed-rs.git?rev=784042c#784042cb89e7b4aa45c34d6768684760c6c540dd"
 dependencies = [
  "anyhow",
  "image",
@@ -8087,8 +8149,10 @@ dependencies = [
 name = "flow-like-catalog-std"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "ahash 0.8.12",
  "async-trait",
+ "chacha20poly1305",
  "chrono",
  "chrono-tz 0.10.4",
  "csv",
@@ -8119,6 +8183,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid 1.23.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -8130,6 +8195,7 @@ dependencies = [
  "async-smtp",
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "chrono-tz 0.10.4",
  "flow-like",
@@ -8140,16 +8206,21 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
+ "hmac 0.12.1",
  "htmd 0.3.2",
  "icalendar",
+ "jsonwebtoken 10.3.0",
  "mail-parser",
+ "rcgen",
  "regex",
+ "reqwest 0.12.28",
  "rumqttc",
  "rustls-pki-types",
  "schemars 1.2.1",
  "scraper",
  "serde",
  "serenity",
+ "sha2 0.10.9",
  "teloxide 0.17.0",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -10160,7 +10231,7 @@ dependencies = [
 [[package]]
 name = "h3o"
 version = "0.9.4"
-source = "git+https://github.com/TM9657/h3o?rev=95255f0#95255f0e73d01f27c5aa9a230da9c29943f3018a"
+source = "git+https://github.com/Rheosoph/h3o?rev=95255f0#95255f0e73d01f27c5aa9a230da9c29943f3018a"
 dependencies = [
  "ahash 0.8.12",
  "either",
@@ -11050,7 +11121,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -11792,7 +11863,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12839,7 +12910,7 @@ dependencies = [
 [[package]]
 name = "lance-graph"
 version = "0.5.4"
-source = "git+https://github.com/TM9657/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
+source = "git+https://github.com/Rheosoph/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -12864,7 +12935,7 @@ dependencies = [
 [[package]]
 name = "lance-graph-catalog"
 version = "0.5.4"
-source = "git+https://github.com/TM9657/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
+source = "git+https://github.com/Rheosoph/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -14201,7 +14272,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 [[package]]
 name = "markitdown"
 version = "0.2.0"
-source = "git+https://github.com/TM9657/markitdown-rs.git?rev=2e2e7fd#2e2e7fd048147a0163da1e141bffb106e565ff48"
+source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=1431d2f#1431d2f5037a4b6e046526b5c4b2c3ffcd6e3b0e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -14449,9 +14520,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws_lambda_events 0.16.1",
- "flow-like-types",
  "image",
- "imageproc",
  "lambda_runtime 0.14.4",
  "serde",
  "serde_json",
@@ -15248,7 +15317,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -15432,7 +15501,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -15504,7 +15573,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -16221,6 +16290,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1896e52e97c2f0cf997cc627380f1af1ecb3f6c29ce6175047cd38adaadb46f5"
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16554,7 +16632,7 @@ dependencies = [
 [[package]]
 name = "ort"
 version = "2.0.0-rc.10"
-source = "git+https://github.com/TM9657/ort.git?rev=1d64032#1d64032f1b86f6d53ce7cfd7b8c771840a277cd2"
+source = "git+https://github.com/Rheosoph/ort.git?rev=1d64032#1d64032f1b86f6d53ce7cfd7b8c771840a277cd2"
 dependencies = [
  "ndarray",
  "ort-sys",
@@ -16566,7 +16644,7 @@ dependencies = [
 [[package]]
 name = "ort-sys"
 version = "2.0.0-rc.10"
-source = "git+https://github.com/TM9657/ort.git?rev=1d64032#1d64032f1b86f6d53ce7cfd7b8c771840a277cd2"
+source = "git+https://github.com/Rheosoph/ort.git?rev=1d64032#1d64032f1b86f6d53ce7cfd7b8c771840a277cd2"
 dependencies = [
  "flate2",
  "hmac-sha256",
@@ -16596,7 +16674,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -18159,8 +18237,8 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.4.1",
- "itertools 0.10.5",
+ "heck 0.5.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -18179,8 +18257,8 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
- "itertools 0.10.5",
+ "heck 0.5.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -18214,7 +18292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -18227,7 +18305,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -18950,7 +19028,7 @@ dependencies = [
 [[package]]
 name = "rbook"
 version = "0.6.9"
-source = "git+https://github.com/TM9657/rbook.git?branch=master#9df02c833a1f60cfeedc00a52e22c0a813b143e2"
+source = "git+https://github.com/Rheosoph/rbook.git?branch=master#9df02c833a1f60cfeedc00a52e22c0a813b143e2"
 dependencies = [
  "percent-encoding",
  "quick-xml 0.38.4",
@@ -18968,9 +19046,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.14.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57f6d249aad744e274e682777a50283a225a32705394ee6d5fcc01efa25e4055"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna",
+]
+
+[[package]]
 name = "rdev"
 version = "0.5.3"
-source = "git+https://github.com/TM9657/rdev?branch=macos-thread-safety#baeca059c557319bbce473110f3f2e7b3093a645"
+source = "git+https://github.com/Rheosoph/rdev?branch=macos-thread-safety#baeca059c557319bbce473110f3f2e7b3093a645"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
@@ -19895,6 +19987,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusticata-macros"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+dependencies = [
+ "nom 7.1.3",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19917,7 +20018,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -20043,7 +20144,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -21116,7 +21217,7 @@ dependencies = [
  "mime_guess",
  "parking_lot",
  "percent-encoding",
- "reqwest 0.11.27",
+ "reqwest 0.12.28",
  "rustc-hash 2.1.2",
  "secrecy 0.8.0",
  "serde",
@@ -21525,7 +21626,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -21537,7 +21638,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54254b8531cafa275c5e096f62d48c81435d1015405a91198ddb11e967301d40"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -21566,7 +21667,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -23044,7 +23145,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-remote-push"
 version = "1.0.10"
-source = "git+https://github.com/TM9657/tauri-plugin-remote-push.git?branch=main#7bdd8df2580934aee7f4298b1d51102d6da01143"
+source = "git+https://github.com/Rheosoph/tauri-plugin-remote-push.git?branch=main#7bdd8df2580934aee7f4298b1d51102d6da01143"
 dependencies = [
  "serde",
  "serde_json",
@@ -23254,7 +23355,7 @@ dependencies = [
 [[package]]
 name = "tdms-rs"
 version = "2.0.0"
-source = "git+https://github.com/TM9657/tdms-rs?rev=620318f#620318f467fc97f01f3c772e212dd8a820df0748"
+source = "git+https://github.com/Rheosoph/tdms-rs?rev=620318f#620318f467fc97f01f3c772e212dd8a820df0748"
 dependencies = [
  "byteorder",
  "indexmap 1.9.3",
@@ -23412,7 +23513,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -24563,7 +24664,7 @@ dependencies = [
 [[package]]
 name = "tract-core"
 version = "0.21.14-pre"
-source = "git+https://github.com/TM9657/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
+source = "git+https://github.com/Rheosoph/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
 dependencies = [
  "anyhow",
  "anymap3",
@@ -24588,7 +24689,7 @@ dependencies = [
 [[package]]
 name = "tract-data"
 version = "0.21.14-pre"
-source = "git+https://github.com/TM9657/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
+source = "git+https://github.com/Rheosoph/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
 dependencies = [
  "anyhow",
  "downcast-rs 1.2.1",
@@ -24613,7 +24714,7 @@ dependencies = [
 [[package]]
 name = "tract-linalg"
 version = "0.21.14-pre"
-source = "git+https://github.com/TM9657/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
+source = "git+https://github.com/Rheosoph/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
 dependencies = [
  "byteorder",
  "cc",
@@ -24640,7 +24741,7 @@ dependencies = [
 [[package]]
 name = "tract-tflite"
 version = "0.21.14-pre"
-source = "git+https://github.com/TM9657/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
+source = "git+https://github.com/Rheosoph/tract?rev=ed3b020#ed3b0200e22bdd4553819db49e8aea94e33cae48"
 dependencies = [
  "derive-new",
  "flatbuffers 23.5.26",
@@ -24950,7 +25051,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -26537,7 +26638,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -27517,6 +27618,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
+dependencies = [
+ "asn1-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom 7.1.3",
+ "oid-registry",
+ "ring",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "xattr"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -27674,6 +27793,16 @@ name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
+
+[[package]]
+name = "yasna"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+dependencies = [
+ "bit-vec 0.9.1",
+ "time",
+]
 
 [[package]]
 name = "yoke"

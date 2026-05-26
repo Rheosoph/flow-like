@@ -11,8 +11,8 @@ import {
 	Progress,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { ModuleWithLessons } from "@tm9657/flow-like-ui/lib/learn/types";
+} from "@flow-like/flow-like-ui";
+import type { ModuleWithLessons } from "@flow-like/flow-like-ui/lib/learn/types";
 import {
 	ArrowLeft,
 	Award,

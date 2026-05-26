@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::event_sink::cron::CronSink;
+use crate::event_sink::daemon::DaemonSink;
 use crate::event_sink::deeplink::DeeplinkSink;
 use crate::event_sink::discord::DiscordSink;
 use crate::event_sink::email::EmailSink;
@@ -24,6 +25,7 @@ use crate::event_sink::web_watcher::WebWatcherSink;
 use crate::event_sink::webhook::WebhookSink;
 
 pub mod cron;
+pub mod daemon;
 pub mod deeplink;
 pub mod discord;
 pub mod email;
@@ -122,6 +124,8 @@ pub enum EventConfig {
     Shortcut(ShortcutSink),
     #[serde(rename = "cron")]
     Cron(CronSink),
+    #[serde(rename = "daemon")]
+    Daemon(DaemonSink),
 }
 
 impl EventConfig {

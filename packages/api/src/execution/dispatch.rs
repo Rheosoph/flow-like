@@ -1092,10 +1092,11 @@ pub async fn fetch_profile_for_dispatch(
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     let model = if let Some(pid) = profile_id {
-        profile::Entity::find_by_id(pid)
+        profile::Entity::find()
             .filter(
-                profile::Column::UserId
-                    .eq(user_id)
+                profile::Column::Id
+                    .eq(pid)
+                    .and(profile::Column::UserId.eq(user_id))
                     .and(profile::Column::DeletedAt.is_null()),
             )
             .one(db)

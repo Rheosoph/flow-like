@@ -33,16 +33,27 @@ pub struct AtlassianProvider {
 }
 
 impl AtlassianProvider {
+    fn trim_path(path: &str) -> &str {
+        path.strip_prefix('/').unwrap_or(path)
+    }
+
+    fn api_path(base: &str, prefix: &str, path: &str) -> String {
+        let base = base.trim_end_matches('/');
+        let prefix = prefix.trim_matches('/');
+        let path = Self::trim_path(path);
+        if prefix.is_empty() {
+            return format!("{}/{}", base, path);
+        }
+
+        format!("{}/{}/{}", base, prefix, path)
+    }
+
     pub fn jira_api_url(&self, path: &str) -> String {
         // For OAuth, we must use api.atlassian.com with cloud_id
         if self.auth_type == "oauth"
             && let Some(cloud_id) = &self.cloud_id
         {
-            let path = if path.starts_with('/') {
-                &path[1..]
-            } else {
-                path
-            };
+            let path = Self::trim_path(path);
             return format!(
                 "https://api.atlassian.com/ex/jira/{}/rest/api/3/{}",
                 cloud_id, path
@@ -50,17 +61,34 @@ impl AtlassianProvider {
         }
 
         // For API token or PAT, use direct instance URL
-        let base = self.base_url.trim_end_matches('/');
         let api_path = if self.is_cloud {
-            "/rest/api/3"
+            "rest/api/3"
         } else {
-            "/rest/api/2"
+            "rest/api/2"
         };
-        if path.starts_with('/') {
-            format!("{}{}{}", base, api_path, path)
-        } else {
-            format!("{}{}/{}", base, api_path, path)
+        Self::api_path(&self.base_url, api_path, path)
+    }
+
+    pub fn jira_agile_api_url(&self, path: &str) -> String {
+        if self.auth_type == "oauth"
+            && let Some(cloud_id) = &self.cloud_id
+        {
+            let path = Self::trim_path(path);
+            return format!(
+                "https://api.atlassian.com/ex/jira/{}/rest/agile/1.0/{}",
+                cloud_id, path
+            );
         }
+
+        Self::api_path(&self.base_url, "rest/agile/1.0", path)
+    }
+
+    pub fn jira_search_api_url(&self) -> String {
+        if self.is_cloud {
+            return self.jira_api_url("/search/jql");
+        }
+
+        self.jira_api_url("/search")
     }
 
     pub fn confluence_api_url(&self, path: &str) -> String {
@@ -68,11 +96,7 @@ impl AtlassianProvider {
         if self.auth_type == "oauth"
             && let Some(cloud_id) = &self.cloud_id
         {
-            let path = if path.starts_with('/') {
-                &path[1..]
-            } else {
-                path
-            };
+            let path = Self::trim_path(path);
             return format!(
                 "https://api.atlassian.com/ex/confluence/{}/wiki/api/v2/{}",
                 cloud_id, path
@@ -80,17 +104,51 @@ impl AtlassianProvider {
         }
 
         // For API token or PAT, use direct instance URL
-        let base = self.base_url.trim_end_matches('/');
         let api_path = if self.is_cloud {
-            "/wiki/api/v2"
+            "wiki/api/v2"
         } else {
-            "/wiki/rest/api"
+            "rest/api"
         };
-        if path.starts_with('/') {
-            format!("{}{}{}", base, api_path, path)
-        } else {
-            format!("{}{}/{}", base, api_path, path)
+        Self::api_path(&self.base_url, api_path, path)
+    }
+
+    pub fn confluence_rest_api_url(&self, path: &str) -> String {
+        if self.auth_type == "oauth"
+            && let Some(cloud_id) = &self.cloud_id
+        {
+            let path = Self::trim_path(path);
+            return format!(
+                "https://api.atlassian.com/ex/confluence/{}/wiki/rest/api/{}",
+                cloud_id, path
+            );
         }
+
+        let api_path = if self.is_cloud {
+            "wiki/rest/api"
+        } else {
+            "rest/api"
+        };
+        Self::api_path(&self.base_url, api_path, path)
+    }
+
+    pub fn confluence_wiki_url(&self, path: &str) -> String {
+        let path = Self::trim_path(path);
+        let path = path.strip_prefix("wiki/").unwrap_or(path);
+
+        if self.auth_type == "oauth"
+            && let Some(cloud_id) = &self.cloud_id
+        {
+            return format!(
+                "https://api.atlassian.com/ex/confluence/{}/wiki/{}",
+                cloud_id, path
+            );
+        }
+
+        if self.is_cloud {
+            return Self::api_path(&self.base_url, "wiki", path);
+        }
+
+        Self::api_path(&self.base_url, "", path)
     }
 
     /// For Confluence search, we need to use the v1 REST API which has different path structure
@@ -104,8 +162,7 @@ impl AtlassianProvider {
             );
         }
 
-        let base = self.base_url.trim_end_matches('/');
-        format!("{}/wiki/rest/api/content/search", base)
+        self.confluence_rest_api_url("/content/search")
     }
 
     pub fn auth_header(&self) -> String {

@@ -34,7 +34,7 @@ import {
 	useBackend,
 	useInvoke,
 	useSetQueryParams,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Calendar,
 	CopyIcon,

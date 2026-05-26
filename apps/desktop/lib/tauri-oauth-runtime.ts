@@ -1,6 +1,6 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { IOAuthRuntime } from "@tm9657/flow-like-ui";
+import type { IOAuthRuntime } from "@flow-like/flow-like-ui";
 
 export const tauriOAuthRuntime: IOAuthRuntime = {
 	async openUrl(url: string): Promise<void> {

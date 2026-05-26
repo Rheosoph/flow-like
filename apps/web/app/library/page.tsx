@@ -1,6 +1,6 @@
 "use client";
 
-import { LibraryPage } from "@tm9657/flow-like-ui";
+import { LibraryPage } from "@flow-like/flow-like-ui";
 
 export default function Page() {
 	return <LibraryPage />;

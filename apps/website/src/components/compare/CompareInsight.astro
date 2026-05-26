@@ -22,10 +22,10 @@ const { t } = Astro.props;
     </h2>
 
     <!-- Visual representation -->
-    <div class="grid md:grid-cols-3 gap-6 mb-10">
+    <div class="grid md:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
       <!-- Execution Engines -->
       <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
-        <div class="text-sm font-medium text-amber-500 mb-4">Execution Engines</div>
+        <div class="text-sm font-medium text-amber-500 mb-4">{t("compare.insight.card.execution.title")}</div>
         <div class="flex flex-wrap justify-center gap-2">
           {["n8n", "Node-RED", "Zapier"].map((name) => (
             <span class="px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-medium border border-amber-500/20">
@@ -41,14 +41,14 @@ const { t } = Astro.props;
           ))}
         </div>
         <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
-          Can run workflows<br/>
-          <span class="text-purple-500">✓ = replayable</span>
+          {t("compare.insight.card.execution.body")}<br/>
+          <span class="text-purple-500">{t("compare.insight.card.execution.replayable")}</span>
         </div>
       </div>
 
       <!-- UI Shells -->
       <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
-        <div class="text-sm font-medium text-blue-500 mb-4">UI Shells</div>
+        <div class="text-sm font-medium text-blue-500 mb-4">{t("compare.insight.card.ui.title")}</div>
         <div class="flex flex-wrap justify-center gap-2">
           {["Retool", "Power Apps", "Appsmith", "Superblocks"].map((name) => (
             <span class="px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-medium border border-blue-500/20">
@@ -57,7 +57,37 @@ const { t } = Astro.props;
           ))}
         </div>
         <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
-          Can build interfaces
+          {t("compare.insight.card.ui.body")}
+        </div>
+      </div>
+
+      <!-- Enterprise Data Platforms -->
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
+        <div class="text-sm font-medium text-fuchsia-500 mb-4">{t("compare.insight.card.enterprise_data.title")}</div>
+        <div class="flex flex-wrap justify-center gap-2">
+          {["Ontology platforms", "ERP data suites"].map((name) => (
+            <span class="px-3 py-1.5 rounded-full bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 text-xs font-medium border border-fuchsia-500/20">
+              {name}
+            </span>
+          ))}
+        </div>
+        <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
+          {t("compare.insight.card.enterprise_data.body1")}<br/>{t("compare.insight.card.enterprise_data.body2")}
+        </div>
+      </div>
+
+      <!-- Enterprise Automation -->
+      <div class="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-6">
+        <div class="text-sm font-medium text-rose-500 mb-4">{t("compare.insight.card.enterprise_automation.title")}</div>
+        <div class="flex flex-wrap justify-center gap-2">
+          {["UiPath", "Salesforce", "Regrello"].map((name) => (
+            <span class="px-3 py-1.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-medium border border-rose-500/20">
+              {name}
+            </span>
+          ))}
+        </div>
+        <div class="mt-4 pt-4 border-t border-border/30 text-xs text-muted-foreground">
+          {t("compare.insight.card.enterprise_automation.body1")}<br/>{t("compare.insight.card.enterprise_automation.body2")}
         </div>
       </div>
 
@@ -65,19 +95,26 @@ const { t } = Astro.props;
       <div class="rounded-2xl border-2 border-emerald-500/50 bg-emerald-500/5 backdrop-blur-sm p-6 relative">
         <div class="absolute -top-3 left-1/2 -translate-x-1/2">
           <span class="px-3 py-1 rounded-full bg-emerald-500 text-white text-xs font-semibold">
-            Both + More
+            {t("compare.insight.flowlike.badge")}
           </span>
         </div>
         <div class="text-sm font-medium text-emerald-600 dark:text-emerald-400 mb-4 mt-2">Flow-Like</div>
         <div class="flex flex-wrap justify-center gap-2">
-          {["Workflows", "UI Builder", "Desktop", "Mobile", "Offline"].map((cap) => (
+          {[
+            "compare.insight.flowlike.cap.workflows",
+            "compare.insight.flowlike.cap.ui_builder",
+            "compare.insight.flowlike.cap.desktop",
+            "compare.insight.flowlike.cap.mobile",
+            "compare.insight.flowlike.cap.offline",
+            "compare.insight.flowlike.cap.unlimited_files",
+          ].map((cap) => (
             <span class="px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium border border-emerald-500/20">
-              {cap}
+              {t(cap)}
             </span>
           ))}
         </div>
         <div class="mt-4 pt-4 border-t border-emerald-500/20 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-          Ships real applications
+          {t("compare.insight.flowlike.body")}
         </div>
       </div>
     </div>

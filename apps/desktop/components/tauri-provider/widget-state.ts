@@ -6,7 +6,7 @@ import {
 	type IWidgetState,
 	type Version,
 	type VersionType,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { appsDB } from "../../lib/apps-db";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";

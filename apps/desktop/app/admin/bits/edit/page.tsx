@@ -28,7 +28,7 @@ import {
 	useInvoke,
 	useQuery,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
 import { Plus, RefreshCw, Save, Search, Trash2, Wrench } from "lucide-react";
 import { useRouter } from "next/navigation";

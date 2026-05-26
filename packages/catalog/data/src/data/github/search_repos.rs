@@ -1,6 +1,6 @@
 use super::{
     list_repos::GitHubRepository,
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -56,6 +56,7 @@ impl NodeLogic for SearchGitHubReposNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -100,7 +101,18 @@ impl NodeLogic for SearchGitHubReposNode {
             "Sort by: stars, forks, help-wanted-issues, updated",
             VariableType::String,
         )
-        .set_default_value(Some(json!("best-match")));
+        .set_default_value(Some(json!("best-match")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "best-match".to_string(),
+                    "stars".to_string(),
+                    "forks".to_string(),
+                    "help-wanted-issues".to_string(),
+                    "updated".to_string(),
+                ])
+                .build(),
+        );
 
         node.add_input_pin(
             "order",
@@ -108,7 +120,12 @@ impl NodeLogic for SearchGitHubReposNode {
             "Sort order: asc, desc",
             VariableType::String,
         )
-        .set_default_value(Some(json!("desc")));
+        .set_default_value(Some(json!("desc")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["asc".to_string(), "desc".to_string()])
+                .build(),
+        );
 
         node.add_input_pin(
             "per_page",
@@ -223,9 +240,9 @@ impl NodeLogic for SearchGitHubReposNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

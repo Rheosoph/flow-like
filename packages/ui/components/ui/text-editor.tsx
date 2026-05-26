@@ -61,6 +61,29 @@ type PluginWithIdentity = {
 	name?: string;
 };
 
+const MINIMAL_STATIC_PLUGIN_IDS = new Set([
+	"a",
+	"blockquote",
+	"bold",
+	"code",
+	"code_block",
+	"code_line",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"italic",
+	"li",
+	"lic",
+	"ol",
+	"p",
+	"paragraph",
+	"strikethrough",
+	"ul",
+]);
+
 const toValue = (nodes: PlateLikeNode[]): Value => nodes as unknown as Value;
 
 const paragraphValue = (text: string): Value =>
@@ -367,6 +390,7 @@ function TextEditorStatic({
 							const { key, name } = plugin as unknown as PluginWithIdentity;
 							const pluginId = key || name || "";
 							return (
+								MINIMAL_STATIC_PLUGIN_IDS.has(pluginId) ||
 								pluginId.includes("paragraph") ||
 								pluginId.includes("heading") ||
 								pluginId === "h1" ||
@@ -451,7 +475,7 @@ function TextEditorStatic({
 		>
 			<PlateStatic
 				editor={editor}
-				className="py-0 [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0"
+				className="py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0"
 			/>
 		</div>
 	);

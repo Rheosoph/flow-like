@@ -67,7 +67,7 @@ fn base_template(content: &str, footer_text: &str) -> String {
                                 <tr>
                                     <td style="text-align: center; padding-top: 16px; border-top: 1px solid #1a1a1a;">
                                         <p style="margin: 0; font-size: 11px; color: #404040;">
-                                            © {year} Flow-Like by TM9657 GmbH. All rights reserved.
+                                            © {year} Flow-Like by Rheosoph GmbH. All rights reserved.
                                         </p>
                                     </td>
                                 </tr>
@@ -298,7 +298,7 @@ WHAT HAPPENS NEXT?
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         company_name = company_name,
         tier_display = tier_display,
@@ -451,7 +451,7 @@ Track your request: {tracking_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         emoji = emoji,
         headline = headline,
@@ -554,7 +554,7 @@ Track your request: {tracking_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         company_name = company_name,
         action = action,
@@ -638,7 +638,7 @@ Thank you for choosing Flow-Like. We hope this solution helps transform your wor
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         company_name = company_name,
         notes_section = delivery_notes
@@ -776,7 +776,7 @@ View your package: {package_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         emoji = emoji,
         headline = headline,
@@ -901,7 +901,7 @@ View your app: {app_url}
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         emoji = emoji,
         headline = headline,
@@ -1008,7 +1008,7 @@ The package is ready to use. Install it from the store or add it to your apps.
 
 Questions? Contact us at help@great-co.de
 
-© {year} Flow-Like by TM9657 GmbH. All rights reserved.
+© {year} Flow-Like by Rheosoph GmbH. All rights reserved.
 "#,
         package_name = package_name,
         price_display = price_display,

@@ -1,24 +1,24 @@
 "use client";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import type { IHub, UseQueryResult } from "@tm9657/flow-like-ui";
-import { Bit, Button, useBackend } from "@tm9657/flow-like-ui";
+import type { IHub, UseQueryResult } from "@flow-like/flow-like-ui";
+import { Bit, Button, useBackend } from "@flow-like/flow-like-ui";
 import {
 	Alert,
 	AlertDescription,
 	AlertTitle,
-} from "@tm9657/flow-like-ui/components/ui/alert";
+} from "@flow-like/flow-like-ui/components/ui/alert";
 import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-} from "@tm9657/flow-like-ui/components/ui/avatar";
-import { Badge } from "@tm9657/flow-like-ui/components/ui/badge";
-import { BitHover } from "@tm9657/flow-like-ui/components/ui/bit-hover";
-import type { IBit } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
-import { IBitTypes } from "@tm9657/flow-like-ui/lib/schema/bit/bit";
-import { humanFileSize } from "@tm9657/flow-like-ui/lib/utils";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui/components/ui/avatar";
+import { Badge } from "@flow-like/flow-like-ui/components/ui/badge";
+import { BitHover } from "@flow-like/flow-like-ui/components/ui/bit-hover";
+import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
+import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
+import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { ArrowBigRight, CloudDownload, Loader2, LogIn } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";

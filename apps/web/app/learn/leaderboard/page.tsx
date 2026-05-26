@@ -8,7 +8,7 @@ import {
 	Switch,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";

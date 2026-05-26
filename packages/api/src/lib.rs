@@ -105,6 +105,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .nest("/registry", routes::registry::routes())
         .nest("/audit", routes::audit::routes())
         .nest("/sink", routes::sink::routes())
+        .nest("/aliases", routes::alias::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
         .with_state(state.clone())
         .route("/version", get(|| async { "0.0.0" }))
@@ -123,10 +124,34 @@ pub fn construct_router(state: Arc<State>) -> Router {
                 )),
         );
 
+    // Inbound REST/MCP routers. They deliberately bypass the JWT
+    // middleware (per-registration auth is enforced inside the handler)
+    // but DO need CORS, compression, decompression and error reporting
+    // so they behave like the rest of the API surface.
+    let inbound_layers = ServiceBuilder::new()
+        .layer(from_fn_with_state(
+            state.clone(),
+            error_reporting_middleware,
+        ))
+        .layer(CorsLayer::permissive())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new().compress_when(
+            DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
+        ));
+
+    let inbound_rest = routes::inbound::rest_routes()
+        .with_state(state.clone())
+        .layer(inbound_layers.clone());
+    let inbound_mcp = routes::inbound::mcp_routes()
+        .with_state(state.clone())
+        .layer(inbound_layers);
+
     Router::new()
         .merge(
             SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
         )
+        .nest("/r", inbound_rest)
+        .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
 }
 

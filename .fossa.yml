@@ -1,6 +1,6 @@
 version: 3
 
 project:
-  locator: git+github.com/TM9657/flow-like
+  locator: git+github.com/Rheosoph/flow-like
   id: flow-like
   name: flow-like

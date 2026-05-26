@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-go
 
-Go SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using [TinyGo](https://tinygo.org/), which produces compact WASM binaries from Go source without the full Go runtime overhead.
+Go SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using [TinyGo](https://tinygo.org/), which produces compact WASM binaries from Go source without the full Go runtime overhead.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ brew install tinygo
 
 ```bash
 go mod init github.com/yourname/my-flow-node
-go get github.com/TM9657/flow-like/libs/wasm-sdk/wasm-sdk-go
+go get github.com/Rheosoph/flow-like/libs/wasm-sdk/wasm-sdk-go
 ```
 
 Or copy the SDK files directly into your project (since it has no external dependencies).
@@ -27,7 +27,7 @@ Or copy the SDK files directly into your project (since it has no external depen
 ```go
 package main
 
-import sdk "github.com/TM9657/flow-like/libs/wasm-sdk/wasm-sdk-go"
+import sdk "github.com/Rheosoph/flow-like/libs/wasm-sdk/wasm-sdk-go"
 
 //go:wasmexport get_nodes
 func GetNodes() int64 {
@@ -75,7 +75,7 @@ func main() {}
 ```go
 package main
 
-import sdk "github.com/TM9657/flow-like/libs/wasm-sdk/wasm-sdk-go"
+import sdk "github.com/Rheosoph/flow-like/libs/wasm-sdk/wasm-sdk-go"
 
 type AddNode struct{}
 

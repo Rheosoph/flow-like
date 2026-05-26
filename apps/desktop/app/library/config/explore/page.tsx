@@ -1,6 +1,6 @@
 "use client";
 
-import { ExploreDataPage } from "@tm9657/flow-like-ui/components/settings/explore/explore-page";
+import { ExploreDataPage } from "@flow-like/flow-like-ui/components/settings/explore/explore-page";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import NotFound from "../not-found";

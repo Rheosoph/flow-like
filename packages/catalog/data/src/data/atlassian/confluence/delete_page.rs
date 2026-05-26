@@ -1,4 +1,4 @@
-use crate::data::atlassian::provider::AtlassianProvider;
+use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -28,6 +28,7 @@ impl NodeLogic for DeleteConfluencePageNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -65,6 +66,8 @@ impl NodeLogic for DeleteConfluencePageNode {
             VariableType::Boolean,
         );
 
+        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["write:confluence-content"]);
+
         node
     }
 
@@ -81,8 +84,7 @@ impl NodeLogic for DeleteConfluencePageNode {
         let url = if provider.is_cloud {
             provider.confluence_api_url(&format!("/pages/{}", page_id))
         } else {
-            let base = provider.base_url.trim_end_matches('/');
-            format!("{}/wiki/rest/api/content/{}", base, page_id)
+            provider.confluence_rest_api_url(&format!("/content/{}", page_id))
         };
 
         let response = client

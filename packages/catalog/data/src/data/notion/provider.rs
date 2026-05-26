@@ -41,6 +41,7 @@ impl NodeLogic for NotionApiKeyProviderNode {
             "Connect to Notion using an Internal Integration token. Create an integration at notion.so/my-integrations and paste the token here.",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -119,6 +120,7 @@ impl NodeLogic for NotionOAuthProviderNode {
             "Connect to Notion using OAuth. Requires OAuth provider configuration in flow-like.config.json.",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_output_pin(

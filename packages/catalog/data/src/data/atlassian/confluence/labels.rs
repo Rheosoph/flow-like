@@ -59,6 +59,7 @@ impl NodeLogic for GetLabelsNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -123,7 +124,7 @@ impl NodeLogic for GetLabelsNode {
 
         let labels = if provider.is_cloud {
             // Cloud v2 API
-            let url = format!("{}/wiki/api/v2/pages/{}/labels", provider.base_url, page_id);
+            let url = provider.confluence_api_url(&format!("/pages/{}/labels", page_id));
 
             let response = client
                 .get(&url)
@@ -150,7 +151,7 @@ impl NodeLogic for GetLabelsNode {
                 .collect::<Vec<_>>()
         } else {
             // Server v1 API
-            let url = format!("{}/rest/api/content/{}/label", provider.base_url, page_id);
+            let url = provider.confluence_rest_api_url(&format!("/content/{}/label", page_id));
 
             let response = client
                 .get(&url)
@@ -207,6 +208,7 @@ impl NodeLogic for AddLabelNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -280,61 +282,28 @@ impl NodeLogic for AddLabelNode {
 
         let client = reqwest::Client::new();
 
-        if provider.is_cloud {
-            // Cloud v2 API - use v1 for labels as v2 doesn't support adding
-            let url = format!(
-                "{}/wiki/rest/api/content/{}/label",
-                provider.base_url, page_id
-            );
+        let url = provider.confluence_rest_api_url(&format!("/content/{}/label", page_id));
+        let body = json!([{
+            "prefix": "global",
+            "name": label
+        }]);
 
-            let body = json!([{
-                "prefix": "global",
-                "name": label
-            }]);
+        let response = client
+            .post(&url)
+            .header("Authorization", provider.auth_header())
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
 
-            let response = client
-                .post(&url)
-                .header("Authorization", provider.auth_header())
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Failed to add label: {} - {}",
-                    status,
-                    error_text
-                ));
-            }
-        } else {
-            // Server v1 API
-            let url = format!("{}/rest/api/content/{}/label", provider.base_url, page_id);
-
-            let body = json!([{
-                "prefix": "global",
-                "name": label
-            }]);
-
-            let response = client
-                .post(&url)
-                .header("Authorization", provider.auth_header())
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Failed to add label: {} - {}",
-                    status,
-                    error_text
-                ));
-            }
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(flow_like_types::anyhow!(
+                "Failed to add label: {} - {}",
+                status,
+                error_text
+            ));
         }
 
         context.set_pin_value("success", json!(true)).await?;
@@ -364,6 +333,7 @@ impl NodeLogic for RemoveLabelNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -437,21 +407,11 @@ impl NodeLogic for RemoveLabelNode {
 
         let client = reqwest::Client::new();
 
-        let url = if provider.is_cloud {
-            format!(
-                "{}/wiki/rest/api/content/{}/label/{}",
-                provider.base_url,
-                page_id,
-                urlencoding::encode(&label)
-            )
-        } else {
-            format!(
-                "{}/rest/api/content/{}/label/{}",
-                provider.base_url,
-                page_id,
-                urlencoding::encode(&label)
-            )
-        };
+        let url = provider.confluence_rest_api_url(&format!(
+            "/content/{}/label/{}",
+            page_id,
+            urlencoding::encode(&label)
+        ));
 
         let response = client
             .delete(&url)

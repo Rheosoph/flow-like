@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import "@tm9657/flow-like-ui/global.css";
+import "@flow-like/flow-like-ui/global.css";
 import { Inter } from "next/font/google";
 import { ClientProviders } from "../components/client-providers";
 
@@ -25,8 +25,8 @@ export const metadata: Metadata = {
 	alternates: {
 		canonical: "/",
 	},
-	authors: [{ name: "TM9657 GmbH" }],
-	creator: "TM9657 GmbH",
+	authors: [{ name: "Rheosoph GmbH" }],
+	creator: "Rheosoph GmbH",
 	metadataBase: new URL(siteUrl),
 	openGraph: {
 		type: "website",

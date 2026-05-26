@@ -8,8 +8,8 @@ import {
 	Switch,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { LeaderboardOptIn } from "@tm9657/flow-like-ui/lib/learn/types";
+} from "@flow-like/flow-like-ui";
+import type { LeaderboardOptIn } from "@flow-like/flow-like-ui/lib/learn/types";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Pencil, Trophy } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";

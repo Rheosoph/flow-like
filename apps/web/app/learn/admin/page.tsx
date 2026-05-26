@@ -14,7 +14,7 @@ import {
 	Skeleton,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	ArrowLeft,
 	BookOpenCheck,

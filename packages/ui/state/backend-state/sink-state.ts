@@ -20,7 +20,8 @@ export type SinkType =
 	| "geolocation"
 	| "notion"
 	| "shortcut"
-	| "cron";
+	| "cron"
+	| "daemon";
 
 export interface IEventRegistration {
 	event_id: string;

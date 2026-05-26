@@ -6,7 +6,7 @@ import {
 	useMutation,
 	useQuery,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Avatar,
 	AvatarFallback,
@@ -21,7 +21,7 @@ import {
 	CardTitle,
 	Input,
 	Skeleton,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,

@@ -8,7 +8,7 @@ import {
 	useMutation,
 	useQuery,
 	useQueryClient,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Badge,
 	Button,
@@ -20,13 +20,13 @@ import {
 	CardTitle,
 	Input,
 	Skeleton,
-} from "@tm9657/flow-like-ui/components";
+} from "@flow-like/flow-like-ui/components";
 import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-} from "@tm9657/flow-like-ui/components/ui/avatar";
-import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
+} from "@flow-like/flow-like-ui/components/ui/avatar";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,

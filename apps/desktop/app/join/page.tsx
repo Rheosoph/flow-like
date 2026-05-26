@@ -1,6 +1,6 @@
 "use client";
 
-import { LoadingScreen, useBackend } from "@tm9657/flow-like-ui";
+import { LoadingScreen, useBackend } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";

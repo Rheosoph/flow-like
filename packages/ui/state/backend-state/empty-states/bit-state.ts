@@ -4,8 +4,8 @@ import type {
 	IBitState,
 	IDownloadProgress,
 	ISettingsProfile,
-} from "@tm9657/flow-like-ui";
-import type { IBitSearchQuery } from "@tm9657/flow-like-ui/lib/schema/hub/bit-search-query";
+} from "@flow-like/flow-like-ui";
+import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 
 export class EmptyBitState implements IBitState {
 	getInstalledBit(bits: IBit[]): Promise<IBit[]> {

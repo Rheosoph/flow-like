@@ -38,13 +38,13 @@ import {
 	useExecutionService,
 	useInvoke,
 	useMobileHeader,
-} from "@tm9657/flow-like-ui";
-import { AppPublicationBanner } from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-banner";
+} from "@flow-like/flow-like-ui";
+import { AppPublicationBanner } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-banner";
 import {
 	type AppPublicationRequestItem,
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
-} from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+} from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChartAreaIcon,
@@ -1016,7 +1016,9 @@ export default function Id({
 												</div>
 											}
 										>
-											{children}
+											<div key={id ?? "missing-app"} className="contents">
+												{children}
+											</div>
 										</Suspense>
 									</div>
 								</div>
@@ -1032,7 +1034,9 @@ export default function Id({
 												</div>
 											}
 										>
-											{children}
+											<div key={id ?? "missing-app"} className="contents">
+												{children}
+											</div>
 										</Suspense>
 									</div>
 								</div>
@@ -1050,7 +1054,9 @@ export default function Id({
 								</div>
 							}
 						>
-							{children}
+							<div key={id ?? "missing-app"} className="contents">
+								{children}
+							</div>
 						</Suspense>
 					</div>
 				</div>

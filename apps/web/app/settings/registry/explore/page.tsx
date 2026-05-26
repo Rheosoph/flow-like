@@ -17,13 +17,13 @@ import {
 	Skeleton,
 	StorePackageDetail,
 	useBackend,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type {
 	InstalledPackage,
 	PackageSummary,
 	SearchFilters,
 	SearchResults,
-} from "@tm9657/flow-like-ui/lib/schema/wasm";
+} from "@flow-like/flow-like-ui/lib/schema/wasm";
 import { motion } from "framer-motion";
 import {
 	ArrowUpDown,

@@ -2,8 +2,8 @@
 name = "tauri-plugin-flow-like-dexie-blob-offload"
 version = "0.1.0"
 description = "Tauri plugin that offloads large Dexie/IndexedDB values to the native filesystem using content-addressed blake3 hashing with HMAC-verified references."
-authors = ["TM9657 GmbH"]
-repository = "https://github.com/TM9657/flow-like/"
+authors = ["Rheosoph GmbH"]
+repository = "https://github.com/Rheosoph/flow-like/"
 edition = "2024"
 homepage = "https://flow-like.com"
 license = "MIT"

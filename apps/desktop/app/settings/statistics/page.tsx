@@ -21,8 +21,8 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-} from "@tm9657/flow-like-ui";
-import type { ISettingsProfile } from "@tm9657/flow-like-ui/types";
+} from "@flow-like/flow-like-ui";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import {
 	BarChart3,
 	Boxes,

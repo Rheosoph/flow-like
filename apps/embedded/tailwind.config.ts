@@ -1,4 +1,4 @@
-import preset from "@tm9657/flow-like-ui/tailwind.config";
+import preset from "@flow-like/flow-like-ui/tailwind.config";
 import type { Config } from "tailwindcss";
 
 const config = {
@@ -8,7 +8,7 @@ const config = {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
-		"../../node_modules/@tm9657/flow-like-ui/**/*.{ts,tsx}",
+		"../../node_modules/@flow-like/flow-like-ui/**/*.{ts,tsx}",
 	],
 } satisfies Config;
 

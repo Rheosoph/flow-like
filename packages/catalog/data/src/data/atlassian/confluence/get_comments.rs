@@ -1,4 +1,4 @@
-use crate::data::atlassian::provider::AtlassianProvider;
+use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -41,6 +41,7 @@ impl NodeLogic for GetConfluenceCommentsNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -81,6 +82,8 @@ impl NodeLogic for GetConfluenceCommentsNode {
         .set_schema::<ConfluenceComment>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["read:confluence-content.all"]);
+
         node
     }
 
@@ -97,11 +100,10 @@ impl NodeLogic for GetConfluenceCommentsNode {
         let url = if provider.is_cloud {
             provider.confluence_api_url(&format!("/pages/{}/footer-comments", page_id))
         } else {
-            let base = provider.base_url.trim_end_matches('/');
-            format!(
-                "{}/wiki/rest/api/content/{}/child/comment?expand=body.storage,history",
-                base, page_id
-            )
+            provider.confluence_rest_api_url(&format!(
+                "/content/{}/child/comment?expand=body.storage,history",
+                page_id
+            ))
         };
 
         let response = client

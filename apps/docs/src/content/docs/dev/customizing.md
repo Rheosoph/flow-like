@@ -164,7 +164,7 @@ Use `flow-like` as a Cargo dependency:
 
 ```toml
 [dependencies]
-flow-like = { git = "https://github.com/TM9657/flow-like" }
+flow-like = { git = "https://github.com/Rheosoph/flow-like" }
 ```
 
 ### Visual Editor

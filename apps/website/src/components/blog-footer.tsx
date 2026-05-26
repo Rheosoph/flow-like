@@ -168,11 +168,11 @@ export function BlogFooter() {
 
 					{/* Company */}
 					<FooterSection title={t("footer.section.company")}>
-						<FooterLink href="https://github.com/TM9657/flow-like" external>
+						<FooterLink href="https://github.com/Rheosoph/flow-like" external>
 							{t("footer.link.github")}
 						</FooterLink>
 						<FooterLink
-							href="https://github.com/TM9657/flow-like/discussions"
+							href="https://github.com/Rheosoph/flow-like/discussions"
 							external
 						>
 							{t("footer.link.community")}
@@ -212,7 +212,7 @@ export function BlogFooter() {
 					{/* Social Links */}
 					<div className="flex items-center gap-4">
 						<a
-							href="https://github.com/TM9657/flow-like"
+							href="https://github.com/Rheosoph/flow-like"
 							target="_blank"
 							rel="noreferrer"
 							className="text-muted-foreground hover:text-foreground transition-colors"

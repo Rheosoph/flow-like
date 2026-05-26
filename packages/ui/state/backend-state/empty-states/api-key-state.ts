@@ -3,7 +3,7 @@ import type {
 	ITechnicalUser,
 	ITechnicalUserCreateInput,
 	ITechnicalUserCreateResult,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export class EmptyApiKeyState implements IApiKeyState {
 	getApiKeys(_appId: string): Promise<ITechnicalUser[]> {

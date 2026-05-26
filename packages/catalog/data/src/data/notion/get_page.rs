@@ -1,4 +1,8 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{
+    NOTION_API_VERSION, auth_header, block_plain_text, log_and_error, notion_error,
+    title_from_page_properties,
+};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -7,14 +11,14 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-
-const NOTION_API_VERSION: &str = "2022-06-28";
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotionBlock {
     pub id: String,
     pub block_type: String,
     pub has_children: bool,
+    pub in_trash: bool,
     pub content: Value,
 }
 
@@ -26,6 +30,7 @@ pub struct NotionPageContent {
     pub created_time: String,
     pub last_edited_time: String,
     pub archived: bool,
+    pub in_trash: bool,
     pub icon_emoji: Option<String>,
     pub properties: Value,
     pub blocks: Vec<NotionBlock>,
@@ -49,35 +54,68 @@ impl GetNotionPageNode {
     }
 }
 
-fn extract_plain_text_from_rich_text(rich_text: &Value) -> String {
-    rich_text
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|t| t["plain_text"].as_str())
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default()
+pub fn parse_block(block: &Value) -> NotionBlock {
+    let block_type = block["type"].as_str().unwrap_or("unknown").to_string();
+    let in_trash = block["in_trash"]
+        .as_bool()
+        .or_else(|| block["archived"].as_bool())
+        .unwrap_or(false);
+
+    NotionBlock {
+        id: block["id"].as_str().unwrap_or("").to_string(),
+        block_type: block_type.clone(),
+        has_children: block["has_children"].as_bool().unwrap_or(false),
+        in_trash,
+        content: block[&block_type].clone(),
+    }
 }
 
-fn extract_block_text(block: &Value) -> String {
-    let block_type = block["type"].as_str().unwrap_or("");
+async fn fetch_block_children(
+    client: &reqwest::Client,
+    access_token: &str,
+    block_id: &str,
+) -> flow_like_types::Result<Vec<Value>> {
+    let mut blocks = Vec::new();
+    let mut cursor: Option<String> = None;
 
-    match block_type {
-        "paragraph" | "heading_1" | "heading_2" | "heading_3" | "bulleted_list_item"
-        | "numbered_list_item" | "quote" | "callout" | "toggle" => {
-            extract_plain_text_from_rich_text(&block[block_type]["rich_text"])
+    loop {
+        let mut url = format!(
+            "https://api.notion.com/v1/blocks/{}/children?page_size=100",
+            block_id
+        );
+        if let Some(cursor) = &cursor {
+            url.push_str("&start_cursor=");
+            url.push_str(&urlencoding::encode(cursor));
         }
-        "code" => extract_plain_text_from_rich_text(&block["code"]["rich_text"]),
-        "to_do" => {
-            let text = extract_plain_text_from_rich_text(&block["to_do"]["rich_text"]);
-            let checked = block["to_do"]["checked"].as_bool().unwrap_or(false);
-            format!("[{}] {}", if checked { "x" } else { " " }, text)
+
+        let response = client
+            .get(&url)
+            .header("Authorization", auth_header(access_token))
+            .header("Notion-Version", NOTION_API_VERSION)
+            .send()
+            .await
+            .map_err(|err| flow_like_types::anyhow!("Network error: {}", err))?;
+
+        if !response.status().is_success() {
+            return Err(flow_like_types::anyhow!("{}", notion_error(response).await));
         }
-        "divider" => "---".to_string(),
-        _ => String::new(),
+
+        let blocks_response: BlocksResponse = response.json().await.map_err(|err| {
+            flow_like_types::anyhow!("Failed to parse block children response: {}", err)
+        })?;
+
+        blocks.extend(blocks_response.results);
+        if !blocks_response.has_more {
+            break;
+        }
+
+        cursor = blocks_response.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
     }
+
+    Ok(blocks)
 }
 
 #[async_trait]
@@ -89,6 +127,7 @@ impl NodeLogic for GetNotionPageNode {
             "Retrieves a Notion page with its content and blocks",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -121,6 +160,14 @@ impl NodeLogic for GetNotionPageNode {
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(true)));
+
+        node.add_input_pin(
+            "include_nested_content",
+            "Include Nested Content",
+            "Whether to fetch child blocks recursively",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "exec_out",
@@ -188,10 +235,13 @@ impl NodeLogic for GetNotionPageNode {
 
         let page_id: String = context.evaluate_pin("page_id").await?;
         let include_content: bool = context.evaluate_pin("include_content").await?;
+        let include_nested_content: bool = context
+            .evaluate_pin("include_nested_content")
+            .await
+            .unwrap_or(false);
 
         if page_id.is_empty() {
-            context.log_message("Page ID cannot be empty", LogLevel::Error);
-            context.activate_exec_pin("error").await?;
+            log_and_error(context, "Page ID cannot be empty").await?;
             return Ok(());
         }
 
@@ -204,7 +254,7 @@ impl NodeLogic for GetNotionPageNode {
 
         let page_response = client
             .get(format!("https://api.notion.com/v1/pages/{}", page_id))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", auth_header(&access_token))
             .header("Notion-Version", NOTION_API_VERSION)
             .send()
             .await;
@@ -212,12 +262,7 @@ impl NodeLogic for GetNotionPageNode {
         let page_data: Value = match page_response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+                    context.log_message(&notion_error(resp).await, LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }
@@ -232,54 +277,71 @@ impl NodeLogic for GetNotionPageNode {
             }
         };
 
-        let title = page_data["properties"]["title"]["title"]
-            .as_array()
-            .or_else(|| page_data["properties"]["Name"]["title"].as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t["plain_text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_else(|| "Untitled".to_string());
+        let title = title_from_page_properties(&page_data["properties"]);
 
         let mut blocks: Vec<NotionBlock> = Vec::new();
         let mut plain_text_parts: Vec<String> = Vec::new();
 
         if include_content {
-            let blocks_response = client
-                .get(format!(
-                    "https://api.notion.com/v1/blocks/{}/children",
-                    page_id
-                ))
-                .header("Authorization", format!("Bearer {}", access_token))
-                .header("Notion-Version", NOTION_API_VERSION)
-                .send()
-                .await;
-
-            if let Ok(resp) = blocks_response
-                && resp.status().is_success()
-                && let Ok(blocks_data) = resp.json::<BlocksResponse>().await
+            let mut raw_blocks = match fetch_block_children(&client, &access_token, &page_id).await
             {
-                for block in blocks_data.results {
-                    let block_type = block["type"].as_str().unwrap_or("unknown").to_string();
-                    let text = extract_block_text(&block);
+                Ok(blocks) => blocks,
+                Err(err) => {
+                    log_and_error(context, err.to_string()).await?;
+                    return Ok(());
+                }
+            };
 
-                    if !text.is_empty() {
-                        plain_text_parts.push(text);
+            if include_nested_content {
+                let mut visited = HashSet::new();
+                let mut queue: VecDeque<String> = raw_blocks
+                    .iter()
+                    .filter(|block| block["has_children"].as_bool().unwrap_or(false))
+                    .filter_map(|block| block["id"].as_str().map(String::from))
+                    .collect();
+
+                while let Some(block_id) = queue.pop_front() {
+                    if !visited.insert(block_id.clone()) {
+                        continue;
                     }
 
-                    blocks.push(NotionBlock {
-                        id: block["id"].as_str().unwrap_or("").to_string(),
-                        block_type: block_type.clone(),
-                        has_children: block["has_children"].as_bool().unwrap_or(false),
-                        content: block[&block_type].clone(),
-                    });
+                    let child_blocks =
+                        match fetch_block_children(&client, &access_token, &block_id).await {
+                            Ok(blocks) => blocks,
+                            Err(err) => {
+                                log_and_error(context, err.to_string()).await?;
+                                return Ok(());
+                            }
+                        };
+
+                    for block in &child_blocks {
+                        if block["has_children"].as_bool().unwrap_or(false)
+                            && let Some(id) = block["id"].as_str()
+                        {
+                            queue.push_back(id.to_string());
+                        }
+                    }
+
+                    raw_blocks.extend(child_blocks);
                 }
+            }
+
+            for block in raw_blocks {
+                let text = block_plain_text(&block);
+                if !text.is_empty() {
+                    plain_text_parts.push(text);
+                }
+
+                blocks.push(parse_block(&block));
             }
         }
 
         let plain_text = plain_text_parts.join("\n");
+
+        let in_trash = page_data["in_trash"]
+            .as_bool()
+            .or_else(|| page_data["archived"].as_bool())
+            .unwrap_or(false);
 
         let page_content = NotionPageContent {
             id: page_data["id"].as_str().unwrap_or("").to_string(),
@@ -290,7 +352,8 @@ impl NodeLogic for GetNotionPageNode {
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
-            archived: page_data["archived"].as_bool().unwrap_or(false),
+            archived: in_trash,
+            in_trash,
             icon_emoji: page_data["icon"]["emoji"].as_str().map(String::from),
             properties: page_data["properties"].clone(),
             blocks: blocks.clone(),

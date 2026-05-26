@@ -287,7 +287,7 @@ export const zh = {
 	"nav.github": "GitHub",
 	"nav.blog": "博客",
 	"nav.contact": "联系",
-	"footer.copyright": "© 2024 TM9657 GmbH. 保留所有权利。",
+	"footer.copyright": "© 2026 Rheosoph GmbH. 保留所有权利。",
 
 	// Compare page — capability deep-dive cards
 	"compare.explain.how_does_it": "Flow-Like 的实现方式",

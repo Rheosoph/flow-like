@@ -28,9 +28,9 @@ lance = ["lancedb>=0.6.0"]
 langchain = ["langchain-core>=0.3.0"]
 
 [project.urls]
-Homepage = "https://github.com/TM9657/flow-like"
-Repository = "https://github.com/TM9657/flow-like"
-Issues = "https://github.com/TM9657/flow-like/issues"
+Homepage = "https://github.com/Rheosoph/flow-like"
+Repository = "https://github.com/Rheosoph/flow-like"
+Issues = "https://github.com/Rheosoph/flow-like/issues"
 
 [tool.uv]
 dev-dependencies = ["pytest>=8.0", "pytest-asyncio>=0.23"]

@@ -26,8 +26,8 @@ import {
 	TimeoutTier,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { PackageInspection } from "@tm9657/flow-like-ui/lib/schema/developer";
+} from "@flow-like/flow-like-ui";
+import type { PackageInspection } from "@flow-like/flow-like-ui/lib/schema/developer";
 import {
 	AlertTriangle,
 	ArrowLeft,

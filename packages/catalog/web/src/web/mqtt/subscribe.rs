@@ -399,6 +399,8 @@ impl NodeLogic for MqttSubscribeNode {
         });
 
         let timeout = timeout as u64;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
         if timeout > 0 {
             tokio::select! {
                 _ = close_notify.notified() => {}
@@ -407,9 +409,25 @@ impl NodeLogic for MqttSubscribeNode {
                     let client = conn.client.lock().await;
                     let _ = client.disconnect().await;
                 }
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("MQTT subscription cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let client = conn.client.lock().await;
+                    let _ = client.disconnect().await;
+                }
             }
         } else {
-            close_notify.notified().await;
+            tokio::select! {
+                _ = close_notify.notified() => {}
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("MQTT subscription cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let client = conn.client.lock().await;
+                    let _ = client.disconnect().await;
+                }
+            }
         }
 
         handle.abort();
@@ -421,6 +439,10 @@ impl NodeLogic for MqttSubscribeNode {
 
         context.deactivate_exec_pin("on_subscribed").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }

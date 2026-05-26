@@ -3,8 +3,8 @@ name = "flow-like-sinks"
 description = "Event sinks for Flow-Like - HTTP, Webhook, Cron, MQTT, and more"
 version = "0.1.0"
 edition = "2024"
-authors = ["TM9657 GmbH"]
-repository = "https://github.com/TM9657/flow-like/"
+authors = ["Rheosoph GmbH"]
+repository = "https://github.com/Rheosoph/flow-like/"
 categories = ["GenAI", "AI", "Productivity"]
 license-file = "LICENSE"
 
