@@ -1992,6 +1992,34 @@ fn negotiate_mcp_protocol_version(requested: Option<&str>) -> String {
     }
 }
 
+fn mcp_protocol_version_from_headers(headers: &HeaderMap) -> String {
+    let requested = headers
+        .get("mcp-protocol-version")
+        .and_then(|v| v.to_str().ok());
+    negotiate_mcp_protocol_version(requested)
+}
+
+fn new_mcp_session(
+    event_id: &str,
+    protocol_version: String,
+    initialized: bool,
+) -> (
+    InboundMcpSession,
+    flow_like_types::tokio::sync::broadcast::Receiver<String>,
+) {
+    let (sse_tx, rx) = flow_like_types::tokio::sync::broadcast::channel::<String>(64);
+    (
+        InboundMcpSession {
+            event_id: event_id.to_string(),
+            protocol_version,
+            initialized,
+            created_at: std::time::Instant::now(),
+            sse_tx,
+        },
+        rx,
+    )
+}
+
 async fn prune_expired_mcp_sessions() {
     const TTL: Duration = Duration::from_secs(60 * 60 * 6);
     let mut sessions = MCP_SESSIONS.lock().await;
@@ -2036,39 +2064,61 @@ async fn mcp_handle_post(
     if let Some(session_id) = supplied_session_id.as_ref()
         && !has_initialize
     {
-        let sessions = MCP_SESSIONS.lock().await;
-        let Some(session) = sessions.get(session_id) else {
-            return Ok(mcp_json_response(
-                StatusCode::NOT_FOUND,
-                json_rpc_error(None, -32001, "Session not found"),
-                None,
-                headers,
-            ));
-        };
-        if session.event_id != event_row.id {
-            return Ok(mcp_json_response(
-                StatusCode::NOT_FOUND,
-                json_rpc_error(None, -32001, "Session not found"),
-                None,
-                headers,
-            ));
-        }
-        if let Some(client_protocol) = headers
+        let client_protocol = headers
             .get("mcp-protocol-version")
             .and_then(|v| v.to_str().ok())
-            && client_protocol != session.protocol_version
-            && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&client_protocol)
-        {
-            return Ok(mcp_json_response(
-                StatusCode::BAD_REQUEST,
-                json_rpc_error(
+            .map(str::to_string);
+        let mut sessions = MCP_SESSIONS.lock().await;
+        if let Some(session) = sessions.get(session_id) {
+            if session.event_id != event_row.id {
+                return Ok(mcp_json_response(
+                    StatusCode::NOT_FOUND,
+                    json_rpc_error(None, -32001, "Session not found"),
                     None,
-                    -32600,
-                    &format!("Unsupported MCP-Protocol-Version: {client_protocol}"),
-                ),
-                None,
-                headers,
-            ));
+                    headers,
+                ));
+            }
+            if let Some(client_protocol) = client_protocol.as_deref()
+                && client_protocol != session.protocol_version
+                && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&client_protocol)
+            {
+                return Ok(mcp_json_response(
+                    StatusCode::BAD_REQUEST,
+                    json_rpc_error(
+                        None,
+                        -32600,
+                        &format!("Unsupported MCP-Protocol-Version: {client_protocol}"),
+                    ),
+                    None,
+                    headers,
+                ));
+            }
+        } else {
+            if let Some(client_protocol) = client_protocol.as_deref()
+                && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&client_protocol)
+            {
+                return Ok(mcp_json_response(
+                    StatusCode::BAD_REQUEST,
+                    json_rpc_error(
+                        None,
+                        -32600,
+                        &format!("Unsupported MCP-Protocol-Version: {client_protocol}"),
+                    ),
+                    None,
+                    headers,
+                ));
+            }
+            let (session, _) = new_mcp_session(
+                &event_row.id,
+                mcp_protocol_version_from_headers(headers),
+                true,
+            );
+            tracing::warn!(
+                session_id = %session_id,
+                event_id = %event_row.id,
+                "MCP session not found locally; recreated session for stateless request"
+            );
+            sessions.insert(session_id.clone(), session);
         }
     }
 
@@ -2253,26 +2303,33 @@ async fn mcp_handle_get(
     let (session_id, mut rx, legacy_endpoint) = {
         let mut sessions = MCP_SESSIONS.lock().await;
         if let Some(session_id) = supplied_session_id {
-            let Some(session) = sessions.get(&session_id) else {
-                return mcp_text_response(StatusCode::NOT_FOUND, "Session not found", headers);
-            };
-            if session.event_id != event_row.id {
-                return mcp_text_response(StatusCode::NOT_FOUND, "Session not found", headers);
+            if let Some(session) = sessions.get(&session_id) {
+                if session.event_id != event_row.id {
+                    return mcp_text_response(StatusCode::NOT_FOUND, "Session not found", headers);
+                }
+                (session_id, session.sse_tx.subscribe(), None)
+            } else {
+                let (session, rx) = new_mcp_session(
+                    &event_row.id,
+                    mcp_protocol_version_from_headers(headers),
+                    true,
+                );
+                tracing::warn!(
+                    session_id = %session_id,
+                    event_id = %event_row.id,
+                    "MCP SSE session not found locally; recreated session"
+                );
+                sessions.insert(session_id.clone(), session);
+                (session_id, rx, None)
             }
-            (session_id, session.sse_tx.subscribe(), None)
         } else {
             let session_id = uuid::Uuid::new_v4().simple().to_string();
-            let (tx, rx) = flow_like_types::tokio::sync::broadcast::channel::<String>(64);
-            sessions.insert(
-                session_id.clone(),
-                InboundMcpSession {
-                    event_id: event_row.id.clone(),
-                    protocol_version: MCP_DEFAULT_PROTOCOL_VERSION.to_string(),
-                    initialized: false,
-                    created_at: std::time::Instant::now(),
-                    sse_tx: tx,
-                },
+            let (session, rx) = new_mcp_session(
+                &event_row.id,
+                MCP_DEFAULT_PROTOCOL_VERSION.to_string(),
+                false,
             );
+            sessions.insert(session_id.clone(), session);
             let endpoint = format!(
                 "{}?sessionId={}",
                 mcp_resource_url(headers, slug_or_id),
