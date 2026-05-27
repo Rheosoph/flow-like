@@ -56,7 +56,7 @@ pub async fn chat_completion(
         let mut model_factory = model_factory.lock().await;
 
         match model_factory
-            .build(&best_model, flow_like_state, token)
+            .build(&best_model, flow_like_state, token, None)
             .await
         {
             Ok(model) => model,
@@ -102,7 +102,7 @@ pub async fn stream_chat_completion(
         let mut model_factory = model_factory.lock().await;
 
         match model_factory
-            .build(&best_model, flow_like_state, token)
+            .build(&best_model, flow_like_state, token, None)
             .await
         {
             Ok(model) => model,
