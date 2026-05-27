@@ -20,7 +20,7 @@ RUN yum update -y && \
     curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
     unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
     rm protoc-25.3-linux-aarch_64.zip && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0 && \
     yum remove -y xz && \
     yum clean all
 

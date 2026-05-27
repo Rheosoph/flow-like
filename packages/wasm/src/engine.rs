@@ -159,7 +159,6 @@ impl WasmConfig {
         // Runtime settings
         config.consume_fuel(self.fuel_metering);
         config.epoch_interruption(self.epoch_interruption);
-        config.async_support(true);
 
         // Enable WASM GC and exception handling proposals (needed for Kotlin/Wasm, etc.)
         config.wasm_gc(true);

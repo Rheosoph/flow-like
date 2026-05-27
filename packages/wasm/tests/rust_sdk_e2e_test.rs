@@ -15,6 +15,7 @@ use flow_like_wasm::component::instance::WasmComponentInstance;
 use flow_like_wasm::component::WasmComponent;
 use flow_like_wasm::engine::{WasmConfig, WasmEngine};
 use flow_like_wasm::limits::WasmSecurityConfig;
+use flow_like_wasm::WASM_ABI_VERSION;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -94,7 +95,7 @@ async fn test_rust_sdk_load_component() {
 // ── get-nodes (multi-node) ─────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_rust_sdk_get_nodes_returns_two() {
+async fn test_rust_sdk_get_nodes_returns_template_nodes() {
     let Some((engine, component)) = load_template().await else {
         return;
     };
@@ -107,11 +108,18 @@ async fn test_rust_sdk_get_nodes_returns_two() {
         .call_get_nodes()
         .await
         .expect("call_get_nodes failed");
-    assert_eq!(nodes.len(), 2, "Template should expose exactly 2 nodes");
+    assert_eq!(nodes.len(), 6, "Template should expose exactly 6 nodes");
 
     let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
     assert!(names.contains(&"repeat_text"), "Missing repeat_text node");
     assert!(names.contains(&"char_count"), "Missing char_count node");
+    assert!(names.contains(&"greeting"), "Missing greeting node");
+    assert!(names.contains(&"file_writer"), "Missing file_writer node");
+    assert!(names.contains(&"file_reader"), "Missing file_reader node");
+    assert!(
+        names.contains(&"weather_agent"),
+        "Missing weather_agent node"
+    );
 }
 
 #[tokio::test]
@@ -177,7 +185,10 @@ async fn test_rust_sdk_abi_version() {
             .unwrap();
 
     let version = instance.call_get_abi_version().await.unwrap();
-    assert_eq!(version, 1, "ABI version should be 1");
+    assert_eq!(
+        version, WASM_ABI_VERSION,
+        "ABI version should match runtime"
+    );
 }
 
 // ── Execution: repeat_text ─────────────────────────────────────────────

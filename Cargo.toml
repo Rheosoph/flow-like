@@ -163,9 +163,9 @@ dashmap = "6"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "43.0.2", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "43.0.2"
-wasmtime-wasi-http = "43.0.2"
+wasmtime = { version = "45.0.0", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "45.0.0"
+wasmtime-wasi-http = "45.0.0"
 
 # Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)
