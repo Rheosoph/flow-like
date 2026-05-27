@@ -143,6 +143,20 @@ impl Default for Profile {
 }
 
 impl Profile {
+    fn is_local_provider_name(provider_name: &str) -> bool {
+        matches!(
+            provider_name.trim().to_ascii_lowercase().as_str(),
+            "local"
+                | "local:any-tts"
+                | "llama.cpp"
+                | "llamacpp"
+                | "ollama"
+                | "custom:ollama"
+                | "lmstudio"
+                | "custom:lmstudio"
+        )
+    }
+
     /// Check if a bit is a local model (requires local hosting capabilities)
     fn is_local_model(bit: &Bit) -> bool {
         if bit.bit_type == crate::bit::BitTypes::Tts {
@@ -152,23 +166,13 @@ impl Profile {
         if let Ok(llm_params) =
             flow_like_types::json::from_value::<crate::bit::LLMParameters>(bit.parameters.clone())
         {
-            let provider_name = llm_params.provider.provider_name.to_lowercase();
-            if provider_name == "local"
-                || provider_name == "llama.cpp"
-                || provider_name == "llamacpp"
-                || provider_name == "ollama"
-            {
+            if Self::is_local_provider_name(&llm_params.provider.provider_name) {
                 return true;
             }
         } else if let Ok(vlm_params) =
             flow_like_types::json::from_value::<crate::bit::VLMParameters>(bit.parameters.clone())
         {
-            let provider_name = vlm_params.provider.provider_name.to_lowercase();
-            if provider_name == "local"
-                || provider_name == "llama.cpp"
-                || provider_name == "llamacpp"
-                || provider_name == "ollama"
-            {
+            if Self::is_local_provider_name(&vlm_params.provider.provider_name) {
                 return true;
             }
         }
@@ -217,7 +221,13 @@ impl Profile {
 
         if !remote {
             for bit_ref in &self.bits {
-                let bit = self.get_profile_bit(bit_ref, http_client.clone()).await?;
+                let bit = match self.get_profile_bit(bit_ref, http_client.clone()).await {
+                    Ok(bit) => bit,
+                    Err(err) => {
+                        println!("Skipping unresolved profile bit {bit_ref}: {err}");
+                        continue;
+                    }
+                };
 
                 // Skip local models if only_hosted is true
                 if only_hosted && Self::is_local_model(&bit) {
@@ -409,7 +419,13 @@ impl Profile {
 #[cfg(test)]
 mod tests {
     use super::{Profile, split_profile_bit_reference};
+    use crate::{
+        bit::{BitModelClassification, BitModelPreference, BitTypes, VLMParameters},
+        utils::http::HTTPClient,
+    };
+    use flow_like_model_provider::provider::ModelProvider;
     use flow_like_types::tokio;
+    use std::sync::Arc;
 
     #[test]
     fn split_profile_bit_reference_handles_hub_urls() {
@@ -446,5 +462,53 @@ mod tests {
 
         assert_eq!(bit.id, "s14lujkm2gut2mwg0zo3imxv");
         assert_eq!(profile.bits, vec!["s14lujkm2gut2mwg0zo3imxv"]);
+    }
+
+    #[tokio::test]
+    async fn best_model_skips_missing_profile_bits() {
+        let profile = Profile {
+            bits: vec!["missing-bit".to_string()],
+            ..Profile::default()
+        };
+        let http_client = Arc::new(HTTPClient::new_without_refetch());
+
+        let err = profile
+            .get_best_model_filtered(
+                &BitModelPreference::default(),
+                false,
+                false,
+                false,
+                http_client,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.to_string(), "No Model found");
+    }
+
+    #[test]
+    fn local_model_detection_includes_custom_local_providers() {
+        for provider_name in ["custom:ollama", "custom:lmstudio"] {
+            let bit = crate::bit::Bit {
+                bit_type: BitTypes::Vlm,
+                parameters: flow_like_types::json::to_value(VLMParameters {
+                    context_length: 20000,
+                    model_classification: BitModelClassification::default(),
+                    provider: ModelProvider {
+                        provider_name: provider_name.to_string(),
+                        model_id: Some("local-model".to_string()),
+                        version: None,
+                        params: None,
+                    },
+                })
+                .unwrap(),
+                ..crate::bit::Bit::default()
+            };
+
+            assert!(
+                Profile::is_local_model(&bit),
+                "{provider_name} should be treated as local-only"
+            );
+        }
     }
 }
