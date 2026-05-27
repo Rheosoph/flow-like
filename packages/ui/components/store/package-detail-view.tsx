@@ -36,6 +36,7 @@ import {
 import {
 	type PackageMeta,
 	type PackageReview,
+	type PackageVersion,
 	PackageStatus,
 	type RegistryEntry,
 } from "../../lib/schema/wasm";
@@ -123,26 +124,59 @@ function NodeCard({
 function VersionRow({
 	version,
 	isLatest,
+	canInstall,
+	installedVersion,
+	isInstalling,
+	onInstall,
 }: {
-	version: {
-		version: string;
-		publishedAt: string;
-		releaseNotes?: string;
-		yanked: boolean;
-	};
+	version: PackageVersion;
 	isLatest: boolean;
+	canInstall: boolean;
+	installedVersion?: string | null;
+	isInstalling?: boolean;
+	onInstall?: (version: string) => void;
 }) {
+	const isInstalled = installedVersion === version.version;
+	const isPending = version.status === PackageStatus.PendingReview;
+	const isRejected = version.status === PackageStatus.Rejected;
+	const isDisabled = version.status === PackageStatus.Disabled;
+	const isVersionInstallable = !version.yanked && !isRejected && !isDisabled;
+
 	return (
-		<div className="flex items-center justify-between py-2 border-b last:border-0">
-			<div className="flex items-center gap-2">
+		<div className="flex items-center justify-between gap-3 py-2 border-b last:border-0">
+			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
 				<code className="text-sm font-mono">{version.version}</code>
 				{isLatest && <Badge variant="secondary">Latest</Badge>}
+				{isPending && <Badge variant="outline">Pending Review</Badge>}
+				{isRejected && <Badge variant="destructive">Rejected</Badge>}
+				{isDisabled && <Badge variant="secondary">Disabled</Badge>}
 				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
 			</div>
-			<RelativeTime
-				className="text-sm text-muted-foreground"
-				value={version.publishedAt}
-			/>
+			<div className="flex shrink-0 items-center gap-3">
+				<RelativeTime
+					className="text-sm text-muted-foreground"
+					value={version.publishedAt}
+				/>
+				{canInstall && isVersionInstallable && onInstall && (
+					<Button
+						size="sm"
+						variant={isInstalled ? "secondary" : "outline"}
+						disabled={isInstalled || isInstalling}
+						onClick={() => onInstall(version.version)}
+					>
+						{isInstalled ? (
+							<Check className="mr-2 h-3.5 w-3.5" />
+						) : (
+							<Download className="mr-2 h-3.5 w-3.5" />
+						)}
+						{isInstalled
+							? "Installed"
+							: isPending
+								? "Install for testing"
+								: "Install"}
+					</Button>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -489,31 +523,48 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	}
 
 	const manifest = pkg.manifest;
+	const canManagePublication =
+		currentUserPermission != null &&
+		isMaintainer(currentUserPermission) &&
+		!!fetcher;
+	const hasPendingVersion = pkg.versions.some(
+		(version) => version.status === PackageStatus.PendingReview,
+	);
 	const latestVersion =
-		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
+		pkg.versions.find(
+			(v) =>
+				!v.yanked &&
+				v.status !== PackageStatus.Rejected &&
+				v.status !== PackageStatus.Disabled,
+		)?.version ?? pkg.versions[0]?.version;
+	const canInstallForReview =
+		canManagePublication &&
+		!!latestVersion &&
+		(hasPendingVersion || pkg.status === PackageStatus.PendingReview);
 	const isInstallable =
 		pkg.status === PackageStatus.Active ||
-		pkg.status === PackageStatus.Deprecated;
+		pkg.status === PackageStatus.Deprecated ||
+		canInstallForReview;
 	const isInstalled = !!installedVersion;
 	const hasUpdate =
-		isInstallable && isInstalled && installedVersion !== latestVersion;
+		isInstallable &&
+		isInstalled &&
+		!!latestVersion &&
+		installedVersion !== latestVersion;
 	const unavailableActionLabel =
 		pkg.status === PackageStatus.PendingReview
 			? "Pending review"
 			: pkg.status === PackageStatus.Disabled
 				? "Disabled"
-				: "Unavailable";
+				: pkg.status === PackageStatus.Rejected
+					? "Rejected"
+					: "Unavailable";
 	const unavailableActionMessage = isInstalled
 		? `Updates are unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`
 		: `Install is unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`;
-	const canManagePublication =
-		currentUserPermission != null &&
-		isMaintainer(currentUserPermission) &&
-		!!fetcher;
 	const showPublicationAudit =
 		canManagePublication &&
-		visibility === "private" &&
-		pkg.status !== PackageStatus.Active;
+		(pkg.status !== PackageStatus.Active || hasPendingVersion);
 	const showPublicationRequest =
 		currentUserPermission != null &&
 		isOwner(currentUserPermission) &&
@@ -570,6 +621,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										{pkg.status === PackageStatus.PendingReview && (
 											<Badge variant="secondary" className="gap-1">
 												Pending Review
+											</Badge>
+										)}
+										{pkg.status === PackageStatus.Rejected && (
+											<Badge variant="destructive" className="gap-1">
+												Rejected
 											</Badge>
 										)}
 										{pkg.verified && (
@@ -699,7 +755,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										) : (
 											<Download className="mr-2 h-4 w-4" />
 										)}
-										Install
+										{canInstallForReview ? "Install for testing" : "Install"}
 									</Button>
 								)}
 							</div>
@@ -1222,6 +1278,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												key={v.version}
 												version={v}
 												isLatest={idx === 0}
+												canInstall={canManagePublication}
+												installedVersion={installedVersion}
+												isInstalling={isInstalling}
+												onInstall={onInstall}
 											/>
 										))}
 									</div>

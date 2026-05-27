@@ -175,6 +175,7 @@ export enum PackageStatus {
 	Deprecated = "deprecated",
 	PendingReview = "pending_review",
 	Disabled = "disabled",
+	Rejected = "rejected",
 	Yanked = "yanked",
 }
 
@@ -197,6 +198,7 @@ export interface PackageVersion {
 	version: string;
 	wasmHash: string;
 	wasmSize: number;
+	status?: PackageStatus;
 	downloadUrl?: string;
 	publishedAt: string;
 	minFlowLikeVersion?: string;

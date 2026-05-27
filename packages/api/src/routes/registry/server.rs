@@ -245,6 +245,33 @@ fn status_to_enum(status: &str) -> crate::entity::sea_orm_active_enums::WasmPack
     }
 }
 
+fn status_to_package_status(
+    status: &crate::entity::sea_orm_active_enums::WasmPackageStatus,
+) -> PackageStatus {
+    use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+    match status {
+        WasmPackageStatus::Active => PackageStatus::Active,
+        WasmPackageStatus::Deprecated => PackageStatus::Deprecated,
+        WasmPackageStatus::PendingReview => PackageStatus::PendingReview,
+        WasmPackageStatus::Rejected => PackageStatus::Rejected,
+        WasmPackageStatus::Disabled => PackageStatus::Disabled,
+    }
+}
+
+fn package_version_from_model(v: wasm_package_version::Model) -> PackageVersion {
+    PackageVersion {
+        version: v.version,
+        wasm_hash: v.wasm_hash,
+        wasm_size: v.wasm_size as u64,
+        status: status_to_package_status(&v.status),
+        download_url: None,
+        published_at: chrono::DateTime::from_naive_utc_and_offset(v.published_at, chrono::Utc),
+        min_flow_like_version: v.min_flow_like_version,
+        release_notes: v.release_notes,
+        yanked: v.yanked,
+    }
+}
+
 fn db_cat_to_string(cat: &WasmPackageCategory) -> String {
     serde_json::to_value(cat)
         .ok()
@@ -683,10 +710,26 @@ impl ServerRegistry {
             .count(&self.db)
             .await? as i64;
 
-        let pending_review = wasm_package::Entity::find()
+        let pending_package_rows = wasm_package::Entity::find()
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::PendingReview))
-            .count(&self.db)
-            .await? as i64;
+            .all(&self.db)
+            .await?;
+
+        let mut pending_package_ids: std::collections::HashSet<String> =
+            pending_package_rows.into_iter().map(|pkg| pkg.id).collect();
+
+        let pending_version_rows = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview))
+            .all(&self.db)
+            .await?;
+
+        pending_package_ids.extend(
+            pending_version_rows
+                .into_iter()
+                .map(|version| version.package_id),
+        );
+
+        let pending_review = pending_package_ids.len() as i64;
 
         let rejected_packages = wasm_package::Entity::find()
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Rejected))
@@ -737,7 +780,7 @@ impl ServerRegistry {
         self.build_registry_entry(pkg, show_all).await.map(Some)
     }
 
-    /// Get a package entry by ID regardless of status — for authors/maintainers
+    /// Get a package entry by ID regardless of status — for owners/maintainers
     /// who need to see their own pending/disabled packages.
     pub async fn get_package_any_status(
         &self,
@@ -747,7 +790,7 @@ impl ServerRegistry {
             return Ok(None);
         };
 
-        // any-status callers are always owners/admins — show everything.
+        // any-status callers are always maintainers/admins — show everything.
         self.build_registry_entry(pkg, true).await.map(Some)
     }
 
@@ -771,7 +814,7 @@ impl ServerRegistry {
         let show_all = match pkg.visibility {
             WasmPackageVisibility::Private => true,
             _ => match viewer_sub {
-                Some(sub) => self.is_package_author(sub, id).await?,
+                Some(sub) => self.can_view_unapproved_versions(sub, id).await?,
                 None => false,
             },
         };
@@ -779,18 +822,99 @@ impl ServerRegistry {
         self.build_registry_entry(pkg, show_all).await.map(Some)
     }
 
-    /// Returns `true` when `user_id` has an author record on `package_id`.
-    async fn is_package_author(
+    /// Returns `true` when `user_id` can manage `package_id`.
+    async fn can_view_unapproved_versions(
         &self,
         user_id: &str,
         package_id: &str,
     ) -> flow_like_types::Result<bool> {
-        let record = wasm_package_author::Entity::find()
-            .filter(wasm_package_author::Column::PackageId.eq(package_id))
-            .filter(wasm_package_author::Column::UserId.eq(user_id))
+        let record = wasm_package_user::Entity::find()
+            .filter(wasm_package_user::Column::PackageId.eq(package_id))
+            .filter(wasm_package_user::Column::UserId.eq(user_id))
             .one(&self.db)
             .await?;
-        Ok(record.is_some())
+        let Some(record) = record else {
+            return Ok(false);
+        };
+
+        let permission =
+            crate::permission::wasm_package_permission::WasmPackagePermission::from_bits_truncate(
+                record.permission,
+            );
+        Ok(permission.has_permission(
+            crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
+        ))
+    }
+
+    async fn latest_pending_version(
+        &self,
+        package_id: &str,
+    ) -> flow_like_types::Result<Option<wasm_package_version::Model>> {
+        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+
+        let version = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(package_id))
+            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview))
+            .order_by_desc(wasm_package_version::Column::PublishedAt)
+            .one(&self.db)
+            .await?;
+        Ok(version)
+    }
+
+    async fn build_package_details(
+        &self,
+        pkg: wasm_package::Model,
+        review_version: Option<wasm_package_version::Model>,
+    ) -> flow_like_types::Result<PackageDetails> {
+        let authors = self.get_package_authors(&pkg.id).await?;
+
+        let (version, status, wasm_size, nodes, published_at) =
+            if let Some(version) = review_version {
+                (
+                    version.version,
+                    status_to_string(&version.status),
+                    version.wasm_size as u64,
+                    version.nodes,
+                    Some(chrono::DateTime::from_naive_utc_and_offset(
+                        version.published_at,
+                        chrono::Utc,
+                    )),
+                )
+            } else {
+                (
+                    pkg.version.clone(),
+                    status_to_string(&pkg.status),
+                    pkg.wasm_size as u64,
+                    pkg.nodes.clone(),
+                    pkg.published_at
+                        .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
+                )
+            };
+
+        Ok(PackageDetails {
+            id: pkg.id,
+            name: pkg.name,
+            description: pkg.description,
+            version,
+            authors,
+            license: pkg.license,
+            homepage: pkg.homepage,
+            repository: pkg.repository,
+            keywords: pkg.keywords.unwrap_or_default(),
+            status,
+            verified: pkg.verified,
+            download_count: pkg.download_count as u64,
+            wasm_size,
+            nodes,
+            permissions: pkg.permissions,
+            price: pkg.price,
+            visibility: visibility_to_string(&pkg.visibility),
+            primary_category: pkg.primary_category.as_ref().map(db_cat_to_string),
+            secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_string),
+            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
+            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
+            published_at,
+        })
     }
 
     /// Get a package entry by ID (admin - returns any status)
@@ -802,34 +926,10 @@ impl ServerRegistry {
             return Ok(None);
         };
 
-        let authors = self.get_package_authors(&pkg.id).await?;
-
-        Ok(Some(PackageDetails {
-            id: pkg.id,
-            name: pkg.name,
-            description: pkg.description,
-            version: pkg.version,
-            authors,
-            license: pkg.license,
-            homepage: pkg.homepage,
-            repository: pkg.repository,
-            keywords: pkg.keywords.unwrap_or_default(),
-            status: status_to_string(&pkg.status),
-            verified: pkg.verified,
-            download_count: pkg.download_count as u64,
-            wasm_size: pkg.wasm_size as u64,
-            nodes: pkg.nodes,
-            permissions: pkg.permissions,
-            price: pkg.price,
-            visibility: visibility_to_string(&pkg.visibility),
-            primary_category: pkg.primary_category.as_ref().map(db_cat_to_string),
-            secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_string),
-            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
-            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
-            published_at: pkg
-                .published_at
-                .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
-        }))
+        let review_version = self.latest_pending_version(&pkg.id).await?;
+        self.build_package_details(pkg, review_version)
+            .await
+            .map(Some)
     }
 
     /// Get authors for a package with user information
@@ -929,19 +1029,7 @@ impl ServerRegistry {
 
         let package_versions: Vec<PackageVersion> = versions
             .into_iter()
-            .map(|v| PackageVersion {
-                version: v.version,
-                wasm_hash: v.wasm_hash,
-                wasm_size: v.wasm_size as u64,
-                download_url: None,
-                published_at: chrono::DateTime::from_naive_utc_and_offset(
-                    v.published_at,
-                    chrono::Utc,
-                ),
-                min_flow_like_version: v.min_flow_like_version,
-                release_notes: v.release_notes,
-                yanked: v.yanked,
-            })
+            .map(package_version_from_model)
             .collect();
 
         // Prefer nodes from the latest version; fall back to the parent package.
@@ -965,12 +1053,7 @@ impl ServerRegistry {
             manifest,
             nodes,
             versions: package_versions,
-            status: match pkg.status {
-                WasmPackageStatus::Active => PackageStatus::Active,
-                WasmPackageStatus::Deprecated => PackageStatus::Deprecated,
-                WasmPackageStatus::PendingReview => PackageStatus::PendingReview,
-                _ => PackageStatus::Disabled,
-            },
+            status: status_to_package_status(&pkg.status),
             download_count: pkg.download_count as u64,
             created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
             updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
@@ -1104,11 +1187,7 @@ impl ServerRegistry {
                     description: pkg.description,
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
-                    status: match pkg.status {
-                        WasmPackageStatus::Active => PackageStatus::Active,
-                        WasmPackageStatus::Deprecated => PackageStatus::Deprecated,
-                        _ => PackageStatus::Disabled,
-                    },
+                    status: status_to_package_status(&pkg.status),
                     keywords: pkg.keywords.unwrap_or_default(),
                     verified: pkg.verified,
                     price: pkg.price,
@@ -1319,11 +1398,7 @@ impl ServerRegistry {
                     description: pkg.description,
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
-                    status: match pkg.status {
-                        WasmPackageStatus::Active => PackageStatus::Active,
-                        WasmPackageStatus::Deprecated => PackageStatus::Deprecated,
-                        _ => PackageStatus::Disabled,
-                    },
+                    status: status_to_package_status(&pkg.status),
                     keywords: pkg.keywords.unwrap_or_default(),
                     verified: pkg.verified,
                     price: pkg.price,
@@ -1450,7 +1525,7 @@ impl ServerRegistry {
         submitter_id: &str,
         _submitter_email: Option<String>,
     ) -> flow_like_types::Result<PublishResponse> {
-        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+        use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
 
         let now = chrono::Utc::now().naive_utc();
 
@@ -1518,6 +1593,7 @@ impl ServerRegistry {
         let existing_package = wasm_package::Entity::find_by_id(&manifest.id)
             .one(&self.db)
             .await?;
+        let is_existing_package = existing_package.is_some();
 
         let is_private_package = existing_package
             .as_ref()
@@ -1639,6 +1715,24 @@ impl ServerRegistry {
             approved_at: Set(None),
         };
         version_model.insert(&self.db).await?;
+
+        let submitted_review = wasm_package_review::ActiveModel {
+            id: Set(create_id()),
+            package_id: Set(manifest.id.clone()),
+            reviewer_id: Set(submitter_id.to_string()),
+            action: Set(WasmReviewAction::Submitted),
+            comment: Set(Some(if is_existing_package {
+                format!("Version {} submitted for review", manifest.version)
+            } else {
+                format!("Initial version {} submitted", manifest.version)
+            })),
+            internal_note: Set(None),
+            security_score: Set(None),
+            code_quality_score: Set(None),
+            documentation_score: Set(None),
+            created_at: Set(now),
+        };
+        submitted_review.insert(&self.db).await?;
 
         // Dispatch compilation based on configured backend
         let compile_db = self.db.clone();
@@ -1821,19 +1915,7 @@ impl ServerRegistry {
 
         Ok(versions
             .into_iter()
-            .map(|v| PackageVersion {
-                version: v.version,
-                wasm_hash: v.wasm_hash,
-                wasm_size: v.wasm_size as u64,
-                download_url: None,
-                published_at: chrono::DateTime::from_naive_utc_and_offset(
-                    v.published_at,
-                    chrono::Utc,
-                ),
-                min_flow_like_version: v.min_flow_like_version,
-                release_notes: v.release_notes,
-                yanked: v.yanked,
-            })
+            .map(package_version_from_model)
             .collect())
     }
 
@@ -1853,19 +1935,7 @@ impl ServerRegistry {
 
         Ok(versions
             .into_iter()
-            .map(|v| PackageVersion {
-                version: v.version,
-                wasm_hash: v.wasm_hash,
-                wasm_size: v.wasm_size as u64,
-                download_url: None,
-                published_at: chrono::DateTime::from_naive_utc_and_offset(
-                    v.published_at,
-                    chrono::Utc,
-                ),
-                min_flow_like_version: v.min_flow_like_version,
-                release_notes: v.release_notes,
-                yanked: v.yanked,
-            })
+            .map(package_version_from_model)
             .collect())
     }
 
@@ -1878,10 +1948,32 @@ impl ServerRegistry {
         offset: usize,
         limit: usize,
     ) -> flow_like_types::Result<(Vec<PackageDetails>, usize)> {
+        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+
         let mut query = wasm_package::Entity::find();
 
         if let Some(status) = status_filter {
-            query = query.filter(wasm_package::Column::Status.eq(status_to_enum(status)));
+            if status == "pending_review" {
+                let pending_version_package_ids: Vec<String> = wasm_package_version::Entity::find()
+                    .filter(
+                        wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview),
+                    )
+                    .all(&self.db)
+                    .await?
+                    .into_iter()
+                    .map(|version| version.package_id)
+                    .collect();
+
+                let mut condition = sea_orm::Condition::any()
+                    .add(wasm_package::Column::Status.eq(WasmPackageStatus::PendingReview));
+                if !pending_version_package_ids.is_empty() {
+                    condition =
+                        condition.add(wasm_package::Column::Id.is_in(pending_version_package_ids));
+                }
+                query = query.filter(condition);
+            } else {
+                query = query.filter(wasm_package::Column::Status.eq(status_to_enum(status)));
+            }
         }
 
         let total_count = query.clone().count(&self.db).await? as usize;
@@ -1895,39 +1987,8 @@ impl ServerRegistry {
 
         let mut details: Vec<PackageDetails> = Vec::with_capacity(packages.len());
         for pkg in packages {
-            let authors = self.get_package_authors(&pkg.id).await?;
-            details.push(PackageDetails {
-                id: pkg.id,
-                name: pkg.name,
-                description: pkg.description,
-                version: pkg.version,
-                authors,
-                license: pkg.license,
-                homepage: pkg.homepage,
-                repository: pkg.repository,
-                keywords: pkg.keywords.unwrap_or_default(),
-                status: status_to_string(&pkg.status),
-                verified: pkg.verified,
-                download_count: pkg.download_count as u64,
-                wasm_size: pkg.wasm_size as u64,
-                nodes: pkg.nodes,
-                permissions: pkg.permissions,
-                price: pkg.price,
-                visibility: visibility_to_string(&pkg.visibility),
-                primary_category: pkg.primary_category.as_ref().map(db_cat_to_string),
-                secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_string),
-                created_at: chrono::DateTime::from_naive_utc_and_offset(
-                    pkg.created_at,
-                    chrono::Utc,
-                ),
-                updated_at: chrono::DateTime::from_naive_utc_and_offset(
-                    pkg.updated_at,
-                    chrono::Utc,
-                ),
-                published_at: pkg
-                    .published_at
-                    .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
-            });
+            let review_version = self.latest_pending_version(&pkg.id).await?;
+            details.push(self.build_package_details(pkg, review_version).await?);
         }
 
         Ok((details, total_count))
@@ -1945,7 +2006,7 @@ impl ServerRegistry {
         let now = chrono::Utc::now().naive_utc();
 
         // Verify package exists
-        let Some(_pkg) = wasm_package::Entity::find_by_id(package_id)
+        let Some(pkg) = wasm_package::Entity::find_by_id(package_id)
             .one(&self.db)
             .await?
         else {
@@ -1969,35 +2030,15 @@ impl ServerRegistry {
             }
         };
 
-        // Update package status based on action
-        let new_status = match action {
-            WasmReviewAction::Approved => Some(WasmPackageStatus::Active),
-            WasmReviewAction::Rejected => Some(WasmPackageStatus::Rejected),
-            _ => None,
-        };
+        let pending_versions = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(package_id))
+            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview))
+            .order_by_desc(wasm_package_version::Column::PublishedAt)
+            .all(&self.db)
+            .await?;
 
-        if let Some(status) = new_status {
-            let mut update_model = wasm_package::ActiveModel {
-                id: Set(package_id.to_string()),
-                status: Set(status.clone()),
-                updated_at: Set(now),
-                ..Default::default()
-            };
-
-            if status == WasmPackageStatus::Active {
-                update_model.published_at = Set(Some(now));
-                update_model.visibility = Set(WasmPackageVisibility::Public);
-
-                // Approve all PendingReview versions and promote latest to parent
-                let pending_versions = wasm_package_version::Entity::find()
-                    .filter(wasm_package_version::Column::PackageId.eq(package_id))
-                    .filter(
-                        wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview),
-                    )
-                    .order_by_desc(wasm_package_version::Column::PublishedAt)
-                    .all(&self.db)
-                    .await?;
-
+        match action {
+            WasmReviewAction::Approved => {
                 for pv in &pending_versions {
                     wasm_package_version::ActiveModel {
                         id: Set(pv.id.clone()),
@@ -2009,7 +2050,18 @@ impl ServerRegistry {
                     .await?;
                 }
 
-                // Update parent package with latest approved version's data
+                let mut update_model = wasm_package::ActiveModel {
+                    id: Set(package_id.to_string()),
+                    status: Set(WasmPackageStatus::Active),
+                    published_at: Set(Some(now)),
+                    updated_at: Set(now),
+                    ..Default::default()
+                };
+
+                if pkg.status == WasmPackageStatus::PendingReview {
+                    update_model.visibility = Set(WasmPackageVisibility::Public);
+                }
+
                 if let Some(latest) = pending_versions.first() {
                     update_model.version = Set(latest.version.clone());
                     update_model.wasm_path = Set(latest.wasm_path.clone());
@@ -2017,9 +2069,33 @@ impl ServerRegistry {
                     update_model.wasm_size = Set(latest.wasm_size);
                     update_model.nodes = Set(latest.nodes.clone());
                 }
-            }
 
-            update_model.update(&self.db).await?;
+                update_model.update(&self.db).await?;
+            }
+            WasmReviewAction::Rejected => {
+                for pv in &pending_versions {
+                    wasm_package_version::ActiveModel {
+                        id: Set(pv.id.clone()),
+                        status: Set(WasmPackageStatus::Rejected),
+                        ..Default::default()
+                    }
+                    .update(&self.db)
+                    .await?;
+                }
+
+                let mut update_model = wasm_package::ActiveModel {
+                    id: Set(package_id.to_string()),
+                    updated_at: Set(now),
+                    ..Default::default()
+                };
+
+                if pending_versions.is_empty() || pkg.status == WasmPackageStatus::PendingReview {
+                    update_model.status = Set(WasmPackageStatus::Rejected);
+                }
+
+                update_model.update(&self.db).await?;
+            }
+            _ => {}
         }
 
         // Create review record
@@ -2265,15 +2341,7 @@ impl ServerRegistry {
                     description: pkg.description,
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
-                    status: match pkg.status {
-                        crate::entity::sea_orm_active_enums::WasmPackageStatus::Active => {
-                            PackageStatus::Active
-                        }
-                        crate::entity::sea_orm_active_enums::WasmPackageStatus::Deprecated => {
-                            PackageStatus::Deprecated
-                        }
-                        _ => PackageStatus::Disabled,
-                    },
+                    status: status_to_package_status(&pkg.status),
                     keywords: pkg.keywords.unwrap_or_default(),
                     verified: pkg.verified,
                     price: pkg.price,
