@@ -26,14 +26,15 @@ RUN yum update -y && \
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 ENV RUSTFLAGS="--cfg tokio_unstable"
-ENV CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS
 
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/root/.cargo/git,id=cargo-git \
     --mount=type=cache,target=/app/target,id=cargo-target-aws-event-bridge \
-    cargo build --release --manifest-path apps/backend/aws/event-bridge/Cargo.toml && \
+    if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
+    cargo build --locked --release --manifest-path apps/backend/aws/event-bridge/Cargo.toml && \
     cp /app/target/release/aws-event-bridge /tmp/bootstrap && \
     strip --strip-all /tmp/bootstrap
 
