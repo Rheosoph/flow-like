@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use utoipa::ToSchema;
 
-use flow_like_wasm::aot_cache::WASMTIME_VERSION;
+use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
@@ -36,7 +36,7 @@ const WASM_COMPILED_PATH: &str = "wasm-compiled";
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {
-    format!("{}-{}-wt{}", os, arch, WASMTIME_VERSION)
+    format!("{}-{}-wt{}", os, arch, WASMTIME_MAJOR_VERSION)
 }
 
 /// Platform key for the current host process.

@@ -1466,7 +1466,10 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         if let Err(e) = app_handle.run_on_main_thread(move || {
             let _ = emit_handle.emit("catalog-updated", ());
         }) {
-            tracing::warn!("Failed to schedule catalog-updated emit on main thread: {:?}", e);
+            tracing::warn!(
+                "Failed to schedule catalog-updated emit on main thread: {:?}",
+                e
+            );
         }
         tracing::info!("Developer nodes loaded into catalog");
     }

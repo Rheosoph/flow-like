@@ -24,7 +24,7 @@ use axum::{
     http::HeaderMap,
 };
 use flow_like_types::{anyhow, create_id, tokio};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -193,28 +193,21 @@ pub async fn report_progress(
             StateRunStatus::Cancelled => ExecutionStatus::Warn,
             _ => ExecutionStatus::Info,
         };
-        let db = state.db.clone();
-        let board_id = claims.board_id.clone();
-        let event_id = claims.event_id.clone().unwrap_or_default();
-        let app_id = claims.app_id.clone();
         let user_id = execution_claim_user_id(&claims.sub).map(ToOwned::to_owned);
-        let run_id = claims.run_id.clone();
-        tokio::spawn(async move {
-            if let Err(e) = track_execution_usage(
-                &db,
-                &board_id,
-                &event_id,
-                &run_id,
-                duration_us,
-                exec_status,
-                user_id.as_deref(),
-                &app_id,
-            )
-            .await
-            {
-                tracing::warn!(error=%e, "Failed to track execution usage");
-            }
-        });
+        if let Err(e) = track_execution_usage(
+            &state.db,
+            &claims.board_id,
+            claims.event_id.as_deref().unwrap_or_default(),
+            &claims.run_id,
+            duration_us,
+            exec_status,
+            user_id.as_deref(),
+            &claims.app_id,
+        )
+        .await
+        {
+            tracing::warn!(error=%e, "Failed to track execution usage");
+        }
     }
 
     Ok(Json(ProgressUpdateResponse {
@@ -514,6 +507,14 @@ async fn track_execution_usage(
     user_id: Option<&str>,
     app_id: &str,
 ) -> Result<(), flow_like_types::Error> {
+    let existing = execution_usage_tracking::Entity::find()
+        .filter(execution_usage_tracking::Column::Version.eq(version))
+        .one(db)
+        .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
     let now = chrono::Utc::now().naive_utc();
     let instance = std::env::var("INSTANCE_ID").ok();
     let record = execution_usage_tracking::ActiveModel {

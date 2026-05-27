@@ -16,7 +16,14 @@ use wasmtime::Module;
 use wasmtime::component::Component;
 
 /// Wasmtime major version, extracted automatically from the workspace Cargo.toml at build time.
-pub const WASMTIME_VERSION: &str = env!("WASMTIME_VERSION");
+///
+/// Precompiled artifacts are keyed by Wasmtime's serialization compatibility
+/// version, which is the major version for the default Wasmtime module version
+/// strategy.
+pub const WASMTIME_MAJOR_VERSION: &str = env!("WASMTIME_MAJOR_VERSION");
+
+/// Backwards-compatible alias for callers that imported the previous name.
+pub const WASMTIME_VERSION: &str = WASMTIME_MAJOR_VERSION;
 
 /// Build the platform key for the current host (e.g. `ios-aarch64-wt43`).
 /// This always returns the native platform key so the client can request
@@ -26,7 +33,7 @@ pub fn host_platform_key() -> String {
         "{}-{}-wt{}",
         std::env::consts::OS,
         std::env::consts::ARCH,
-        WASMTIME_VERSION,
+        WASMTIME_MAJOR_VERSION,
     )
 }
 
@@ -36,7 +43,7 @@ fn cache_key(wasm_hash: &str) -> String {
         wasm_hash,
         std::env::consts::OS,
         std::env::consts::ARCH,
-        WASMTIME_VERSION,
+        WASMTIME_MAJOR_VERSION,
     )
 }
 

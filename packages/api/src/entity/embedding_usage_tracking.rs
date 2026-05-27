@@ -10,6 +10,16 @@ pub struct Model {
     pub id: String,
     #[sea_orm(column_name = "modelId", column_type = "Text")]
     pub model_id: String,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub provider: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub endpoint: Option<String>,
+    #[sea_orm(column_name = "invocationId", column_type = "Text", nullable)]
+    pub invocation_id: Option<String>,
+    #[sea_orm(column_name = "providerRequestId", column_type = "Text", nullable)]
+    pub provider_request_id: Option<String>,
+    #[sea_orm(column_name = "rawUsage", column_type = "JsonBinary", nullable)]
+    pub raw_usage: Option<Json>,
     #[sea_orm(column_name = "tokenCount")]
     pub token_count: i64,
     #[sea_orm(column_type = "Double", nullable)]

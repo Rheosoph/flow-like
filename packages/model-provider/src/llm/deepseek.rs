@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use super::{ModelLogic, extract_headers};
+use super::{ModelLogic, UsageReportingMode, extract_headers};
 use crate::provider::random_provider;
 use crate::{
     llm::ModelConstructor,
@@ -87,5 +87,9 @@ impl ModelLogic for DeepseekModel {
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+
+    fn usage_reporting(&self) -> UsageReportingMode {
+        UsageReportingMode::OpenAIStreamOptions
     }
 }

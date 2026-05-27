@@ -6,21 +6,30 @@
 
 use crate::error::ExecutorError;
 use crate::types::WasmPackageRef;
+use flow_like::flow::board::Board;
 use flow_like::flow::node::NodeLogic;
 use flow_like_wasm::{WasmConfig, WasmEngine, WasmModule, WasmNodeLogic};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+
+pub(crate) struct WasmLoadReport {
+    pub nodes: Vec<Arc<dyn NodeLogic>>,
+    pub failed_package_ids: BTreeSet<String>,
+}
 
 /// Load WASM packages from presigned URLs and return node logic instances.
 ///
 /// For each package, downloads the pre-compiled `.cwasm` artifact and its blake3
 /// checksum via presigned URLs, verifies integrity, deserializes, and extracts
 /// node definitions.
-pub async fn load_wasm_packages(
+pub(crate) async fn load_wasm_packages(
     wasm_packages: &HashMap<String, WasmPackageRef>,
-) -> Result<Vec<Arc<dyn NodeLogic>>, ExecutorError> {
+) -> Result<WasmLoadReport, ExecutorError> {
     if wasm_packages.is_empty() {
-        return Ok(Vec::new());
+        return Ok(WasmLoadReport {
+            nodes: Vec::new(),
+            failed_package_ids: BTreeSet::new(),
+        });
     }
 
     let engine =
@@ -31,6 +40,7 @@ pub async fn load_wasm_packages(
 
     let http = reqwest::Client::new();
     let mut all_nodes: Vec<Arc<dyn NodeLogic>> = Vec::new();
+    let mut failed_package_ids = BTreeSet::new();
 
     for (package_id, pkg_ref) in wasm_packages {
         match load_single_package(&engine, &http, package_id, pkg_ref).await {
@@ -48,13 +58,59 @@ pub async fn load_wasm_packages(
                     package_id = %package_id,
                     version = %pkg_ref.version,
                     error = %e,
-                    "Failed to load WASM package — skipping"
+                    "Failed to load WASM package"
                 );
+                failed_package_ids.insert(package_id.clone());
             }
         }
     }
 
-    Ok(all_nodes)
+    Ok(WasmLoadReport {
+        nodes: all_nodes,
+        failed_package_ids,
+    })
+}
+
+pub(crate) fn unavailable_board_wasm_packages(
+    board: &Board,
+    wasm_packages: Option<&HashMap<String, WasmPackageRef>>,
+    failed_package_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let available = match wasm_packages {
+        Some(packages) if !packages.is_empty() => packages,
+        _ => {
+            let mut required = BTreeSet::new();
+            collect_required_packages(board, &mut required);
+            return required.into_iter().collect();
+        }
+    };
+
+    let mut missing = BTreeSet::new();
+    let mut required = BTreeSet::new();
+    collect_required_packages(board, &mut required);
+    for package_id in required {
+        if !available.contains_key(&package_id) || failed_package_ids.contains(&package_id) {
+            missing.insert(package_id);
+        }
+    }
+
+    missing.into_iter().collect()
+}
+
+fn collect_required_packages(board: &Board, package_ids: &mut BTreeSet<String>) {
+    for node in board.nodes.values() {
+        if let Some(wasm) = &node.wasm {
+            package_ids.insert(wasm.package_id.clone());
+        }
+    }
+
+    for layer in board.layers.values() {
+        for node in layer.nodes.values() {
+            if let Some(wasm) = &node.wasm {
+                package_ids.insert(wasm.package_id.clone());
+            }
+        }
+    }
 }
 
 async fn load_single_package(

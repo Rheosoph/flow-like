@@ -2,11 +2,15 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::entity::{bit, embedding_usage_tracking};
+use crate::entity::{bit, embedding_usage_tracking, user};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
-use axum::{Extension, Json, extract::State};
+use crate::usage_accounting::{
+    UsageInvocationSettlement, UsageInvocationStart, settle_usage_invocation,
+    start_usage_invocation,
+};
+use axum::{Extension, Json, extract::State, http::HeaderMap};
 use flow_like::bit::Bit;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
@@ -15,6 +19,41 @@ use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+const APP_ID_HEADER: &str = "x-flow-like-app-id";
+
+#[derive(Clone, Debug, Default)]
+struct UsageRequestContext {
+    app_id: Option<String>,
+}
+
+fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|header| header.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn resolve_usage_context(
+    state: &AppState,
+    user: &AppUser,
+    headers: &HeaderMap,
+) -> Result<UsageRequestContext, ApiError> {
+    if let AppUser::Executor(executor) = user {
+        return Ok(UsageRequestContext {
+            app_id: Some(executor.app_id.clone()),
+        });
+    }
+
+    let app_id = header_string(headers, APP_ID_HEADER);
+    if let Some(app_id) = app_id.as_deref() {
+        user.execution_app_permission(app_id, state).await?;
+    }
+
+    Ok(UsageRequestContext { app_id })
+}
 
 /// Bit cache entry with expiration
 struct CachedBit {
@@ -191,6 +230,7 @@ async fn enforce_embedding_tier(
 pub async fn embed_text(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
+    headers: HeaderMap,
     Json(payload): Json<EmbedRequest>,
 ) -> Result<Json<EmbedResponse>, ApiError> {
     // 1. Fetch bit and validate remote config (CACHED for performance!)
@@ -198,12 +238,33 @@ pub async fn embed_text(
 
     // 2. Enforce user tier
     enforce_embedding_tier(&user, &state, &embedding_provider).await?;
+    let usage_context = resolve_usage_context(&state, &user, &headers).await?;
+    let user_id = user
+        .executor_scoped_sub()
+        .unwrap_or_else(|_| "unknown".to_string());
 
     // 3. Build upstream request based on implementation
     let start = Instant::now();
-    let embeddings = match remote_config.implementation {
+    let token_count_estimate = payload.input.iter().map(|s| s.len() / 4).sum::<usize>() as i64;
+    let price_estimate = estimate_embedding_price(&payload.model, token_count_estimate);
+    let invocation_id = start_usage_invocation(
+        &state,
+        UsageInvocationStart {
+            kind: "embedding",
+            user_id: Some(&user_id),
+            app_id: usage_context.app_id.as_deref(),
+            provider: Some(&embedding_provider.provider.provider_name),
+            endpoint: Some("internal"),
+            model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
+            estimated_tokens: token_count_estimate,
+            estimated_cost_micro_dollars: price_estimate,
+        },
+    )
+    .await?;
+
+    let result = match remote_config.implementation {
         Some(RemoteEmbeddingProvider::Internal) => {
-            call_internal(&state, &embedding_provider, &remote_config, &payload).await?
+            call_internal(&state, &embedding_provider, &remote_config, &payload).await
         }
         None => {
             return Err(ApiError::bad_request(
@@ -211,22 +272,47 @@ pub async fn embed_text(
             ));
         }
     };
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = settle_usage_invocation(
+                &state.db,
+                invocation_id.as_deref(),
+                UsageInvocationSettlement {
+                    status: crate::usage_accounting::STATUS_FAILED,
+                    error: Some(error.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    // 4. Track usage (rough token estimate: ~4 chars per token)
-    let token_count = payload.input.iter().map(|s| s.len() / 4).sum::<usize>() as i64;
+    // 4. Track usage. Prefer upstream usage when provided; otherwise use the
+    // same rough token estimate used for preflight limit checks.
+    let token_count = result
+        .usage
+        .as_ref()
+        .map(|usage| usage.total_tokens)
+        .unwrap_or(token_count_estimate);
     let price = estimate_embedding_price(&payload.model, token_count);
-
-    let user_id = user.sub().unwrap_or_else(|_| "unknown".to_string());
 
     // Best-effort usage tracking
     if let Err(e) = track_embedding_usage(
         &state,
         &user_id,
-        &payload.model,
+        result.model.as_deref().unwrap_or(&payload.model),
         token_count,
         price,
         latency_ms,
+        usage_context.app_id.as_deref(),
+        Some(&embedding_provider.provider.provider_name),
+        Some("internal"),
+        invocation_id.as_deref(),
+        result.provider_request_id.as_deref(),
+        result.raw_usage.clone(),
     )
     .await
     {
@@ -243,8 +329,8 @@ pub async fn embed_text(
     );
 
     Ok(Json(EmbedResponse {
-        embeddings,
-        model: payload.model,
+        embeddings: result.embeddings,
+        model: result.model.unwrap_or(payload.model),
         usage: EmbedUsage {
             prompt_tokens: token_count,
             total_tokens: token_count,
@@ -272,6 +358,12 @@ async fn track_embedding_usage(
     token_count: i64,
     price: i64,
     latency_ms: f64,
+    app_id: Option<&str>,
+    provider: Option<&str>,
+    endpoint: Option<&str>,
+    invocation_id: Option<&str>,
+    provider_request_id: Option<&str>,
+    raw_usage: Option<flow_like_types::Value>,
 ) -> Result<(), flow_like_types::Error> {
     use chrono::Utc;
     use embedding_usage_tracking::ActiveModel;
@@ -280,16 +372,46 @@ async fn track_embedding_usage(
     let record = ActiveModel {
         id: Set(create_id()),
         model_id: Set(model.to_string()),
+        provider: Set(provider.map(ToOwned::to_owned)),
+        endpoint: Set(endpoint.map(ToOwned::to_owned)),
+        invocation_id: Set(invocation_id.map(ToOwned::to_owned)),
+        provider_request_id: Set(provider_request_id.map(ToOwned::to_owned)),
+        raw_usage: Set(raw_usage.clone()),
         token_count: Set(token_count),
         latency: Set(Some(latency_ms)),
         user_id: Set(Some(user_sub.to_string())),
-        app_id: Set(None),
+        app_id: Set(app_id.map(ToOwned::to_owned)),
         price: Set(price),
         created_at: Set(now),
         updated_at: Set(now),
     };
 
     record.insert(&state.db).await?;
+    settle_usage_invocation(
+        &state.db,
+        invocation_id,
+        UsageInvocationSettlement {
+            status: crate::usage_accounting::STATUS_COMPLETED,
+            embedding_tokens: token_count,
+            cost_micro_dollars: price,
+            latency_ms: Some(latency_ms),
+            provider_request_id: provider_request_id.map(ToOwned::to_owned),
+            raw_usage,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    if price != 0
+        && let Some(existing) = user::Entity::find_by_id(user_sub).one(&state.db).await?
+    {
+        let total_embedding_price = existing.total_embedding_price.saturating_add(price);
+        let mut active: user::ActiveModel = existing.into();
+        active.total_embedding_price = Set(total_embedding_price);
+        active.updated_at = Set(now);
+        active.update(&state.db).await?;
+    }
+
     Ok(())
 }
 
@@ -308,6 +430,15 @@ const INTERNAL_REQUEST_TIMEOUT_SECS: u64 = 120;
 const INTERNAL_MAX_RETRIES: u32 = 6;
 const INTERNAL_INITIAL_BACKOFF_MS: u64 = 2000;
 
+#[derive(Debug, Clone)]
+struct InternalEmbeddingResult {
+    embeddings: Vec<Vec<f32>>,
+    model: Option<String>,
+    usage: Option<EmbedUsage>,
+    provider_request_id: Option<String>,
+    raw_usage: Option<flow_like_types::Value>,
+}
+
 async fn get_secret_string(state: &AppState, secret_name: &str) -> Result<String, ApiError> {
     state
         .secrets
@@ -322,7 +453,7 @@ async fn call_internal(
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
-) -> Result<Vec<Vec<f32>>, ApiError> {
+) -> Result<InternalEmbeddingResult, ApiError> {
     let endpoint = get_secret_string(state, INTERNAL_EMBEDDING_ENDPOINT_SECRET).await?;
     let model_id = config
         .model_id
@@ -424,16 +555,34 @@ async fn call_internal(
             #[derive(Deserialize)]
             struct InternalResponse {
                 data: Vec<InternalEmbeddingObject>,
+                model: Option<String>,
+                usage: Option<EmbedUsage>,
             }
 
-            let resp: InternalResponse = response.json().await.map_err(|e| {
+            let resp_json: flow_like_types::Value = response.json().await.map_err(|e| {
                 ApiError::internal(format!("Failed to parse Internal gateway response: {}", e))
             })?;
+            let provider_request_id = resp_json
+                .get("id")
+                .or_else(|| resp_json.get("request_id"))
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned);
+            let raw_usage = resp_json.get("usage").cloned();
+            let resp: InternalResponse =
+                flow_like_types::json::from_value(resp_json).map_err(|e| {
+                    ApiError::internal(format!("Failed to parse Internal gateway response: {}", e))
+                })?;
 
             // Sort by index to guarantee order, then extract embeddings
             let mut items = resp.data;
             items.sort_by_key(|item| item.index);
-            return Ok(items.into_iter().map(|item| item.embedding).collect());
+            return Ok(InternalEmbeddingResult {
+                embeddings: items.into_iter().map(|item| item.embedding).collect(),
+                model: resp.model,
+                usage: resp.usage,
+                provider_request_id,
+                raw_usage,
+            });
         }
 
         // Retry on 429 (rate limit) or 503/5xx (transient server errors)

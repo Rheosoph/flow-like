@@ -20,7 +20,7 @@ use flow_like_storage::Path;
 use flow_like_types::create_id;
 use flow_like_types::intercom::BufferedInterComHandler;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
@@ -271,20 +271,25 @@ pub async fn execute(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
 
     let mut registry = PREPARED_REGISTRY.clone();
+    let mut failed_wasm_package_ids = BTreeSet::new();
 
     // Load WASM packages from presigned URLs if any are specified
     if let Some(ref wasm_packages) = request.wasm_packages {
         if !wasm_packages.is_empty() {
             match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
-                Ok(wasm_nodes) => {
-                    tracing::info!(count = wasm_nodes.len(), "Loaded WASM nodes for execution");
-                    for logic in wasm_nodes {
+                Ok(report) => {
+                    tracing::info!(
+                        count = report.nodes.len(),
+                        "Loaded WASM nodes for execution"
+                    );
+                    failed_wasm_package_ids = report.failed_package_ids;
+                    for logic in report.nodes {
                         let node = logic.get_node();
                         registry.insert(node, logic);
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to load WASM packages");
+                    return Err(e);
                 }
             }
         }
@@ -297,6 +302,18 @@ pub async fn execute(
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
     let board = Arc::new(resolve_board(&state, &request, &storage_root).await?);
+    let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
+        &board,
+        request.wasm_packages.as_ref(),
+        &failed_wasm_package_ids,
+    );
+    if !unavailable_wasm_packages.is_empty() {
+        return Err(ExecutorError::Execution(format!(
+            "Missing WASM package artifacts for board {}: {}",
+            board_id,
+            unavailable_wasm_packages.join(", ")
+        )));
+    }
 
     // Send start event to API
     send_event(

@@ -42,6 +42,8 @@ pub struct PaginatedResponse<T: Serialize> {
 pub struct LlmUsageRecord {
     pub id: String,
     pub model_id: String,
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
     pub token_in: i64,
     pub token_out: i64,
     pub latency: Option<f64>,
@@ -93,6 +95,8 @@ pub async fn get_llm_history(
         .map(|r| LlmUsageRecord {
             id: r.id,
             model_id: r.model_id,
+            provider: r.provider,
+            endpoint: r.endpoint,
             token_in: r.token_in,
             token_out: r.token_out,
             latency: r.latency,
@@ -116,6 +120,8 @@ pub async fn get_llm_history(
 pub struct EmbeddingUsageRecord {
     pub id: String,
     pub model_id: String,
+    pub provider: Option<String>,
+    pub endpoint: Option<String>,
     pub token_count: i64,
     pub latency: Option<f64>,
     pub app_id: Option<String>,
@@ -166,6 +172,8 @@ pub async fn get_embedding_history(
         .map(|r| EmbeddingUsageRecord {
             id: r.id,
             model_id: r.model_id,
+            provider: r.provider,
+            endpoint: r.endpoint,
             token_count: r.token_count,
             latency: r.latency,
             app_id: r.app_id,

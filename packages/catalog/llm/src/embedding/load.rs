@@ -105,7 +105,11 @@ impl NodeLogic for LoadModelNode {
                         let model = model_factory
                             .lock()
                             .await
-                            .build_text_proxy(&bit, access_token.clone())
+                            .build_text_proxy(
+                                &bit,
+                                access_token.clone(),
+                                context.model_usage_context(),
+                            )
                             .await?;
                         CachedEmbeddingModelObject {
                             text_model: Some(model),

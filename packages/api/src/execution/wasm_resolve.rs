@@ -41,6 +41,7 @@ pub async fn resolve_wasm_packages(
     }
 
     let mut result: HashMap<String, flow_like_types::dispatch::WasmPackageRef> = HashMap::new();
+    let mut had_errors = false;
 
     for pkg in &packages {
         let version_record = wasm_package_version::Entity::find()
@@ -54,6 +55,7 @@ pub async fn resolve_wasm_packages(
         let version_record = match version_record {
             Some(v) => v,
             None => {
+                had_errors = true;
                 tracing::warn!(
                     package_id = %pkg.package_id,
                     version = %pkg.version,
@@ -69,6 +71,7 @@ pub async fn resolve_wasm_packages(
         {
             Ok((download_url, _, _)) => download_url,
             Err(e) => {
+                had_errors = true;
                 tracing::warn!(
                     package_id = %pkg.package_id,
                     version = %pkg.version,
@@ -94,6 +97,7 @@ pub async fn resolve_wasm_packages(
                 result.insert(pkg.package_id.clone(), resolved);
             }
             Err(e) => {
+                had_errors = true;
                 tracing::warn!(
                     package_id = %pkg.package_id,
                     version = %pkg.version,
@@ -107,8 +111,17 @@ pub async fn resolve_wasm_packages(
     if result.is_empty() {
         None
     } else {
-        let arc = Arc::new(result.clone());
-        state.wasm_resolve_cache.insert(app_id.to_string(), arc);
+        if had_errors {
+            tracing::warn!(
+                app_id = %app_id,
+                resolved = result.len(),
+                total = packages.len(),
+                "Resolved WASM packages with skipped entries; not caching partial result"
+            );
+        } else {
+            let arc = Arc::new(result.clone());
+            state.wasm_resolve_cache.insert(app_id.to_string(), arc);
+        }
         Some(result)
     }
 }

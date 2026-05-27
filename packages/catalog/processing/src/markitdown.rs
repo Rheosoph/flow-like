@@ -433,7 +433,12 @@ impl NodeLogic for ExtractDocumentAiNode {
         let model = model_factory
             .lock()
             .await
-            .build(&model_bit, context.app_state.clone(), context.token.clone())
+            .build(
+                &model_bit,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
             .await?;
 
         #[allow(deprecated)]
@@ -742,7 +747,12 @@ impl NodeLogic for ExtractDocumentsAiNode {
         let model = model_factory
             .lock()
             .await
-            .build(&model_bit, context.app_state.clone(), context.token.clone())
+            .build(
+                &model_bit,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
             .await?;
 
         #[allow(deprecated)]
@@ -1003,6 +1013,7 @@ async fn invoke_model_simple(
     invoke_model_simple_standalone(
         &context.app_state,
         &context.token,
+        context.model_usage_context(),
         model_bit,
         system_prompt,
         user_prompt,
@@ -1014,6 +1025,7 @@ async fn invoke_model_simple(
 async fn invoke_model_simple_standalone(
     app_state: &std::sync::Arc<flow_like::state::FlowLikeState>,
     access_token: &Option<String>,
+    usage_context: Option<flow_like::models::llm::ModelUsageContext>,
     model_bit: &Bit,
     system_prompt: &str,
     user_prompt: &str,
@@ -1026,7 +1038,12 @@ async fn invoke_model_simple_standalone(
     let model = model_factory
         .lock()
         .await
-        .build(model_bit, app_state.clone(), access_token.clone())
+        .build(
+            model_bit,
+            app_state.clone(),
+            access_token.clone(),
+            usage_context,
+        )
         .await?;
 
     let model_name = model_bit
@@ -1286,7 +1303,12 @@ impl NodeLogic for SummarizeDocumentNode {
         let model = model_factory
             .lock()
             .await
-            .build(&model_bit, context.app_state.clone(), context.token.clone())
+            .build(
+                &model_bit,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
             .await?;
 
         let chunks: Vec<TextChunk> = pages
@@ -1580,6 +1602,7 @@ Extract specific, domain-relevant keywords that would help identify this content
             let system_prompt = Arc::new(system_prompt.to_string());
             let app_state = context.app_state.clone();
             let token = context.token.clone();
+            let usage_context = context.model_usage_context();
 
             let tasks: Vec<_> = chunks
                 .iter()
@@ -1594,11 +1617,13 @@ Extract specific, domain-relevant keywords that would help identify this content
                     let system_prompt = Arc::clone(&system_prompt);
                     let app_state = app_state.clone();
                     let token = token.clone();
+                    let usage_context = usage_context.clone();
 
                     async move {
                         let response = invoke_model_simple_standalone(
                             &app_state,
                             &token,
+                            usage_context,
                             &model_bit,
                             &system_prompt,
                             &user_prompt,

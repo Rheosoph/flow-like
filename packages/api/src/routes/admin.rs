@@ -17,6 +17,7 @@ pub mod publication;
 pub mod runs;
 pub mod sinks;
 pub mod solutions;
+pub mod usage;
 pub mod users;
 
 pub fn routes() -> Router<AppState> {
@@ -86,6 +87,20 @@ pub fn routes() -> Router<AppState> {
         // User management routes
         .route("/users", get(users::list_users::list_users))
         .route("/users/{user_id}", patch(users::update_user::update_user))
+        // Usage reporting and limits
+        .route("/usage/overview", get(usage::overview))
+        .route("/usage/invocations", get(usage::invocations))
+        .route("/usage/reconcile", post(usage::reconcile))
+        .route("/usage/alerts", get(usage::alerts))
+        .route(
+            "/usage/alerts/{alert_id}/ack",
+            post(usage::acknowledge_alert),
+        )
+        .route("/usage/audit", get(usage::audit))
+        .route(
+            "/usage/apps/{app_id}/limits",
+            get(usage::get_limits).put(usage::put_limits),
+        )
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
         // Fork orphan janitor

@@ -6,8 +6,8 @@ fn main() {
     let workspace_toml =
         fs::read_to_string("../../Cargo.toml").expect("failed to read workspace Cargo.toml");
 
-    // Find: wasmtime = { version = "XX", ... }
-    let version = workspace_toml
+    // Find: wasmtime = { version = "XX.YY.ZZ", ... }
+    let full_version = workspace_toml
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
@@ -24,5 +24,14 @@ fn main() {
         })
         .expect("could not find wasmtime version in workspace Cargo.toml");
 
-    println!("cargo:rustc-env=WASMTIME_VERSION={version}");
+    let major_version = full_version
+        .split('.')
+        .next()
+        .filter(|major| !major.is_empty())
+        .expect("could not extract wasmtime major version from workspace Cargo.toml");
+
+    println!("cargo:rustc-env=WASMTIME_MAJOR_VERSION={major_version}");
+    // Backwards-compatible env name; this intentionally carries the artifact
+    // compatibility version, not the full Cargo package version.
+    println!("cargo:rustc-env=WASMTIME_VERSION={major_version}");
 }
