@@ -360,6 +360,7 @@ impl Modify for SecurityAddon {
         // Admin routes
         crate::routes::admin::solutions::list_solutions::list_solutions,
         crate::routes::admin::packages::get_stats::get_stats,
+        crate::routes::admin::packages::ensure_wasm_artifacts::ensure_wasm_artifacts,
         crate::routes::admin::packages::get_packages::get_packages,
         crate::routes::admin::packages::get_package::get_package,
         crate::routes::admin::packages::delete_package::delete_package,

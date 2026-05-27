@@ -34,41 +34,87 @@ pub(crate) static PREPARED_REGISTRY: LazyLock<FlowNodeRegistryInner> = LazyLock:
     FlowNodeRegistryInner::prepare(&catalog_arc)
 });
 
-/// One entry in [`BOARD_PROTO_CACHE`]. Carries the storage-level identity
-/// (`e_tag` / `last_modified`) captured during the original load so a cheap
-/// HEAD can verify the cached body still matches what's on disk.
-struct CachedProto {
-    proto: flow_like_types::proto::Board,
+/// One entry in [`BOARD_CACHE`]. Carries a cleaned, node-updated `Board` with
+/// request-specific state stripped, plus the storage-level identity captured
+/// during the original load so a cheap HEAD can verify freshness.
+struct CachedBoard {
+    board: flow_like::flow::board::Board,
     e_tag: Option<String>,
     last_modified: chrono::DateTime<chrono::Utc>,
 }
 
-/// Cache of decompressed board protos, keyed by `(app_id, board_id, version)`.
+/// Cache of prepared boards, keyed by `(app_id, board_id, version, wasm bundle)`.
 ///
-/// The proto is the on-disk representation: identical for all callers of the
-/// same `(app_id, board_id, version)` tuple, with no per-request state. Sharing
-/// it across requests skips the dominant cost of `Board::load` (object-store
-/// fetch + lz4 decompression + protobuf decode) — typically the largest single
-/// cost on warm Lambda invocations.
+/// The cached board has already gone through object-store fetch, lz4
+/// decompression, protobuf decode, `Board::from_proto`, `node_updates`, and
+/// cleanup. Before insertion, `app_state` and `logic_nodes` are removed so a
+/// warm Lambda hit cannot reuse caller credentials or request-scoped logic.
 ///
-/// The per-request `Board` is still rebuilt from a clone of the cached proto
-/// against the caller's `FlowLikeState` (and registry, which carries
-/// per-request WASM packages) — that step keeps execution state isolated.
+/// The per-request `Board` is a clone with the current `FlowLikeState` attached.
+/// `InternalRun` still builds its own mutable execution graph per run, so pin
+/// values and node state remain isolated.
 ///
 /// Freshness: pinned versions are immutable in storage and skip revalidation.
 /// `latest` does a HEAD before reuse so rapid edit-test cycles never execute
-/// stale boards — HEAD is ~10–30 ms vs. ~hundreds of ms for the full reload.
-/// TTL bounds memory growth on long-lived instances.
-static BOARD_PROTO_CACHE: LazyLock<moka::sync::Cache<String, Arc<CachedProto>>> =
-    LazyLock::new(|| {
-        moka::sync::Cache::builder()
-            .max_capacity(256)
-            .time_to_live(Duration::from_secs(30 * 60))
-            .time_to_idle(Duration::from_secs(5 * 60))
-            .build()
-    });
+/// stale boards. TTL bounds memory growth on long-lived instances.
+static BOARD_CACHE: LazyLock<moka::sync::Cache<String, Arc<CachedBoard>>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(256)
+        .time_to_live(Duration::from_secs(30 * 60))
+        .time_to_idle(Duration::from_secs(5 * 60))
+        .build()
+});
 
-fn board_cache_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)>) -> String {
+fn wasm_registry_signature(request: &ExecutionRequest) -> String {
+    let Some(packages) = request.wasm_packages.as_ref() else {
+        return "static".to_string();
+    };
+
+    if packages.is_empty() {
+        return "static".to_string();
+    }
+
+    let mut parts = packages
+        .iter()
+        .map(|(package_id, package_ref)| {
+            format!(
+                "{}@{}:{}:{}",
+                package_id, package_ref.version, package_ref.wasm_hash, package_ref.cwasm_checksum
+            )
+        })
+        .collect::<Vec<_>>();
+    parts.sort();
+    parts.join("|")
+}
+
+fn board_cache_key(request: &ExecutionRequest, board_id: &str) -> String {
+    let version = request.board_version;
+    let board_key = match version {
+        Some((m, n, p)) => format!("{}:{}:{}_{}_{}", request.app_id, board_id, m, n, p),
+        None => format!("{}:{}:latest", request.app_id, board_id),
+    };
+    format!("{}:{}", board_key, wasm_registry_signature(request))
+}
+
+fn attach_cached_board(
+    cached: &CachedBoard,
+    board_dir: Path,
+    state: Arc<FlowLikeState>,
+) -> flow_like::flow::board::Board {
+    let mut board = cached.board.clone();
+    board.board_dir = board_dir;
+    board.app_state = Some(state);
+    board.logic_nodes = HashMap::new();
+    board
+}
+
+fn strip_request_state(mut board: flow_like::flow::board::Board) -> flow_like::flow::board::Board {
+    board.app_state = None;
+    board.logic_nodes = HashMap::new();
+    board
+}
+
+fn board_version_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)>) -> String {
     match version {
         Some((m, n, p)) => format!("{}:{}:{}_{}_{}", app_id, board_id, m, n, p),
         None => format!("{}:{}:latest", app_id, board_id),
@@ -79,7 +125,7 @@ fn board_cache_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)
 /// matches what HEAD returns now. We prefer e_tag (cheap, exact) and fall
 /// back to last_modified when the backend doesn't expose one.
 fn meta_unchanged(
-    cached: &CachedProto,
+    cached: &CachedBoard,
     head: &flow_like_storage::object_store::ObjectMeta,
 ) -> bool {
     match (&cached.e_tag, &head.e_tag) {
@@ -88,21 +134,20 @@ fn meta_unchanged(
     }
 }
 
-/// Resolve the request's board with the proto cache + HEAD revalidation.
+/// Resolve the request's board with the prepared-board cache + HEAD revalidation.
 ///
 /// On a cache hit for the floating "latest", we kick off the HEAD probe and
-/// the per-request `from_loaded_proto` build (`node_updates` etc.) in
-/// parallel — HEAD is ~5–30 ms and the build is typically larger, so the
-/// validation drops out of the critical path entirely. If HEAD reports the
-/// cached proto stale (or fails), we discard the speculative board and
-/// reload from storage. Pinned versions are immutable and skip HEAD.
-async fn resolve_board(
+/// the per-request board clone in parallel. If HEAD reports the cached board
+/// stale (or fails), we discard the speculative clone and reload from storage.
+/// Pinned versions are immutable and skip HEAD.
+pub(crate) async fn resolve_board(
     state: &Arc<FlowLikeState>,
     request: &ExecutionRequest,
     storage_root: &Path,
 ) -> Result<flow_like::flow::board::Board, ExecutorError> {
     let board_id = &request.board_id;
-    let cache_key = board_cache_key(&request.app_id, board_id, request.board_version);
+    let cache_key = board_cache_key(request, board_id);
+    let version_key = board_version_key(&request.app_id, board_id, request.board_version);
     let proto_path = Board::proto_path(storage_root, board_id, request.board_version);
     let is_pinned_version = request.board_version.is_some();
 
@@ -121,40 +166,40 @@ async fn resolve_board(
         })?
         .as_generic();
 
-    if let Some(cached) = BOARD_PROTO_CACHE.get(&cache_key) {
+    if let Some(cached) = BOARD_CACHE.get(&cache_key) {
         if is_pinned_version {
-            tracing::debug!(cache_key = %cache_key, "Board proto cache hit (pinned)");
-            return Ok(Board::from_loaded_proto(
-                cached.proto.clone(),
+            tracing::debug!(cache_key = %cache_key, "Board cache hit (pinned)");
+            return Ok(attach_cached_board(
+                cached.as_ref(),
                 storage_root.clone(),
                 state.clone(),
-            )
-            .await);
+            ));
         }
 
-        let speculative_proto = cached.proto.clone();
         let head_fut = meta_store.head(&proto_path);
         let build_fut =
-            Board::from_loaded_proto(speculative_proto, storage_root.clone(), state.clone());
+            async { attach_cached_board(cached.as_ref(), storage_root.clone(), state.clone()) };
         let (head_result, speculative_board) = tokio::join!(head_fut, build_fut);
 
         match head_result {
-            Ok(head_meta) if meta_unchanged(&cached, &head_meta) => {
-                tracing::debug!(cache_key = %cache_key, "Board proto cache hit (HEAD validated)");
+            Ok(head_meta) if meta_unchanged(cached.as_ref(), &head_meta) => {
+                tracing::debug!(cache_key = %cache_key, "Board cache hit (HEAD validated)");
                 return Ok(speculative_board);
             }
             Ok(_) => {
-                tracing::debug!(cache_key = %cache_key, "Board proto cache stale, reloading");
+                tracing::debug!(cache_key = %cache_key, "Board cache stale, reloading");
+                BOARD_CACHE.invalidate(&cache_key);
             }
             Err(e) => {
                 tracing::warn!(
                     cache_key = %cache_key,
                     error = %e,
-                    "HEAD failed during cache revalidation, falling back to full reload"
+                    "HEAD failed during board cache revalidation, falling back to full reload"
                 );
+                BOARD_CACHE.invalidate(&cache_key);
             }
         }
-        // The speculative board built from a stale proto is unsafe to return;
+        // The speculative board built from stale storage is unsafe to return;
         // drop it and load fresh below.
         drop(speculative_board);
     }
@@ -165,16 +210,17 @@ async fn resolve_board(
             .map_err(|e| {
                 ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
             })?;
-    BOARD_PROTO_CACHE.insert(
+    let board = Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await;
+    BOARD_CACHE.insert(
         cache_key.clone(),
-        Arc::new(CachedProto {
-            proto: loaded.clone(),
+        Arc::new(CachedBoard {
+            board: strip_request_state(board.clone()),
             e_tag: meta.e_tag.clone(),
             last_modified: meta.last_modified,
         }),
     );
-    tracing::debug!(cache_key = %cache_key, "Board proto cache populated");
-    Ok(Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await)
+    tracing::debug!(cache_key = %cache_key, version_key = %version_key, "Board cache populated");
+    Ok(board)
 }
 
 /// API-compatible event input format
@@ -276,7 +322,14 @@ pub async fn execute(
     // Load WASM packages from presigned URLs if any are specified
     if let Some(ref wasm_packages) = request.wasm_packages {
         if !wasm_packages.is_empty() {
-            match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
+            match crate::wasm_loader::load_wasm_packages(
+                &request.app_id,
+                &request.board_id,
+                request.board_version,
+                wasm_packages,
+            )
+            .await
+            {
                 Ok(report) => {
                     tracing::info!(
                         count = report.nodes.len(),

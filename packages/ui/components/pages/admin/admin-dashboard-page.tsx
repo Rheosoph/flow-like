@@ -51,6 +51,7 @@ import type {
 	IUsageReconciliationResult,
 	IUsageLimitPeriod,
 } from "../../../lib/schema/usage";
+import type { AdminEnsureWasmArtifactsResponse } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
 import {
 	Badge,
@@ -1664,6 +1665,7 @@ export function AdminDashboardPage({
 	infoDependencyKey = [],
 }: AdminDashboardPageProps) {
 	const backend = useBackend();
+	const queryClient = useQueryClient();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -1682,6 +1684,7 @@ export function AdminDashboardPage({
 		[info.data?.permission],
 	);
 	const hasAdminAccess = perms.hasPermission(GlobalPermission.Admin);
+	const hasPackageAccess = perms.hasPermission(GlobalPermission.ManagePackages);
 
 	const packageStats = useQuery<{
 		totalPackages: number;
@@ -1720,7 +1723,28 @@ export function AdminDashboardPage({
 		enabled: !!profile.data,
 	});
 
+	const ensureWasmArtifacts = useMutation({
+		mutationFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return backend.apiState.post<AdminEnsureWasmArtifactsResponse>(
+				profile.data,
+				"admin/packages/ensure-wasm-artifacts",
+				{},
+			);
+		},
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({
+				queryKey: ["admin", "packages"],
+			});
+		},
+	});
+
 	const statsLoading = packageStats.isLoading;
+	const ensureResult = ensureWasmArtifacts.data;
+	const ensureError =
+		ensureWasmArtifacts.error instanceof Error
+			? ensureWasmArtifacts.error.message
+			: null;
 
 	return (
 		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
@@ -1752,6 +1776,77 @@ export function AdminDashboardPage({
 									<Link href="/admin/packages">Review Now</Link>
 								</Button>
 							</CardContent>
+						</Card>
+					)}
+
+					{hasPackageAccess && (
+						<Card>
+							<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<div>
+									<CardTitle className="flex items-center gap-2 text-base">
+										<Cpu className="h-4 w-4 text-green-500" />
+										WASM Artifact Compatibility
+									</CardTitle>
+									<CardDescription>
+										Check active package versions for current Linux Wasmtime
+										artifacts and queue missing compiles.
+									</CardDescription>
+								</div>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={!profile.data || ensureWasmArtifacts.isPending}
+									onClick={() => ensureWasmArtifacts.mutate()}
+								>
+									<RefreshCw
+										className={`mr-2 h-4 w-4 ${ensureWasmArtifacts.isPending ? "animate-spin" : ""}`}
+									/>
+									Check Artifacts
+								</Button>
+							</CardHeader>
+							{(ensureResult || ensureError) && (
+								<CardContent>
+									{ensureResult ? (
+										<div className="grid gap-3 text-sm sm:grid-cols-4">
+											<div>
+												<div className="text-muted-foreground">Target</div>
+												<div className="font-medium">
+													{ensureResult.targetPlatform}
+												</div>
+											</div>
+											<div>
+												<div className="text-muted-foreground">Checked</div>
+												<div className="font-medium">
+													{ensureResult.checkedVersions}
+												</div>
+											</div>
+											<div>
+												<div className="text-muted-foreground">
+													Jobs started
+												</div>
+												<div className="font-medium">
+													{ensureResult.jobsStarted}
+												</div>
+											</div>
+											<div>
+												<div className="text-muted-foreground">Ready</div>
+												<div className="font-medium">
+													{ensureResult.alreadyAvailable}
+												</div>
+											</div>
+											{ensureResult.failed > 0 && (
+												<div className="sm:col-span-4 rounded-md border border-destructive/40 p-3 text-destructive">
+													Failed dispatches: {ensureResult.failed}
+												</div>
+											)}
+										</div>
+									) : (
+										<div className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+											{ensureError}
+										</div>
+									)}
+								</CardContent>
+							)}
 						</Card>
 					)}
 

@@ -1,6 +1,12 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::wasm_catalog::{
+        app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+    },
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -40,7 +46,7 @@ pub async fn undo_board(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
-    Json(params): Json<ExecuteCommandsBody>,
+    Json(mut params): Json<ExecuteCommandsBody>,
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
@@ -56,6 +62,12 @@ pub async fn undo_board(
             "No app state found for board"
         )))?
         .clone();
+    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let builtin_nodes = state.registry.as_ref().get_nodes();
+    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+        board.mark_changed();
+    }
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.undo(params.commands, flow_state.clone()).await?;
     board.save(None).await?;
@@ -86,7 +98,7 @@ pub async fn redo_board(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
-    Json(params): Json<ExecuteCommandsBody>,
+    Json(mut params): Json<ExecuteCommandsBody>,
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
@@ -102,6 +114,12 @@ pub async fn redo_board(
             "No app state found for board"
         )))?
         .clone();
+    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let builtin_nodes = state.registry.as_ref().get_nodes();
+    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+        board.mark_changed();
+    }
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.redo(params.commands, flow_state.clone()).await?;
     board.save(None).await?;

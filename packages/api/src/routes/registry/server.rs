@@ -32,7 +32,16 @@ use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
-const WASM_COMPILED_PATH: &str = "wasm-compiled";
+pub const WASM_COMPILED_PATH: &str = "wasm-compiled";
+
+pub fn with_current_wasmtime_version(existing: Option<Vec<String>>) -> Vec<String> {
+    let mut versions = existing.unwrap_or_default();
+    let current = WASMTIME_MAJOR_VERSION.to_string();
+    if !versions.iter().any(|version| version == &current) {
+        versions.push(current);
+    }
+    versions
+}
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {
@@ -556,9 +565,14 @@ impl ServerRegistry {
                             .one(&db)
                             .await;
                         if let Ok(Some(record)) = version_record {
+                            let supported_wasmtime_versions =
+                                record.supported_wasmtime_versions.clone();
                             let mut active: wasm_package_version::ActiveModel = record.into();
                             active.compilation_status = Set(WasmCompilationStatus::Compiled);
                             active.compiled_platforms = Set(Some(platforms));
+                            active.supported_wasmtime_versions = Set(Some(
+                                with_current_wasmtime_version(supported_wasmtime_versions),
+                            ));
                             active.compilation_error = Set(None);
                             if let Some(ref nodes) = extracted_nodes {
                                 active.nodes = Set(nodes.clone());
@@ -1707,6 +1721,7 @@ impl ServerRegistry {
             status: Set(WasmPackageStatus::PendingReview),
             compilation_status: Set(WasmCompilationStatus::Pending),
             compiled_platforms: Set(Some(vec![])),
+            supported_wasmtime_versions: Set(Some(vec![])),
             compilation_error: Set(None),
             duplicate_of_package_id: Set(dup_pkg_id),
             duplicate_of_version: Set(dup_version),
@@ -1819,6 +1834,7 @@ impl ServerRegistry {
                         id: Set(version_id.clone()),
                         compilation_status: Set(WasmCompilationStatus::Compiled),
                         compiled_platforms: Set(Some(platforms)),
+                        supported_wasmtime_versions: Set(Some(with_current_wasmtime_version(None))),
                         compilation_error: Set(None),
                         ..Default::default()
                     };

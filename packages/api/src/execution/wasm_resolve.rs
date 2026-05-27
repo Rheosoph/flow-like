@@ -9,7 +9,9 @@
 //! path. The cache TTL is set below the signed-URL TTL so callers always
 //! receive a signature with safe remaining lifetime.
 
-use crate::entity::{app_package, wasm_package_version};
+use crate::entity::{
+    app_package, sea_orm_active_enums::WasmCompilationStatus, wasm_package_version,
+};
 use crate::routes::registry::server::executor_target_platform;
 use crate::state::AppState;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -32,6 +34,7 @@ pub async fn resolve_wasm_packages(
 
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
+        .filter(app_package::Column::Stale.eq(false))
         .all(&state.db)
         .await
         .ok()?;
@@ -64,6 +67,28 @@ pub async fn resolve_wasm_packages(
                 continue;
             }
         };
+
+        let compiled_for_target = version_record.compilation_status
+            == WasmCompilationStatus::Compiled
+            && version_record
+                .compiled_platforms
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|platform| platform == &target);
+
+        if !compiled_for_target {
+            had_errors = true;
+            tracing::warn!(
+                package_id = %pkg.package_id,
+                version = %pkg.version,
+                target = %target,
+                status = ?version_record.compilation_status,
+                compiled_platforms = ?version_record.compiled_platforms,
+                "WASM package is not compiled for executor target — skipping"
+            );
+            continue;
+        }
 
         let wasm_url = match registry
             .get_wasm_url(&pkg.package_id, Some(&pkg.version))

@@ -3,7 +3,11 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::{board::secrets::filter_board_secrets, template::get_template::VersionQuery},
+    routes::app::{
+        board::secrets::filter_board_secrets,
+        template::get_template::VersionQuery,
+        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    },
     state::AppState,
 };
 use axum::{
@@ -58,6 +62,10 @@ pub async fn get_board(
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, version_opt)
         .await?;
+
+    let builtin_nodes = state.registry.as_ref().get_nodes();
+    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes);
 
     filter_board_secrets(&mut board);
 

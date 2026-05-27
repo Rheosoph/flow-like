@@ -69,6 +69,10 @@ pub fn routes() -> Router<AppState> {
         .route("/packages", get(packages::get_packages::get_packages))
         .route("/packages/stats", get(packages::get_stats::get_stats))
         .route(
+            "/packages/ensure-wasm-artifacts",
+            post(packages::ensure_wasm_artifacts::ensure_wasm_artifacts),
+        )
+        .route(
             "/packages/{package_id}",
             get(packages::get_package::get_package)
                 .patch(packages::update_package::update_package)

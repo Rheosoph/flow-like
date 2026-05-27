@@ -8,13 +8,63 @@ use crate::error::ExecutorError;
 use crate::types::WasmPackageRef;
 use flow_like::flow::board::Board;
 use flow_like::flow::node::NodeLogic;
-use flow_like_wasm::{WasmConfig, WasmEngine, WasmModule, WasmNodeLogic};
+use flow_like_wasm::{LoadedWasm, WasmConfig, WasmEngine, WasmModule, WasmNodeLogic};
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+use tokio::sync::OnceCell;
 
 pub(crate) struct WasmLoadReport {
     pub nodes: Vec<Arc<dyn NodeLogic>>,
     pub failed_package_ids: BTreeSet<String>,
+}
+
+static WASM_ENGINE: OnceCell<Arc<WasmEngine>> = OnceCell::const_new();
+static WASM_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+static WASM_PACKAGE_CACHE: LazyLock<moka::sync::Cache<String, Arc<Vec<Arc<dyn NodeLogic>>>>> =
+    LazyLock::new(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(256)
+            .time_to_live(Duration::from_secs(30 * 60))
+            .time_to_idle(Duration::from_secs(10 * 60))
+            .build()
+    });
+
+async fn wasm_engine() -> Result<Arc<WasmEngine>, ExecutorError> {
+    WASM_ENGINE
+        .get_or_try_init(|| async {
+            let engine = Arc::new(WasmEngine::new(WasmConfig::default()).map_err(|e| {
+                ExecutorError::Execution(format!("Failed to create WASM engine: {}", e))
+            })?);
+            engine.start_epoch_ticker();
+            Ok::<Arc<WasmEngine>, ExecutorError>(engine)
+        })
+        .await
+        .cloned()
+}
+
+fn package_cache_key(
+    app_id: &str,
+    board_id: &str,
+    board_version: Option<(u32, u32, u32)>,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> String {
+    let board_version = match board_version {
+        Some((major, minor, patch)) => format!("{major}_{minor}_{patch}"),
+        None => "latest".to_string(),
+    };
+
+    format!(
+        "{}:{}:{}:{}@{}:{}:{}",
+        app_id,
+        board_id,
+        board_version,
+        package_id,
+        pkg_ref.version,
+        pkg_ref.wasm_hash,
+        pkg_ref.cwasm_checksum
+    )
 }
 
 /// Load WASM packages from presigned URLs and return node logic instances.
@@ -23,6 +73,9 @@ pub(crate) struct WasmLoadReport {
 /// checksum via presigned URLs, verifies integrity, deserializes, and extracts
 /// node definitions.
 pub(crate) async fn load_wasm_packages(
+    app_id: &str,
+    board_id: &str,
+    board_version: Option<(u32, u32, u32)>,
     wasm_packages: &HashMap<String, WasmPackageRef>,
 ) -> Result<WasmLoadReport, ExecutorError> {
     if wasm_packages.is_empty() {
@@ -32,18 +85,27 @@ pub(crate) async fn load_wasm_packages(
         });
     }
 
-    let engine =
-        Arc::new(WasmEngine::new(WasmConfig::default()).map_err(|e| {
-            ExecutorError::Execution(format!("Failed to create WASM engine: {}", e))
-        })?);
-    engine.start_epoch_ticker();
-
-    let http = reqwest::Client::new();
+    let engine = wasm_engine().await?;
+    let http = &*WASM_HTTP_CLIENT;
     let mut all_nodes: Vec<Arc<dyn NodeLogic>> = Vec::new();
     let mut failed_package_ids = BTreeSet::new();
 
     for (package_id, pkg_ref) in wasm_packages {
-        match load_single_package(&engine, &http, package_id, pkg_ref).await {
+        let cache_key = package_cache_key(app_id, board_id, board_version, package_id, pkg_ref);
+        if let Some(cached_nodes) = WASM_PACKAGE_CACHE.get(&cache_key) {
+            tracing::debug!(
+                app_id = %app_id,
+                board_id = %board_id,
+                package_id = %package_id,
+                version = %pkg_ref.version,
+                node_count = cached_nodes.len(),
+                "WASM package cache hit"
+            );
+            all_nodes.extend(cached_nodes.iter().cloned());
+            continue;
+        }
+
+        match load_single_package(&engine, http, package_id, pkg_ref).await {
             Ok(nodes) => {
                 tracing::info!(
                     package_id = %package_id,
@@ -51,7 +113,9 @@ pub(crate) async fn load_wasm_packages(
                     node_count = nodes.len(),
                     "Loaded WASM package"
                 );
-                all_nodes.extend(nodes);
+                let nodes = Arc::new(nodes);
+                WASM_PACKAGE_CACHE.insert(cache_key, nodes.clone());
+                all_nodes.extend(nodes.iter().cloned());
             }
             Err(e) => {
                 tracing::error!(
@@ -148,21 +212,21 @@ async fn load_single_package(
         )));
     }
 
-    let wasm_module = match deserialize_cwasm(engine, package_id, pkg_ref, &cwasm_bytes) {
-        Ok(module) => module,
+    let loaded = match deserialize_cwasm(engine, http, package_id, pkg_ref, &cwasm_bytes).await {
+        Ok(loaded) => loaded,
         Err(deserialize_error) => {
             tracing::warn!(
                 package_id = %package_id,
                 version = %pkg_ref.version,
                 error = %deserialize_error,
-                "Failed to deserialize cwasm, falling back to raw wasm compilation"
+                "Failed to deserialize cwasm, falling back to raw wasm loading"
             );
-            compile_raw_wasm(engine, http, package_id, pkg_ref).await?
+            let wasm_bytes = download_raw_wasm(http, package_id, pkg_ref).await?;
+            compile_raw_wasm(engine, package_id, pkg_ref, &wasm_bytes).await?
         }
     };
 
     let init_security = flow_like_wasm::WasmSecurityConfig::default();
-    let loaded = flow_like_wasm::LoadedWasm::Module(wasm_module);
 
     let mut instance = loaded
         .instantiate(engine, init_security.clone())
@@ -200,36 +264,59 @@ async fn load_single_package(
     Ok(nodes)
 }
 
-fn deserialize_cwasm(
-    engine: &Arc<WasmEngine>,
-    package_id: &str,
-    pkg_ref: &WasmPackageRef,
-    cwasm_bytes: &[u8],
-) -> Result<Arc<WasmModule>, ExecutorError> {
-    let module =
-        unsafe { wasmtime::Module::deserialize(engine.engine(), cwasm_bytes) }.map_err(|e| {
-            ExecutorError::Execution(format!(
-                "Failed to deserialize cwasm for {} v{}: {}",
-                package_id, pkg_ref.version, e
-            ))
-        })?;
-
-    Ok(Arc::new(
-        WasmModule::from_precompiled(module, pkg_ref.wasm_hash.clone()).map_err(|e| {
-            ExecutorError::Execution(format!(
-                "Failed to build WasmModule for {} v{}: {}",
-                package_id, pkg_ref.version, e
-            ))
-        })?,
-    ))
-}
-
-async fn compile_raw_wasm(
+async fn deserialize_cwasm(
     engine: &Arc<WasmEngine>,
     http: &reqwest::Client,
     package_id: &str,
     pkg_ref: &WasmPackageRef,
-) -> Result<Arc<WasmModule>, ExecutorError> {
+    cwasm_bytes: &[u8],
+) -> Result<LoadedWasm, ExecutorError> {
+    match unsafe { wasmtime::Module::deserialize(engine.engine(), cwasm_bytes) } {
+        Ok(module) => {
+            let module =
+                WasmModule::from_precompiled(module, pkg_ref.wasm_hash.clone()).map_err(|e| {
+                    ExecutorError::Execution(format!(
+                        "Failed to build WasmModule for {} v{}: {}",
+                        package_id, pkg_ref.version, e
+                    ))
+                })?;
+            return Ok(LoadedWasm::Module(Arc::new(module)));
+        }
+        Err(module_error) => {
+            match unsafe {
+                wasmtime::component::Component::deserialize(engine.engine(), cwasm_bytes)
+            } {
+                Ok(component) => {
+                    let wasm_bytes = download_raw_wasm(http, package_id, pkg_ref).await?;
+                    let component = flow_like_wasm::component::WasmComponent::from_precompiled(
+                        component,
+                        &wasm_bytes,
+                        pkg_ref.wasm_hash.clone(),
+                    )
+                    .map_err(|e| {
+                        ExecutorError::Execution(format!(
+                            "Failed to build WasmComponent for {} v{}: {}",
+                            package_id, pkg_ref.version, e
+                        ))
+                    })?;
+                    return Ok(LoadedWasm::Component(Arc::new(component)));
+                }
+                Err(component_error) => {
+                    return Err(ExecutorError::Execution(format!(
+                        "Failed to deserialize cwasm for {} v{} as module ({}) or component ({})",
+                        package_id, pkg_ref.version, module_error, component_error
+                    )));
+                }
+            }
+        }
+    }
+}
+
+async fn download_raw_wasm(
+    http: &reqwest::Client,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Vec<u8>, ExecutorError> {
     let wasm_resp = http.get(&pkg_ref.wasm_url).send().await.map_err(|e| {
         ExecutorError::Storage(format!(
             "Failed to download raw wasm for {}: {}",
@@ -259,14 +346,19 @@ async fn compile_raw_wasm(
         )));
     }
 
-    Ok(Arc::new(
-        WasmModule::from_bytes(engine, &wasm_bytes, pkg_ref.wasm_hash.clone())
-            .await
-            .map_err(|e| {
-                ExecutorError::Execution(format!(
-                    "Failed to compile raw wasm for {} v{}: {}",
-                    package_id, pkg_ref.version, e
-                ))
-            })?,
-    ))
+    Ok(wasm_bytes.to_vec())
+}
+
+async fn compile_raw_wasm(
+    engine: &Arc<WasmEngine>,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+    wasm_bytes: &[u8],
+) -> Result<LoadedWasm, ExecutorError> {
+    engine.load_auto(wasm_bytes).await.map_err(|e| {
+        ExecutorError::Execution(format!(
+            "Failed to compile raw wasm for {} v{}: {}",
+            package_id, pkg_ref.version, e
+        ))
+    })
 }

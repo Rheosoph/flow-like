@@ -3,6 +3,7 @@ use crate::entity::sea_orm_active_enums::{
     WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility,
 };
 use crate::entity::{wasm_package, wasm_package_version};
+use crate::routes::registry::server::with_current_wasmtime_version;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -110,6 +111,7 @@ pub async fn handle_compilation_callback(
     };
 
     let compiled_ok = compilation_status == WasmCompilationStatus::Compiled;
+    let supported_wasmtime_versions = version_record.supported_wasmtime_versions.clone();
 
     let mut update = wasm_package_version::ActiveModel {
         id: Set(version_record.id),
@@ -121,6 +123,12 @@ pub async fn handle_compilation_callback(
 
     if let Some(ref nodes) = nodes {
         update.nodes = Set(nodes.clone());
+    }
+
+    if compiled_ok {
+        update.supported_wasmtime_versions = Set(Some(with_current_wasmtime_version(
+            supported_wasmtime_versions,
+        )));
     }
 
     // Auto-approve private packages on successful compilation

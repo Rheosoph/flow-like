@@ -8,7 +8,6 @@ use crate::error::ExecutorError;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
 use flow_like::credentials::StoreType;
-use flow_like::flow::board::Board;
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::{InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
@@ -194,7 +193,14 @@ async fn execute_inner(
     // Load WASM packages from presigned URLs if any are specified
     if let Some(ref wasm_packages) = request.wasm_packages {
         if !wasm_packages.is_empty() {
-            match crate::wasm_loader::load_wasm_packages(wasm_packages).await {
+            match crate::wasm_loader::load_wasm_packages(
+                &request.app_id,
+                &request.board_id,
+                request.board_version,
+                wasm_packages,
+            )
+            .await
+            {
                 Ok(report) => {
                     tracing::info!(
                         count = report.nodes.len(),
@@ -219,18 +225,7 @@ async fn execute_inner(
 
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Arc::new(
-        Board::load(
-            storage_root.clone(),
-            board_id,
-            state.clone(),
-            request.board_version,
-        )
-        .await
-        .map_err(|e| {
-            ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
-        })?,
-    );
+    let board = Arc::new(crate::execute::resolve_board(&state, request, &storage_root).await?);
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
         &board,
         request.wasm_packages.as_ref(),

@@ -381,6 +381,25 @@ export interface AdminPackageDetailResponse {
 	reviews: PackageReview[];
 }
 
+export interface AdminEnsureWasmArtifactsFailure {
+	packageId: string;
+	version: string;
+	message: string;
+}
+
+export interface AdminEnsureWasmArtifactsResponse {
+	targetPlatform: string;
+	wasmtimeVersion: string;
+	activePackages: number;
+	checkedVersions: number;
+	skippedVersions: number;
+	alreadyAvailable: number;
+	alreadyPending: number;
+	jobsStarted: number;
+	failed: number;
+	failures: AdminEnsureWasmArtifactsFailure[];
+}
+
 // Package visibility and compilation
 export type PackageVisibility = "private" | "public" | "public_request_access";
 
