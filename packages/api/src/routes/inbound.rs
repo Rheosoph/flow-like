@@ -1553,7 +1553,7 @@ async fn dispatch_event_collect(
         .scoped_credentials(
             &executor_subject,
             &event_row.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await?;
     let shared_credentials = credentials.into_shared_credentials();

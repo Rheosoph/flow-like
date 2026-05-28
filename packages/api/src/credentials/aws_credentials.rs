@@ -167,6 +167,8 @@ impl AwsRuntimeCredentials {
         let runs_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        let (content_path_prefix, user_content_path_prefix) =
+            scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
         // Sanitize role_session_name: AWS requires [\w+=,.@-]{2,64}
         let raw_session = format!("{}-{}", sub, app_id);
@@ -197,13 +199,9 @@ impl AwsRuntimeCredentials {
             CredentialsAccess::EditAppContent => edit_app_content_policy(self, &apps_prefix),
             CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
             CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
-            CredentialsAccess::InvokeNone => invoke_none_policy(
-                self,
-                &apps_prefix,
-                &user_prefix,
-                &runs_prefix,
-                &temporary_user_prefix,
-            ),
+            CredentialsAccess::InvokeNone => {
+                invoke_none_policy(self, &user_prefix, &runs_prefix, &temporary_user_prefix)
+            }
             CredentialsAccess::InvokeRead => invoke_read_policy(
                 self,
                 &apps_prefix,
@@ -213,6 +211,14 @@ impl AwsRuntimeCredentials {
                 &temporary_global_prefix,
             ),
             CredentialsAccess::InvokeWrite => invoke_read_write_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &runs_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+            ),
+            CredentialsAccess::ServerExecute => server_execute_policy(
                 self,
                 &apps_prefix,
                 &user_prefix,
@@ -252,10 +258,42 @@ impl AwsRuntimeCredentials {
             logs_bucket: self.logs_bucket.clone(),
             region: self.region.clone(),
             expiration: Some(chrono_expiration),
-            content_path_prefix: Some(apps_prefix),
-            user_content_path_prefix: Some(user_prefix),
+            content_path_prefix,
+            user_content_path_prefix,
         })
     }
+}
+
+#[cfg(feature = "aws")]
+fn scoped_content_path_prefixes(
+    apps_prefix: &str,
+    user_prefix: &str,
+    mode: &CredentialsAccess,
+) -> (Option<String>, Option<String>) {
+    let app = matches!(
+        mode,
+        CredentialsAccess::EditApp
+            | CredentialsAccess::ReadApp
+            | CredentialsAccess::ReadAppContent
+            | CredentialsAccess::EditAppContent
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| apps_prefix.to_string());
+
+    let user = matches!(
+        mode,
+        CredentialsAccess::EditUser
+            | CredentialsAccess::ReadUser
+            | CredentialsAccess::InvokeNone
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| user_prefix.to_string());
+
+    (app, user)
 }
 
 #[cfg(feature = "aws")]
@@ -422,7 +460,6 @@ fn invoke_read_write_policy(
                 "s3:ListBucket"
             ],
             "Resource": [
-                format!("arn:aws:s3:::{}", credentials.meta_bucket),
                 format!("arn:aws:s3:::{}", credentials.content_bucket)
             ],
             "Condition": {
@@ -451,13 +488,107 @@ fn invoke_read_write_policy(
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
             ],
+          }
+        ],
+    });
+
+    policy
+}
+
+fn server_execute_policy(
+    credentials: &AwsRuntimeCredentials,
+    apps_prefix: &str,
+    user_prefix: &str,
+    runs_prefix: &str,
+    temporary_user_prefix: &str,
+    temporary_global_prefix: &str,
+) -> flow_like_types::Value {
+    json!({
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.content_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", apps_prefix),
+                        format!("{}/*", user_prefix),
+                        format!("{}/*", temporary_user_prefix),
+                        format!("{}/*", temporary_global_prefix)
+                    ]
+                }
+            }
           },
           {
             "Effect": "Allow",
             "Action": [
                 "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
             ],
             "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
+                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
+            ],
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.logs_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", runs_prefix)
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.logs_bucket, runs_prefix),
+            ],
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}", credentials.meta_bucket)
+            ],
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        format!("{}/*", apps_prefix)
+                    ]
+                }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject"
+            ],
+            "Resource": [
+                format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, apps_prefix),
                 format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, apps_prefix),
             ],
           },
@@ -471,9 +602,7 @@ fn invoke_read_write_policy(
             ]
           }
         ],
-    });
-
-    policy
+    })
 }
 
 fn invoke_read_policy(
@@ -493,7 +622,6 @@ fn invoke_read_policy(
                 "s3:ListBucket"
             ],
             "Resource": [
-                format!("arn:aws:s3:::{}", credentials.meta_bucket),
                 format!("arn:aws:s3:::{}", credentials.content_bucket)
             ],
             "Condition": {
@@ -517,7 +645,6 @@ fn invoke_read_policy(
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, runs_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
-                format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, apps_prefix),
             ],
           },
           {
@@ -531,15 +658,6 @@ fn invoke_read_policy(
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
             ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3express:CreateSession",
-            ],
-            "Resource": [
-                "*"
-            ]
           }
         ],
     });
@@ -549,7 +667,6 @@ fn invoke_read_policy(
 
 fn invoke_none_policy(
     credentials: &AwsRuntimeCredentials,
-    apps_prefix: &str,
     user_prefix: &str,
     runs_prefix: &str,
     temporary_user_prefix: &str,
@@ -563,7 +680,6 @@ fn invoke_none_policy(
                 "s3:ListBucket"
             ],
             "Resource": [
-                format!("arn:aws:s3:::{}", credentials.meta_bucket),
                 format!("arn:aws:s3:::{}", credentials.content_bucket),
             ],
             "Condition": {
@@ -591,29 +707,11 @@ fn invoke_none_policy(
             "Effect": "Allow",
             "Action": [
                 "s3:GetObject",
-            ],
-            "Resource": [
-                format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, apps_prefix),
-            ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
                 "s3:PutObject",
             ],
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, runs_prefix),
             ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3express:CreateSession",
-            ],
-            "Resource": [
-                "*"
-            ]
           }
         ],
     });
@@ -1026,6 +1124,143 @@ mod tests {
         }
     }
 
+    fn test_aws_runtime_credentials() -> AwsRuntimeCredentials {
+        AwsRuntimeCredentials {
+            access_key_id: Some("AKIATEST".to_string()),
+            secret_access_key: Some("secret".to_string()),
+            session_token: Some("token".to_string()),
+            meta_bucket: "meta-secret".to_string(),
+            content_bucket: "content-data".to_string(),
+            logs_bucket: "logs".to_string(),
+            region: "us-east-1".to_string(),
+            expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
+        }
+    }
+
+    #[test]
+    fn test_aws_invoke_policies_do_not_grant_meta_access() {
+        let creds = test_aws_runtime_credentials();
+        let apps_prefix = "apps/app-1";
+        let user_prefix = "users/user-1/apps/app-1";
+        let runs_prefix = "runs/app-1";
+        let temporary_user_prefix = "tmp/user/user-1/apps/app-1";
+        let temporary_global_prefix = "tmp/global/apps/app-1";
+
+        let policies = [
+            (
+                "InvokeNone",
+                invoke_none_policy(&creds, user_prefix, runs_prefix, temporary_user_prefix),
+            ),
+            (
+                "InvokeRead",
+                invoke_read_policy(
+                    &creds,
+                    apps_prefix,
+                    user_prefix,
+                    runs_prefix,
+                    temporary_user_prefix,
+                    temporary_global_prefix,
+                ),
+            ),
+            (
+                "InvokeWrite",
+                invoke_read_write_policy(
+                    &creds,
+                    apps_prefix,
+                    user_prefix,
+                    runs_prefix,
+                    temporary_user_prefix,
+                    temporary_global_prefix,
+                ),
+            ),
+        ];
+
+        for (mode, policy) in policies {
+            let policy = to_string(&policy).expect("policy should serialize");
+            assert!(
+                !policy.contains("meta-secret"),
+                "{mode} must not grant access to the meta bucket"
+            );
+            assert!(
+                !policy.contains("s3express:CreateSession"),
+                "{mode} should not need S3 Express sessions without meta access"
+            );
+        }
+    }
+
+    #[test]
+    fn test_aws_invoke_none_does_not_grant_app_content_access() {
+        let creds = test_aws_runtime_credentials();
+        let policy = invoke_none_policy(
+            &creds,
+            "users/user-1/apps/app-1",
+            "runs/app-1",
+            "tmp/user/user-1/apps/app-1",
+        );
+        let policy = to_string(&policy).expect("policy should serialize");
+
+        assert!(
+            !policy.contains("content-data/apps/app-1/*"),
+            "InvokeNone must not grant app content access"
+        );
+        assert!(policy.contains("content-data/users/user-1/apps/app-1/*"));
+        assert!(policy.contains("content-data/tmp/user/user-1/apps/app-1/*"));
+        assert!(policy.contains("content-data/runs/app-1/*"));
+    }
+
+    #[test]
+    fn test_aws_invoke_none_shared_shape_has_no_app_content_prefix() {
+        let (app, user) = scoped_content_path_prefixes(
+            "apps/app-1",
+            "users/user-1/apps/app-1",
+            &CredentialsAccess::InvokeNone,
+        );
+
+        assert_eq!(app, None);
+        assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
+    }
+
+    #[test]
+    fn test_aws_server_execute_grants_meta_read_only() {
+        let creds = test_aws_runtime_credentials();
+        let policy = server_execute_policy(
+            &creds,
+            "apps/app-1",
+            "users/user-1/apps/app-1",
+            "runs/app-1",
+            "tmp/user/user-1/apps/app-1",
+            "tmp/global/apps/app-1",
+        );
+        let statements = policy["Statement"]
+            .as_array()
+            .expect("policy statements should be an array");
+        let meta_object_statement = statements
+            .iter()
+            .find(|statement| {
+                statement["Resource"]
+                    .to_string()
+                    .contains("meta-secret/apps")
+            })
+            .expect("server execute should include meta object access");
+        let meta_actions = meta_object_statement["Action"].to_string();
+        let policy = to_string(&policy).expect("policy should serialize");
+
+        assert!(policy.contains("meta-secret/apps/app-1/*"));
+        assert!(policy.contains("\"s3:GetObject\""));
+        assert!(policy.contains("content-data/apps/app-1/*"));
+        assert!(policy.contains("logs/runs/app-1/*"));
+        assert!(
+            !meta_actions.contains("PutObject"),
+            "ServerExecute must not grant meta writes"
+        );
+        assert!(
+            !meta_actions.contains("DeleteObject"),
+            "ServerExecute must not grant meta deletes"
+        );
+    }
+
     #[test]
     fn test_aws_runtime_credentials_serialization() {
         let creds = AwsRuntimeCredentials {
@@ -1059,6 +1294,10 @@ mod tests {
         assert_eq!(
             format!("{}", CredentialsAccess::InvokeWrite),
             "invoke_write"
+        );
+        assert_eq!(
+            format!("{}", CredentialsAccess::ServerExecute),
+            "server_execute"
         );
         assert_eq!(format!("{}", CredentialsAccess::ReadLogs), "read_logs");
     }

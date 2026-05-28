@@ -71,10 +71,9 @@ pub struct InvokeBoardAsyncResponse {
     pub backend: String,
 }
 
-/// Get credentials access for invoke - always InvokeWrite since
-/// server-side execution is scoped through workflow logic
+/// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
-    crate::credentials::CredentialsAccess::InvokeWrite
+    crate::credentials::CredentialsAccess::ServerExecute
 }
 
 /// POST /apps/{app_id}/board/{board_id}/invoke/async

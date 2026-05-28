@@ -88,10 +88,9 @@ pub struct InvokeEventResponse {
     pub poll_token: Option<String>,
 }
 
-/// Get credentials access for invoke - always InvokeWrite since
-/// server-side execution is scoped through workflow logic
+/// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
-    crate::credentials::CredentialsAccess::InvokeWrite
+    crate::credentials::CredentialsAccess::ServerExecute
 }
 
 /// POST /apps/{app_id}/events/{event_id}/invoke

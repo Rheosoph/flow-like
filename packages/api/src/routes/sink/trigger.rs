@@ -675,7 +675,7 @@ pub async fn trigger_event(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await?;
     let shared_credentials = credentials.into_shared_credentials();
@@ -918,7 +918,7 @@ pub async fn trigger_http(
         .scoped_credentials(
             &executor_subject,
             &app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
@@ -1353,7 +1353,7 @@ pub async fn trigger_telegram(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
@@ -1679,7 +1679,7 @@ pub async fn trigger_discord(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;

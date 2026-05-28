@@ -603,7 +603,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -3386,7 +3386,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes 2.0.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3404,8 +3404,7 @@ dependencies = [
 [[package]]
 name = "cap-primitives"
 version = "3.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6cf3aea8a5081171859ef57bc1606b1df6999df4f1110f8eef68b30098d1d3a"
+source = "git+https://github.com/Rheosoph/cap-std.git?rev=dca01d25b31c91da1aa7f2050c0eca4d4f361871#dca01d25b31c91da1aa7f2050c0eca4d4f361871"
 dependencies = [
  "ambient-authority",
  "fs-set-times",
@@ -3415,15 +3414,14 @@ dependencies = [
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "winx",
 ]
 
 [[package]]
 name = "cap-std"
 version = "3.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6dc3090992a735d23219de5c204927163d922f42f575a0189b005c62d37549a"
+source = "git+https://github.com/Rheosoph/cap-std.git?rev=dca01d25b31c91da1aa7f2050c0eca4d4f361871#dca01d25b31c91da1aa7f2050c0eca4d4f361871"
 dependencies = [
  "cap-primitives",
  "io-extras",
@@ -3950,7 +3948,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6330,7 +6328,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7128,8 +7126,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "erasable"
 version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "437cfb75878119ed8265685c41a115724eae43fb7cc5a0bf0e4ecc3b803af1c4"
+source = "git+https://github.com/Rheosoph/pointer-utils.git?rev=e1c31813a156e656f8d0b2c194410ac7192ffbd4#e1c31813a156e656f8d0b2c194410ac7192ffbd4"
 dependencies = [
  "autocfg",
  "scopeguard",
@@ -7153,7 +7150,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8681,7 +8678,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11610,11 +11607,10 @@ dependencies = [
 [[package]]
 name = "io-extras"
 version = "0.18.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
+source = "git+https://github.com/Rheosoph/io-extras.git?rev=515df16351274387cb14d661874ed731fff1350b#515df16351274387cb14d661874ed731fff1350b"
 dependencies = [
  "io-lifetimes 2.0.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11824,7 +11820,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -15278,7 +15274,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -18622,7 +18618,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -19966,7 +19962,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -19979,7 +19975,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -20105,7 +20101,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -21527,8 +21523,7 @@ dependencies = [
 [[package]]
 name = "smartstring"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
+source = "git+https://github.com/Rheosoph/smartstring.git?rev=ea5608253d061dbc90a8f66022ebc3326bd65514#ea5608253d061dbc90a8f66022ebc3326bd65514"
 dependencies = [
  "autocfg",
  "static_assertions",
@@ -22049,6 +22044,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
+ "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 
@@ -23448,7 +23444,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -27267,7 +27263,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.11.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
